@@ -48,7 +48,11 @@ object AccountabilityModule {
     @Provides @Singleton
     fun provideAccountabilityDatabase(@ApplicationContext context: Context): AccountabilityDatabase =
         Room.databaseBuilder(context, AccountabilityDatabase::class.java, AccountabilityDatabase.DB_NAME)
-            .addMigrations(AccountabilityDatabase.MIGRATION_1_2, AccountabilityDatabase.MIGRATION_2_3)
+            .addMigrations(
+                AccountabilityDatabase.MIGRATION_1_2,
+                AccountabilityDatabase.MIGRATION_2_3,
+                AccountabilityDatabase.MIGRATION_3_4,
+            )
             .build()
 
     @Provides
