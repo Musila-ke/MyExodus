@@ -1,0 +1,99 @@
+rules:
+  # Regression guard for the XOS AndroidKeyStoreBCWorkaround bug (2026-08-31):
+  # explicit provider-name lookup on Signature.getInstance breaks on XOS devices.
+  - id: myexodus-no-explicit-keystore-provider
+    languages: [kotlin]
+    severity: ERROR
+    message: >
+      Explicit "AndroidKeyStore" provider lookup on Signature.getInstance breaks on
+      XOS (AndroidKeyStoreBCWorkaround shadow). Use the default provider chain.
+    patterns:
+      - pattern: Signature.getInstance($ALG, "AndroidKeyStore")
+      - pattern-not: Signature.getInstance($ALG, $SOME_OTHER_PROVIDER)
+
+  # Sensitive material must never reach logs (DEK/CEK/keys/tokens/secrets).
+  - id: myexodus-no-secret-logging
+    languages: [kotlin]
+    severity: ERROR
+    message: >
+      Logging a value whose name suggests key material ($SECRET). DEK/CEK/keys/tokens
+      must never be logged. Redact or remove.
+    patterns:
+      - pattern-either:
+          - pattern: Log.$LEVEL($TAG, $SECRET)
+          - pattern: Log.$LEVEL($TAG, $MSG, $SECRET)
+          - pattern: Log.$LEVEL($TAG, $MSG, $E, $SECRET)
+      - metavariable-regex:
+          metavariable: $SECRET
+          regex: (?i).*(dek|cek|secret|keystore|keyset|master.?key|token|escrow|passphrase|password|private.?key|auth.?key).*
+      - metavariable-regex:
+          metavariable: $LEVEL
+          regex: (v|d|i|w|e)
+
+  # Byte-array material must not be toString()'d into logs.
+  - id: myexodus-no-bytestring-in-logs
+    languages: [kotlin]
+    severity: ERROR
+    message: >
+      ByteArray (likely key/IV/nonce material) converted to a string in a log call.
+      Key material must never be logged.
+    patterns:
+      - pattern: Log.$LEVEL($TAG, $X.toString())
+      - metavariable-regex:
+          metavariable: $LEVEL
+          regex: (v|d|i|w|e)
+
+  # Never surface raw exception details in user-facing UI.
+  - id: myexodus-no-exception-in-ui
+    languages: [kotlin]
+    severity: WARNING
+    message: >
+      Raw exception message ($E.message) exposed to the UI/Toast. Map errors to
+      user-meaningful messages; internals must not reach the screen.
+    patterns:
+      - pattern: $UI($E.message)
+      - metavariable-regex:
+          metavariable: $UI
+          regex: (Toast\.makeText|setText|append|text =)
+
+  # Firestore document/collection paths must not be built by string concatenation
+  # (path injection / accidental namespace crossing).
+  - id: myexodus-no-firestore-path-concat
+    languages: [kotlin]
+    severity: WARNING
+    message: >
+      String concatenation into a Firestore document/collection path. Use the
+      FirestoreSchema helpers so paths stay deterministic and validated.
+    patterns:
+      - pattern-either:
+          - pattern: $FS.collection($A + $B)
+          - pattern: $FS.document($A + $B)
+
+  # startActivity needs FLAG_ACTIVITY_NEW_TASK when the context isn't an Activity.
+  # Note: "context" alone is deliberately NOT matched — composables use
+  # LocalContext.current, which IS the hosting Activity (all 5 first-run findings
+  # on this rule were false positives of that shape, 2026-08-31).
+  - id: myexodus-new-task-when-background
+    languages: [kotlin]
+    severity: WARNING
+    message: >
+      startActivity from a non-Activity context requires FLAG_ACTIVITY_NEW_TASK,
+      otherwise it throws on API 26+ (or is silently refused for background starts).
+    patterns:
+      - pattern: $CTX.startActivity($I)
+      - pattern-not: $CTX.startActivity(...FLAG_ACTIVITY_NEW_TASK...)
+      - metavariable-regex:
+          metavariable: $CTX
+          regex: (?i).*(service|appContext|applicationContext).*
+
+  # No hardcoded Firebase/Google API keys outside google-services.json build config.
+  - id: myexodus-no-hardcoded-firebase-key
+    languages: [kotlin]
+    severity: ERROR
+    message: >
+      Hardcoded key literal ($KEY). Firebase keys come from google-services.json
+      resource config, never from code.
+    patterns:
+      - pattern-either:
+          - pattern: $X = "AIza$KEY"
+          - pattern: $X = "AAAA$KEY"

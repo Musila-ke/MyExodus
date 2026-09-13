@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Test-APK-only components. The victim activity shares the .test package with the tests,
+     so Rule 4's self-block CHECK (blocked_package != com.example.myexodus) permits a rule
+     against it — giving the §12 suite a controllable, observable restricted app. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name="com.example.myexodus.blocking.TouchRecordingActivity"
+            android:exported="true" />
+    </application>
+</manifest>

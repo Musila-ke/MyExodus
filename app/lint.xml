@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- targetSdk 36 is current stable (Android 16); lint compares against the installed
+         android-37 preview and suggests a bump — deliberate, the plan pins targetSdk 36. -->
+    <issue id="OldTargetApi" severity="ignore" />
+    <!-- Version-availability reminders only; upgrades are reviewed one per change with
+         changelog + lockfile + Trivy (dependency discipline), never auto-bumped. -->
+    <issue id="GradleDependency" severity="ignore" />
+    <issue id="AndroidGradlePluginVersion" severity="ignore" />
+    <issue id="NewerVersionAvailable" severity="ignore" />
+</lint>

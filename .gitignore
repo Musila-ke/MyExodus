@@ -1,0 +1,27 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Tool caches (Kotlin compiler sessions, SonarQube scanner, skill caches, Claude Code local state)
+.kotlin/
+.scannerwork/
+.cache/
+.claude/
+
+# Signing material — never commit (release keystore lives offline per the ADR #10 runbook)
+*.jks
+*.keystore
+*.p12
+keystore.properties

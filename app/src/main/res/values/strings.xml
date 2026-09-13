@@ -1,0 +1,135 @@
+<resources>
+    <string name="app_name">MyExodus</string>
+    <string name="enhanced_mode_block_overlay">Blocked by your MyExodus rules</string>
+    <string name="blocked_target_title">%1$s is blocked</string>
+    <string name="overlay_open_recovery">Open MyExodus Recovery</string>
+    <string name="overlay_different_site">Go to a different site</string>
+    <string name="overlay_hint">Home and back always work. Blocking resumes when you come back.</string>
+    <string name="block_screen_hint">You can always press Home to leave. Blocking resumes when you come back.</string>
+    <string name="enhanced_mode_service_label">MyExodus blocker</string>
+    <string name="enhanced_mode_accessibility_description">Used to detect when you open an app or website on your restriction list and show the blocking overlay. It reads only the app name of the window you switch to and, in supported browsers only, the address-bar text.</string>
+    <string name="enhanced_mode_health_disabled_title">MyExodus blocker is off</string>
+    <string name="enhanced_mode_health_disabled_text">Your Enhanced Mode rules are no longer applied. Re-enable the accessibility service to resume blocking.</string>
+
+    <!-- Rule state labels and schedule summaries (shared by Home and Rules rows) -->
+    <string name="state_paused">Paused</string>
+    <string name="state_expired">Expired</string>
+    <string name="state_blocked_now">Blocked now</string>
+    <string name="state_not_active_now">Not active now</string>
+    <string name="schedule_always_on">Always on</string>
+    <string name="schedule_window">%1$s, %2$s</string>
+    <string name="schedule_overnight_window">%1$s, %2$s (overnight)</string>
+    <string name="schedule_daily_limit">%1$s daily limit</string>
+    <string name="schedule_until">until %1$s</string>
+    <string name="schedule_none">No schedule set</string>
+    <string name="days_every_day">every day</string>
+    <string name="days_weekdays">weekdays</string>
+    <string name="days_weekends">weekends</string>
+
+    <!-- Rules screen -->
+    <string name="rules_title">Rules</string>
+    <string name="rules_subtitle">Blocks enforced on this device</string>
+    <string name="rules_apps_header">Apps</string>
+    <string name="rules_websites_header">Websites</string>
+    <string name="rules_empty_title">No blocks yet</string>
+    <string name="rules_empty_body">Add an app or website to block. Blocks start working the moment they are saved — no restart needed.</string>
+    <string name="rules_pause">Pause this block</string>
+    <string name="rules_resume">Resume this block</string>
+    <string name="rules_delete">Delete</string>
+    <string name="rules_delete_title">Delete this block?</string>
+    <string name="rules_delete_body">“%1$s” will be removed and no longer enforced. It stops blocking immediately.</string>
+    <string name="rules_delete_confirm">Delete</string>
+    <string name="rules_cancel">Cancel</string>
+
+    <!-- Rule editor -->
+    <string name="editor_new_app">New app block</string>
+    <string name="editor_new_website">New website block</string>
+    <string name="editor_edit">Edit block</string>
+    <string name="editor_back">Back</string>
+    <string name="editor_target_app">App</string>
+    <string name="editor_target_website">Website address</string>
+    <string name="editor_choose_app">Choose app</string>
+    <string name="editor_change_app">Change</string>
+    <string name="editor_website_hint">example.com or https://example.com/path</string>
+    <string name="editor_target_missing">Choose the app you want to block.</string>
+    <string name="editor_target_invalid">That doesn’t look like a website address. Try example.com.</string>
+    <string name="editor_always_on">Always on</string>
+    <string name="editor_always_on_hint">Blocks every hour of every day until paused or deleted.</string>
+    <string name="editor_from">From</string>
+    <string name="editor_to">To</string>
+    <string name="editor_overnight">Overnight — ends the next day.</string>
+    <string name="editor_days">Days</string>
+    <string name="editor_days_every">Every day</string>
+    <string name="editor_days_weekdays">Weekdays</string>
+    <string name="editor_days_weekends">Weekends</string>
+    <string name="editor_same_time_error">Start and end time can’t be the same. Pick a different end time.</string>
+    <string name="editor_ends">Ends</string>
+    <string name="editor_never">Never</string>
+    <string name="editor_clear">Clear</string>
+    <string name="editor_timezone_note">Times use %1$s.</string>
+    <string name="editor_use_device_zone">Use device time zone</string>
+    <string name="editor_save">Save</string>
+    <string name="editor_saving">Saving…</string>
+    <string name="editor_not_saved">Not saved — %1$s</string>
+    <string name="editor_wall_time_hint">Blocks start and end at these times in the time zone shown.</string>
+
+    <string name="editor_rule_gone">This block was removed on another screen. Go back to see your current blocks.</string>
+    <string name="editor_target_duplicate">That’s already in your block list. Edit the existing block instead.</string>
+    <string name="dialog_ok">OK</string>
+
+    <!-- Write failures -->
+    <string name="error_self_block">MyExodus can’t block itself — pick a different app.</string>
+    <string name="error_limit_reached">You’ve reached the maximum number of blocks.</string>
+    <string name="error_write_failed">the change couldn’t be written. Try again.</string>
+
+    <!-- Settings: protection status rows -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_subtitle">Permissions and enforcement status</string>
+    <string name="settings_protection_header">Protection</string>
+    <string name="settings_action_fix">Fix</string>
+    <string name="settings_action_open">Open</string>
+    <string name="settings_accessibility_title">Accessibility service</string>
+    <string name="settings_accessibility_ok">On — MyExodus sees when a blocked app opens</string>
+    <string name="settings_accessibility_off">Off — blocked apps open normally</string>
+    <string name="settings_usage_title">Usage access</string>
+    <string name="settings_usage_ok">On — MyExodus can tell which app is in front</string>
+    <string name="settings_usage_off">Off — app blocking can’t run</string>
+    <string name="settings_exact_alarm_title">Exact alarms</string>
+    <string name="settings_exact_alarm_ok">Allowed</string>
+    <string name="settings_exact_alarm_off">Not allowed — timers may end late</string>
+    <string name="settings_battery_title">Android battery optimization</string>
+    <string name="settings_battery_ok">Exempt — Android won’t pause MyExodus</string>
+    <string name="settings_battery_off">Not exempt — Android may pause MyExodus in the background</string>
+    <string name="settings_battery_hint">Opens your phone’s battery settings — you still make the change there.</string>
+    <string name="settings_oem_title">OEM background restrictions</string>
+    <string name="settings_oem_status">Android doesn’t report this. %1$s manages background apps in its own settings.</string>
+    <string name="settings_overlay_title">Display over other apps</string>
+    <string name="settings_overlay_ok">Allowed</string>
+    <string name="settings_overlay_off">Not allowed — the block screen can’t be shown</string>
+    <string name="settings_overlay_not_needed">Not needed on this device</string>
+    <string name="settings_integrity_title">Enforcement integrity</string>
+    <string name="settings_integrity_verified">Verified — hardware-backed device key</string>
+    <string name="settings_integrity_unverified">Unverified — device key is not StrongBox-backed</string>
+    <string name="settings_integrity_unavailable">Unavailable — no device identity set up yet</string>
+    <string name="settings_integrity_failed">Failed — the device key couldn’t be read</string>
+    <string name="settings_integrity_recheck">Recheck</string>
+
+    <!-- Recovery screen -->
+    <string name="recovery_title">Recovery</string>
+    <string name="recovery_subtitle">Friction timer and override status</string>
+    <string name="recovery_timer_label">Friction timer</string>
+    <string name="recovery_blocked_target">Blocked: %1$s</string>
+    <string name="recovery_time_change_frozen">Time change detected — countdown frozen</string>
+    <string name="recovery_override">Use it now (override)</string>
+    <string name="recovery_override_unavailable">Override unavailable — try again later</string>
+    <string name="recovery_overrides_logged">Overrides are logged on this device.</string>
+    <string name="recovery_leave_note">Leaving MyExodus won’t stop the timer — the block lifts when it ends or when you override.</string>
+    <string name="recovery_idle_title">No recovery session</string>
+    <string name="recovery_idle_body">A recovery session starts when a blocked app opens and you tap “I need to use this app”. Wait out the timer and the block is lifted for that rule.</string>
+
+    <!-- App picker -->
+    <string name="picker_title">Choose an app</string>
+    <string name="picker_search">Search apps</string>
+    <string name="picker_no_match">No apps match “%1$s”.</string>
+    <string name="picker_none">No launchable apps found.</string>
+</resources>

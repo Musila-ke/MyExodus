@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name=".blocking.DeviceVerificationActivity"
+            android:exported="true" />
+        <activity
+            android:name=".vpn.VpnSpikeActivity"
+            android:exported="true" />
+        <activity
+            android:name=".accountability.PairingTestActivity"
+            android:exported="true" />
+    </application>
+</manifest>

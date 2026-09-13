@@ -1,0 +1,81 @@
+rules_version = '2';
+// §8.4 Accountability-Partner Protocol Firestore rules (deploy via Firebase Console / CLI —
+// console deployment is a separate user step; emulator suite verification is §18).
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Canonical pair state document: cross-document validation target ("rules are not filters").
+    // Created by either member during enrollment; membership is read/write-gated.
+    match /pairs/{pairId} {
+      // Create is the enrollment step: the doc does not exist yet, so the creator asserts
+      // membership in the new doc (the read/update/delete rules keep everything else gated).
+      // The tombstone guard closes the revocation-reopen gap: after §10 deletion deletes
+      // this doc, either former member could otherwise re-create it (members is
+      // self-asserted) and reopen the mailbox for the pair. deleted_pairs is append-only,
+      // so a revoked pair can never be re-created (2026-08-31 review fix).
+      allow create: if request.resource.data.members is map
+        && request.resource.data.members[request.auth.uid] == true
+        && !exists(/databases/$(database)/documents/deleted_pairs/$(pairId));
+      // resource == null: reads of *nonexistent* docs must not be denied, or the redemption
+      // transaction's pre-create read of the pair doc aborts with PERMISSION_DENIED (caught
+      // on-device 2026-08-30) and existing docs stay membership-gated.
+      allow read, update, delete: if resource == null || request.auth.uid in resource.data.members;
+    }
+
+    // Mailbox. create is gated on pair membership via the cross-document exists() check and the
+    // 1 MiB envelope cap; entries are immutable — update/delete are denied outright.
+    match /accountability_events/{eventId} {
+      allow create: if request.auth.uid == request.resource.data.authorUid
+        && exists(/databases/$(database)/documents/pairs/$(request.resource.data.pairId))
+        && request.resource.data.pairId is string
+        && request.resource.data.pairId.size() < 64
+        && request.resource.data.envelope.size() < 1048576;
+      allow read: if request.auth.uid == resource.data.partnerUid
+        || request.auth.uid == resource.data.authorUid;
+      allow update, delete: if false;
+    }
+
+    // §9 reverse channel: a receiver holding a gap requests the sender re-publish one
+    // sequence. Create/read/delete are pair-member-gated; requests are short-lived
+    // (deleted by the responding sender after fulfillment).
+    match /backfill_requests/{requestId} {
+      function isMember(uid, pairId) {
+        return uid in get(/databases/$(database)/documents/pairs/$(pairId)).data.members;
+      }
+      allow create: if request.auth.uid != null
+        && request.resource.data.pairId is string
+        && isMember(request.auth.uid, request.resource.data.pairId)
+        && request.resource.data.requesterUid == request.auth.uid;
+      allow read, delete: if request.auth.uid != null
+        && isMember(request.auth.uid, resource.data.pairId);
+      allow update: if false;
+    }
+
+    // §10 revocation tombstones: append-only record written by BilateralDeletion just before
+    // it deletes the pair doc. Guards the pair create rule above against revocation-reopen.
+    // The tombstone's own create is gated on the pair doc still existing + membership, so it
+    // can only be written by a current member; no other operation is allowed on it.
+    match /deleted_pairs/{pairId} {
+      allow create: if request.auth.uid != null
+        && exists(/databases/$(database)/documents/pairs/$(pairId))
+        && request.auth.uid in get(/databases/$(database)/documents/pairs/$(pairId)).data.members
+        && !exists(/databases/$(database)/documents/deleted_pairs/$(pairId));
+      allow read, update, delete: if false;
+    }
+
+    // §10 step 1 pairing tokens. The document id is SHA-256(token), so a token document is
+    // unaddressable without the token itself — possession is the read/delete gate, and the
+    // lifetime gate (single-use + expiry, §10 steps 1/3) is enforced by comparing the
+    // stored expiresAt Timestamp to request.time. The redemption transaction deletes the
+    // document, so a second redemption reads nothing.
+    match /pairing_tokens/{tokenId} {
+      allow create: if request.auth.uid != null
+        && request.resource.data.creatorUid == request.auth.uid
+        && request.resource.data.pairId is string
+        && request.resource.data.expiresAt > request.time;
+      allow read, delete: if request.auth.uid != null
+        && (resource == null || resource.data.expiresAt > request.time);
+      allow update: if false;
+    }
+  }
+}
