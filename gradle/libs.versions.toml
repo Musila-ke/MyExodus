@@ -49,6 +49,7 @@ androidx-compose-material3 = { group = "androidx.compose.material3", name = "mat
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended", version = "1.7.8" }
 androidx-room-runtime = { group = "androidx.room3", name = "room3-runtime", version.ref = "room" }
 androidx-room-compiler = { group = "androidx.room3", name = "room3-compiler", version.ref = "room" }
+androidx-room-testing = { group = "androidx.room3", name = "room3-testing", version.ref = "room" }
 androidx-sqlite = { group = "androidx.sqlite", name = "sqlite", version.ref = "sqlite" }
 zetetic-sqlcipher = { group = "net.zetetic", name = "sqlcipher-android", version.ref = "sqlcipher" }
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
@@ -57,6 +58,10 @@ hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-com
 hilt-work = { group = "androidx.hilt", name = "hilt-work", version.ref = "hiltNavigationCompose" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
+# Room 3.0.3 is compiled against kotlinx-serialization 1.8.1; navigation/lifecycle transitives
+# pin 1.7.3, whose GeneratedSerializer interface lacks the 1.8 default typeParametersSerializers()
+# (AbstractMethodError when Room deserializes schema bundles — hit by MigrationTestHelper).
+kotlinx-serialization-bom = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-bom", version = "1.8.1" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 androidx-test-core = { group = "androidx.test", name = "core", version.ref = "androidxTestCore" }
 bcprov-jdk18on = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bcprov" }

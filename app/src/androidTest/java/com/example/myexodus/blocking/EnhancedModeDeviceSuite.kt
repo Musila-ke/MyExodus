@@ -17,6 +17,7 @@ import com.example.myexodus.data.db.ActivityLogKeyManager
 import com.example.myexodus.data.db.AndroidDatabaseKeyManager
 import com.example.myexodus.data.db.DatabaseHealthStore
 import com.example.myexodus.data.db.RecoveryManager
+import com.example.myexodus.data.db.RulesStoreKeyManager
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.UserProfile
 import dagger.hilt.android.EntryPointAccessors
@@ -115,6 +116,7 @@ abstract class EnhancedModeDeviceSuite {
             context,
             AndroidDatabaseKeyManager(context),
             ActivityLogKeyManager(context),
+            RulesStoreKeyManager(context),
             healthStore,
         )
         recovery.resetAllData()

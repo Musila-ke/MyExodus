@@ -22,12 +22,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.blocking.AttemptRecorder
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.ProtectionDegradation
@@ -40,6 +42,9 @@ import com.example.myexodus.ui.home.HomeScreen
 import com.example.myexodus.ui.recovery.RecoveryScreen
 import com.example.myexodus.ui.rules.RulesScreen
 import com.example.myexodus.ui.settings.SettingsScreen
+import com.example.myexodus.ui.streaks.HabitPickerSheet
+import com.example.myexodus.ui.streaks.StreaksScreen
+import com.example.myexodus.ui.streaks.StreaksViewModel
 
 private val Tabs = listOf(
     "Home" to Icons.Default.Home,
@@ -63,11 +68,26 @@ fun AppShell(
     settings: EnhancedModeSettings,
     degradation: ProtectionDegradation?,
     onReenable: () -> Unit,
+    streaks: StreaksViewModel,
+    encryptionPending: Boolean = false,
     requestedTab: String? = null,
     onTabConsumed: () -> Unit = {},
+    requestedHabit: String? = null,
+    onHabitConsumed: () -> Unit = {},
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    var pickerOpen by rememberSaveable { mutableStateOf(false) }
     val expanded = rememberWindowWidth() == WindowWidth.EXPANDED
+
+    // Plan §8 Step 5: the streak state is collected once here and consumed read-only by the
+    // Home hero, the splash cards, and the Streaks tab — never re-derived per screen.
+    val habit by streaks.state.collectAsStateWithLifecycle()
+    val habits by streaks.habits.collectAsStateWithLifecycle()
+    val streakResolved by streaks.resolved.collectAsStateWithLifecycle()
+    val addingHabit by streaks.addingHabit.collectAsStateWithLifecycle()
+    val setupError by streaks.setupError.collectAsStateWithLifecycle()
+    val relapseInFlight by streaks.relapseInFlight.collectAsStateWithLifecycle()
+    val relapseNote by streaks.relapseNote.collectAsStateWithLifecycle()
 
     // Interception Escape Hatch lands here: tab labels are the deep-link keys.
     LaunchedEffect(requestedTab) {
@@ -76,6 +96,14 @@ fun AppShell(
             tab = index
             onTabConsumed()
         }
+    }
+
+    // Milestone notification deep link: select the celebrated habit BEFORE its splash card
+    // renders, so the card (and the hero) belong to the habit the notification named.
+    LaunchedEffect(requestedHabit) {
+        val habitId = requestedHabit ?: return@LaunchedEffect
+        streaks.selectHabit(habitId)
+        onHabitConsumed()
     }
 
     Scaffold(
@@ -116,6 +144,11 @@ fun AppShell(
                         monitor = monitor,
                         degradation = degradation,
                         onReenable = onReenable,
+                        habit = habit,
+                        onAcknowledgeMilestone = streaks::acknowledgeMilestones,
+                        onSwitchHabit = { pickerOpen = true },
+                        streakResolved = streakResolved,
+                        encryptionPending = encryptionPending,
                         modifier = contentModifier,
                     )
                     tab == 1 -> RulesScreen(
@@ -129,6 +162,18 @@ fun AppShell(
                         attempts = attempts,
                         modifier = contentModifier,
                     )
+                    tab == 3 -> StreaksScreen(
+                        state = habit,
+                        addingHabit = addingHabit,
+                        setupError = setupError,
+                        relapseInFlight = relapseInFlight,
+                        relapseNote = relapseNote,
+                        onOnboard = streaks::onboard,
+                        onOpenHabitPicker = { pickerOpen = true },
+                        onCancelAddHabit = streaks::cancelAddHabit,
+                        onRelapse = streaks::logRelapse,
+                        modifier = contentModifier,
+                    )
                     tab == 4 -> SettingsScreen(
                         monitor = monitor,
                         strictMode = strictMode,
@@ -139,5 +184,23 @@ fun AppShell(
                 }
             }
         }
+    }
+
+    // One shared habit picker for both entry points (Home hero + Streaks summary card);
+    // "Add habit" from Home lands on the Streaks tab where the form renders.
+    if (pickerOpen) {
+        HabitPickerSheet(
+            habits = habits,
+            onSelect = {
+                streaks.selectHabit(it)
+                pickerOpen = false
+            },
+            onAddHabit = {
+                streaks.beginAddHabit()
+                tab = 3
+                pickerOpen = false
+            },
+            onDismiss = { pickerOpen = false },
+        )
     }
 }

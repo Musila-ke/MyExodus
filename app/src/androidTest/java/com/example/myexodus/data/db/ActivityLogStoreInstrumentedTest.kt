@@ -4,11 +4,10 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.myexodus.data.db.entity.DomainEvent
-import java.util.Arrays
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -39,6 +38,7 @@ class ActivityLogStoreInstrumentedTest {
             context,
             AndroidDatabaseKeyManager(context),
             keyManager,
+            RulesStoreKeyManager(context),
             DatabaseHealthStore(),
         )
         recovery.resetAllData()
@@ -48,20 +48,19 @@ class ActivityLogStoreInstrumentedTest {
 
     @Test
     fun open_activatesFixedPragmas() {
-        assertTrue(newStore().open())
-        val key = keyManager.getOrCreateKey()
-        try {
-            val path = context.getDatabasePath(ActivityLogSchema.DB_NAME)
-            SQLiteDatabase.openOrCreateDatabase(path, key, null, null).use { db ->
-                assertEquals("wal", queryString(db, "PRAGMA journal_mode"))
-                assertEquals("1", queryString(db, "PRAGMA synchronous"))
-                assertEquals("5000", queryString(db, "PRAGMA busy_timeout"))
-                assertEquals("1", queryString(db, "PRAGMA secure_delete"))
-                assertEquals("1", queryString(db, "PRAGMA cipher_memory_security"))
-            }
-        } finally {
-            Arrays.fill(key, 0.toByte())
-        }
+        val store = newStore()
+        assertTrue(store.open())
+        // Assert on the STORE's own connection: busy_timeout, synchronous, secure_delete and
+        // cipher_memory_security are connection-scoped — a second connection sees framework
+        // defaults (device-caught 2026-09-14: busy_timeout read back 2500 on a fresh handle).
+        val db = store.databaseForTest()
+        assertNotNull(db)
+        assertEquals("wal", queryString(db!!, "PRAGMA journal_mode"))
+        assertEquals("1", queryString(db, "PRAGMA synchronous"))
+        assertEquals("5000", queryString(db, "PRAGMA busy_timeout"))
+        assertEquals("1", queryString(db, "PRAGMA secure_delete"))
+        assertEquals("1", queryString(db, "PRAGMA cipher_memory_security"))
+        store.close()
     }
 
     @Test
@@ -133,9 +132,12 @@ class ActivityLogStoreInstrumentedTest {
         val store = newStore()
         assertTrue(store.open())
         val base = context.getDatabasePath(ActivityLogSchema.DB_NAME).absolutePath
-        assertFalse(java.io.File(base + "-wal").exists())
         store.insert(event("e1", "inst-1", createdAt = 1L))
+        // SQLCipher creates -wal/-shm eagerly when entering WAL mode at open (device-verified
+        // 2026-09-14), so the meaningful claim is that sidecars carry the write, not that they
+        // were absent before it.
         assertTrue(java.io.File(base + "-wal").exists())
+        assertTrue(java.io.File(base + "-shm").exists())
         store.checkpoint()
     }
 

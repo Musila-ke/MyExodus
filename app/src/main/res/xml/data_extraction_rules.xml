@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+   Habit-streaks plan §10 / Decision 14: android:allowBackup="false" blocks cloud and ADB
+   backup but NOT the API 31+ device-to-device transfer flow. Every store here is either
+   Keystore-bound (the wrapped DEKs cannot leave the device — a transferred copy would be
+   permanently unreadable and orphan the Keystore references) or device-local protection
+   state. Nothing in this app is meaningful on another device, so nothing transfers.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="file" path="rules_snapshot.json" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="file" path="rules_snapshot.json" />
     </device-transfer>
-    -->
 </data-extraction-rules>

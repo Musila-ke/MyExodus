@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -128,11 +130,16 @@ object ProtectionNotifications {
             manager.cancel(NOTIF_DEGRADED)
             return
         }
-        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS)
-            != android.content.pm.PackageManager.PERMISSION_GRANTED
+        // POST_NOTIFICATIONS exists only on 33+; pre-33 that check reports DENIED for an
+        // unknown permission, so the real gate there is areNotificationsEnabled (same
+        // reasoning as ForegroundBlockerService.checkNotificationsPermission).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
         ) {
             return
         }
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
         manager.notify(NOTIF_DEGRADED, degraded(context, degradation))
     }
 }

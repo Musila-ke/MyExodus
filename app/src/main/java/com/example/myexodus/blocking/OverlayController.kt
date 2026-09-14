@@ -3,7 +3,6 @@ package com.example.myexodus.blocking
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Rect
-import android.graphics.drawable.ColorDrawable
 import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.SystemClock
@@ -16,6 +15,7 @@ import android.app.AppOpsManager
 import android.app.Dialog
 import android.os.Process
 import android.view.Display
+import androidx.core.graphics.drawable.toDrawable
 import com.example.myexodus.BuildConfig
 import java.util.concurrent.ConcurrentHashMap
 
@@ -182,7 +182,7 @@ class OverlayController(
         lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_DIM_BEHIND.inv()
         lp.dimAmount = 0f
         lp.windowAnimations = 0
-        window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        window.setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             // ALWAYS (value 3, stable since API 28) is annotated @RequiresApi(30) in modern
             // stubs because R narrowed it to fullscreen windows; both behaviors are wanted

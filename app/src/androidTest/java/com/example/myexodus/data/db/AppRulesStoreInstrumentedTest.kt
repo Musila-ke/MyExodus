@@ -26,7 +26,7 @@ class AppRulesStoreInstrumentedTest {
 
     private fun newFactory(): Triple<AppRulesStoreFactory, DatabaseHealthStore, RecoveryManager> {
         val healthStore = DatabaseHealthStore()
-        val recovery = RecoveryManager(context, legacyKeys, activityKeys, healthStore)
+        val recovery = RecoveryManager(context, legacyKeys, activityKeys, RulesStoreKeyManager(context), healthStore)
         recovery.resetAllData()
         val factory = AppRulesStoreFactory(context, recovery, healthStore)
         return Triple(factory, healthStore, recovery)
@@ -64,7 +64,7 @@ class AppRulesStoreInstrumentedTest {
 
         // Simulated app restart: a brand-new factory must re-open the same file.
         val healthStore2 = DatabaseHealthStore()
-        val recovery2 = RecoveryManager(context, legacyKeys, activityKeys, healthStore2)
+        val recovery2 = RecoveryManager(context, legacyKeys, activityKeys, RulesStoreKeyManager(context), healthStore2)
         val factory2 = AppRulesStoreFactory(context, recovery2, healthStore2)
         val db2 = factory2.open()
         assertNotNull(db2)
@@ -83,24 +83,14 @@ class AppRulesStoreInstrumentedTest {
         val rulesSql = schemaSql("restriction_rules")
         assertTrue(rulesSql?.contains(SchemaConstraints.CHECK_SELF_BLOCK) == true)
         assertTrue(rulesSql?.contains("severity_valid") == true)
-
-        val path = context.getDatabasePath("myexodus_rules.db").absolutePath
-        var userActiveIndex = 0L
-        AndroidSQLiteDriver().open(path).use { conn ->
-            conn.prepare(
-                "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='ux_user_active'",
-            ).use { stmt ->
-                stmt.step()
-                userActiveIndex = stmt.getLong(0)
-            }
-        }
-        assertEquals(1L, userActiveIndex)
+        // No ux_user_active assertion here: that v1-era partial index is deliberately retired
+        // (documented in SchemaConstraints.kt, dropped by AppRulesStoreFactory on open).
     }
 
     @Test
     fun corruptFileOnDisk_surfacesRecoverableDataFound() = runTest {
         val healthStore = DatabaseHealthStore()
-        val recovery = RecoveryManager(context, legacyKeys, activityKeys, healthStore)
+        val recovery = RecoveryManager(context, legacyKeys, activityKeys, RulesStoreKeyManager(context), healthStore)
         recovery.resetAllData()
         // Place a corrupt orphan BEFORE the open, as a crashed recovery would.
         val corrupt = java.io.File(context.getDatabasePath("myexodus_rules.db").absolutePath + ".corrupt")

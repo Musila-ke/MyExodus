@@ -5,7 +5,6 @@ import android.content.Context
 import android.util.Log
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.SQLiteStatement
-import androidx.sqlite.driver.AndroidSQLiteDriver
 import java.io.File
 import java.util.Arrays
 import net.zetetic.database.sqlcipher.SQLiteDatabase
@@ -22,12 +21,16 @@ import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
  * next launch — a database is never deleted that wasn't fully verified. INSERT OR IGNORE
  * makes re-runs idempotent. The rules store must already be open (schema present) before
  * this runs; the activity log key is guaranteed fresh because it never existed pre-split.
+ * The rules destination is opened through [AppRulesStoreFactory.currentDriver] because the
+ * store is SQLCipher-encrypted since the habit-streaks plan (§8 Step 1) — a plaintext open
+ * of an encrypted file fails.
  */
 class DatabaseMigration(
     private val appContext: Context,
     private val legacyKeyManager: DatabaseKeyManager,
     private val recoveryManager: RecoveryManager,
     private val activityLogKeyManager: ActivityLogKeyManager,
+    private val rulesStoreFactory: AppRulesStoreFactory,
 ) {
     private val lock = Any()
     @Volatile private var completed = false
@@ -67,7 +70,7 @@ class DatabaseMigration(
     private fun migrateInternal(legacyFile: File, dek: ByteArray): Boolean {
         SQLCipherDriver(dek, null, null).open(legacyFile.absolutePath).use { legacy ->
             val rulesPath = appContext.getDatabasePath(AppRulesStoreFactory.DB_NAME)
-            AndroidSQLiteDriver().open(rulesPath.absolutePath).use { rules ->
+            rulesStoreFactory.currentDriver().open(rulesPath.absolutePath).use { rules ->
                 val activityPath = appContext.getDatabasePath(ActivityLogSchema.DB_NAME)
                 val logKey = activityLogKeyManager.getOrCreateKey()
                 try {
@@ -112,28 +115,42 @@ class DatabaseMigration(
             rules.prepare("INSERT OR IGNORE INTO ${spec.new} ($columns) VALUES ($placeholders)").use { writer ->
                 while (reader.step()) {
                     for ((index, column) in spec.columns.withIndex()) {
-                        bind(reader, writer, index + 1, column)
+                        bind(reader, writer, index, column)
                     }
                     writer.step()
+                    // reset() after each row per the androidx driver contract — the zetetic
+                    // writer would otherwise insert only the first row of each table
+                    // (device-verified 2026-09-14); a no-op on the framework driver.
+                    writer.reset()
                 }
             }
         }
         return true
     }
 
-    private fun bind(reader: SQLiteStatement, writer: SQLiteStatement, index: Int, column: Column) {
+    /**
+     * Reader and writer have different index bases in the androidx.sqlite driver API: reads are
+     * 0-based (the driver delegates to a framework cursor — out-of-range reads return junk, they
+     * don't throw), binds are 1-based. A single shared index shifted every copied value one
+     * column left, silently (device-verified 2026-09-14; the same class of bug as
+     * PlaintextToEncryptedMigration.bind).
+     */
+    private fun bind(reader: SQLiteStatement, writer: SQLiteStatement, readIndex: Int, column: Column) {
+        val writeIndex = readIndex + 1
         when (column.kind) {
             Kind.TEXT -> {
-                val value = reader.getText(index)
-                if (value == null) writer.bindNull(index) else writer.bindText(index, value)
+                // getText is @NonNull-annotated but the cursor still returns null for NULL
+                // columns; isNull is the honest check (2026-09-14, same class of bug as LONG).
+                if (reader.isNull(readIndex)) writer.bindNull(writeIndex)
+                else writer.bindText(writeIndex, reader.getText(readIndex))
             }
             Kind.LONG -> {
                 // getLong coerces NULL to 0; the instrumented migration test seeds NULL
                 // time_range_start/end, and 0 would silently mean "midnight" (2026-08-28 review).
-                if (reader.isNull(index)) writer.bindNull(index)
-                else writer.bindLong(index, reader.getLong(index))
+                if (reader.isNull(readIndex)) writer.bindNull(writeIndex)
+                else writer.bindLong(writeIndex, reader.getLong(readIndex))
             }
-            Kind.BLOB -> writer.bindBlob(index, reader.getBlob(index))
+            Kind.BLOB -> writer.bindBlob(writeIndex, reader.getBlob(readIndex))
         }
     }
 
@@ -146,12 +163,14 @@ class DatabaseMigration(
             val values = ContentValues()
             while (reader.step()) {
                 values.clear()
-                values.put("event_id", reader.getText(1) ?: "")
-                values.put("installation_id", reader.getText(2) ?: "")
-                values.put("event_type", reader.getText(3) ?: "")
-                values.put("payload", reader.getBlob(4))
-                values.put("sync_status", reader.getText(5) ?: "")
-                values.put("created_at", reader.getLong(6))
+                // 0-based reads (see bind); the old 1-based indices read the payload BLOB as a
+                // string and crashed every migration (device-verified 2026-09-14).
+                values.put("event_id", reader.getText(0) ?: "")
+                values.put("installation_id", reader.getText(1) ?: "")
+                values.put("event_type", reader.getText(2) ?: "")
+                values.put("payload", reader.getBlob(3))
+                values.put("sync_status", reader.getText(4) ?: "")
+                values.put("created_at", reader.getLong(5))
                 activity.insertWithOnConflict(
                     ActivityLogSchema.TABLE, null, values, SQLiteDatabase.CONFLICT_IGNORE,
                 )

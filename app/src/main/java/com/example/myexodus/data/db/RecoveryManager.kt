@@ -3,6 +3,7 @@ package com.example.myexodus.data.db
 import android.content.Context
 import android.util.Log
 import java.io.File
+import java.io.IOException
 
 /**
  * The only component permitted to delete or rename database files. Covers the plain rules
@@ -15,6 +16,7 @@ class RecoveryManager(
     private val appContext: Context,
     private val legacyKeyManager: DatabaseKeyManager,
     private val activityLogKeyManager: ActivityLogKeyManager,
+    private val rulesStoreKeyManager: RulesStoreKeyManager,
     private val healthStore: DatabaseHealthStore,
 ) {
 
@@ -22,6 +24,12 @@ class RecoveryManager(
     val activityDbFile: File get() = appContext.getDatabasePath(ActivityLogSchema.DB_NAME)
     val legacyDbFile: File get() = appContext.getDatabasePath(LEGACY_DB_NAME)
     private val snapshotCacheFile: File get() = File(appContext.filesDir, SNAPSHOT_CACHE_NAME)
+
+    /** Plaintext backup kept until the encrypted store has opened on a later cold start. */
+    val rulesDbBackupFile: File get() = File(rulesDbFile.path + CONVERSION_BACKUP_SUFFIX)
+
+    /** Room-built encrypted database while the conversion is in flight. */
+    val rulesDbTempFile: File get() = File(rulesDbFile.path + CONVERSION_TEMP_SUFFIX)
 
     fun checkOrphanedCorruptFiles() {
         val anyOrphan =
@@ -53,26 +61,97 @@ class RecoveryManager(
         for (file in listOf(rulesDbFile, activityDbFile, legacyDbFile)) {
             deleteWithSidecars(file)
         }
+        cleanupConversionArtifacts()
         snapshotCacheFile.delete()
         legacyKeyManager.resetKeyMaterial()
         activityLogKeyManager.resetKeyMaterial()
+        rulesStoreKeyManager.resetKeyMaterial()
         healthStore.set(DatabaseHealth.Opening)
+    }
+
+    // --- Plaintext→encrypted conversion (§8 Step 0). All renames/deletes stay in this class;
+    // the conversion routine only reads rows and writes the temp destination.
+
+    fun hasConversionBackup(): Boolean = rulesDbBackupFile.exists()
+
+    /** Copies the (already checkpointed) plaintext rules file to `.bak` before any swap. */
+    fun backupPlaintextRules(): Boolean = try {
+        rulesDbFile.copyTo(rulesDbBackupFile, overwrite = true)
+        Log.i(TAG, "Conversion backup written to ${rulesDbBackupFile.name}")
+        true
+    } catch (e: IOException) {
+        Log.e(TAG, "Conversion backup copy failed", e)
+        false
+    }
+
+    /**
+     * Replaces the plaintext rules file with the verified encrypted temp file. The plaintext
+     * sidecars go first (the caller checkpointed, so they hold no unmerged data); the swap
+     * itself is a same-directory rename, atomic on Linux.
+     */
+    fun swapInEncryptedRules(): Boolean {
+        deleteSidecars(rulesDbFile)
+        var renamed = rulesDbTempFile.renameTo(rulesDbFile)
+        if (!renamed) {
+            // Unusual for a same-directory rename; the .bak makes the delete window safe.
+            rulesDbFile.delete()
+            renamed = rulesDbTempFile.renameTo(rulesDbFile)
+        }
+        if (!renamed) {
+            Log.e(TAG, "Encrypted swap rename failed; plaintext backup retained")
+            return false
+        }
+        deleteSidecars(rulesDbTempFile)
+        Log.i(TAG, "Recovery action: encrypted rules database swapped into place")
+        return true
+    }
+
+    /** Two-launch confirmation: drop the plaintext backup after a later cold start opened the encrypted store. */
+    fun confirmConversionBackup() {
+        Log.i(TAG, "Recovery action: conversion confirmed; removing plaintext backup")
+        cleanupConversionArtifacts()
+    }
+
+    /** Encrypted store failed to open: put the untouched plaintext database back. */
+    fun restorePlaintextFromBackup(): Boolean {
+        if (!hasConversionBackup()) return false
+        Log.w(TAG, "Recovery action: restoring plaintext database from conversion backup")
+        deleteWithSidecars(rulesDbFile)
+        deleteConversionTemp()
+        val restored = rulesDbBackupFile.renameTo(rulesDbFile)
+        if (!restored) Log.e(TAG, "Restore from conversion backup failed")
+        return restored
+    }
+
+    fun deleteConversionTemp() {
+        rulesDbTempFile.delete()
+        deleteSidecars(rulesDbTempFile)
+    }
+
+    private fun cleanupConversionArtifacts() {
+        deleteConversionTemp()
+        rulesDbBackupFile.delete()
+        deleteSidecars(rulesDbBackupFile)
     }
 
     private fun renameCorrupt(file: File) {
         Log.w(TAG, "Recovery action: renaming corrupted database to .corrupt")
-        File(file.path + "-wal").delete()
-        File(file.path + "-shm").delete()
+        deleteSidecars(file)
         if (file.exists() && !file.renameTo(File(file.path + ".corrupt"))) {
             Log.e(TAG, "Failed to rename corrupted database to ${file.path}.corrupt")
         }
     }
 
     private fun deleteWithSidecars(file: File) {
-        File(file.path + "-wal").delete()
-        File(file.path + "-shm").delete()
+        deleteSidecars(file)
         File(file.path + ".corrupt").delete()
         file.delete()
+    }
+
+    private fun deleteSidecars(file: File) {
+        File(file.path + "-wal").delete()
+        File(file.path + "-shm").delete()
+        File(file.path + "-journal").delete()
     }
 
     private fun hasCorrupt(file: File): Boolean = File(file.path + ".corrupt").exists()
@@ -81,5 +160,7 @@ class RecoveryManager(
         const val TAG = "MyExodusDb"
         const val LEGACY_DB_NAME = "myexodus.db"
         const val SNAPSHOT_CACHE_NAME = "rules_snapshot.json"
+        const val CONVERSION_BACKUP_SUFFIX = ".bak"
+        const val CONVERSION_TEMP_SUFFIX = ".tmp"
     }
 }

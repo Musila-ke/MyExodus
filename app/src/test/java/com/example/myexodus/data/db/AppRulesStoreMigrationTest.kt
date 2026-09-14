@@ -17,11 +17,12 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Rules-store migration chain 2→3→4→5 (recovery_state, attempt_log, is_enabled). The v2
- * baseline is the exact DDL Room generates for version 2 (verbatim copies of the SQL emitted
- * by AppRulesStore_Impl), so the test proves the real upgrade path end to end, including
- * Room's post-migration schema validation (the 2026-08-28 migration failure class) and that
- * pre-existing rule rows survive the 4→5 column add as enabled.
+ * Rules-store migration chain 2→6 (recovery_state, attempt_log, is_enabled, streak tables).
+ * The v2 baseline is the exact DDL Room generates for version 2 (verbatim copies of the SQL
+ * emitted by AppRulesStore_Impl), so the test proves the real upgrade path end to end,
+ * including Room's post-migration schema validation (the 2026-08-28 migration failure class)
+ * and that pre-existing rule rows survive the 4→5 column add as enabled. The 5→6 specifics
+ * are covered on-device by AppRulesStoreMigrationInstrumentedTest (MigrationTestHelper).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
@@ -36,7 +37,9 @@ class AppRulesStoreMigrationTest {
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
         healthStore = DatabaseHealthStore()
-        recovery = RecoveryManager(context, FakeKeyManager(), ActivityLogKeyManager(context), healthStore)
+        recovery = RecoveryManager(
+            context, FakeKeyManager(), ActivityLogKeyManager(context), RulesStoreKeyManager(context), healthStore,
+        )
         recovery.resetAllData()
         factory = AppRulesStoreFactory(context, recovery, healthStore)
     }

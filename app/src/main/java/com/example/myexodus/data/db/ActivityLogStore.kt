@@ -24,6 +24,10 @@ class ActivityLogStore(
 
     val isOpen: Boolean get() = synchronized(lock) { db != null }
 
+    /** Test-only: the live handle, so device suites can assert the connection-scoped PRAGMAs
+     *  that [ActivityLogSchema.applyPragmas] fixed (a second connection cannot see them). */
+    fun databaseForTest(): SQLiteDatabase? = synchronized(lock) { db }
+
     /**
      * Opens (or creates) the encrypted log file. Returns false on failure after recovery
      * attempts (key loss → fresh empty log; corruption → preserved .corrupt copy, fresh

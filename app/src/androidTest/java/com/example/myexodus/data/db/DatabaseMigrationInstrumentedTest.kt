@@ -33,7 +33,7 @@ class DatabaseMigrationInstrumentedTest {
     @Before
     fun setUp() {
         healthStore = DatabaseHealthStore()
-        recovery = RecoveryManager(context, legacyKeys, activityKeys, healthStore)
+        recovery = RecoveryManager(context, legacyKeys, activityKeys, RulesStoreKeyManager(context), healthStore)
         recovery.resetAllData()
     }
 
@@ -52,7 +52,7 @@ class DatabaseMigrationInstrumentedTest {
         val rules = rulesFactory().open()
         assertTrue(rules != null)
 
-        val migrated = DatabaseMigration(context, legacyKeys, recovery, activityKeys).runOnceIfNeeded()
+        val migrated = DatabaseMigration(context, legacyKeys, recovery, activityKeys, rulesFactory()).runOnceIfNeeded()
         assertTrue("Migration should succeed", migrated)
 
         assertEquals(1L, rulesCount("user_profile"))
@@ -60,6 +60,12 @@ class DatabaseMigrationInstrumentedTest {
         assertEquals(1L, rulesCount("daily_usage_tracker"))
         assertEquals(1L, rulesCount("habit_progress"))
         assertEquals(1L, rulesCount("coaching_step"))
+
+        // Row-count parity alone passed while every value was shifted one column left
+        // (out-of-range reads return junk instead of throwing), so assert real values.
+        assertEquals("Legacy User", rulesText("user_profile", "name", "user_id", "profile-1"))
+        assertEquals("com.instagram.android", rulesText("restriction_rules", "blocked_package", "rule_id", "rule-1"))
+        assertEquals("Go for a walk", rulesText("coaching_step", "action_text", "step_id", "c-1"))
 
         val log = ActivityLogStore(context, activityKeys)
         assertTrue(log.open())
@@ -76,7 +82,7 @@ class DatabaseMigrationInstrumentedTest {
     fun migration_isIdempotent() = runTest {
         seedLegacyDatabase()
         rulesFactory().open()
-        val migration = DatabaseMigration(context, legacyKeys, recovery, activityKeys)
+        val migration = DatabaseMigration(context, legacyKeys, recovery, activityKeys, rulesFactory())
 
         assertTrue(migration.runOnceIfNeeded())
         // A second run (e.g. concurrent bootstrap) must no-op.
@@ -90,7 +96,7 @@ class DatabaseMigrationInstrumentedTest {
         recovery.legacyDbFile.writeText("not a database")
         rulesFactory().open()
 
-        val migrated = DatabaseMigration(context, legacyKeys, recovery, activityKeys).runOnceIfNeeded()
+        val migrated = DatabaseMigration(context, legacyKeys, recovery, activityKeys, rulesFactory()).runOnceIfNeeded()
         assertFalse("Migration must fail on an unreadable legacy database", migrated)
         assertTrue("Legacy file must be preserved on failure", recovery.legacyDbFile.exists())
         assertEquals("No rows may be copied on failure", 0L, rulesCount("restriction_rules"))
@@ -101,6 +107,15 @@ class DatabaseMigrationInstrumentedTest {
             conn.prepare("SELECT count(*) FROM $table").use { stmt ->
                 stmt.step()
                 stmt.getLong(0)
+            }
+        }
+    }
+
+    private fun rulesText(table: String, column: String, idColumn: String, id: String): String? {
+        return AndroidSQLiteDriver().open(recovery.rulesDbFile.absolutePath).use { conn ->
+            conn.prepare("SELECT $column FROM $table WHERE $idColumn = ?").use { stmt ->
+                stmt.bindText(1, id)
+                if (stmt.step()) stmt.getText(0) else null
             }
         }
     }

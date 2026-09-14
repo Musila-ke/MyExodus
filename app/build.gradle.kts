@@ -49,10 +49,25 @@ android {
             isIncludeAndroidResources = true
         }
     }
+    sourceSets {
+        getByName("androidTest") {
+            // MigrationTestHelper loads the exported schema JSONs from the test APK's assets
+            // (verified: androidx.room3.testing.AndroidMigrationTestHelper.loadSchema reads
+            // instrumentation.context.assets/<dbClass-qualified-name>/<version>.json).
+            assets.srcDir("$projectDir/schemas")
+        }
+    }
 }
 
 dependencyLocking {
     lockAllConfigurations()
+}
+
+ksp {
+    // Room schema export (§8 Step 1 / §12): MigrationTestHelper needs the versioned schema
+    // JSONs. Room 3's compiler still reads the `room.schemaLocation` processor option
+    // (verified against room3-compiler 3.0.3 class constants).
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
@@ -70,6 +85,9 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.room.runtime)
+    // Aligns kotlinx-serialization to Room 3.0.3's compile target (AndroidX ships the
+    // schema/migration serializers precompiled against 1.8.1; 1.7.x throws AbstractMethodError).
+    implementation(platform(libs.kotlinx.serialization.bom))
     implementation(libs.androidx.sqlite)
     implementation(libs.zetetic.sqlcipher)
     ksp(libs.androidx.room.compiler)
@@ -105,6 +123,7 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.test.uiautomator)
+    androidTestImplementation(libs.androidx.room.testing)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
     // Debug-only: the pairing harness prompts for biometric signing (V1 UI will move this to main).

@@ -86,6 +86,22 @@
             android:name=".blocking.ProtectionActionReceiver"
             android:exported="false" />
 
+        <!-- Habit-streaks §8 Step 4: milestone alarms do not survive reboot, so every boot
+            re-derives the pending alarm set from durable state. Post-unlock broadcast only —
+            the rules store is credential-encrypted and unreachable pre-unlock. -->
+        <receiver
+            android:name=".streaks.MilestoneBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Milestone alarm firing (§6/§8 Step 4). Component-explicit; never exported. -->
+        <receiver
+            android:name=".streaks.MilestoneAlarmReceiver"
+            android:exported="false" />
+
         <!-- §8.1 app-block detection service. specialUse requires the subtype property on
             API 34+; the declaration is part of the Play-policy self-check (§12) when the
             release build is prepared. START_STICKY restarts after a crash, which is exactly

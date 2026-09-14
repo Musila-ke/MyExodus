@@ -9,6 +9,7 @@ import com.example.myexodus.data.db.DatabaseHealthStore
 import com.example.myexodus.data.db.DatabaseKeyManager
 import com.example.myexodus.data.db.KeyFailure
 import com.example.myexodus.data.db.RecoveryManager
+import com.example.myexodus.data.db.RulesStoreKeyManager
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.UserProfile
 import kotlinx.coroutines.test.runTest
@@ -40,7 +41,9 @@ class RulesSnapshotPublisherTest {
         context = ApplicationProvider.getApplicationContext()
         fakeLegacyKeys = FakeKeyManager()
         val healthStore = DatabaseHealthStore()
-        recovery = RecoveryManager(context, fakeLegacyKeys, ActivityLogKeyManager(context), healthStore)
+        recovery = RecoveryManager(
+            context, fakeLegacyKeys, ActivityLogKeyManager(context), RulesStoreKeyManager(context), healthStore,
+        )
         recovery.resetAllData()
         factory = AppRulesStoreFactory(context, recovery, healthStore)
         publisher = RulesSnapshotPublisher(context, factory)

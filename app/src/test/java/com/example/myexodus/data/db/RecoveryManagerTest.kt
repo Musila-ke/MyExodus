@@ -30,7 +30,7 @@ class RecoveryManagerTest {
         healthStore = DatabaseHealthStore()
         fakeLegacyKeys = FakeKeyManager()
         activityLogKeys = ActivityLogKeyManager(context)
-        manager = RecoveryManager(context, fakeLegacyKeys, activityLogKeys, healthStore)
+        manager = RecoveryManager(context, fakeLegacyKeys, activityLogKeys, RulesStoreKeyManager(context), healthStore)
         wipeAll()
     }
 

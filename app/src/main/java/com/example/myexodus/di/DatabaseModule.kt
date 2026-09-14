@@ -12,6 +12,8 @@ import com.example.myexodus.data.db.DatabaseKeyManager
 import com.example.myexodus.data.db.DatabaseMigration
 import com.example.myexodus.data.db.InstallationIdProvider
 import com.example.myexodus.data.db.RecoveryManager
+import com.example.myexodus.data.db.RulesStoreEncryption
+import com.example.myexodus.data.db.RulesStoreKeyManager
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -39,20 +41,34 @@ object DatabaseModule {
     @Provides @Singleton
     fun provideHealthStore(): DatabaseHealthStore = DatabaseHealthStore()
 
+    /** Key source for the rules store, encrypted at rest since the habit-streaks plan (§8 Step 1). */
+    @Provides @Singleton
+    fun provideRulesStoreKeyManager(@ApplicationContext context: Context): RulesStoreKeyManager =
+        RulesStoreKeyManager(context)
+
     @Provides @Singleton
     fun provideRecoveryManager(
         @ApplicationContext context: Context,
         legacyKeyManager: DatabaseKeyManager,
         activityLogKeyManager: ActivityLogKeyManager,
+        rulesStoreKeyManager: RulesStoreKeyManager,
         healthStore: DatabaseHealthStore,
-    ): RecoveryManager = RecoveryManager(context, legacyKeyManager, activityLogKeyManager, healthStore)
+    ): RecoveryManager =
+        RecoveryManager(context, legacyKeyManager, activityLogKeyManager, rulesStoreKeyManager, healthStore)
+
+    @Provides @Singleton
+    fun provideRulesStoreEncryption(
+        rulesStoreKeyManager: RulesStoreKeyManager,
+        recoveryManager: RecoveryManager,
+    ): RulesStoreEncryption = RulesStoreEncryption(rulesStoreKeyManager, recoveryManager)
 
     @Provides @Singleton
     fun provideAppRulesStoreFactory(
         @ApplicationContext context: Context,
         recoveryManager: RecoveryManager,
         healthStore: DatabaseHealthStore,
-    ): AppRulesStoreFactory = AppRulesStoreFactory(context, recoveryManager, healthStore)
+        encryption: RulesStoreEncryption,
+    ): AppRulesStoreFactory = AppRulesStoreFactory(context, recoveryManager, healthStore, encryption)
 
     @Provides @Singleton
     fun provideActivityLogStore(
@@ -66,8 +82,9 @@ object DatabaseModule {
         legacyKeyManager: DatabaseKeyManager,
         recoveryManager: RecoveryManager,
         activityLogKeyManager: ActivityLogKeyManager,
+        storeFactory: AppRulesStoreFactory,
     ): DatabaseMigration =
-        DatabaseMigration(context, legacyKeyManager, recoveryManager, activityLogKeyManager)
+        DatabaseMigration(context, legacyKeyManager, recoveryManager, activityLogKeyManager, storeFactory)
 
     @Provides @Singleton
     fun provideRulesSnapshotPublisher(

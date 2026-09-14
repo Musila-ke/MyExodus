@@ -23,6 +23,7 @@ import com.example.myexodus.data.db.DatabaseHealthStore
 import com.example.myexodus.data.db.DatabaseKeyManager
 import com.example.myexodus.data.db.KeyFailure
 import com.example.myexodus.data.db.RecoveryManager
+import com.example.myexodus.data.db.RulesStoreKeyManager
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
@@ -82,7 +83,9 @@ class PartnerSyncCoordinatorTest {
             .build()
         store = ChainStateStore(db)
         val healthStore = DatabaseHealthStore()
-        recovery = RecoveryManager(context, FakeKeyManager(), ActivityLogKeyManager(context), healthStore)
+        recovery = RecoveryManager(
+            context, FakeKeyManager(), ActivityLogKeyManager(context), RulesStoreKeyManager(context), healthStore,
+        )
         recovery.resetAllData()
         factory = AppRulesStoreFactory(context, recovery, healthStore)
         recorder = AttemptRecorder(factory)

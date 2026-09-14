@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -49,6 +50,7 @@ import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.StrictModeManager
 import com.example.myexodus.ui.AppShell
+import com.example.myexodus.ui.streaks.StreaksViewModel
 import com.example.myexodus.ui.theme.MyExodusTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
@@ -62,10 +64,15 @@ class MainActivity : ComponentActivity() {
      *  Recovery dashboard (one tap from the block surface). */
     private var requestedTab by mutableStateOf<String?>(null)
 
+    /** Milestone notifications deep-link the habit they celebrate (multi-habit): the shell
+     *  selects it before showing Home so the splash card belongs to the right habit. */
+    private var requestedHabit by mutableStateOf<String?>(null)
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         requestedTab = intent.getStringExtra(EXTRA_START_TAB)
+        requestedHabit = intent.getStringExtra(EXTRA_START_HABIT)
     }
 
     @Inject lateinit var rulesStoreFactory: AppRulesStoreFactory
@@ -79,9 +86,20 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var settings: EnhancedModeSettings
     @Inject lateinit var protectionStatus: ProtectionStatusStore
 
+    private val streaksViewModel: StreaksViewModel by viewModels()
+
+    /** Plan §8 Step 5 / Decision 9: the foreground evaluation trigger lives here, at the
+     *  Activity lifecycle boundary — never inside composition. The ViewModel's own `init`
+     *  covers the first launch. */
+    override fun onResume() {
+        super.onResume()
+        streaksViewModel.refresh()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestedTab = intent.getStringExtra(EXTRA_START_TAB)
+        requestedHabit = intent.getStringExtra(EXTRA_START_HABIT)
         enableEdgeToEdge()
         setContent {
             MyExodusTheme {
@@ -100,17 +118,22 @@ class MainActivity : ComponentActivity() {
                 }
                 val rulesStore = remember { rulesStoreFactory.open() }
                 val health = healthStore.health.collectAsStateWithLifecycle().value
+                // EncryptionUpgradePending is deliberately usable (plan §8 Step 0: pending
+                // conversion must not block the app — it runs on the plaintext store meanwhile).
+                val usable = health == DatabaseHealth.Ready ||
+                    health == DatabaseHealth.EncryptionUpgradePending
                 // V1 ships no onboarding; rules FK a profile row, so the single local profile
                 // is created on first launch (idempotent — see RulesRepository).
                 LaunchedEffect(health) {
-                    if (health == DatabaseHealth.Ready) {
+                    if (usable) {
                         runCatching { rulesRepository.ensureActiveProfile() }
                             .onFailure { Log.w(TAG, "Profile bootstrap failed", it) }
                     }
                 }
-                if (health == DatabaseHealth.Ready) {
+                if (usable) {
                     AppShell(
                         store = rulesStore,
+                        encryptionPending = health == DatabaseHealth.EncryptionUpgradePending,
                         repository = rulesRepository,
                         recoveryStore = recoveryStore,
                         attempts = attemptRecorder,
@@ -118,8 +141,11 @@ class MainActivity : ComponentActivity() {
                         strictMode = strictMode,
                         settings = settings,
                         degradation = degradation,
+                        streaks = streaksViewModel,
                         requestedTab = requestedTab,
                         onTabConsumed = { requestedTab = null },
+                        requestedHabit = requestedHabit,
+                        onHabitConsumed = { requestedHabit = null },
                         onReenable = {
                             protectionStatus.reenable()
                             ProtectionNotifications.updateDegraded(this, null)
@@ -166,7 +192,14 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_START_TAB = "extra_start_tab"
+
+        /** Milestone notification deep link: which habit's Home to show. */
+        const val EXTRA_START_HABIT = "extra_start_habit"
         const val TAB_RECOVERY = "Recovery"
+
+        /** Milestone notifications land here: the splash card renders at the top of Home
+         *  (plan §8 Step 5), so the notification's "open the app" call-to-action must show it. */
+        const val TAB_HOME = "Home"
 
         private const val TAG = "MyExodus"
     }
@@ -211,6 +244,13 @@ private fun DatabaseHealthScreen(
                 Text("Opening MyExodus…")
             }
             DatabaseHealth.Ready -> Unit
+            DatabaseHealth.EncryptionUpgradePending -> {
+                Text("Data protection upgrade pending", style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(8.dp))
+                Text("MyExodus will finish securing your local data on a future launch. Try again now, or keep using the app.")
+                Spacer(Modifier.height(16.dp))
+                Button(onClick = onRetry) { Text("Try again") }
+            }
             DatabaseHealth.RecoverableDataFound -> {
                 Text("Recoverable data found", style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.height(8.dp))

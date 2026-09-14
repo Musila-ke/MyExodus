@@ -9,6 +9,7 @@ import com.example.myexodus.data.db.DatabaseHealthStore
 import com.example.myexodus.data.db.DatabaseKeyManager
 import com.example.myexodus.data.db.KeyFailure
 import com.example.myexodus.data.db.RecoveryManager
+import com.example.myexodus.data.db.RulesStoreKeyManager
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -37,7 +38,9 @@ class RecoveryStateStoreTest {
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
         val healthStore = DatabaseHealthStore()
-        recovery = RecoveryManager(context, FakeKeyManager(), ActivityLogKeyManager(context), healthStore)
+        recovery = RecoveryManager(
+            context, FakeKeyManager(), ActivityLogKeyManager(context), RulesStoreKeyManager(context), healthStore,
+        )
         recovery.resetAllData()
         factory = AppRulesStoreFactory(context, recovery, healthStore)
         store = RecoveryStateStore(factory)

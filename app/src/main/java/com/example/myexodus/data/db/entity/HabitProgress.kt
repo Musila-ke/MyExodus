@@ -31,4 +31,13 @@ data class HabitProgress(
     @ColumnInfo(name = "share_milestones") val shareMilestones: Boolean,
     // No FK: the Partnership table is out of scope for the persistence plan (six entities).
     @ColumnInfo(name = "assigned_partnership_id") val assignedPartnershipId: String?,
+    // Habit-level record surviving streak rollovers (habit-streaks plan §8 Step 2); the live
+    // accumulator is RecoveryStreak.current_streak_elapsed_ms and must never be read from here.
+    // defaultValue keeps Room's schema validation in step with the v6 migration's ADD COLUMN.
+    @ColumnInfo(name = "all_time_max_streak_elapsed_ms", defaultValue = "0")
+    val allTimeMaxStreakElapsedMs: Long = 0,
+    // The habit the UI displays (V1 multi-habit): exactly one selected row per profile once a
+    // habit exists. A v7 addition; the migration backfills pre-v7 rows (≤1 habit per profile).
+    @ColumnInfo(name = "is_selected", defaultValue = "0")
+    val isSelected: Boolean = false,
 )
