@@ -2,7 +2,10 @@ package com.example.myexodus.blocking
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.ViewTreeObserver
@@ -37,6 +40,10 @@ sealed interface OverlayContent {
  * nothing reaches the app beneath; opaque so the blocked content is not readable through it.
  * `filterTouchesWhenObscured` per NFR-S10: taps are discarded while another window obscures
  * this one. Reused per display — [bind] re-renders it for every show.
+ *
+ * Painted in the block screen's own theme colors (user-directed 2026-09-13: the cover showed
+ * dark, the BlockerActivity card light — the swap read as two pause screens; matching colors
+ * and type make it one continuous surface). Keep in step with [BlockerActivity.BlockScreen].
  */
 @SuppressLint("ViewConstructor") // built in code only — never inflated from XML
 internal class BlockOverlayView(
@@ -47,32 +54,35 @@ internal class BlockOverlayView(
 ) : FrameLayout(context) {
 
     private val title = TextView(context).apply {
-        setTextColor(Color.WHITE)
-        textSize = 22f
+        setTextColor(0xFF1D1B19.toInt()) // TextLight
+        textSize = 22f // titleLarge, as the block screen
         gravity = Gravity.CENTER
     }
     private val message = TextView(context).apply {
-        setTextColor(0xFFB9BDC4.toInt())
-        textSize = 15f
+        setTextColor(0xFF6E675E.toInt()) // MutedLight (onSurfaceVariant)
+        textSize = 14f // bodyMedium
         gravity = Gravity.CENTER
     }
-    private val recoveryButton = overlayButton(R.string.overlay_open_recovery)
-    private val differentSiteButton = overlayButton(R.string.overlay_different_site)
+    private val recoveryButton = overlayButton(R.string.overlay_open_recovery, primary = true)
+    private val differentSiteButton = overlayButton(R.string.overlay_different_site, primary = false)
     private val hint = TextView(context).apply {
         setText(R.string.overlay_hint)
-        setTextColor(0xFF8A9099.toInt())
-        textSize = 13f
+        setTextColor(0xFF6E675E.toInt()) // MutedLight
+        textSize = 12f // bodySmall
         gravity = Gravity.CENTER
     }
 
     init {
-        setBackgroundColor(0xFF15171A.toInt())
+        setBackgroundColor(0xFFFAF8F5.toInt()) // SandLight — the theme background
         filterTouchesWhenObscured = true
         addView(
             LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                setPadding(64, 64, 64, 64)
+                // dp, not raw px: 64px rendered as a visibly different inset per density
+                // (emulator-caught 2026-09-13 alongside the Dialog-decoration sizing defect).
+                val pad = (24 * resources.displayMetrics.density).toInt()
+                setPadding(pad, pad, pad, pad)
                 addView(title)
                 addView(message, marginParams(bottom = 32))
                 addView(recoveryButton, marginParams(bottom = 8))
@@ -112,9 +122,34 @@ internal class BlockOverlayView(
         }
     }
 
-    private fun overlayButton(textRes: Int): Button = Button(context).apply {
+    private fun overlayButton(textRes: Int, primary: Boolean): Button = Button(context).apply {
         setText(textRes)
         isAllCaps = false
+        setTextColor(if (primary) Color.WHITE else 0xFF1D1B19.toInt())
+        // Pill shape + ripple, as the Compose M3 buttons on the block screen; the cover must
+        // not restyle at the hand-off. Paint order: ripple (masked to the pill) over the fill.
+        val radius = 20 * resources.displayMetrics.density
+        val mask = GradientDrawable().apply {
+            cornerRadius = radius
+            setColor(Color.WHITE)
+        }
+        val fill = GradientDrawable().apply {
+            cornerRadius = radius
+            setColor(if (primary) 0xFF0F766E.toInt() else 0xFFEFEAE2.toInt()) // TealLight / surfaceVariant
+        }
+        background = RippleDrawable(
+            ColorStateList.valueOf(if (primary) 0x33FFFFFF else 0x22000000),
+            fill,
+            mask,
+        )
+        // Replacing the background drops the drawable's content insets (text ran edge-to-edge
+        // over the pill) and the theme's button style keeps an elevation shadow the Compose
+        // button does not have. M3 metrics instead: 24/8dp padding, 40dp min height, flat.
+        val padH = (24 * resources.displayMetrics.density).toInt()
+        val padV = (8 * resources.displayMetrics.density).toInt()
+        setPadding(padH, padV, padH, padV)
+        minimumHeight = (40 * resources.displayMetrics.density).toInt()
+        stateListAnimator = null
     }
 
     private fun marginParams(top: Int = 0, bottom: Int = 0): LinearLayout.LayoutParams =

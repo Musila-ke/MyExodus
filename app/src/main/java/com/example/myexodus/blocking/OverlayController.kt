@@ -1,7 +1,9 @@
 package com.example.myexodus.blocking
 
 import android.content.Context
+import android.graphics.Color
 import android.graphics.Rect
+import android.graphics.drawable.ColorDrawable
 import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.SystemClock
@@ -69,21 +71,34 @@ class OverlayController(
     }
 
     fun show(generation: Long, displayId: Int, bounds: Rect, content: OverlayContent) {
-        if (!stateMachine.isCurrent(generation) || shown[displayId] == true) {
-            // Diagnostic (2026-08-28): §12 latency run showed 1 submission across 20 Block
-            // decides — which gate no-ops on-device (stale generation vs already-shown)?
-            // Debug-only: builds a string even when nothing is wrong (hot path, release).
+        if (!stateMachine.isCurrent(generation)) {
             if (BuildConfig.DEBUG) {
-                Log.d(
-                    TAG,
-                    "show skipped gen=$generation display=$displayId gate=" +
-                        if (!stateMachine.isCurrent(generation)) "stale-generation" else "already-shown",
-                )
+                Log.d(TAG, "show skipped gen=$generation display=$displayId gate=stale-generation")
             }
+            return
+        }
+        if (shown[displayId] == true) {
+            // Already shown: re-bound, never re-add. The first show passes display bounds
+            // (cold-sub-window guard); the service's per-window pass that follows must still
+            // land, or the cover freezes at whole-display size and swallows the allowed pane
+            // (emulator-5554 split-screen, 2026-09-14). Content stays first-wins.
+            refreshBounds(displayId, bounds)
             return
         }
         contents[displayId] = content
         if (useAddView) showAddView(generation, displayId, bounds, content) else showDialog(generation, displayId, bounds, content)
+    }
+
+    /** Live re-bound of an already-shown overlay: updateViewLayout on the added view,
+     *  window-attribute re-apply on the dialog. */
+    private fun refreshBounds(displayId: Int, bounds: Rect) {
+        if (useAddView) {
+            val view = views[displayId] ?: return
+            applyBounds(view, bounds)
+            runCatching { windowManagerFor(displayId).updateViewLayout(view, view.layoutParams) }
+        } else {
+            dialogs[displayId]?.let { applyBounds(it, bounds) }
+        }
     }
 
     fun hide(generation: Long, displayId: Int) {
@@ -143,11 +158,31 @@ class OverlayController(
         val display = displayManager.getDisplay(displayId) ?: return null
         val displayContext = appContext.createDisplayContext(display)
         val dialog = BlockDialog(displayContext)
+        // Install the decor BEFORE touching window attributes: setContentView builds the
+        // DecorView and re-applies the theme's windowAnimationStyle (and the dim/background)
+        // over anything written earlier. A `windowAnimations = 0` write made before this
+        // point was silently reverted to the dialog theme's entrance animation — the window
+        // then stalled drawn-but-transparent on the stock emulator (emulator-caught
+        // 2026-09-13: WM said HAS_DRAWN + isVisible + topmost, zero pixels until window
+        // animations were disabled). Attribute writes must come after this line.
+        val view = BlockOverlayView(displayContext, { }, onOpenRecovery, onDifferentSite)
+        dialog.setContentView(view)
         val window = dialog.window ?: return null
         val lp = window.attributes
         lp.flags = lp.flags or
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        // A plain Dialog's theme background is an inset rounded shape with a dim layer: the
+        // opaque card rendered inside it, shrunk to a floating panel with the blocked app
+        // visible around the edges (emulator-caught 2026-09-13; the XOS addView path has no
+        // decor, so its card always filled the window). The Dialog path drops the theme
+        // background and dim so the view fills the window exactly like the addView path;
+        // both paths can't share the mechanism otherwise. No window animation either — the
+        // bridge must appear instantly, not scale in.
+        lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_DIM_BEHIND.inv()
+        lp.dimAmount = 0f
+        lp.windowAnimations = 0
+        window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             // ALWAYS (value 3, stable since API 28) is annotated @RequiresApi(30) in modern
             // stubs because R narrowed it to fullscreen windows; both behaviors are wanted
@@ -160,8 +195,6 @@ class OverlayController(
         }
         window.attributes = lp
         window.setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
-        val view = BlockOverlayView(displayContext, { }, onOpenRecovery, onDifferentSite)
-        dialog.setContentView(view)
         dialogViews[displayId] = view
         profiler.attach(window, displayId)
         dialogs[displayId] = dialog

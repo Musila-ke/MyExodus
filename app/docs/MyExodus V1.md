@@ -245,6 +245,7 @@ Every functional requirement below specifies a testable behavior. Before any of 
 **Edge Case:** Given the user crosses the 2-hour threshold while the device has no network connection, When the limit is reached, Then the system successfully intercepts and blocks the app locally.
 
 **Implementation status (2026-09-13): deferred by product decision.** The schema column (`daily_limit_ms`) and the engine branch (`usageTodayMs >= dailyLimitMs`, only evaluated when a caller supplies usage) exist, but nothing feeds usage data: the rule editor creates rules with `dailyLimitMs = 0`, and the enforcement path evaluates with `usageTodayMs = null`. A daily limit can therefore be neither set in the UI nor enforced. Making it real requires a `UsageStatsManager` threshold feed into the enforcement path — enforcement work outside the UI-only scope of this phase. No UI copy promises a daily-limit feature.
+**Un-deferred 2026-09-13 (user direction — "nah we need it").** Back on the build queue. Shape of the build: foreground-time accumulation per restricted app in the FGS's existing `queryEvents` poll (the PACKAGE_USAGE_STATS permission and the 1.5s ACTIVITY_RESUMED loop already exist — the feed is mostly bookkeeping — session start/end accumulation, persistence, and a day-boundary reset — not new infrastructure), the `dailyLimitMs` field in the rule editor, the engine branch fed with real usage, and Req 32's pre-block warnings (10-/5-minute heads-up notifications) riding on the same feed. Plan pending.
 
 ### 5. Total Block Duration Expirations
 
@@ -423,6 +424,23 @@ Every functional requirement below specifies a testable behavior. Before any of 
 ### 34. Partner Dashboard Cache TTL
 
 **Requirement:** The partner dashboard shall implement a 15-minute Time-To-Live (TTL) for all cached behavioral data to ensure that accountability partners are reviewing current habit metrics and not stale telemetry.
+
+### 35. Partner SOS Signal
+
+**Requirement:** The system shall provide a single-tap SOS action (a floating action button on the restricted user's Home) that sends the paired accountability partner a quiet "reach out to me" signal for moments of craving or relapse risk — no typing required from the user.
+**Happy Path:** Given a paired user is struggling, When they tap SOS, Then the partner's device receives a gentle check-in notification and the user's app confirms it was sent.
+**Copy direction (user-set 2026-09-13, "chill, subtle"):** the user's own framing ("needs you to reach out... at risk of relapse") is the intent; the shipped wording should stay warm and low-stakes rather than clinical or alarmist — e.g. "Sam could use a quick check-in." Final copy is an open product decision (Open Product Decisions #7).
+**Edge Case (Offline):** Given the device is offline, When SOS is tapped, Then the signal is queued and delivered on reconnect, and the in-app confirmation honestly states it is waiting for a connection. Rate-limit: one signal per ~10 minutes; a repeat tap inside the window asks "send another?" — accidental presses must not spam the partner.
+**Dependencies (flagged — SOS is not a small feature given the current state):** (1) partner pairing has no shipping UI (see Req 6/16 status) — there is nothing to deliver to yet; (2) **no push path exists in code** — no FCM service or sender; the mailbox is a 15-minute pull and periodic WorkManager does not run on the XOS fleet device (ADR #27); timely delivery is an architectural decision, see Open Product Decisions #7; (3) if the copy names the user, name capture must exist first — anonymous auth today, and nothing populates the schema's `name` column.
+**Implementation status (2026-09-13): not built — spec added from user direction; plan pending (should be planned together with the partner pillar, or at minimum after the delivery-channel decision).**
+
+### 36. Home-Screen Widget
+
+**Requirement:** The system shall offer an Android home-screen widget giving the restricted user a glanceable, honest status plus one-tap access to help — designed for the urge moment, where speed to recovery matters most.
+**Content (draft for user confirmation):** (a) days-free streak numeral; (b) live protection state (e.g. "Blocking now" / "N rules armed") computed by the same engine evaluation the Home screen uses (`BlockDecisionEngine.blocksNow` — no UI-side re-derivation of schedule semantics); (c) one-tap deep links: open the app, and "Manage urge" straight to the Recovery tab. Read-only over existing local state — no new data, no network, no sync.
+**Edge Case (staleness):** Given widget hosts refresh on their own schedule, When state changes (streak increment, rule expiry, block end), Then the widget refreshes at a modest cadence (30-minute floor is the platform norm) and never shows a state it cannot back — a stale widget must understate, not overstate, protection.
+**Constraints:** adds `androidx.glance:glance-appwidget` (new dependency) + manifest receiver; size variants (minimum 2×1 streak-only; 4×2 streak + status + action); Desert Dawn light/dark. Device verification must include the Transsion/XOS launcher — the only fleet device.
+**Implementation status (2026-09-13): not built — spec added from user direction; content/sizing to confirm (Open Product Decisions #8).**
 
 ## Scope Triage (Solo-Developer Feasibility)
 

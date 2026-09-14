@@ -33,7 +33,7 @@ import kotlinx.coroutines.runBlocking
  * drives the parts that need shell powers (key presses, touch injection) by reacting to
  * MARKER log lines, and asserts the tapjacking result from the victim's logcat lines.
  *
- * Host usage: am start -n <app>/.blocking.DeviceVerificationActivity --es suite <functional|latency|multiwindow|browser|fgs|fgs-down|sync|seed-ui|clear-ui> [--ez requireService false]
+ * Host usage: am start -n <app>/.blocking.DeviceVerificationActivity --es suite <functional|latency|multiwindow|browser|fgs|fgs-down|sync|seed-ui|clear-ui> [--ez requireService false] [--ez preSplit true (multiwindow only: the suite seeds, logs MARKER_MULTIWINDOW_SEEDED, and waits for the host to form the split — host launches the victim fullscreen, then Recents → Split screen → pick a partner app; the suite observes, never launches)]
  *
  * `seed-ui`/`clear-ui` seed and remove four rules (one per live-state branch of the home
  * dashboard) for UI screenshot verification; they keep existing data — no DB reset.
@@ -284,16 +284,23 @@ class DeviceVerificationActivity : Activity() {
 
     private suspend fun multiWindowSuite() {
         seed("APP")
-        launchVictim()
-        waitForOverlay(true)
+        if (intent.getBooleanExtra(EXTRA_PRE_SPLIT, false)) {
+            // Host-driven (emulator-5554, 2026-09-14): any programmatic bring-to-front of a
+            // pane task dismantles the split on this WM, so the suite stays passive — the
+            // host launches the victim fullscreen, then forms the split from Recents
+            // (victim = top pane). Engagement is detected on the victim's a11y window
+            // shrinking below the display, NOT on the overlay: the fullscreen victim blocks
+            // the moment it launches, crashing through waitForOverlay before any split
+            // exists (three runs skipped as fullscreen, 2026-09-14).
+            Log.i(TAG, "MARKER_MULTIWINDOW_SEEDED — host: form the split (victim = top pane)")
+            waitForSplitEngaged(timeoutMs = 180_000)
+            waitForOverlay(true, timeoutMs = 60_000)
+        } else {
+            launchVictim()
+            waitForOverlay(true)
+        }
 
-        val windows = checkNotNull(BlockerAccessibilityService.instance?.visibleWindows()) {
-            "service window view unavailable"
-        }
-        val victimWindow = windows.firstOrNull {
-            runCatching { it.root?.packageName?.toString() == victimPackage }.getOrDefault(false)
-        }
-        checkNotNull(victimWindow) { "victim window must be visible to the service connection" }
+        val (victimWindow, overlayWindow) = awaitMultiWindowWindows()
 
         val display = getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)
         val metrics = DisplayMetrics()
@@ -306,8 +313,6 @@ class DeviceVerificationActivity : Activity() {
             return
         }
 
-        val overlayWindow = windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY }
-        checkNotNull(overlayWindow) { "overlay window must be visible to the service connection" }
         val ob = Rect().also { overlayWindow.getBoundsInScreen(it) }
 
         check(ob.contains(vb.left + vb.width() / 2, vb.top + vb.height() / 2)) {
@@ -318,6 +323,25 @@ class DeviceVerificationActivity : Activity() {
         check(!ob.contains(cx, cy)) { "overlay $ob must not cover the allowed pane (display center $cx,$cy)" }
         check(overlay.isShown(Display.DEFAULT_DISPLAY))
         Log.i(TAG, "multi-window: overlay bounds $ob restricted to victim pane $vb")
+    }
+
+    /** The a11y window list lags the overlay's shown-state by a frame (emulator race,
+     *  2026-09-14): both windows must be present before the assertions read bounds. */
+    private fun awaitMultiWindowWindows(): Pair<AccessibilityWindowInfo, AccessibilityWindowInfo> {
+        val deadline = SystemClock.elapsedRealtime() + 5_000
+        while (true) {
+            val windows = BlockerAccessibilityService.instance?.visibleWindows().orEmpty()
+            val victim = windows.firstOrNull {
+                runCatching { it.root?.packageName?.toString() == victimPackage }.getOrDefault(false)
+            }
+            val overlayWindow = windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY }
+            if (victim != null && overlayWindow != null) return victim to overlayWindow
+            if (SystemClock.elapsedRealtime() > deadline) {
+                checkNotNull(victim) { "victim window must be visible to the service connection" }
+                error("overlay window must be visible to the service connection")
+            }
+            SystemClock.sleep(200)
+        }
     }
 
     // --- shared scaffolding (ported from EnhancedModeDeviceSuite) -----------------------
@@ -338,14 +362,22 @@ class DeviceVerificationActivity : Activity() {
     }
 
     private suspend fun seed(targetType: String, blockedTarget: String = victimPackage) {
-        // resetAndReopen, not resetAllData: the store factory caches its connection, so
-        // deleting files behind the open handle leaves the old profile visible and the
-        // insert races the UNIQUE is_active constraint (caught on-device 2026-08-27).
-        entryPoint.appRulesStoreFactory().resetAndReopen()!!.userProfileDao().insert(PROFILE)
+        // Live-DAO wipe via the cached store, not resetAndReopen: the harness runs with
+        // MainActivity alive, and closing the connection under its dashboard collectors
+        // crashes them ("attempt to re-open an already-closed object: myexodus_rules.db",
+        // emulator-5554 2026-09-14). Keeping the same store also keeps the blocking
+        // engine's publisher snapshot live — resetAndReopen swapped the store out from
+        // under it (same crash class as the 2026-08-27 profile/UNIQUE finding below).
+        val store = entryPoint.appRulesStoreFactory().open() ?: error("rules store unavailable")
+        store.restrictionRuleDao().getActiveRules()
+            .forEach { entryPoint.rulesRepository().deleteRule(it) }
+        val profileId = store.userProfileDao().observeActive().first()?.userId ?: PROFILE.also {
+            store.userProfileDao().insert(it)
+        }.userId
         entryPoint.rulesRepository().insertRule(
                 RestrictionRule(
                     ruleId = "rule-${System.nanoTime()}",
-                    profileId = PROFILE_ID,
+                    profileId = profileId,
                     // For WEBSITE rules the pattern text lives in blockedPackage (that is
                     // what UrlPattern.from parses); the APP seed uses the victim package.
                     blockedPackage = blockedTarget,
@@ -486,6 +518,21 @@ class DeviceVerificationActivity : Activity() {
         }.getOrDefault(emptyList())
     }
 
+    /** True once the victim sits in a pane: its a11y window is smaller than the display.
+     *  Real metrics, same 50px slack as the isFullscreen skip-check below. */
+    private fun waitForSplitEngaged(timeoutMs: Long) {
+        val display = getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)
+        val metrics = DisplayMetrics()
+        checkNotNull(display).getRealMetrics(metrics)
+        waitFor(timeoutMs) {
+            val victim = BlockerAccessibilityService.instance?.visibleWindows()?.firstOrNull {
+                runCatching { it.root?.packageName?.toString() == victimPackage }.getOrDefault(false)
+            } ?: return@waitFor false
+            val bounds = Rect().also { victim.getBoundsInScreen(it) }
+            bounds.width() < metrics.widthPixels - 50 || bounds.height() < metrics.heightPixels - 50
+        }
+    }
+
     private fun waitForOverlay(shown: Boolean, timeoutMs: Long = 8_000) {
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
         while (SystemClock.elapsedRealtime() < deadline) {
@@ -508,6 +555,7 @@ class DeviceVerificationActivity : Activity() {
         const val TAG = "MyExodusVerification"
         const val EXTRA_SUITE = "suite"
         const val EXTRA_REQUIRE_SERVICE = "requireService"
+        const val EXTRA_PRE_SPLIT = "preSplit"
         const val PROFILE_ID = "device-test-profile"
         const val UI_SEED_PREFIX = "ui-seed"
         val PROFILE = UserProfile(

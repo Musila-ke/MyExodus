@@ -209,8 +209,25 @@ class BlockerAccessibilityService : AccessibilityService() {
                 // Own-package content changes never decide (our app is never a restricted
                 // target or a browser) and the window list isn't consulted for
                 // non-WSC events — skip outright instead of risking the master-switch/emergency
-                // hides on our own overlay's content-changed events.
-                if (packageName == this.packageName) return@onAccessibilityEvent
+                // hides on our own overlay's content-changed events. One exception: our own
+                // ACTIVITY window drawing while a card is up means the durable block screen
+                // (or a recovery screen) is now the foreground — the bridge's job is done.
+                // Needed because the activity's WSC can turn out to be the starting window's
+                // only (dead id; emulator 2026-09-13: BlockerActivity's real window arrived as
+                // content-changed alone, so nothing ever lifted the cover off it). The
+                // overlay's own churn cannot match: its window is never TYPE_APPLICATION
+                // (same invariant as the WSC own-cover guard above).
+                if (packageName == this.packageName) {
+                    if (overlay.isShown(displayId)) {
+                        val own = windowFor(event.windowId)
+                        if (own?.type == AccessibilityWindowInfo.TYPE_APPLICATION &&
+                            isActiveForeground(packageName, own)
+                        ) {
+                            overlay.hide(stateMachine.currentGeneration, displayId)
+                        }
+                    }
+                    return@onAccessibilityEvent
+                }
                 // App-level restriction already covers this window: a URL-scan Allow would
                 // hide the app-level overlay over the still-restricted browser (bypass,
                 // caught 2026-08-28 review). URL rules govern only while the app itself
@@ -270,13 +287,13 @@ class BlockerAccessibilityService : AccessibilityService() {
         when (decision) {
             is BlockDecision.Block -> {
                 // Content is built only on a transition: an already-shown overlay's show()
-                // is a no-op, and the label lookup (PackageManager round-trip) must not run
-                // per WSC storm event. Display bounds, not the deciding window's: a cold
+                // only re-bounds, and the label lookup (PackageManager round-trip) must not
+                // run per WSC storm event. Display bounds, not the deciding window's: a cold
                 // launch can fire the blocked app's sub-window (loading/transient dialog)
-                // first, and the already-shown gate then froze the cover at that sub-window's
-                // size — AnkiDroid rendered readable around a 684x563 card (2026-09-13). The
-                // cover's job is the app's whole surface; split-screen pane coverage for
-                // *other* restricted windows stays in blockOtherRestrictedWindows.
+                // first, and the then-frozen cover left the cover at that sub-window's size —
+                // AnkiDroid rendered readable around a 684x563 card (2026-09-13). The cover
+                // starts at the app's whole surface; split-screen pane coverage is the
+                // largest-window re-bound in blockOtherRestrictedWindows.
                 if (!overlay.isShown(displayId)) {
                     overlay.show(generation, displayId, displayBounds(displayId), appBlockedContent(packageName))
                     // Per-window root walks only on a new block transition, not on every
@@ -302,11 +319,35 @@ class BlockerAccessibilityService : AccessibilityService() {
                     scanGeneration = generation
                     scanDisplayId = displayId
                     scanner.onContentChanged(packageName, barId, { rootInActiveWindow }, generation)
-                } else {
+                } else if (!overlay.isShown(displayId) || !restrictedPaneBeside(displayId, window)) {
                     overlay.hide(generation, displayId)
                 }
             }
         }
+    }
+
+    /** Multi-window (plan §8 Step 5 / Decision 10): an Allow for one window must not lift
+     *  the cover off a restricted pane beside it — scrolling the allowed pane's Settings
+     *  hid the cover off the still-blocked victim pane (emulator-5554, 2026-09-14). True
+     *  when a restricted window on this display is DISJOINT from the window being allowed:
+     *  a partition partner. Overlap disqualifies by design — a restricted fullscreen
+     *  window still fading out behind a new foreground app and a blocked PiP sliver both
+     *  overlap the allowed window, and keeping their cover alive would strand it over the
+     *  launcher (the "Home always works" promise). No visibility test: the android-37
+     *  stubs drop AccessibilityWindowInfo.isVisible, and overlap already separates
+     *  occluded windows from partitions. Costs a window-list walk, so callers
+     *  short-circuit on a not-shown overlay. */
+    private fun restrictedPaneBeside(displayId: Int, allowed: AccessibilityWindowInfo?): Boolean {
+        val allowedBounds = allowed?.boundsInScreenOrNull ?: return false
+        allWindows().forEach { w ->
+            if (w.displayIdOrDefault() != displayId) return@forEach
+            val bounds = w.boundsInScreenOrNull ?: return@forEach
+            if (Rect.intersects(bounds, allowedBounds)) return@forEach
+            val pkg = runCatching { w.root?.packageName?.toString() }.getOrNull() ?: return@forEach
+            if (emergency.isProtected(pkg, w)) return@forEach
+            if (engine.decideApp(pkg, System.currentTimeMillis()) is BlockDecision.Block) return true
+        }
+        return false
     }
 
     /** Deferred re-check for a WSC whose window was absent from the live list at arrival: the
@@ -314,9 +355,29 @@ class BlockerAccessibilityService : AccessibilityService() {
      *  generation) or never does (keyguard removal, background notification flapping — drop
      *  it, as before). Decides only when the window is the active foreground, so a delayed
      *  entry for a background window cannot hide an overlay over the real foreground app. */
-    private fun deferredWsc(packageName: String, windowId: Int, detectionNanos: Long) {
-        val window = windowFor(windowId) ?: return
-        if (rootInActiveWindow?.packageName?.toString() != packageName) return
+    private fun deferredWsc(packageName: String, windowId: Int, detectionNanos: Long, attempt: Int = 0) {
+        val window = windowFor(windowId)
+        // Same own-cover guard as the direct path: the overlay's own window events must never
+        // decide (Allow → self-hide; caught on-device 2026-08-27).
+        if (window?.type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) return
+        // The active root is the decisive signal; the window-list entry is a bonus (a
+        // recreated window can leave the event's id permanently stale — emulator-caught
+        // 2026-09-13: the one re-check fired mid-transition and dropped, so the cover stayed
+        // above BlockerActivity with the activity's WSC never re-deciding).
+        if (rootInActiveWindow?.packageName?.toString() != packageName) {
+            if (attempt < MAX_DEFERRED_WSC_ATTEMPTS) {
+                mainHandler.postDelayed(
+                    { deferredWsc(packageName, windowId, detectionNanos, attempt + 1) },
+                    DEFERRED_WSC_MS,
+                )
+            } else if (BuildConfig.DEBUG) {
+                Log.i(
+                    TAG,
+                    "deferred WSC dropped pkg=$packageName winId=$windowId window=${window != null}",
+                )
+            }
+            return
+        }
         val generation = stateMachine.advance(packageName, windowId, detectionNanos)
         decideApp(packageName, generation, detectionNanos, window)
     }
@@ -330,23 +391,32 @@ class BlockerAccessibilityService : AccessibilityService() {
             ruleId = publisher.snapshot.appRules[packageName]?.ruleId,
         )
 
-    /** Multi-window (plan §8 Step 5 / Decision 10): every other window resolving to a restricted
-     *  package gets its display's overlay, bounded to that window's bounds. Includes our own
-     *  overlay window (decides Allow) and the current one (already shown). */
+    /** Multi-window (plan §8 Step 5 / Decision 10): each display showing a restricted package
+     *  gets its overlay bounded to that package's LARGEST window — its main surface, so a
+     *  transient sub-window can't shrink the cover (AnkiDroid's 684x563 loading card,
+     *  2026-09-13). The trigger's show passed display bounds; this pass is what re-bounds the
+     *  already-shown cover to the restricted pane (split-screen, emulator-5554 2026-09-14).
+     *  Clamped to the bar-free display: panes extend behind the nav bar, and covering it
+     *  swallows Home/Back (2026-09-13). */
     private fun blockOtherRestrictedWindows(generation: Long) {
+        val candidate = HashMap<Int, Pair<String, Rect>>()
         allWindows().forEach { w ->
             val root = runCatching { w.root }.getOrNull() ?: return@forEach
             val pkg = root.packageName?.toString() ?: return@forEach
             if (emergency.isProtected(pkg, w)) return@forEach
-            if (engine.decideApp(pkg, System.currentTimeMillis()) is BlockDecision.Block) {
-                val displayId = w.displayIdOrDefault()
-                overlay.show(
-                    generation,
-                    displayId,
-                    w.boundsInScreenOrNull ?: displayBounds(displayId),
-                    appBlockedContent(pkg),
-                )
+            if (engine.decideApp(pkg, System.currentTimeMillis()) !is BlockDecision.Block) return@forEach
+            val bounds = w.boundsInScreenOrNull ?: return@forEach
+            val displayId = w.displayIdOrDefault()
+            val incumbent = candidate[displayId]
+            if (incumbent == null || bounds.area() > incumbent.second.area()) {
+                candidate[displayId] = pkg to bounds
             }
+        }
+        candidate.forEach { (displayId, entry) ->
+            val (pkg, windowBounds) = entry
+            val target = Rect(windowBounds)
+            if (!target.intersect(displayBounds(displayId))) return@forEach
+            overlay.show(generation, displayId, target, appBlockedContent(pkg))
         }
     }
 
@@ -521,6 +591,8 @@ class BlockerAccessibilityService : AccessibilityService() {
     private val AccessibilityWindowInfo.boundsInScreenOrNull: Rect?
         get() = runCatching { Rect().also { getBoundsInScreen(it) } }.getOrNull()
 
+    private fun Rect.area(): Long = width().toLong() * height().toLong()
+
     /** True when the window is the active foreground (per-display isActive, root fallback for
      *  XOS window-list lag); safe on recycled windows. Both the WSC decide gate and the
      *  emergency-exclusion gate key off it. */
@@ -533,6 +605,12 @@ class BlockerAccessibilityService : AccessibilityService() {
 
         /** How long to wait after a null-window WSC before re-checking the live window list. */
         private const val DEFERRED_WSC_MS = 400L
+
+        /** Bounded re-checks for a not-yet-active WSC: transitions can take seconds on a
+         *  loaded device (emulator: BlockerActivity displayed ~4s after start; a single
+         *  re-check missed it and the cover above it never hid). ~2.4s worst case, then the
+         *  event is dropped for good — a genuinely stale event must not decide later. */
+        private const val MAX_DEFERRED_WSC_ATTEMPTS = 6
 
         /** True between onServiceConnected and onDestroy; the device suite waits on it because
          *  the accessibility re-bind after a process restart lags on XOS. */
