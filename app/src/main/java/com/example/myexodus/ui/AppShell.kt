@@ -35,9 +35,11 @@ import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.ProtectionDegradation
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.recovery.RecoveryStateStore
+import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.StrictModeManager
+import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.ui.home.HomeScreen
 import com.example.myexodus.ui.recovery.RecoveryScreen
 import com.example.myexodus.ui.rules.RulesScreen
@@ -61,11 +63,13 @@ private val ContentMaxWidth = 840.dp
 fun AppShell(
     store: AppRulesStore?,
     repository: RulesRepository,
+    usageAccountingEngine: UsageAccountingEngine,
     recoveryStore: RecoveryStateStore,
     attempts: AttemptRecorder,
     monitor: EnhancedModeHealthMonitor,
     strictMode: StrictModeManager,
     settings: EnhancedModeSettings,
+    crashReporting: CrashReporting,
     degradation: ProtectionDegradation?,
     onReenable: () -> Unit,
     streaks: StreaksViewModel,
@@ -144,6 +148,9 @@ fun AppShell(
                         monitor = monitor,
                         degradation = degradation,
                         onReenable = onReenable,
+                        // §8 Step 6: the degraded banner's fix path is the Settings tab,
+                        // where each mechanism's row names its own fix.
+                        onOpenSettings = { tab = Tabs.indexOfFirst { it.first == "Settings" } },
                         habit = habit,
                         onAcknowledgeMilestone = streaks::acknowledgeMilestones,
                         onSwitchHabit = { pickerOpen = true },
@@ -154,6 +161,7 @@ fun AppShell(
                     tab == 1 -> RulesScreen(
                         store = store,
                         repository = repository,
+                        usageAccountingEngine = usageAccountingEngine,
                         modifier = contentModifier,
                     )
                     tab == 2 -> RecoveryScreen(
@@ -178,6 +186,7 @@ fun AppShell(
                         monitor = monitor,
                         strictMode = strictMode,
                         settings = settings,
+                        crashReporting = crashReporting,
                         modifier = contentModifier,
                     )
                     else -> ComingSoonScreen(Tabs[tab].first, modifier = contentModifier)

@@ -16,7 +16,13 @@ import javax.inject.Singleton
 class EnhancedModeSettings @Inject constructor(
     @ApplicationContext private val appContext: Context,
 ) {
-    private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    // Lazy: constructed with the Hilt graph at process start, which can be pre-unlock
+    // (LOCKED_BOOT_COMPLETED, plan §8.5) — CE SharedPreferences throw until first unlock.
+    // Device-caught 2026-09-15: eager init here killed the pre-unlock process through the
+    // ProtectionStatusMonitor dependency chain (reboot leg h1: FATAL on cold boot).
+    private val prefs: android.content.SharedPreferences by lazy {
+        appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    }
 
     var enhancedModeEnabled: Boolean
         get() = prefs.getBoolean(KEY_ENABLED, true)

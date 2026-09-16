@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.R
 import com.example.myexodus.blocking.RulesRepository
+import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.ui.WindowWidth
@@ -74,6 +75,7 @@ private const val ROUTE_EDIT = "edit"
 fun RulesScreen(
     store: AppRulesStore,
     repository: RulesRepository,
+    usageAccountingEngine: UsageAccountingEngine,
     modifier: Modifier = Modifier,
 ) {
     val profile by store.userProfileDao().observeActive().collectAsStateWithLifecycle(initialValue = null)
@@ -125,6 +127,7 @@ fun RulesScreen(
                     target = editTarget,
                     existingRules = rules.orEmpty(),
                     repository = repository,
+                    usageAccountingEngine = usageAccountingEngine,
                     onDone = { route = ROUTE_LIST },
                     modifier = modifier,
                 )

@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -36,25 +37,29 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.example.myexodus.blocking.AttemptRecorder
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
-import com.example.myexodus.blocking.ForegroundBlockerService
-import com.example.myexodus.blocking.ProtectionDegradation
-import com.example.myexodus.blocking.ProtectionNotifications
+import com.example.myexodus.blocking.EnforcementForegroundService
+import com.example.myexodus.blocking.ProtectionStatusMonitor
 import com.example.myexodus.blocking.ProtectionStatusStore
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.recovery.RecoveryStateStore
-import com.example.myexodus.blocking.hasUsageAccess
+import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.DatabaseHealth
 import com.example.myexodus.data.db.DatabaseHealthStore
 import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.settings.EnhancedModeSettings
+import com.example.myexodus.settings.SetupStateStore
 import com.example.myexodus.settings.StrictModeManager
+import com.example.myexodus.settings.readProtectionChecks
+import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.ui.AppShell
+import com.example.myexodus.ui.setup.SetupScreen
 import com.example.myexodus.ui.streaks.StreaksViewModel
 import com.example.myexodus.ui.theme.MyExodusTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -77,6 +82,7 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var rulesStoreFactory: AppRulesStoreFactory
     @Inject lateinit var rulesRepository: RulesRepository
+    @Inject lateinit var usageAccountingEngine: UsageAccountingEngine
     @Inject lateinit var recoveryStore: RecoveryStateStore
     @Inject lateinit var attemptRecorder: AttemptRecorder
     @Inject lateinit var recoveryManager: RecoveryManager
@@ -85,6 +91,9 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var strictMode: StrictModeManager
     @Inject lateinit var settings: EnhancedModeSettings
     @Inject lateinit var protectionStatus: ProtectionStatusStore
+    @Inject lateinit var protectionStatusMonitor: ProtectionStatusMonitor
+    @Inject lateinit var crashReporting: CrashReporting
+    @Inject lateinit var setupStateStore: SetupStateStore
 
     private val streaksViewModel: StreaksViewModel by viewModels()
 
@@ -130,16 +139,46 @@ class MainActivity : ComponentActivity() {
                             .onFailure { Log.w(TAG, "Profile bootstrap failed", it) }
                     }
                 }
-                if (usable) {
+                // Plan §8 Step 7 gate: the wizard runs once, only while a required mechanism
+                // is missing. Evaluated-and-complete is recorded so a later revocation never
+                // re-opens onboarding — Settings rows and the degraded banner own those fixes.
+                var showSetup by remember { mutableStateOf<Boolean?>(null) }
+                LaunchedEffect(Unit) {
+                    showSetup = withContext(Dispatchers.IO) {
+                        if (setupStateStore.setupSeen) {
+                            false
+                        } else {
+                            val checks = readProtectionChecks(this@MainActivity)
+                            val needed = !checks.usageAccess || !checks.overlayGranted ||
+                                !monitor.isServiceEnabled()
+                            if (!needed) setupStateStore.setupSeen = true
+                            needed
+                        }
+                    }
+                }
+                if (usable && showSetup == true) {
+                    SetupScreen(
+                        monitor = monitor,
+                        onFinish = {
+                            setupStateStore.setupSeen = true
+                            showSetup = false
+                            // Plan §8 Step 7 ends the wizard by starting enforcement while
+                            // the app is foregrounded.
+                            refreshProtectionChecks()
+                        },
+                    )
+                } else if (usable) {
                     AppShell(
                         store = rulesStore,
                         encryptionPending = health == DatabaseHealth.EncryptionUpgradePending,
                         repository = rulesRepository,
+                        usageAccountingEngine = usageAccountingEngine,
                         recoveryStore = recoveryStore,
                         attempts = attemptRecorder,
                         monitor = monitor,
                         strictMode = strictMode,
                         settings = settings,
+                        crashReporting = crashReporting,
                         degradation = degradation,
                         streaks = streaksViewModel,
                         requestedTab = requestedTab,
@@ -148,8 +187,10 @@ class MainActivity : ComponentActivity() {
                         onHabitConsumed = { requestedHabit = null },
                         onReenable = {
                             protectionStatus.reenable()
-                            ProtectionNotifications.updateDegraded(this, null)
-                            degradation = null
+                            // Recompute right away: clearing APP_STOPPED can immediately
+                            // reveal another degraded reason (or none).
+                            protectionStatusMonitor.refresh()
+                            degradation = protectionStatus.degradation
                         },
                     )
                 } else {
@@ -173,20 +214,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** §8.2: usage-access and notification grant state, checked on every onResume AND from
-     *  the FGS's own cycle (revocation while the app is never opened is still detected). */
+    /** §8 Step 6: protection status is re-evaluated on every resume through the shared
+     *  arbiter (which also runs on the FGS's own 30s cycle — revocation while the app is
+     *  never opened is still detected). */
     private fun refreshProtectionChecks() {
-        val usageOk = hasUsageAccess()
-        when {
-            !usageOk && protectionStatus.degradation != ProtectionDegradation.USAGE_ACCESS_REVOKED ->
-                protectionStatus.degradation = ProtectionDegradation.USAGE_ACCESS_REVOKED
-            usageOk && protectionStatus.degradation == ProtectionDegradation.USAGE_ACCESS_REVOKED -> {
-                protectionStatus.degradation = null
-                ProtectionNotifications.updateDegraded(this, null)
-            }
-        }
+        protectionStatusMonitor.refresh()
         if (settings.enhancedModeEnabled) {
-            ForegroundBlockerService.start(this)
+            EnforcementForegroundService.start(this)
         }
     }
 
@@ -200,6 +234,10 @@ class MainActivity : ComponentActivity() {
         /** Milestone notifications land here: the splash card renders at the top of Home
          *  (plan §8 Step 5), so the notification's "open the app" call-to-action must show it. */
         const val TAB_HOME = "Home"
+
+        /** Enforcement degradation alerts (§8 Step 6) land here: the Settings protection
+         *  rows name each mechanism and carry its fix. */
+        const val TAB_SETTINGS = "Settings"
 
         private const val TAG = "MyExodus"
     }

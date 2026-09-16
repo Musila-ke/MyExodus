@@ -47,7 +47,7 @@ import com.example.myexodus.data.db.entity.UserProfile
         RecoveryStreak::class,
         MilestoneEvent::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 abstract class AppRulesStore : RoomDatabase() {

@@ -38,12 +38,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.myexodus.R
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.ProtectionDegradation
 import com.example.myexodus.data.db.AppRulesStore
@@ -76,6 +77,7 @@ fun HomeScreen(
     monitor: EnhancedModeHealthMonitor,
     degradation: ProtectionDegradation?,
     onReenable: () -> Unit,
+    onOpenSettings: () -> Unit,
     habit: HabitState?,
     onAcknowledgeMilestone: (List<Int>) -> Unit,
     onSwitchHabit: () -> Unit,
@@ -126,7 +128,7 @@ fun HomeScreen(
         }
         item(key = "status") { StatusHeader(serviceEnabled) }
         degradation?.let { current ->
-            item(key = "degradation") { DegradationBanner(current, onReenable) }
+            item(key = "degradation") { DegradationBanner(current, onReenable, onOpenSettings) }
         }
         if (encryptionPending) {
             item(key = "encryption-pending") { EncryptionPendingNotice() }
@@ -448,16 +450,23 @@ private fun EncryptionPendingNotice() {
 private fun DegradationBanner(
     degradation: ProtectionDegradation,
     onReenable: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val (message, actionLabel, action) = when (degradation) {
-        ProtectionDegradation.USAGE_ACCESS_REVOKED -> Triple(
-            "App blocking is off — MyExodus can't see when restricted apps open. Grant usage access in Settings.",
-            "Fix",
-            { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) },
+        // §8 Step 6: cause not named — with both paths down it is usually more than one
+        // thing; the Settings protection rows name each mechanism and carry its fix.
+        ProtectionDegradation.DEGRADED_NO_DETECTION -> Triple(
+            stringResource(R.string.protection_paused_text),
+            stringResource(R.string.protection_paused_action),
+            onOpenSettings,
         )
+        // The old copy claimed blocking was off while Path A (a11y) is typically still
+        // live after a Task-Manager stop — can't claim that, and can't claim "everything
+        // is fine": the poll path (time limits + fallback detection) stays off until
+        // re-enable. Name only the always-true loss (regression finding #1, 2026-09-16).
         ProtectionDegradation.APP_STOPPED -> Triple(
-            "Protection was stopped from the Task Manager. Re-enable it to resume blocking.",
+            "MyExodus was stopped from the Task Manager. Time limits stay paused until you re-enable.",
             "Re-enable",
             onReenable,
         )
@@ -468,16 +477,6 @@ private fun DegradationBanner(
                 context.startActivity(
                     Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
                         .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName),
-                )
-            },
-        )
-        ProtectionDegradation.OVERLAY_REVOKED -> Triple(
-            "Blocking overlay is off — MyExodus can't show block screens. Allow 'display over other apps' in Settings.",
-            "Fix",
-            {
-                context.startActivity(
-                    Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
-                        .setData("package:${context.packageName}".toUri()),
                 )
             },
         )

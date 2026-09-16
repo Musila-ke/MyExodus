@@ -9,10 +9,11 @@
 /.idea/assetWizardSettings.xml
 .DS_Store
 /build
-/captures
+captures/
 .externalNativeBuild
 .cxx
 local.properties
+*.hprof
 
 # Tool caches (Kotlin compiler sessions, SonarQube scanner, skill caches, Claude Code local state)
 .kotlin/

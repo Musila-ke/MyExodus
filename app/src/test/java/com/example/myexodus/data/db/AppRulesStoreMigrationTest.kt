@@ -5,11 +5,13 @@ import android.content.Context
 import androidx.sqlite.driver.AndroidSQLiteDriver
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.data.db.entity.AttemptLog
+import java.time.LocalDate
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -17,12 +19,13 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Rules-store migration chain 2→6 (recovery_state, attempt_log, is_enabled, streak tables).
- * The v2 baseline is the exact DDL Room generates for version 2 (verbatim copies of the SQL
- * emitted by AppRulesStore_Impl), so the test proves the real upgrade path end to end,
- * including Room's post-migration schema validation (the 2026-08-28 migration failure class)
- * and that pre-existing rule rows survive the 4→5 column add as enabled. The 5→6 specifics
- * are covered on-device by AppRulesStoreMigrationInstrumentedTest (MigrationTestHelper).
+ * Rules-store migration chain 2→8 (recovery_state, attempt_log, is_enabled, streak tables,
+ * daily-usage tracker day-identity reshape). The v2 baseline is the exact DDL Room generates
+ * for version 2 (verbatim copies of the SQL emitted by AppRulesStore_Impl), so the test proves
+ * the real upgrade path end to end, including Room's post-migration schema validation (the
+ * 2026-08-28 migration failure class) and that pre-existing rule rows survive the 4→5 column
+ * add as enabled. The 5→6 specifics are covered on-device by
+ * AppRulesStoreMigrationInstrumentedTest (MigrationTestHelper).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
@@ -69,6 +72,12 @@ class AppRulesStoreMigrationTest {
                     "daily_limit_ms, active_days_of_week, timezone, block_expires_at, severity_level) VALUES " +
                     "('r-1', 'p-1', 'com.instagram.android', 'APP', 1, 0, '1111111', 'UTC', 0, 'HIGH')",
             ).use { it.step() }
+            // v2-era dormant tracker row (enforcement plan §12): must survive 7→8 losslessly
+            // with the specified defaults.
+            conn.prepare(
+                "INSERT INTO daily_usage_tracker (tracker_id, profile_id, package_name, date_epoch, " +
+                    "ms_used_today) VALUES ('t-legacy', 'p-1', 'com.instagram.android', 20820, 1000)",
+            ).use { it.step() }
             conn.prepare("PRAGMA user_version = 2").use { it.step() }
         }
 
@@ -98,6 +107,18 @@ class AppRulesStoreMigrationTest {
             )
             assertEquals(1L, dao.count())
             assertEquals(id, dao.recent(1).single().id)
+
+            // Tracker 7→8: the dormant legacy row survives with the plan's stated defaults —
+            // anchored to the migration's local date + device timezone, warnings NOT_DUE,
+            // not blocked.
+            val tracker = store.dailyUsageTrackerDao()
+                .findByKey("p-1", "com.instagram.android", LocalDate.now().toString())
+            assertNotNull("Legacy tracker row must survive migration 7→8", tracker)
+            assertEquals(1_000L, tracker!!.msUsedToday)
+            assertEquals("NOT_DUE", tracker.warning1State)
+            assertEquals("NOT_DUE", tracker.warning2State)
+            assertEquals(false, tracker.blockedToday)
+            assertTrue(tracker.timezoneIdAtAnchor.isNotBlank())
         }
     }
 

@@ -36,6 +36,9 @@ class RulesSnapshotTest {
         severityLevel = "HIGH",
     )
 
+    /** Fixed build time — before [rule]'s expiry, so it stays enforceable by default. */
+    private val now = 1_700_000_000_000L
+
     private val urlRule = RestrictionRule(
         ruleId = "r-2",
         profileId = "p-1",
@@ -53,7 +56,7 @@ class RulesSnapshotTest {
     @Test
     fun build_mapsAppsAndCanonicalizesUrls_skipsUnparseable() {
         val bad = urlRule.copy(ruleId = "r-3", blockedPackage = "blob:https://x/y")
-        val snapshot = RulesSnapshot.build(listOf(rule, urlRule, bad), 7L)
+        val snapshot = RulesSnapshot.build(listOf(rule, urlRule, bad), 7L, now)
 
         assertEquals(1, snapshot.appRules.size)
         val app = snapshot.appRules["com.instagram.android"]!!
@@ -75,7 +78,17 @@ class RulesSnapshotTest {
     fun build_excludesPausedRules_fromBothEnforcementLists() {
         val pausedApp = rule.copy(ruleId = "r-paused", isEnabled = false)
         val pausedUrl = urlRule.copy(ruleId = "r-url-paused", isEnabled = false)
-        val snapshot = RulesSnapshot.build(listOf(pausedApp, pausedUrl, rule, urlRule), 9L)
+        val snapshot = RulesSnapshot.build(listOf(pausedApp, pausedUrl, rule, urlRule), 9L, now)
+
+        assertEquals(listOf("r-1"), snapshot.appRules.values.map { it.ruleId })
+        assertEquals(listOf("r-2"), snapshot.urlRules.map { it.ruleId })
+    }
+
+    @Test
+    fun build_excludesExpiredRules_fromBothEnforcementLists() {
+        val expiredApp = rule.copy(ruleId = "r-expired", blockExpiresAt = now - 1)
+        val expiredUrl = urlRule.copy(ruleId = "r-url-expired", blockExpiresAt = now - 1)
+        val snapshot = RulesSnapshot.build(listOf(expiredApp, expiredUrl, rule, urlRule), 11L, now)
 
         assertEquals(listOf("r-1"), snapshot.appRules.values.map { it.ruleId })
         assertEquals(listOf("r-2"), snapshot.urlRules.map { it.ruleId })
@@ -83,7 +96,7 @@ class RulesSnapshotTest {
 
     @Test
     fun jsonRoundTrip_preservesAppsUrlsAndNulls() {
-        val snapshot = RulesSnapshot.build(listOf(rule, urlRule), 3L)
+        val snapshot = RulesSnapshot.build(listOf(rule, urlRule), 3L, now)
         val file = File(tmp.root, "rules_snapshot.json")
 
         snapshot.writeTo(file)

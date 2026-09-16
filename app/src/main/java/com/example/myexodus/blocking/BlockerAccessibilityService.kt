@@ -6,31 +6,34 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Rect
-import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Display
-import android.view.WindowInsets
-import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.core.net.toUri
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.MainActivity
 import com.example.myexodus.blocking.recovery.RecoveryStateStore
+import com.example.myexodus.blocking.usage.EnforcementAction
+import com.example.myexodus.blocking.usage.UsageAccountingEngine
+import com.example.myexodus.blocking.usage.UsageSessionMachine
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.ui.appLabel
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 /**
  * Enhanced Mode blocking engine (spec §8 Steps 4–8, Data Flow §6): every event runs
@@ -50,8 +53,10 @@ class BlockerAccessibilityService : AccessibilityService() {
     @Inject lateinit var publisher: RulesSnapshotPublisher
     @Inject lateinit var settings: EnhancedModeSettings
     @Inject lateinit var monitor: EnhancedModeHealthMonitor
+    @Inject lateinit var statusMonitor: ProtectionStatusMonitor
     @Inject lateinit var recoveryStore: RecoveryStateStore
     @Inject lateinit var attempts: AttemptRecorder
+    @Inject lateinit var usageEngine: UsageAccountingEngine
 
     /** Per-bind foreground state + overlay (plan §12: recreated on re-bind; app-scoped
      *  singletons would carry stale generation/overlay state across a Hiber disconnect —
@@ -59,6 +64,12 @@ class BlockerAccessibilityService : AccessibilityService() {
      *  provided @Singleton copies). */
     private val stateMachine = ForegroundStateMachine()
     internal lateinit var overlay: OverlayController
+
+    /** Path A's usage session (enforcement plan v2 §8 Step 4): one tracked app at a time,
+     *  fed by confirmed foreground transitions; the ticker below turns it into incremental
+     *  deltas. Per-bind state, like the overlay. */
+    private val usageSessions = UsageSessionMachine()
+    private var usageTickJob: Job? = null
 
     private val normalizer = AccessibilityEventNormalizer()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -96,12 +107,16 @@ class BlockerAccessibilityService : AccessibilityService() {
         emergency.refresh()
         // Plan §8 Step 12: AAPM check on connect (plus every health-check tick in the worker).
         monitor.refresh()
+        // §8 Step 6: connect/disconnect flips the accounting authority — publish immediately.
+        statusMonitor.refresh()
         overlay.prewarm()
         registerDialerReceiver()
         registerScreenOffReceiver()
         // Fast-path cache synchronously, authoritative load async (plan §8 Steps 2/9) — the
         // engine always decides against some snapshot, never against "no rules".
         publisher.loadFastPath()
+        // §8 Step 4 connect-time usage re-acquire (see the function doc).
+        reacquireUsageSessionOnConnect()
         scope.launch { publisher.loadFromDb() }
     }
 
@@ -151,6 +166,10 @@ class BlockerAccessibilityService : AccessibilityService() {
         // Warm SharedPreferences read; no database I/O on the hot path (§11).
         if (!settings.enhancedModeEnabled) {
             overlay.hide(stateMachine.currentGeneration, displayId)
+            // Deliberate uncredited drop (enforcement plan v2 §8 Step 4): never an over-count.
+            usageSessions.reset()
+            usageTickJob?.cancel()
+            usageTickJob = null
             return
         }
         // Data Flow step 3: emergency exclusion first, fail-open on protected packages — but
@@ -159,6 +178,9 @@ class BlockerAccessibilityService : AccessibilityService() {
         // still-restricted app (caught on-device 2026-08-28 — mid-tapjacking hide).
         if (emergency.isProtected(packageName, window) && isActiveForeground(packageName, window)) {
             overlay.hide(stateMachine.currentGeneration, displayId)
+            // A protected package (dialer) is untracked: the session for the app it replaced
+            // closes with its final tick (enforcement plan v2 §6 step 4).
+            closeUsageSession()
             return
         }
         // Step 4: unknown package → immediate hide, no retain window.
@@ -218,12 +240,15 @@ class BlockerAccessibilityService : AccessibilityService() {
                 // overlay's own churn cannot match: its window is never TYPE_APPLICATION
                 // (same invariant as the WSC own-cover guard above).
                 if (packageName == this.packageName) {
-                    if (overlay.isShown(displayId)) {
+                    if (overlay.isShown(displayId) || usageSessions.activePackage != null) {
                         val own = windowFor(event.windowId)
                         if (own?.type == AccessibilityWindowInfo.TYPE_APPLICATION &&
                             isActiveForeground(packageName, own)
                         ) {
                             overlay.hide(stateMachine.currentGeneration, displayId)
+                            // Our own UI in front means the tracked app is gone: close the
+                            // session (the tracked app behind a lifted card accrues nothing).
+                            closeUsageSession()
                         }
                     }
                     return@onAccessibilityEvent
@@ -260,6 +285,16 @@ class BlockerAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         connected.set(false)
         instance = null
+        // §8 Step 6: authority flips to Path B (or to no-detection) the moment this service
+        // goes away — publish before anything else can read a stale FULL.
+        runCatching { statusMonitor.refresh() }
+        usageTickJob?.cancel()
+        usageTickJob = null
+        // Handoff A→B (device QA 2026-09-15): the ticker dies with this service, and Path B
+        // anchors its re-acquired session at its own poll-now — it can never credit the
+        // [last tick -> destroy] tail, so the final credit must land here. Blocking write:
+        // scope.cancel() below would otherwise cancel an async one mid-flight.
+        val finalTick = usageSessions.close(SystemClock.elapsedRealtime())
         mainHandler.removeCallbacksAndMessages(null)
         dialerReceiver?.let { runCatching { unregisterReceiver(it) } }
         dialerReceiver = null
@@ -268,6 +303,15 @@ class BlockerAccessibilityService : AccessibilityService() {
         scanner.cancelPending()
         overlay.detachAll()
         scope.cancel()
+        if (finalTick != null) {
+            runBlocking {
+                runCatching {
+                    usageEngine.processUsageObservation(
+                        finalTick.packageName, finalTick.deltaMs, SystemClock.elapsedRealtime(),
+                    )
+                }.onFailure { Log.w(TAG, "handoff final credit failed pkg=${finalTick.packageName}", it) }
+            }
+        }
         super.onDestroy()
     }
 
@@ -284,6 +328,10 @@ class BlockerAccessibilityService : AccessibilityService() {
         if (BuildConfig.DEBUG) {
             Log.i(TAG, "decide $packageName gen=$generation -> ${decision.javaClass.simpleName}")
         }
+        // Every confirmed foreground transition feeds the usage session machine — also the
+        // Block case, where a session opened for the walled app must close with its final
+        // tick (§6 step 4) and no session may exist under a wall.
+        syncUsageSession(packageName, displayId, scheduleBlocked = decision is BlockDecision.Block)
         when (decision) {
             is BlockDecision.Block -> {
                 // Content is built only on a transition: an already-shown overlay's show()
@@ -295,10 +343,21 @@ class BlockerAccessibilityService : AccessibilityService() {
                 // starts at the app's whole surface; split-screen pane coverage is the
                 // largest-window re-bound in blockOtherRestrictedWindows.
                 if (!overlay.isShown(displayId)) {
-                    overlay.show(generation, displayId, displayBounds(displayId), appBlockedContent(packageName))
-                    // Per-window root walks only on a new block transition, not on every
-                    // steady-state WSC while the overlay is already up (2026-08-28 review).
-                    blockOtherRestrictedWindows(generation)
+                    coverBlockedApp(generation, displayId, packageName)
+                    // XOS measures the *animating* task for a moment after an app switch, so a
+                    // cover shown mid-animation lands at the animation's rect with the app's
+                    // keys tappable around it (device-caught 2026-09-16: 559x1242 at (80,179)
+                    // when Calculator came to the front — the wall reported `shown` and stayed
+                    // short). One re-run once the animation has settled; skipped if the cover
+                    // is already gone (user left before the settle).
+                    mainHandler.postDelayed(
+                        {
+                            if (overlay.isShown(displayId)) {
+                                coverBlockedApp(generation, displayId, packageName)
+                            }
+                        },
+                        COVER_SETTLE_MS,
+                    )
                 }
             }
             is BlockDecision.Allow -> {
@@ -310,21 +369,193 @@ class BlockerAccessibilityService : AccessibilityService() {
                 // sits behind the content check so the common case — no card, plain app
                 // switch — never probes; with a card up, switching to an unclassified
                 // package costs one probe (memoized; failed probes retried every 10 s).
-                val barId = if (overlay.currentContent(displayId) is OverlayContent.UrlBlocked) {
+                val current = overlay.currentContent(displayId)
+                val barId = if (current is OverlayContent.UrlBlocked) {
                     scanner.viewIdFor(packageName) { rootInActiveWindow }
                 } else {
                     null
                 }
+                // A daily-limit wall must survive the same-package WSC churn (§8 Step 4
+                // re-arm): the schedule engine carries no usage data, so the walled app's
+                // own WSC decides Allow — lifting the card here would only have the usage
+                // engine re-show it a moment later. A *different* package's Allow still
+                // hides it: the wall follows the foreground (Home always works).
+                val limitWalledHere =
+                    (current as? OverlayContent.DailyLimitBlocked)?.packageName == packageName
                 if (barId != null) {
                     scanGeneration = generation
                     scanDisplayId = displayId
                     scanner.onContentChanged(packageName, barId, { rootInActiveWindow }, generation)
+                } else if (limitWalledHere) {
+                    Unit
                 } else if (!overlay.isShown(displayId) || !restrictedPaneBeside(displayId, window)) {
                     overlay.hide(generation, displayId)
                 }
             }
         }
     }
+
+    // --- Daily-usage sessions (enforcement plan v2 §8 Step 4, §6 steps 2–4) ----------------
+
+    /** Connect-time usage re-acquire (user-ruled 2026-09-15, Open Product Decisions #10; beyond
+     *  the plan's §8 Step 4 text, which opens sessions only on window-state transitions). A
+     *  bind while a tracked app is already foreground emits no event for that app, so without
+     *  this the session opens only at the next transition — the [bind → next event] span goes
+     *  uncredited under FULL authority. Mirrors Path B's authority-regained lookback: the
+     *  session anchors at connect-now, never at an earlier observation time — the pre-connect
+     *  span belongs to whichever path held authority before, and double-crediting is worse
+     *  than a visible under-count. rootInActiveWindow is the decisive signal (same rationale
+     *  as [deferredWsc] — XOS window-list lag); bounded retries cover a just-connected
+     *  service whose window list is not populated yet. */
+    private fun reacquireUsageSessionOnConnect(attempt: Int = 0) {
+        if (!settings.enhancedModeEnabled) return
+        val packageName = runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull()
+        if (packageName.isNullOrEmpty() || packageName == this.packageName) {
+            if (attempt < MAX_CONNECT_REACQUIRE_ATTEMPTS) {
+                mainHandler.postDelayed(
+                    { reacquireUsageSessionOnConnect(attempt + 1) },
+                    DEFERRED_WSC_MS,
+                )
+            }
+            return
+        }
+        if (usageSessions.activePackage == packageName) return
+        if (emergency.isProtected(packageName, null)) return
+        if (!isLimitTracked(packageName)) return
+        val displayId = allWindows().firstOrNull { runCatching { it.isActive }.getOrDefault(false) }
+            ?.displayIdOrDefault() ?: Display.DEFAULT_DISPLAY
+        val scheduleBlocked =
+            engine.decideApp(packageName, System.currentTimeMillis()) is BlockDecision.Block
+        if (BuildConfig.DEBUG) {
+            Log.i(TAG, "connect re-acquire pkg=$packageName scheduleBlocked=$scheduleBlocked")
+        }
+        syncUsageSession(packageName, displayId, scheduleBlocked)
+    }
+
+    /** Feeds one confirmed foreground transition into the session machine and mirrors the
+     *  result into the accounting engine. [scheduleBlocked] = this decide ruled the app walled
+     *  by its schedule; a limit card already up for the same package walls it too — neither
+     *  may have a session (covered time must not accrue as usage). */
+    private fun syncUsageSession(packageName: String, displayId: Int, scheduleBlocked: Boolean) {
+        val card = overlay.currentContent(displayId)
+        val limitWalled = (card as? OverlayContent.DailyLimitBlocked)?.packageName == packageName
+        val tracked = !scheduleBlocked && !limitWalled && isLimitTracked(packageName)
+        val observed = usageSessions.observeForeground(
+            packageName, tracked, displayId, SystemClock.elapsedRealtime(), systemBootCount(this),
+        )
+        observed.closedTick?.let { accountUsage(it) }
+        // Instant zero-delta evaluation on open: re-arms the block within ms of re-entry
+        // (§8 Step 4 re-arm) and makes §9's non-positive-limit Block immediate instead of
+        // waiting for the first 10s tick.
+        if (observed.opened) accountUsage(UsageSessionMachine.Tick(packageName, 0L, displayId))
+        syncUsageTicker()
+    }
+
+    /** Closes the open session with its final tick (§6 step 4) — idempotent. */
+    private fun closeUsageSession() {
+        usageSessions.close(SystemClock.elapsedRealtime())?.let { accountUsage(it) }
+        syncUsageTicker()
+    }
+
+    /** The 10s ticker (§8 Step 4): one tick per open session, incremental delta, anchor reset
+     *  each tick. Cancelled whenever no session is open. */
+    private fun syncUsageTicker() {
+        if (usageSessions.activePackage == null) {
+            usageTickJob?.cancel()
+            usageTickJob = null
+            return
+        }
+        if (usageTickJob?.isActive == true) return
+        usageTickJob = scope.launch {
+            while (isActive) {
+                delay(USAGE_TICK_MS)
+                usageSessions.tick(SystemClock.elapsedRealtime(), systemBootCount(this@BlockerAccessibilityService))
+                    ?.let { accountUsage(it) }
+            }
+        }
+    }
+
+    /** One accounting write + render. §8 Step 4's authority gate ("only when
+     *  ProtectionStatusMonitor reports Path A holds accounting authority") is trivially
+     *  satisfied until Step 5/6 exist: Path B has no process yet and this ticker running is
+     *  Path A's health signal — Step 6 replaces this seam with the monitor check. The engine
+     *  transaction runs off the main thread (NFR4: failures are logged, never crash-loops). */
+    private fun accountUsage(tick: UsageSessionMachine.Tick) {
+        scope.launch {
+            runCatching {
+                val action = usageEngine.processUsageObservation(
+                    tick.packageName, tick.deltaMs, SystemClock.elapsedRealtime(),
+                )
+                mainHandler.post { renderUsageAction(tick.packageName, tick.displayId, action) }
+            }.onFailure { Log.w(TAG, "usage accounting failed pkg=${tick.packageName}", it) }
+        }
+    }
+
+    /** Renders the engine's verdict on the main thread (§8 Steps 4/10). A verdict rendered
+     *  after its app already left the foreground touches nothing — the pending warning state
+     *  survives and retries on the app's next observation (Decision 14), and the block
+     *  re-arms on the next foreground enter. */
+    private fun renderUsageAction(packageName: String, displayId: Int, action: EnforcementAction) {
+        if (!isActiveForeground(packageName, null)) return
+        when (action) {
+            is EnforcementAction.NoAction -> Unit
+            is EnforcementAction.ShowWarning -> {
+                // Never over a wall: a banner for an app whose card is already up is noise
+                // (and its delivery confirm would be a lie — the state stays PENDING).
+                val current = overlay.currentContent(displayId)
+                if (current is OverlayContent.AppBlocked || current is OverlayContent.UrlBlocked ||
+                    current is OverlayContent.DailyLimitBlocked
+                ) {
+                    return
+                }
+                overlay.show(
+                    stateMachine.currentGeneration,
+                    displayId,
+                    overlay.warningBounds(displayId),
+                    OverlayContent.Warning(action.level, action.remainingMs),
+                ) {
+                    // Delivery confirmed only once the banner actually attached (§9: a
+                    // warning that failed to attach stays PENDING_DELIVERY / Decision 14).
+                    scope.launch { runCatching { usageEngine.markWarningDelivered(packageName, action.level) } }
+                }
+            }
+            is EnforcementAction.Block -> {
+                // The wall replaces the session: nothing accrues under a covered app.
+                if (usageSessions.activePackage == packageName) closeUsageSession()
+                val current = overlay.currentContent(displayId)
+                if (current !is OverlayContent.DailyLimitBlocked) {
+                    val generation = stateMachine.currentGeneration
+                    overlay.show(
+                        generation,
+                        displayId,
+                        overlay.displayBounds(displayId),
+                        OverlayContent.DailyLimitBlocked(packageName),
+                    ) {
+                        // §8 Step 4 eviction: confirmed attach, then Home — never assumed.
+                        // The wall's usual lifeline is the next decided foreground change, but
+                        // XOS can defer-then-drop the launcher's WSC outright (device-caught
+                        // 2026-09-15: launcher never entered the window list within the six
+                        // deferral attempts) — leaving the wall focused and touch-modal over
+                        // the home screen. Eviction is the wall's end anyway, so hide it after
+                        // a short beat. Generation-guarded: an immediate re-entry decides (new
+                        // generation) and this stale hide no-ops.
+                        if (performGlobalAction(GLOBAL_ACTION_HOME)) {
+                            mainHandler.postDelayed(
+                                { overlay.hide(generation, displayId) },
+                                BLOCK_EVICT_HIDE_MS,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** A tracked package = an enabled rule with a real limit — mirrors BlockDecisionEngine
+     *  Rule 2's `dailyLimitMs > 0` gate and the snapshot's disabled-rule filtering. Read off
+     *  the cached snapshot: no DB I/O on the event path. */
+    private fun isLimitTracked(packageName: String): Boolean =
+        (publisher.snapshot.appRules[packageName]?.dailyLimitMs ?: 0L) > 0L
 
     /** Multi-window (plan §8 Step 5 / Decision 10): an Allow for one window must not lift
      *  the cover off a restricted pane beside it — scrolling the allowed pane's Settings
@@ -398,6 +629,14 @@ class BlockerAccessibilityService : AccessibilityService() {
      *  already-shown cover to the restricted pane (split-screen, emulator-5554 2026-09-14).
      *  Clamped to the bar-free display: panes extend behind the nav bar, and covering it
      *  swallows Home/Back (2026-09-13). */
+    /** Whole-display cover, then the largest-window re-bound. The per-window root walk runs on
+     *  a block transition (and its one settle re-run), never per steady-state WSC
+     *  (2026-08-28 review). */
+    private fun coverBlockedApp(generation: Long, displayId: Int, packageName: String) {
+        overlay.show(generation, displayId, overlay.displayBounds(displayId), appBlockedContent(packageName))
+        blockOtherRestrictedWindows(generation)
+    }
+
     private fun blockOtherRestrictedWindows(generation: Long) {
         val candidate = HashMap<Int, Pair<String, Rect>>()
         allWindows().forEach { w ->
@@ -415,7 +654,7 @@ class BlockerAccessibilityService : AccessibilityService() {
         candidate.forEach { (displayId, entry) ->
             val (pkg, windowBounds) = entry
             val target = Rect(windowBounds)
-            if (!target.intersect(displayBounds(displayId))) return@forEach
+            if (!target.intersect(overlay.displayBounds(displayId))) return@forEach
             overlay.show(generation, displayId, target, appBlockedContent(pkg))
         }
     }
@@ -440,7 +679,7 @@ class BlockerAccessibilityService : AccessibilityService() {
                 overlay.show(
                     generation,
                     displayId,
-                    displayBounds(displayId),
+                    overlay.displayBounds(displayId),
                     if (rule != null) {
                         OverlayContent.UrlBlocked(url.hostUnicode, rule.ruleId, browserPackage)
                     } else {
@@ -457,7 +696,13 @@ class BlockerAccessibilityService : AccessibilityService() {
                     scope.launch { runCatching { attempts.recordBlocked(rule.ruleId, url.hostUnicode) } }
                 }
             }
-            is BlockDecision.Allow -> overlay.hide(generation, displayId)
+            is BlockDecision.Allow -> {
+                // URL evidence is not a foreground transition: it must never lift a
+                // daily-limit wall (§8 Step 4 re-arm — the wall is lifted only by the usage
+                // engine or by the foreground moving to a different app).
+                if (overlay.currentContent(displayId) is OverlayContent.DailyLimitBlocked) return
+                overlay.hide(generation, displayId)
+            }
         }
     }
 
@@ -483,30 +728,6 @@ class BlockerAccessibilityService : AccessibilityService() {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
         }
-    }
-
-    @Suppress("DEPRECATION") // getRealMetrics: deprecated in API 34, but the only non-cutout-aware path below API 30 (minSdk 24).
-    private fun displayBounds(displayId: Int): Rect {
-        val display = getSystemService(DisplayManager::class.java).getDisplay(displayId) ?: return Rect()
-        val metrics = DisplayMetrics()
-        display.getRealMetrics(metrics)
-        val full = Rect(0, 0, metrics.widthPixels, metrics.heightPixels)
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return full
-        // Stop the card at the system bars: a full-display overlay draws above the
-        // navigation bar and swallows its touches, so Home/Back stop working (device-caught
-        // 2026-09-13 — the card's own hint promised they always work). The bar-free area
-        // keeps them visible and touchable around the card.
-        val bars = createDisplayContext(display)
-            .getSystemService(WindowManager::class.java)
-            ?.currentWindowMetrics?.windowInsets
-            ?.getInsetsIgnoringVisibility(WindowInsets.Type.systemBars())
-            ?: return full
-        return Rect(
-            full.left + bars.left,
-            full.top + bars.top,
-            full.right - bars.right,
-            full.bottom - bars.bottom,
-        )
     }
 
     private fun registerDialerReceiver() {
@@ -537,8 +758,13 @@ class BlockerAccessibilityService : AccessibilityService() {
      *  ACTION_SCREEN_OFF is only deliverable to runtime-registered receivers. */
     private fun registerScreenOffReceiver() {
         val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) =
+            override fun onReceive(context: Context?, intent: Intent?) {
                 overlay.hideAll(stateMachine.currentGeneration)
+                // Screen off = nothing visible: the session's final tick credits real usage up
+                // to the moment the screen went dark, then stops (no phantom accrual while
+                // off). Re-opens at the next foreground WSC, same as the overlay re-arm.
+                closeUsageSession()
+            }
         }
         val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -611,6 +837,22 @@ class BlockerAccessibilityService : AccessibilityService() {
          *  re-check missed it and the cover above it never hid). ~2.4s worst case, then the
          *  event is dropped for good — a genuinely stale event must not decide later. */
         private const val MAX_DEFERRED_WSC_ATTEMPTS = 6
+
+        /** Path A's session ticker cadence (enforcement plan v2 §8 Step 4). */
+        private const val USAGE_TICK_MS = 10_000L
+
+        /** Bounded re-checks for the connect-time usage re-acquire while the active root is
+         *  still resolving (~1.2s worst case — mirrors the deferred-WSC lag handling). */
+        private const val MAX_CONNECT_REACQUIRE_ATTEMPTS = 3
+
+        /** Beat between the §8 Step 4 eviction and dropping the block wall (see the Block
+         *  render's eviction callback). */
+        private const val BLOCK_EVICT_HIDE_MS = 1_000L
+
+        /** Re-bound delay after a block cover: long enough for an OEM task-switch animation to
+         *  settle (device-tuned on XOS 2026-09-16, where display metrics track the animating
+         *  task mid-switch). */
+        private const val COVER_SETTLE_MS = 700L
 
         /** True between onServiceConnected and onDestroy; the device suite waits on it because
          *  the accessibility re-bind after a process restart lags on XOS. */

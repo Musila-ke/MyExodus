@@ -5,11 +5,21 @@
     <string name="overlay_open_recovery">Open MyExodus Recovery</string>
     <string name="overlay_different_site">Go to a different site</string>
     <string name="overlay_hint">Home and back always work. Blocking resumes when you come back.</string>
+    <string name="limit_blocked_title">%1$s is done for today</string>
+    <string name="limit_blocked_message">Today’s time limit is used up. It resets tomorrow.</string>
+    <string name="limit_warning_title">About %1$d min of today’s time left</string>
+    <string name="limit_warning_title_final">Almost out of time — about %1$d min left</string>
     <string name="block_screen_hint">You can always press Home to leave. Blocking resumes when you come back.</string>
     <string name="enhanced_mode_service_label">MyExodus blocker</string>
     <string name="enhanced_mode_accessibility_description">Used to detect when you open an app or website on your restriction list and show the blocking overlay. It reads only the app name of the window you switch to and, in supported browsers only, the address-bar text.</string>
-    <string name="enhanced_mode_health_disabled_title">MyExodus blocker is off</string>
-    <string name="enhanced_mode_health_disabled_text">Your Enhanced Mode rules are no longer applied. Re-enable the accessibility service to resume blocking.</string>
+    <string name="enhanced_mode_health_disabled_title">Enhanced Mode is off</string>
+    <string name="enhanced_mode_health_disabled_text">Blocks still work, but they start up to a few seconds later while detection falls back to polling. Re-enable the accessibility service for instant blocking.</string>
+
+    <!-- Protection paused: neither detection path can see apps (§8 Step 6) — the degraded
+         notification and the Home banner share this copy. -->
+    <string name="protection_paused_title">Protection is paused</string>
+    <string name="protection_paused_text">MyExodus can’t tell which app is open right now, so blocks won’t start. Open MyExodus to see what’s off and turn protection back on.</string>
+    <string name="protection_paused_action">Fix</string>
 
     <!-- Rule state labels and schedule summaries (shared by Home and Rules rows) -->
     <string name="state_paused">Paused</string>
@@ -55,6 +65,10 @@
     <string name="editor_target_invalid">That doesn’t look like a website address. Try example.com.</string>
     <string name="editor_always_on">Always on</string>
     <string name="editor_always_on_hint">Blocks every hour of every day until paused or deleted.</string>
+    <string name="editor_daily_limit_title">Daily limit</string>
+    <string name="editor_daily_limit_hint">Blocked after this much use in a day. Starts counting now, resets at midnight.</string>
+    <string name="editor_daily_limit_field_label">Minutes per day</string>
+    <string name="editor_daily_limit_invalid">Enter at least 1 minute for the daily limit.</string>
     <string name="editor_from">From</string>
     <string name="editor_to">To</string>
     <string name="editor_overnight">Overnight — ends the next day.</string>
@@ -94,9 +108,6 @@
     <string name="settings_usage_title">Usage access</string>
     <string name="settings_usage_ok">On — MyExodus can tell which app is in front</string>
     <string name="settings_usage_off">Off — app blocking can’t run</string>
-    <string name="settings_exact_alarm_title">Exact alarms</string>
-    <string name="settings_exact_alarm_ok">Allowed</string>
-    <string name="settings_exact_alarm_off">Not allowed — timers may end late</string>
     <string name="settings_battery_title">Android battery optimization</string>
     <string name="settings_battery_ok">Exempt — Android won’t pause MyExodus</string>
     <string name="settings_battery_off">Not exempt — Android may pause MyExodus in the background</string>
@@ -106,13 +117,15 @@
     <string name="settings_overlay_title">Display over other apps</string>
     <string name="settings_overlay_ok">Allowed</string>
     <string name="settings_overlay_off">Not allowed — the block screen can’t be shown</string>
-    <string name="settings_overlay_not_needed">Not needed on this device</string>
     <string name="settings_integrity_title">Enforcement integrity</string>
     <string name="settings_integrity_verified">Verified — hardware-backed device key</string>
     <string name="settings_integrity_unverified">Unverified — device key is not StrongBox-backed</string>
     <string name="settings_integrity_unavailable">Unavailable — no device identity set up yet</string>
     <string name="settings_integrity_failed">Failed — the device key couldn’t be read</string>
     <string name="settings_integrity_recheck">Recheck</string>
+    <string name="settings_privacy_header">Privacy</string>
+    <string name="settings_crash_reports_title">Crash reports</string>
+    <string name="settings_crash_reports_body">Send anonymous crash diagnostics — error type, device model, Android version. Never app names, usage times, or limits.</string>
 
     <!-- Recovery screen -->
     <string name="recovery_title">Recovery</string>
@@ -125,11 +138,38 @@
     <string name="recovery_overrides_logged">Overrides are logged on this device.</string>
     <string name="recovery_leave_note">Leaving MyExodus won’t stop the timer — the block lifts when it ends or when you override.</string>
     <string name="recovery_idle_title">No recovery session</string>
-    <string name="recovery_idle_body">A recovery session starts when a blocked app opens and you tap “I need to use this app”. Wait out the timer and the block is lifted for that rule.</string>
+    <string name="recovery_idle_body">A recovery session starts when a blocked app opens and you tap “Open MyExodus Recovery”. Wait out the timer and the block is lifted for that rule.</string>
 
     <!-- App picker -->
     <string name="picker_title">Choose an app</string>
     <string name="picker_search">Search apps</string>
     <string name="picker_no_match">No apps match “%1$s”.</string>
     <string name="picker_none">No launchable apps found.</string>
+
+    <!-- First-run setup wizard (plan §8 Step 7): one screen per permission, each stating
+         plainly what breaks if denied, matching ProtectionStatusMonitor behavior. -->
+    <string name="setup_title">Set up protection</string>
+    <string name="setup_step_of">Step %1$d of %2$d</string>
+    <string name="setup_status_granted">Granted</string>
+    <string name="setup_status_missing">Not allowed yet</string>
+    <string name="setup_back">Back</string>
+    <string name="setup_skip">Skip</string>
+    <string name="setup_next">Next</string>
+    <string name="setup_done">Done</string>
+    <string name="setup_usage_title">Usage access</string>
+    <string name="setup_usage_body">MyExodus uses this to tell which app is in front. Without it, app blocking can’t run.</string>
+    <string name="setup_usage_action">Open Usage Access settings</string>
+    <string name="setup_disclosure_title">What MyExodus sees</string>
+    <string name="setup_disclosure_body">To block apps and sites, MyExodus checks the name of the app you switch to — and, in supported browsers only, the address-bar text. App names and usage times stay on this device.</string>
+    <string name="setup_disclosure_action">Continue</string>
+    <string name="setup_accessibility_title">Accessibility service</string>
+    <string name="setup_accessibility_body">Detects when you open an app or website on your list and shows the block screen right away. Without it, blocks still work — they just start up to a few seconds later while detection falls back to polling.</string>
+    <string name="setup_accessibility_action">Open Accessibility settings</string>
+    <string name="setup_notifications_title">Notifications</string>
+    <string name="setup_notifications_body">Used only for a warning before a daily limit runs out and for protection alerts. Blocking works without it — you just won’t get a heads-up.</string>
+    <string name="setup_notifications_action">Allow notifications</string>
+    <string name="setup_notifications_action_settings">Open notification settings</string>
+    <string name="setup_overlay_title">Display over other apps</string>
+    <string name="setup_overlay_body">Lets MyExodus show the block screen on top of a blocked app, including the fallback used when Accessibility is off. Without it, that fallback can’t block or warn.</string>
+    <string name="setup_overlay_action">Open Display over other apps settings</string>
 </resources>

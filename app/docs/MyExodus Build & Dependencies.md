@@ -23,13 +23,14 @@ Current as of 2026-09-13. All versions verified together: `assembleDebug`, `lint
 | Hilt (`com.google.dagger`) | 2.60.1 | Compile-time DI (ADR #5); 2.59+ supports AGP 9 |
 | androidx.hilt:hilt-navigation-compose | 1.4.0 | Navigation ViewModel injection |
 | androidx.hilt:hilt-work | 1.4.0 | `@HiltWorker` for the health-check + partner-sync workers (2026-08-26, 2026-08-30) |
+| androidx.hilt:hilt-compiler | 1.4.0 (KSP) | **Required alongside hilt-work** (added 2026-09-16): the androidx processor that generates each `@HiltWorker`'s `WorkerAssistedFactory` + the map binding `HiltWorkerFactory` reads. Dagger's `com.google.dagger:hilt-compiler` does NOT cover workers. Without it every `@HiltWorker` fails instantiation at dispatch ("Could not create Worker … NoSuchMethodException `<init>[Context, WorkerParameters]`" → reflection fallback); XOS masked this because no WorkManager job ever runs there (ADR #27). Found by the emulator execution leg 2026-09-16; generated `*_AssistedFactory` classes verified in build output after the fix; **runtime-verified 2026-09-16 (emulator-5554, stock Android)**: `HealthCheckWorker` + `PartnerSyncWorker` logged `Worker result SUCCESS` on their genuine dispatch (was `NoSuchMethodException`), and `DailyMaintenanceWorkerInstrumentedTest#maintenanceRun_rollsStaleTrackerRow` passed (`OK (1 test)`) |
 | KSP | 2.3.11 | Room + Hilt codegen; decoupled from Kotlin version since 2.3.0 |
 | Firebase BoM | 34.18.0 | Event relay + partner alerts (ADR #3, #8) |
 | Firebase Messaging | via BoM | Partner push notifications |
 | Firebase Firestore | via BoM | Partner dashboard replica / sync store |
 | Firebase Auth | via BoM | Anonymous sign-in for the pairing relay + mailbox (Slice 7) |
 | androidx.biometric | 1.1.0 | BiometricPrompt signing prompts (debug-only — pairing harness; V1 UI moves it to main) |
-| WorkManager | 2.11.2 | Time-range schedules, heartbeat self-check (feature plans); Enhanced Mode 15-min health check (2026-08-26). Application implements `Configuration.Provider` + `HiltWorkerFactory`; manifest removes `androidx.startup.InitializationProvider` (on-demand init, 2026-08-28) |
+| WorkManager | 2.11.2 | Time-range schedules, heartbeat self-check (feature plans); Enhanced Mode 15-min health check (2026-08-26). Application implements `Configuration.Provider` + `HiltWorkerFactory`; manifest removes `androidx.startup.InitializationProvider` (on-demand init, 2026-08-28). Worker instantiation additionally requires `androidx.hilt:hilt-compiler` on KSP (added 2026-09-16 — see that row) |
 | Navigation Compose | 2.9.8 | App navigation |
 | Lifecycle (runtime/viewmodel/runtime-compose) | 2.11.0 | MVVM state (ADR #4) |
 | Kotlinx Coroutines | 1.11.0 | Reactive flows |
@@ -56,7 +57,7 @@ Current as of 2026-09-13. All versions verified together: `assembleDebug`, `lint
 ## Dependency locking
 
 - `dependencyLocking { lockAllConfigurations() }` is enabled in `app/build.gradle.kts`; resolved versions are pinned in `app/gradle.lockfile` (checked in). This also guards against supply-chain drift.
-- To update a dependency after a version bump: `./gradlew :app:dependencies --write-locks` (or `--update-locks <group:artifact>`).
+- To update a dependency after a version bump: `./gradlew :app:dependencies --write-locks` (or `--update-locks <group:artifact>`). Regenerated 2026-09-16 for `androidx.hilt:hilt-compiler:1.4.0` (+ its `androidx.room:room-compiler-processing:2.8.4` transitive) — both variants build green afterward (debug + R8 release, 2026-09-16). **Scope trap (2026-09-16):** `--write-locks` only updates configurations the invoked tasks resolve; an assemble-only invocation (`:app:assembleDebug :app:assembleRelease --write-locks`) never resolves androidTest/unitTest variant configurations, so a later `connectedDebugAndroidTest` fails config-time with "Resolved 'X' which is not part of the dependency lock state". Use `:app:dependencies --write-locks` for full lock coverage.
 - A root-level `settings-gradle.lockfile` also exists (version catalog lock).
 
 ## Vulnerability scanning — DONE (2026-08-24)

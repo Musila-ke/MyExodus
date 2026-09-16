@@ -1,5 +1,6 @@
 package com.example.myexodus.accountability.enrollment
 
+import android.util.Log
 import com.example.myexodus.accountability.crypto.AttestationVerifier
 import com.example.myexodus.accountability.sync.PairingExchange
 import com.example.myexodus.secrets.SecretsRepository
@@ -90,12 +91,17 @@ class PairingFlow(
         val transcript = transcriptBytes(pairId, state.enrollmentPayload.agreementPublicKey)
         val verification = enrollmentFlow.verifyPartnerMaterial(pairId, state.enrollmentPayload, transcript, partnerSignature)
         if (verification !is EnrollmentFlow.PartnerVerification.Verified) {
+            // The caller only sees null; without this the rejection reason is discarded
+            // (diagnosed blind on the 2026-09-16 emulator-partner run). The cast is safe:
+            // Rejected is the only other PartnerVerification subtype.
+            Log.w(TAG, "initiator rejected partner material: ${(verification as EnrollmentFlow.PartnerVerification.Rejected).reason}")
             exchange.deletePairState(pairId)
             return null
         }
         val partnerAgreementKey = try {
             EnrollmentTranscript.parsePublicKey(state.enrollmentPayload.agreementPublicKey)
         } catch (e: Exception) {
+            Log.w(TAG, "initiator rejected partner material: agreement key unparseable — ${e.message}")
             exchange.deletePairState(pairId)
             return null
         }
@@ -230,5 +236,10 @@ class PairingFlow(
         )
         secretsRepository.storePairingKey(enrollmentFlow.derivePairingKey(cek))
         return enrollmentFlow.deriveSas(pairId, agreementPublicKey(), partnerAgreementPublicKey)
+    }
+
+    private companion object {
+        /** Same tag as the harness so one `adb logcat -s MyExodusPairing` stream captures both. */
+        const val TAG = "MyExodusPairing"
     }
 }

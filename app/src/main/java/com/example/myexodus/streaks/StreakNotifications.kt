@@ -29,7 +29,7 @@ object StreakNotifications {
      *  notification slot first (the §14 delivery counter) must check this before claiming.
      *  POST_NOTIFICATIONS exists only on 33+; pre-33 a raw checkSelfPermission reports DENIED
      *  for an unknown permission (a false "denied" on every pre-33 device), so the real gate
-     *  there is areNotificationsEnabled — same pattern as ForegroundBlockerService. */
+     *  there is areNotificationsEnabled — same pattern as EnforcementForegroundService. */
     fun canPost(context: Context): Boolean =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==

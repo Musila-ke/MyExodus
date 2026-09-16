@@ -232,6 +232,14 @@ FirebaseAppCheck.installAppCheckProviderFactory(
 *   Firestore security rules pass the emulator suite, specifically validating cross-document pair membership.
 *   Biometric prompts occur no more than once per 900-second window during continuous use, and key invalidation triggers correctly when a new fingerprint is added to the device.
 
+### 17.1 Device verification status (2026-09-16)
+
+**AC#1 (enrollment, matching SAS) — PASS at protocol level on the X6532**, with one hardware caveat. Three complete pairings (real Firestore relay, two anonymous uids, roles driven by `PairingTestActivity`): SAS **85108** / **67329** / **79827**, each matching on both roles with both `Paired` outcomes. Caveat: the emulator cannot be the second device — `AttestationVerifier` PKIX-pins the Google Hardware Attestation roots and rejects `SecurityLevel.SOFTWARE` (`AttestationVerifier.kt:37`), so emulator software keys can never pass verification (attempts ended `TokenExpired` / `rejected or timed out`). The run therefore used both roles on one device, which means both roles share the device-level signing/agreement keys: mutual verification, transcript signatures in both directions, redemption, and SAS derivation are fully exercised, but **cross-device key distinctness is not** (requires a second hardware-attesting device).
+
+**AC#4 (revocation + bilateral key destruction) — PASS for the initiating device, server side confirmed.** Harness outcome `Deleted` (pair `52684df48c97e727`): deletion event chained → outbox drained → `destroyAgreementKey()` → pair data wiped → tombstone → pair-doc delete. Server-side: `pairs/52684df48c97e727` REST-reads **404**, and the tombstone is proven present via a create-probe (re-creating the revoked pairId → **403**, identical payload on a bogus pairId → **200** control): the revocation-reopen gap is closed. The receiver half (`handleIncoming`) is unit-tested (`BilateralDeletionTest`); destruction is device-level (one agreement key served both roles in this run), so the "both devices" clause is covered by the unit tests + the design, not by a second physical device.
+
+Residual debris (harmless, member-gated rules prevent cleanup without the original anonymous sessions): pairs `550496d7655cddc6` and `e1b6226a3487b6c4` remain live server-side; expired token `1d652a14d0d04d16` created no pair.
+
 ## 18. Definition of Done
 *   All dual-key crypto engine implementations are complete and hardware-attested.
 *   Animated QR reassembly is functional and tested with 30% simulated frame loss.

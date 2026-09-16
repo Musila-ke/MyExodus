@@ -86,7 +86,8 @@ class PairingTestActivity : FragmentActivity() {
 
         val qrImage = ImageView(this@PairingTestActivity).apply {
             adjustViewBounds = true
-            maxHeight = 360
+            // 240px: the 720x1600 X6532 clips the Delete-pair row even at 360 (caught 2026-09-16)
+            maxHeight = 240
         }
         addView(qrImage)
 
@@ -103,6 +104,9 @@ class PairingTestActivity : FragmentActivity() {
 
         val qrInput = EditText(this@PairingTestActivity).apply {
             hint = "PARTNER: paste base64 QR here"
+            // The 124-char base64 wraps to 4+ lines and pushes every row below off-screen
+            // on a 720x1600 device (caught 2026-09-16); 2 lines cap the growth.
+            maxLines = 2
         }
         addView(qrInput)
         addView(Button(this@PairingTestActivity).apply {

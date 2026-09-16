@@ -121,7 +121,7 @@ class RulesSnapshotPublisher(
             degrade("policy version read failed: ${e.javaClass.simpleName}")
             return
         }
-        val snapshot = RulesSnapshot.build(rules, version)
+        val snapshot = RulesSnapshot.build(rules, version, System.currentTimeMillis())
         snapshot.writeTo(cacheFile)
         try {
             snapshot.writeTo(deCacheFile)

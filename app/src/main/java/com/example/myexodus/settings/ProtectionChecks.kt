@@ -1,13 +1,15 @@
 package com.example.myexodus.settings
 
-import android.app.AlarmManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.example.myexodus.accountability.crypto.AccountabilityKeyStore
 import com.example.myexodus.blocking.OverlayController
 import com.example.myexodus.blocking.hasUsageAccess
@@ -20,11 +22,8 @@ import com.example.myexodus.blocking.hasUsageAccess
  */
 data class ProtectionChecks(
     val usageAccess: Boolean,
-    val exactAlarmSupported: Boolean,
-    val exactAlarmGranted: Boolean,
     val batteryExempt: Boolean,
     val overlayGranted: Boolean,
-    val overlayRequired: Boolean,
     val integrity: IntegrityStatus,
 )
 
@@ -37,26 +36,33 @@ data class ProtectionChecks(
 enum class IntegrityStatus { VERIFIED, UNVERIFIED, UNAVAILABLE, FAILED }
 
 fun readProtectionChecks(context: Context): ProtectionChecks {
-    val exactAlarmSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     return ProtectionChecks(
         usageAccess = runCatching { context.hasUsageAccess() }.getOrDefault(false),
-        exactAlarmSupported = exactAlarmSupported,
-        exactAlarmGranted = if (!exactAlarmSupported) {
-            true
-        } else {
-            runCatching {
-                context.getSystemService(AlarmManager::class.java)?.canScheduleExactAlarms()
-            }.getOrNull() ?: false
-        },
         batteryExempt = runCatching {
             context.getSystemService(PowerManager::class.java)
                 ?.isIgnoringBatteryOptimizations(context.packageName)
         }.getOrNull() ?: false,
+        // Required on every device since the 2026-09-15 fold: Path B always runs and its wall
+        // and warning banner are TYPE_APPLICATION_OVERLAY (enforcement plan v2 §8 Steps 5/7),
+        // so stock Android needs the "display over other apps" grant too.
         overlayGranted = runCatching { OverlayController.overlayPermissionGranted(context) }.getOrDefault(false),
-        overlayRequired = OverlayController.isTranssion(),
         integrity = integrityStatus(),
     )
 }
+
+/**
+ * API 33+ runtime grant; below 33, the app-level toggle. Notifications are the secondary
+ * warning channel only (plan §8 Step 7) — blocking never depends on this.
+ */
+fun notificationsGranted(context: Context): Boolean =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+    } else {
+        NotificationManagerCompat.from(context).areNotificationsEnabled()
+    }
 
 private fun integrityStatus(): IntegrityStatus = runCatching {
     val keyStore = AccountabilityKeyStore()
@@ -71,12 +77,6 @@ fun accessibilitySettingsIntent(): Intent = Intent(Settings.ACTION_ACCESSIBILITY
 
 fun usageAccessSettingsIntent(): Intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
 
-/** API 31+. Callers gate on the support check; building the intent with the inlined constant
- *  string below 31 is harmless — it is never started there. */
-@Suppress("InlinedApi")
-fun exactAlarmSettingsIntent(context: Context): Intent =
-    Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, packageUri(context))
-
 /** Opens the battery-optimization list. It does NOT grant the exemption (plan §5) — the user
  *  still makes the change there. */
 fun batteryOptimizationSettingsIntent(): Intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
@@ -86,6 +86,10 @@ fun overlaySettingsIntent(context: Context): Intent =
 
 fun appInfoSettingsIntent(context: Context): Intent =
     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri(context))
+
+fun notificationSettingsIntent(context: Context): Intent =
+    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
 
 /**
  * OEM background-restriction screen. No API reports OEM restriction state, so this is a

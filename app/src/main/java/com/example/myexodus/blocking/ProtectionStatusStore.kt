@@ -6,20 +6,19 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** Why protection is degraded (blocking-core plan §9); null = healthy. */
+/** Why protection is degraded (blocking-core plan §9); null = healthy. The authority-derived
+ *  reasons are computed by [ProtectionStatusMonitor] (§8 Step 6) — nothing writes this store
+ *  from a permission check anymore. */
 enum class ProtectionDegradation {
-    /** Usage-access (PACKAGE_USAGE_STATS) revoked — app-block detection is impossible. */
-    USAGE_ACCESS_REVOKED,
+    /** Neither detection path can see apps (accessibility unavailable AND polling not
+     *  possible or not enrolled) — no enforcement is running. */
+    DEGRADED_NO_DETECTION,
 
     /** App was stopped via the Android 13+ Task Manager "Stop" action (§8.2). */
     APP_STOPPED,
 
     /** POST_NOTIFICATIONS denied — the FGS runs but its status notification cannot be shown. */
     NOTIFICATIONS_OFF,
-
-    /** SYSTEM_ALERT_WINDOW revoked on Transsion (TYPE_APPLICATION_OVERLAY path) — the
-     *  blocking overlay can't be shown; re-grant restores it. */
-    OVERLAY_REVOKED,
 }
 
 /**
@@ -31,7 +30,12 @@ enum class ProtectionDegradation {
 class ProtectionStatusStore @Inject constructor(
     @ApplicationContext private val appContext: Context,
 ) {
-    private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    // Lazy: constructed with the Hilt graph at process start, which can be pre-unlock
+    // (LOCKED_BOOT_COMPLETED, plan §8.5) — CE SharedPreferences throw until first unlock.
+    // Same device-caught class as EnhancedModeSettings (2026-09-15, reboot leg h1).
+    private val prefs: android.content.SharedPreferences by lazy {
+        appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    }
 
     var degradation: ProtectionDegradation?
         get() = prefs.getString(KEY_DEGRADATION, null)?.let { runCatching { ProtectionDegradation.valueOf(it) }.getOrNull() }

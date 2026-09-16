@@ -22,7 +22,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
-import com.example.myexodus.blocking.ForegroundBlockerService
+import com.example.myexodus.blocking.EnforcementForegroundService
+import com.example.myexodus.blocking.cancelDailyMaintenance
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.StrictModeManager
 import kotlinx.coroutines.delay
@@ -92,9 +93,11 @@ fun EnhancedModeScreen(
                             enhancedOn = enabled
                             // The master switch also drives the §8.1 foreground service.
                             if (enabled) {
-                                ForegroundBlockerService.start(context)
+                                EnforcementForegroundService.start(context)
                             } else {
-                                ForegroundBlockerService.stop(context)
+                                EnforcementForegroundService.stop(context)
+                                // §13 rollback: the maintenance job goes with the switch.
+                                cancelDailyMaintenance(context)
                             }
                         },
                     )

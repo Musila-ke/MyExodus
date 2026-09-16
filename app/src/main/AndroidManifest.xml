@@ -102,17 +102,19 @@
             android:name=".streaks.MilestoneAlarmReceiver"
             android:exported="false" />
 
-        <!-- §8.1 app-block detection service. specialUse requires the subtype property on
-            API 34+; the declaration is part of the Play-policy self-check (§12) when the
-            release build is prepared. START_STICKY restarts after a crash, which is exactly
-            the §8.1 recompute-from-current-state startup path. -->
+        <!-- §8.1 app-block detection + enforcement plan v2 §8 Step 5 daily-usage-limit
+            enforcement, one always-on service (folded 2026-09-15 per user ruling). specialUse
+            requires the subtype property on API 34+; the declaration is part of the
+            Play-policy self-check (§12) when the release build is prepared. START_STICKY
+            restarts after a crash, which is exactly the §8.1 recompute-from-current-state
+            startup path. -->
         <service
-            android:name=".blocking.ForegroundBlockerService"
+            android:name=".blocking.EnforcementForegroundService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="app_blocking_foreground_detection" />
+                android:value="app_blocking_and_daily_usage_limit_enforcement" />
         </service>
 
         <!-- The app-block screen (plan §8.1 Decision 3): a real Activity so Back cannot be
@@ -155,10 +157,15 @@
                 android:value="false" />
         </service>
 
+        <!-- isAccessibilityTool=false (enforcement plan v2 §8 Step 4): this service enforces
+            user-configured restrictions, it does not assist accessibility — the flag keeps
+            the service visible in accessibility settings as a restriction tool. -->
         <service
             android:name=".blocking.BlockerAccessibilityService"
             android:exported="false"
             android:label="@string/enhanced_mode_service_label"
+            android:isAccessibilityTool="false"
+            tools:targetApi="31"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />

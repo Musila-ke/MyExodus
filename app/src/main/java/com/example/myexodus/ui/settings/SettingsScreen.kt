@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -43,11 +44,11 @@ import com.example.myexodus.settings.StrictModeManager
 import com.example.myexodus.settings.accessibilitySettingsIntent
 import com.example.myexodus.settings.appInfoSettingsIntent
 import com.example.myexodus.settings.batteryOptimizationSettingsIntent
-import com.example.myexodus.settings.exactAlarmSettingsIntent
 import com.example.myexodus.settings.oemRestrictionSettingsIntent
 import com.example.myexodus.settings.overlaySettingsIntent
 import com.example.myexodus.settings.readProtectionChecks
 import com.example.myexodus.settings.usageAccessSettingsIntent
+import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.ui.EnhancedModeScreen
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.rememberWindowWidth
@@ -68,6 +69,7 @@ fun SettingsScreen(
     monitor: EnhancedModeHealthMonitor,
     strictMode: StrictModeManager,
     settings: EnhancedModeSettings,
+    crashReporting: CrashReporting,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -119,6 +121,48 @@ fun SettingsScreen(
         }
 
         EnhancedModeScreen(monitor, strictMode, settings)
+
+        PrivacySection(crashReporting)
+    }
+}
+
+/** Decision 12: telemetry is opt-out — this row is the opt-out. Copy states exactly what is
+ *  and is not transmitted; the toggle takes effect immediately (SDK call is synchronous). */
+@Composable
+private fun PrivacySection(crashReporting: CrashReporting) {
+    var crashReportsOn by remember { mutableStateOf(crashReporting.enabled) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(stringResource(R.string.settings_privacy_header), style = MaterialTheme.typography.titleMedium)
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        stringResource(R.string.settings_crash_reports_title),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        stringResource(R.string.settings_crash_reports_body),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = crashReportsOn,
+                    onCheckedChange = { enabled ->
+                        crashReporting.enabled = enabled
+                        crashReportsOn = enabled
+                    },
+                )
+            }
+        }
     }
 }
 
@@ -175,23 +219,6 @@ private fun ProtectionSection(
                     onAction = { context.startActivity(usageAccessSettingsIntent()) },
                 )
 
-                // Below API 31 the permission does not exist — no row, rather than a row
-                // claiming a status Android cannot have.
-                if (checks.exactAlarmSupported) {
-                    divider()
-                    StatusRow(
-                        title = stringResource(R.string.settings_exact_alarm_title),
-                        status = stringResource(
-                            if (checks.exactAlarmGranted) R.string.settings_exact_alarm_ok else R.string.settings_exact_alarm_off,
-                        ),
-                        tone = if (checks.exactAlarmGranted) StatusTone.GOOD else StatusTone.ATTENTION,
-                        actionLabel = stringResource(
-                            if (checks.exactAlarmGranted) R.string.settings_action_open else R.string.settings_action_fix,
-                        ),
-                        onAction = { context.startActivity(exactAlarmSettingsIntent(context)) },
-                    )
-                }
-
                 divider()
                 StatusRow(
                     title = stringResource(R.string.settings_battery_title),
@@ -222,29 +249,16 @@ private fun ProtectionSection(
                 )
 
                 divider()
-                val overlayOk = checks.overlayGranted || !checks.overlayRequired
                 StatusRow(
                     title = stringResource(R.string.settings_overlay_title),
                     status = stringResource(
-                        when {
-                            checks.overlayGranted -> R.string.settings_overlay_ok
-                            !checks.overlayRequired -> R.string.settings_overlay_not_needed
-                            else -> R.string.settings_overlay_off
-                        },
+                        if (checks.overlayGranted) R.string.settings_overlay_ok else R.string.settings_overlay_off,
                     ),
-                    tone = if (overlayOk) StatusTone.GOOD else StatusTone.ATTENTION,
-                    actionLabel = if (checks.overlayRequired) {
-                        stringResource(
-                            if (checks.overlayGranted) R.string.settings_action_open else R.string.settings_action_fix,
-                        )
-                    } else {
-                        null
-                    },
-                    onAction = if (checks.overlayRequired) {
-                        { context.startActivity(overlaySettingsIntent(context)) }
-                    } else {
-                        null
-                    },
+                    tone = if (checks.overlayGranted) StatusTone.GOOD else StatusTone.ATTENTION,
+                    actionLabel = stringResource(
+                        if (checks.overlayGranted) R.string.settings_action_open else R.string.settings_action_fix,
+                    ),
+                    onAction = { context.startActivity(overlaySettingsIntent(context)) },
                 )
 
                 divider()

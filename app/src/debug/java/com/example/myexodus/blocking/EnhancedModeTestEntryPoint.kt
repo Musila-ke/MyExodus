@@ -1,6 +1,7 @@
 package com.example.myexodus.blocking
 
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
+import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -22,4 +23,5 @@ interface EnhancedModeTestEntryPoint {
     fun latencyProfiler(): LatencyProfiler
     fun appRulesStoreFactory(): AppRulesStoreFactory
     fun partnerSyncCoordinator(): PartnerSyncCoordinator
+    fun usageEngine(): UsageAccountingEngine
 }

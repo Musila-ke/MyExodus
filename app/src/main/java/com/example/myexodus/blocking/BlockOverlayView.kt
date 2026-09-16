@@ -14,6 +14,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.example.myexodus.R
+import com.example.myexodus.ui.appLabel
 
 /** What the blocking overlay shows and which actions it offers for the current block. */
 sealed interface OverlayContent {
@@ -32,6 +33,18 @@ sealed interface OverlayContent {
         val ruleId: String,
         val browserPackage: String,
     ) : OverlayContent
+
+    /** Daily-limit block (enforcement plan v2 §8 Step 10 `BlockOverlayContent(packageName)`):
+     *  the app used up its Req 4 daily budget. Full-screen, touch-modal, no dismiss
+     *  affordance — Home is the only escape (fired by the host after this window's attach is
+     *  confirmed, §8 Step 4). The wall lifts at the day rollover, not by any tap. */
+    data class DailyLimitBlocked(val packageName: String) : OverlayContent
+
+    /** Usage warning (plan §8 Step 10 `WarningOverlayContent(level, remainingMs)`) — a
+     *  top-banner countdown of the remaining budget. Non-focusable, touches outside the
+     *  banner pass through; the host auto-dismisses it after 5 seconds or on tap. Carries no
+     *  package: the plan's model has none (the banner is self-explanatory, generic copy). */
+    data class Warning(val level: Int, val remainingMs: Long) : OverlayContent
 }
 
 /**
@@ -51,7 +64,15 @@ internal class BlockOverlayView(
     private val onPresented: () -> Unit,
     private val onOpenRecovery: (ruleId: String) -> Unit,
     private val onDifferentSite: (browserPackage: String) -> Unit,
+    private val onWarningDismiss: () -> Unit = {},
 ) : FrameLayout(context) {
+
+    private var bound: OverlayContent? = null
+
+    /** One-shot callback armed by [bind], fired on the first pre-draw after the window is
+     *  (or already was) attached — the host's "the card is actually on screen" signal (§8
+     *  Step 4: eviction runs only on a confirmed attach, never on the assumption). */
+    private var pendingAttached: (() -> Unit)? = null
 
     private val title = TextView(context).apply {
         setTextColor(0xFF1D1B19.toInt()) // TextLight
@@ -93,7 +114,9 @@ internal class BlockOverlayView(
         )
     }
 
-    fun bind(content: OverlayContent) {
+    fun bind(content: OverlayContent, onAttached: (() -> Unit)? = null) {
+        bound = content
+        pendingAttached = onAttached
         when (content) {
             is OverlayContent.AppBlocked -> {
                 title.text = context.getString(R.string.blocked_target_title, content.target)
@@ -119,7 +142,41 @@ internal class BlockOverlayView(
                 recoveryButton.setOnClickListener { onOpenRecovery(content.ruleId) }
                 differentSiteButton.setOnClickListener { onDifferentSite(content.browserPackage) }
             }
+            is OverlayContent.DailyLimitBlocked -> {
+                title.text = context.getString(
+                    R.string.limit_blocked_title,
+                    appLabel(context, content.packageName),
+                )
+                message.setText(R.string.limit_blocked_message)
+                message.visibility = VISIBLE
+                recoveryButton.visibility = GONE
+                differentSiteButton.visibility = GONE
+                hint.visibility = VISIBLE
+            }
+            is OverlayContent.Warning -> {
+                // Ceiling, not floor: 4m05s left reads "about 5 min", never "4 min" (§8 Step 10).
+                val minutes = ((content.remainingMs + 59_999) / 60_000).toInt()
+                title.text = context.getString(
+                    if (content.level >= 2) R.string.limit_warning_title_final else R.string.limit_warning_title,
+                    minutes,
+                )
+                message.visibility = GONE
+                recoveryButton.visibility = GONE
+                differentSiteButton.visibility = GONE
+                hint.visibility = GONE
+            }
         }
+        // Daily wall = the v1 block screen's rhythm minus its action row (user-directed
+        // 2026-09-15): title → 8dp → message → 32dp → hint. Without the hint the wall read
+        // as an unfinished blank sheet — and Home guidance is the wall's only escape path.
+        val daily = content is OverlayContent.DailyLimitBlocked
+        message.layoutParams =
+            if (daily) marginParams(top = 8, bottom = 32) else marginParams(bottom = 32)
+        hint.layoutParams = if (daily) marginParams() else marginParams(top = 24)
+        hint.setText(if (daily) R.string.block_screen_hint else R.string.overlay_hint)
+        // Rebind of an already-attached window (warning → block upgrade in place, §8 Step 10):
+        // no attach event will fire again, so arm the confirm callback for the next frame.
+        if (onAttached != null && isAttachedToWindow) scheduleAttachCallback()
     }
 
     private fun overlayButton(textRes: Int, primary: Boolean): Button = Button(context).apply {
@@ -171,6 +228,20 @@ internal class BlockOverlayView(
                 return true
             }
         })
+        if (pendingAttached != null) scheduleAttachCallback()
+    }
+
+    private fun scheduleAttachCallback() {
+        val observer = viewTreeObserver
+        observer.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                observer.removeOnPreDrawListener(this)
+                val callback = pendingAttached
+                pendingAttached = null
+                callback?.invoke()
+                return true
+            }
+        })
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -178,10 +249,12 @@ internal class BlockOverlayView(
         return true
     }
 
-    // Touch/click contract for accessibility: the surface itself has no action, but the
-    // contract must hold for TalkBack and click handling to stay well-formed.
+    // Touch/click contract for accessibility: block cards have no self action, but the
+    // contract must hold for TalkBack and click handling to stay well-formed. A tap on a
+    // warning banner is the "dismiss" gesture (§8 Step 4).
     override fun performClick(): Boolean {
         super.performClick()
+        if (bound is OverlayContent.Warning) onWarningDismiss()
         return true
     }
 }

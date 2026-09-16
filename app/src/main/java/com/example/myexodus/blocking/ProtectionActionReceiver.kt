@@ -14,12 +14,15 @@ import javax.inject.Inject
 class ProtectionActionReceiver : BroadcastReceiver() {
 
     @Inject lateinit var status: ProtectionStatusStore
+    @Inject lateinit var statusMonitor: ProtectionStatusMonitor
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             ACTION_REENABLE -> {
                 status.reenable()
-                ProtectionNotifications.updateDegraded(context, null)
+                // Recompute + publish (§8 Step 6): clearing APP_STOPPED can immediately
+                // reveal another reason protection is degraded, or none at all.
+                statusMonitor.refresh()
             }
         }
     }

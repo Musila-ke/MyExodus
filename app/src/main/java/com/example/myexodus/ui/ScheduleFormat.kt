@@ -4,6 +4,7 @@ import android.content.res.Resources
 import com.example.myexodus.R
 import com.example.myexodus.blocking.BlockDecisionEngine
 import com.example.myexodus.data.db.entity.RestrictionRule
+import com.example.myexodus.data.db.entity.isExpiredAt
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalTime
@@ -26,8 +27,7 @@ data class RuleRowState(val label: String?, val active: Boolean)
  */
 fun ruleRowState(rule: RestrictionRule, nowEpochMillis: Long, res: Resources): RuleRowState {
     if (!rule.isEnabled) return RuleRowState(res.getString(R.string.state_paused), active = false)
-    val expired = rule.blockExpiresAt > 0 && nowEpochMillis > rule.blockExpiresAt
-    if (expired) return RuleRowState(res.getString(R.string.state_expired), active = false)
+    if (rule.isExpiredAt(nowEpochMillis)) return RuleRowState(res.getString(R.string.state_expired), active = false)
     val blocking = BlockDecisionEngine.blocksNow(
         isAlwaysOn = rule.isAlwaysOn,
         dailyLimitMs = rule.dailyLimitMs,

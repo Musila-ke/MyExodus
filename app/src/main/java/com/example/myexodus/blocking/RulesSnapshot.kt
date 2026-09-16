@@ -2,6 +2,7 @@ package com.example.myexodus.blocking
 
 import android.util.Log
 import com.example.myexodus.data.db.entity.RestrictionRule
+import com.example.myexodus.data.db.entity.isExpiredAt
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
@@ -29,13 +30,14 @@ data class RulesSnapshot(
         const val MAX_APP_RULES = 2000
         const val MAX_URL_RULES = 2000
 
-        fun build(rules: List<RestrictionRule>, version: Long): RulesSnapshot {
+        fun build(rules: List<RestrictionRule>, version: Long, nowEpochMillis: Long): RulesSnapshot {
             val apps = LinkedHashMap<String, Rule>()
             val urls = mutableListOf<UrlPattern>()
             for (rule in rules) {
-                // Paused rules drop out of enforcement entirely; the single filter point so
-                // no engine path can decide against a disabled rule.
-                if (!rule.isEnabled) continue
+                // Paused and expired rules drop out of enforcement entirely; the single filter
+                // point so no engine path can decide against — or track usage for — a rule the
+                // Rules row already shows as inactive.
+                if (!rule.isEnabled || rule.isExpiredAt(nowEpochMillis)) continue
                 when (rule.targetType) {
                     "APP" -> apps[rule.blockedPackage] = Rule(
                         ruleId = rule.ruleId,

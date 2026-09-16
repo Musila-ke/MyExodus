@@ -11,6 +11,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.data.db.entity.DailyUsageTracker
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.UserProfile
+import java.time.LocalDate
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -116,7 +117,7 @@ class DatabaseConstraintsTest {
         assertTrue(profiles().observeActive().first()?.userId == PROFILE_ID)
     }
 
-    // --- Duplicate usage record (unique profile_id/package_name/date_epoch) ---
+    // --- Duplicate usage record (unique profile_id/package_name/local_date_anchor) ---
 
     @Test
     fun duplicateUsageRecordRejected() = runTest {
@@ -200,8 +201,12 @@ class DatabaseConstraintsTest {
         trackerId = "t-${System.nanoTime()}",
         profileId = PROFILE_ID,
         packageName = "com.instagram.android",
-        dateEpoch = DailyUsageTracker.epochDayFromEpochMillis(System.currentTimeMillis()),
+        localDateAnchor = LocalDate.now().toString(),
+        timezoneIdAtAnchor = "UTC",
         msUsedToday = 1_000L,
+        warning1State = "NOT_DUE",
+        warning2State = "NOT_DUE",
+        blockedToday = false,
     )
 
     private companion object {

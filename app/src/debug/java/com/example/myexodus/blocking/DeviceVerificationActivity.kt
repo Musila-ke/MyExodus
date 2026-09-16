@@ -14,10 +14,15 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityWindowInfo
+import com.example.myexodus.blocking.usage.WarningState
+import com.example.myexodus.data.db.entity.DailyUsageTracker
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.UserProfile
 import dagger.hilt.android.EntryPointAccessors
+import java.time.LocalDate
+import java.time.LocalTime
 import java.util.TimeZone
+import java.util.UUID
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 
@@ -33,7 +38,7 @@ import kotlinx.coroutines.runBlocking
  * drives the parts that need shell powers (key presses, touch injection) by reacting to
  * MARKER log lines, and asserts the tapjacking result from the victim's logcat lines.
  *
- * Host usage: am start -n <app>/.blocking.DeviceVerificationActivity --es suite <functional|latency|multiwindow|browser|fgs|fgs-down|sync|seed-ui|clear-ui> [--ez requireService false] [--ez preSplit true (multiwindow only: the suite seeds, logs MARKER_MULTIWINDOW_SEEDED, and waits for the host to form the split — host launches the victim fullscreen, then Recents → Split screen → pick a partner app; the suite observes, never launches)]
+ * Host usage: am start -n <app>/.blocking.DeviceVerificationActivity --es suite <functional|latency|multiwindow|browser|fgs|fgs-down|sync|seed-ui|clear-ui|usage-seed|usage-clear> [--ez requireService false] [--ez preSplit true (multiwindow only: the suite seeds, logs MARKER_MULTIWINDOW_SEEDED, and waits for the host to form the split — host launches the victim fullscreen, then Recents → Split screen → pick a partner app; the suite observes, never launches)] [usage-seed: --es pkg <pkg> --ei limitMs <n> --ei usedMs <n> [--es anchorDate <yyyy-MM-dd> --es tzAnchor <tzid> — §12 rollover/tz-change legs; defaults: today / device tz] [--es w1 <NOT_DUE|PENDING_DELIVERY|DELIVERED> --es w2 <same> — §12 mid-day-change-while-pending leg; default NOT_DUE] [--ez notifyEngine true — mirrors the editor's post-save onDailyLimitChanged call]; usage-clear: --es pkg <pkg>]. Focus-free row reads (mid-measurement): `am broadcast -n <app>/.blocking.DeviceVerificationReceiver -a usage-read --es pkg <pkg>`.
  *
  * `seed-ui`/`clear-ui` seed and remove four rules (one per live-state branch of the home
  * dashboard) for UI screenshot verification; they keep existing data — no DB reset.
@@ -87,6 +92,8 @@ class DeviceVerificationActivity : Activity() {
             "sync" -> syncSuite()
             "seed-ui" -> seedUiRules()
             "clear-ui" -> clearUiRules()
+            "usage-seed" -> usageSeedSuite()
+            "usage-clear" -> usageClearSuite()
             else -> error("unknown suite '$suite'")
         }
     }
@@ -139,6 +146,93 @@ class DeviceVerificationActivity : Activity() {
         store.restrictionRuleDao().getActiveRules()
             .filter { it.ruleId.startsWith(UI_SEED_PREFIX) }
             .forEach { entryPoint.rulesRepository().deleteRule(it) }
+    }
+
+    // --- usage-limit QA seeding (plan §12 short-limit timing matrix) --------------------
+
+    /**
+     * Seeds a rule's daily limit + a tracker row's used-ms so the 9/10/11/30/60-minute rows
+     * of the §12 matrix don't need real-time waits. The limit is written through
+     * [RulesRepository.updateRule]/[RulesRepository.insertRule] so policy-version bumping and
+     * the live snapshot behave exactly as an editor save. Host:
+     * `--es suite usage-seed --es pkg <pkg> --ei limitMs <n> --ei usedMs <n>`.
+     */
+    private suspend fun usageSeedSuite() {
+        val pkg = intent.getStringExtra(EXTRA_PKG) ?: error("--es $EXTRA_PKG required")
+        val limitMs = intent.getIntExtra(EXTRA_LIMIT_MS, 0).toLong()
+        val usedMs = intent.getIntExtra(EXTRA_USED_MS, 0).toLong()
+        val anchorDate = intent.getStringExtra(EXTRA_ANCHOR_DATE) ?: LocalDate.now().toString()
+        val anchorTz = intent.getStringExtra(EXTRA_TZ_ANCHOR) ?: TimeZone.getDefault().id
+        val w1 = warningStateExtra(EXTRA_W1) ?: WarningState.NOT_DUE
+        val w2 = warningStateExtra(EXTRA_W2) ?: WarningState.NOT_DUE
+        val store = entryPoint.appRulesStoreFactory().open() ?: error("store unavailable")
+        val profile = store.userProfileDao().observeActive().first() ?: PROFILE.also {
+            store.userProfileDao().insert(it)
+        }
+        val repo = entryPoint.rulesRepository()
+        val existing = store.restrictionRuleDao().getByProfileAndPackage(profile.userId, pkg)
+        if (existing != null) {
+            repo.updateRule(existing.copy(dailyLimitMs = limitMs, isEnabled = true))
+        } else {
+            // Windowed + outside its window (mirrors the device matrix rule): the schedule
+            // must stay Allow so the daily limit governs — an always-on seed would wall on
+            // the schedule and the engine would never see the package. The window is placed
+            // 5h AHEAD of seed time rather than at a fixed clock hour: a fixed 22:00–07:00
+            // window walled every night-time QA run ("outside its window" only held during
+            // day runs — caught on-device 2026-09-15 verifying the connect-time re-acquire).
+            val nowMin = LocalTime.now().toSecondOfDay() / 60
+            repo.insertRule(
+                RestrictionRule(
+                    ruleId = "rule-${System.nanoTime()}", profileId = profile.userId,
+                    blockedPackage = pkg, targetType = "APP", isAlwaysOn = false,
+                    dailyLimitMs = limitMs, timeRangeStart = ((nowMin + 300) % 1440).toLong(),
+                    timeRangeEnd = ((nowMin + 360) % 1440).toLong(),
+                    activeDaysOfWeek = "1111111", timezone = TimeZone.getDefault().id,
+                    blockExpiresAt = 0L, severityLevel = "HIGH",
+                ),
+            )
+        }
+        val trackerDao = store.dailyUsageTrackerDao()
+        val current = trackerDao.findByPackage(profile.userId, pkg)
+        val row = (current ?: DailyUsageTracker(
+            trackerId = UUID.randomUUID().toString(),
+            profileId = profile.userId, packageName = pkg,
+            localDateAnchor = anchorDate, timezoneIdAtAnchor = anchorTz,
+            msUsedToday = 0L, warning1State = WarningState.NOT_DUE,
+            warning2State = WarningState.NOT_DUE, blockedToday = false,
+        )).copy(
+            localDateAnchor = anchorDate, timezoneIdAtAnchor = anchorTz,
+            msUsedToday = usedMs, warning1State = w1,
+            warning2State = w2, blockedToday = false,
+        )
+        if (current == null) trackerDao.insert(row) else trackerDao.update(row)
+        // The editor's post-save contract (Decision 15): limit written first, then the engine
+        // recomputes. Off by default so the matrix seeds keep the pure-row semantics.
+        if (intent.getBooleanExtra(EXTRA_NOTIFY_ENGINE, false)) {
+            entryPoint.usageEngine().onDailyLimitChanged(pkg)
+        }
+        Log.i(TAG, "usage seeded pkg=$pkg limitMs=$limitMs usedMs=$usedMs anchor=$anchorDate/$anchorTz w1=$w1 w2=$w2")
+    }
+
+    private fun warningStateExtra(key: String): String? {
+        val value = intent.getStringExtra(key) ?: return null
+        require(value in listOf(WarningState.NOT_DUE, WarningState.PENDING_DELIVERY, WarningState.DELIVERED)) {
+            "bad $key='$value'"
+        }
+        return value
+    }
+
+    /** `--es suite usage-clear --es pkg <pkg>` — removes the package's tracker rows only
+     *  (the rule is left as-is; restore its limit via the editor or another usage-seed). */
+    private suspend fun usageClearSuite() {
+        val pkg = intent.getStringExtra(EXTRA_PKG) ?: error("--es $EXTRA_PKG required")
+        val store = entryPoint.appRulesStoreFactory().open() ?: error("store unavailable")
+        val profile = store.userProfileDao().observeActive().first() ?: return
+        val trackerDao = store.dailyUsageTrackerDao()
+        trackerDao.getForProfile(profile.userId)
+            .filter { it.packageName == pkg }
+            .forEach { trackerDao.delete(it) }
+        Log.i(TAG, "usage cleared pkg=$pkg")
     }
 
     // --- functional suite (life-safety x3, tapjacking, browser URL) ---------------------
@@ -404,7 +498,7 @@ class DeviceVerificationActivity : Activity() {
 
     /**
      * §8.1/§8.2 FGS verification (Slice 8): seed a rule and launch the victim; the
-     * ForegroundBlockerService (not the overlay) must drive the block. The host drives
+     * EnforcementForegroundService (not the overlay) must drive the block. The host drives
      * recovery/override/unlock and asserts BlockerActivity via dumpsys — this activity is
      * covered the whole time. Pass --ez requireService false for a pure V1 (no-overlay)
      * deployment. No FGS restart needed: RulesRepository.insertRule republishes the
@@ -434,7 +528,7 @@ class DeviceVerificationActivity : Activity() {
      * cover's recovery button — whose MainActivity start is the restore path under test.
      */
     private fun fgsDownSuite() {
-        ForegroundBlockerService.stop(this)
+        EnforcementForegroundService.stop(this)
         Log.i(TAG, "MARKER: FGS_STOPPED")
         runOnUiThread {
             startActivity(
@@ -556,6 +650,14 @@ class DeviceVerificationActivity : Activity() {
         const val EXTRA_SUITE = "suite"
         const val EXTRA_REQUIRE_SERVICE = "requireService"
         const val EXTRA_PRE_SPLIT = "preSplit"
+        const val EXTRA_PKG = "pkg"
+        const val EXTRA_LIMIT_MS = "limitMs"
+        const val EXTRA_USED_MS = "usedMs"
+        const val EXTRA_ANCHOR_DATE = "anchorDate"
+        const val EXTRA_TZ_ANCHOR = "tzAnchor"
+        const val EXTRA_W1 = "w1"
+        const val EXTRA_W2 = "w2"
+        const val EXTRA_NOTIFY_ENGINE = "notifyEngine"
         const val PROFILE_ID = "device-test-profile"
         const val UI_SEED_PREFIX = "ui-seed"
         val PROFILE = UserProfile(

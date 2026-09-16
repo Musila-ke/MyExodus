@@ -39,6 +39,10 @@ abstract class RestrictionRuleDao {
     @Query("SELECT r.* FROM restriction_rules r JOIN user_profile u ON u.user_id = r.profile_id WHERE u.is_active = 1")
     abstract suspend fun getActiveRules(): List<RestrictionRule>
 
+    /** The accounting engine's per-package rule read; unique index guarantees at most one. */
+    @Query("SELECT * FROM restriction_rules WHERE profile_id = :profileId AND blocked_package = :packageName LIMIT 1")
+    abstract suspend fun getByProfileAndPackage(profileId: String, packageName: String): RestrictionRule?
+
     /** Rule 4: the CHECK constraint rejects the app's own package; translate to a typed exception. */
     suspend fun insert(rule: RestrictionRule) = translate { insertRaw(rule) }
 

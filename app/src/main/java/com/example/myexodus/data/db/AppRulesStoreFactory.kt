@@ -11,6 +11,8 @@ import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.SQLiteDriver
 import androidx.sqlite.driver.AndroidSQLiteDriver
 import java.io.File
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -162,7 +164,7 @@ class AppRulesStoreFactory(
             .setJournalMode(journalMode)
             .addMigrations(
                 MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
-                MIGRATION_6_7,
+                MIGRATION_6_7, MIGRATION_7_8,
             )
             .addCallback(createCallback)
         if (encrypted) builder.setDriver(requireNotNull(encryption).newDriver())
@@ -209,6 +211,49 @@ class AppRulesStoreFactory(
     companion object {
         const val DB_NAME = "myexodus_rules.db"
         private const val TAG = "MyExodusDb"
+
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                // Daily-usage enforcement (plan v2 §8 Step 1): day identity becomes the
+                // (local date, IANA timezone) pair (Decision 20) and per-day warning/block
+                // state travels with the day row. Rebuild instead of ALTER+DROP COLUMN so the
+                // migration is valid on every SQLite the app can run against (Robolectric's
+                // framework driver included; DROP COLUMN needs SQLite 3.35+). Pre-existing
+                // tracker rows are dormant (nothing ever fed usage data); per the plan they
+                // anchor to the migration's local date + device timezone.
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS daily_usage_tracker_new (" +
+                        "tracker_id TEXT NOT NULL, profile_id TEXT NOT NULL, " +
+                        "package_name TEXT NOT NULL, local_date_anchor TEXT NOT NULL, " +
+                        "timezone_id_at_anchor TEXT NOT NULL, ms_used_today INTEGER NOT NULL, " +
+                        "warning1_state TEXT NOT NULL, warning2_state TEXT NOT NULL, " +
+                        "blocked_today INTEGER NOT NULL, " +
+                        "PRIMARY KEY(tracker_id), " +
+                        "FOREIGN KEY(profile_id) REFERENCES user_profile(user_id) " +
+                        "ON UPDATE NO ACTION ON DELETE NO ACTION)",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO daily_usage_tracker_new (tracker_id, profile_id, package_name, " +
+                        "local_date_anchor, timezone_id_at_anchor, ms_used_today, warning1_state, " +
+                        "warning2_state, blocked_today) " +
+                        "SELECT tracker_id, profile_id, package_name, ?, ?, ms_used_today, " +
+                        "'NOT_DUE', 'NOT_DUE', 0 FROM daily_usage_tracker",
+                ).use { stmt ->
+                    stmt.bindText(1, LocalDate.now().toString())
+                    stmt.bindText(2, ZoneId.systemDefault().id)
+                    stmt.step()
+                }
+                connection.prepare("DROP TABLE daily_usage_tracker").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE daily_usage_tracker_new RENAME TO daily_usage_tracker",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS " +
+                        "index_daily_usage_tracker_profile_id_package_name_local_date_anchor " +
+                        "ON daily_usage_tracker (profile_id, package_name, local_date_anchor)",
+                ).use { it.step() }
+            }
+        }
 
         val MIGRATION_6_7 = object : Migration(6, 7) {
             override suspend fun migrate(connection: SQLiteConnection) {

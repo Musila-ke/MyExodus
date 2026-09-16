@@ -39,3 +39,12 @@ data class RestrictionRule(
     /** Pause switch (Rules screen): a disabled rule stays stored but leaves the snapshot. */
     @ColumnInfo(name = "is_enabled", defaultValue = "1") val isEnabled: Boolean = true,
 )
+
+/**
+ * Rule 3 (absolute expiration) — `blockExpiresAt > 0` and past means the rule is enforced by
+ * nothing: the decision engine allows, the snapshot drops it, and daily-limit tracking must
+ * not accrue, warn, or wall for it (device-caught 2026-09-16: an override-expired rule kept
+ * counting usage and warned "close to daily limit").
+ */
+fun RestrictionRule.isExpiredAt(nowEpochMillis: Long): Boolean =
+    blockExpiresAt > 0 && nowEpochMillis > blockExpiresAt

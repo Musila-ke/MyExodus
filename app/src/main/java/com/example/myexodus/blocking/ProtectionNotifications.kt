@@ -8,11 +8,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
-import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import androidx.core.net.toUri
+import com.example.myexodus.MainActivity
 import com.example.myexodus.R
 
 /**
@@ -55,22 +54,30 @@ object ProtectionNotifications {
 
     fun degraded(context: Context, degradation: ProtectionDegradation): Notification {
         val copy = when (degradation) {
-            ProtectionDegradation.USAGE_ACCESS_REVOKED ->
+            // §8 Step 6: the cause is deliberately not named — with both paths down it is
+            // usually more than one thing, and the app's Settings protection rows name each
+            // mechanism (and its fix) exactly. Never a false "app blocking is off" claim
+            // while Path A is healthy.
+            ProtectionDegradation.DEGRADED_NO_DETECTION ->
                 DegradedCopy(
-                    "App blocking is off",
-                    "MyExodus can't see when restricted apps open. Grant usage access to restore blocking.",
-                    "Fix",
+                    context.getString(R.string.protection_paused_title),
+                    context.getString(R.string.protection_paused_text),
+                    context.getString(R.string.protection_paused_action),
                     PendingIntent.getActivity(
                         context,
                         0,
-                        Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        Intent(context, MainActivity::class.java)
+                            .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                     ),
                 )
             ProtectionDegradation.APP_STOPPED ->
                 DegradedCopy(
                     "Protection was stopped",
-                    "MyExodus was stopped from the Task Manager. Re-enable protection to resume blocking.",
+                    // Same honest-loss copy as the Home banner (regression finding #1):
+                    // "resume blocking" was false while Path A is live after a stop.
+                    "MyExodus was stopped from the Task Manager. Time limits stay paused until you re-enable.",
                     "Re-enable",
                     actionPendingIntent(context, ProtectionActionReceiver.ACTION_REENABLE),
                 )
@@ -83,21 +90,6 @@ object ProtectionNotifications {
                         context,
                         0,
                         context.packageManager.getLaunchIntentForPackage(context.packageName),
-                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                    ),
-                )
-            ProtectionDegradation.OVERLAY_REVOKED ->
-                DegradedCopy(
-                    "Blocking overlay is off",
-                    "MyExodus can't display its blocking overlay. Allow 'display over other apps' to restore full blocking.",
-                    "Fix",
-                    PendingIntent.getActivity(
-                        context,
-                        0,
-                        Intent(
-                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                            "package:${context.packageName}".toUri(),
-                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                     ),
                 )
@@ -132,7 +124,7 @@ object ProtectionNotifications {
         }
         // POST_NOTIFICATIONS exists only on 33+; pre-33 that check reports DENIED for an
         // unknown permission, so the real gate there is areNotificationsEnabled (same
-        // reasoning as ForegroundBlockerService.checkNotificationsPermission).
+        // reasoning as EnforcementForegroundService.checkNotificationsPermission).
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED

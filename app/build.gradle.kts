@@ -4,7 +4,7 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
     id("com.google.gms.google-services")
-
+    alias(libs.plugins.crashlytics)
 }
 
 android {
@@ -98,12 +98,14 @@ dependencies {
     ksp(libs.hilt.compiler)
     implementation(libs.hilt.navigation.compose)
     implementation(libs.hilt.work)
+    ksp(libs.androidx.hilt.compiler)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     implementation(libs.firebase.firestore)
     implementation(libs.firebase.appcheck.playintegrity)
     implementation(libs.firebase.auth)
+    implementation(libs.firebase.crashlytics)
     implementation(libs.camera.core)
     implementation(libs.camera.camera2)
     implementation(libs.camera.lifecycle)

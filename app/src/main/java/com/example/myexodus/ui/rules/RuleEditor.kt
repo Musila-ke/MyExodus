@@ -1,6 +1,7 @@
 package com.example.myexodus.ui.rules
 
 import android.text.format.DateFormat
+import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -40,10 +42,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.UrlPattern
+import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.ui.formatDate
 import com.example.myexodus.ui.formatTime
@@ -61,6 +65,10 @@ import kotlinx.coroutines.launch
 private const val DEFAULT_START_MINUTES = 22 * 60L
 private const val DEFAULT_END_MINUTES = 7 * 60L
 
+private const val MINUTE_MS = 60_000L
+
+private const val TAG = "RuleEditor"
+
 /**
  * Create/edit one block. One rule = one target + one window (the shipped model); the schedule
  * fields carry the engine's own semantics — a window is start-inclusive/end-exclusive, and
@@ -75,6 +83,7 @@ fun RuleEditorScreen(
     target: String?,
     existingRules: List<RestrictionRule>,
     repository: RulesRepository,
+    usageAccountingEngine: UsageAccountingEngine,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -85,6 +94,10 @@ fun RuleEditorScreen(
 
     var targetValue by rememberSaveable { mutableStateOf(initial?.blockedPackage ?: target.orEmpty()) }
     var showPicker by rememberSaveable { mutableStateOf(false) }
+    var limitEnabled by rememberSaveable { mutableStateOf((initial?.dailyLimitMs ?: 0L) > 0L) }
+    var limitText by rememberSaveable {
+        mutableStateOf(initial?.dailyLimitMs?.takeIf { it > 0L }?.div(MINUTE_MS)?.toString() ?: "30")
+    }
     var isAlwaysOn by rememberSaveable { mutableStateOf(initial?.isAlwaysOn ?: true) }
     var startMinutes by rememberSaveable { mutableLongStateOf(initial?.timeRangeStart ?: DEFAULT_START_MINUTES) }
     var endMinutes by rememberSaveable { mutableLongStateOf(initial?.timeRangeEnd ?: DEFAULT_END_MINUTES) }
@@ -104,14 +117,21 @@ fun RuleEditorScreen(
     val invalidTargetMessage = stringResource(R.string.editor_target_invalid)
     val sameTimeMessage = stringResource(R.string.editor_same_time_error)
     val duplicateMessage = stringResource(R.string.editor_target_duplicate)
+    val limitInvalidMessage = stringResource(R.string.editor_daily_limit_invalid)
 
     fun save() {
         error = null
         val value = targetValue.trim()
+        // §9: the UI clamps the daily limit's minimum to 1 minute; an unset limit stores 0
+        // (the engine's "untracked for Rule 2" value — schedule blocking is unaffected).
+        val limitMinutes = limitText.trim().toLongOrNull()
+        val limitInvalid = isApp && limitEnabled && (limitMinutes == null || limitMinutes < 1L)
+        val newLimitMs = if (isApp && limitEnabled && !limitInvalid) limitMinutes!! * MINUTE_MS else 0L
         val invalid = when {
             isApp && value.isEmpty() -> missingTargetMessage
             !isApp && !isValidWebsiteTarget(value) -> invalidTargetMessage
             !isAlwaysOn && startMinutes == endMinutes -> sameTimeMessage
+            limitInvalid -> limitInvalidMessage
             else -> null
         }
         if (invalid != null) {
@@ -146,6 +166,7 @@ fun RuleEditorScreen(
                 )
                 val rule = base.copy(
                     blockedPackage = value,
+                    dailyLimitMs = newLimitMs,
                     isAlwaysOn = isAlwaysOn,
                     // Always on means no window: the stored rule stays honest, so every row
                     // and the engine read the same thing.
@@ -156,7 +177,17 @@ fun RuleEditorScreen(
                     blockExpiresAt = expiresAt,
                 )
                 if (initial == null) repository.insertRule(rule) else repository.updateRule(rule)
-            }.onSuccess { onDone() }.onFailure { error = notSavedMessage(it, context) }
+            }.onSuccess {
+                // Decision 15: a mid-day limit change must recompute the tracker AFTER the
+                // new value is committed (warnings back to NOT_DUE, blockedToday re-derived
+                // in both directions). Only edits can have a tracker row; a failure here
+                // leaves state the next observation re-derives, so it never blocks the save.
+                if (isApp && initial != null && initial.dailyLimitMs != newLimitMs && newLimitMs > 0L) {
+                    runCatching { usageAccountingEngine.onDailyLimitChanged(value) }
+                        .onFailure { Log.w(TAG, "Daily-limit recompute failed after save", it) }
+                }
+                onDone()
+            }.onFailure { error = notSavedMessage(it, context) }
             saving = false
         }
     }
@@ -220,6 +251,41 @@ fun RuleEditorScreen(
                     placeholder = { Text(stringResource(R.string.editor_website_hint)) },
                     modifier = Modifier.fillMaxWidth(),
                 )
+            }
+        }
+
+        // Rule 2 (daily quota) is an app-only mechanism — the engine tracks packages, so a
+        // website rule is never offered a limit that could not be enforced.
+        if (isApp) {
+            SectionCard {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            stringResource(R.string.editor_daily_limit_title),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            stringResource(R.string.editor_daily_limit_hint),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = limitEnabled, onCheckedChange = { limitEnabled = it })
+                }
+                if (limitEnabled) {
+                    OutlinedTextField(
+                        value = limitText,
+                        onValueChange = { limitText = it.filter(Char::isDigit) },
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.editor_daily_limit_field_label)) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         }
 

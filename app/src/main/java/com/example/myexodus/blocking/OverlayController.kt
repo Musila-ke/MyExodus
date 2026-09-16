@@ -5,11 +5,15 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
+import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.Window
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.app.AppOpsManager
 import android.app.Dialog
@@ -40,6 +44,10 @@ class OverlayController(
     private val profiler: LatencyProfiler,
     private val onOpenRecovery: (ruleId: String) -> Unit,
     private val onDifferentSite: (browserPackage: String) -> Unit,
+    /** Path B's host (enforcement plan v2 §8 Step 5): the foreground service holds no
+     *  accessibility token, so its overlay is always the bare-addView
+     *  TYPE_APPLICATION_OVERLAY mechanism (SYSTEM_ALERT_WINDOW-gated, Decision 16). */
+    applicationOverlayHost: Boolean = false,
 ) {
     private val displayManager = appContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
     private val dialogs = ConcurrentHashMap<Int, BlockDialog>()
@@ -47,8 +55,9 @@ class OverlayController(
     private val views = ConcurrentHashMap<Int, BlockOverlayView>()
     private val shown = ConcurrentHashMap<Int, Boolean>()
     private val contents = ConcurrentHashMap<Int, OverlayContent>()
+    private val main = Handler(Looper.getMainLooper())
 
-    private val useAddView = isTranssion()
+    private val useAddView = usesApplicationOverlay(applicationOverlayHost, isTranssion())
 
     /** §12 device-matrix fill-in: (manufacturer, sdkInt-or-null) entries whose non-focusable
      *  overlay routes touches through to the app beneath. Empty at launch; the §12 test suite
@@ -70,23 +79,43 @@ class OverlayController(
         runCatching { if (useAddView) viewFor(display.displayId) else dialogFor(display.displayId) }
     }
 
-    fun show(generation: Long, displayId: Int, bounds: Rect, content: OverlayContent) {
+    /** [onAttached] fires once the window is confirmed drawable (first pre-draw after attach,
+     *  or the next frame when re-binding an attached window) — §8 Step 4's eviction runs from
+     *  it, never from the assumption that the add/show call succeeded. */
+    fun show(
+        generation: Long,
+        displayId: Int,
+        bounds: Rect,
+        content: OverlayContent,
+        onAttached: (() -> Unit)? = null,
+    ) {
         if (!stateMachine.isCurrent(generation)) {
             if (BuildConfig.DEBUG) {
                 Log.d(TAG, "show skipped gen=$generation display=$displayId gate=stale-generation")
             }
             return
         }
-        if (shown[displayId] == true) {
-            // Already shown: re-bound, never re-add. The first show passes display bounds
-            // (cold-sub-window guard); the service's per-window pass that follows must still
-            // land, or the cover freezes at whole-display size and swallows the allowed pane
-            // (emulator-5554 split-screen, 2026-09-14). Content stays first-wins.
-            refreshBounds(displayId, bounds)
+        val current = if (shown[displayId] == true) contents[displayId] else null
+        if (current != null) {
+            when {
+                // Warning → warning (level 2 shadows level 1) or warning → block (the app
+                // exhausted its last minutes while the banner was up): rebind in place — the
+                // window stays attached, its flags may change (§8 Step 4), and a rebind of an
+                // attached window is the only way the attach-confirm callback fires again for
+                // the new content.
+                current is OverlayContent.Warning -> rebindShown(displayId, bounds, content, onAttached)
+                // A banner never replaces a wall (§8 Step 10).
+                content is OverlayContent.Warning -> Unit
+                // Block → block keeps the device-verified first-wins behavior: re-bound only
+                // (the first show passes display bounds; the service's per-window pass must
+                // still land, or the cover freezes at whole-display size and swallows the
+                // allowed pane — emulator-5554 split-screen, 2026-09-14).
+                else -> refreshBounds(displayId, bounds)
+            }
             return
         }
         contents[displayId] = content
-        if (useAddView) showAddView(generation, displayId, bounds, content) else showDialog(generation, displayId, bounds, content)
+        if (useAddView) showAddView(generation, displayId, bounds, content, onAttached) else showDialog(generation, displayId, bounds, content, onAttached)
     }
 
     /** Live re-bound of an already-shown overlay: updateViewLayout on the added view,
@@ -99,6 +128,43 @@ class OverlayController(
         } else {
             dialogs[displayId]?.let { applyBounds(it, bounds) }
         }
+    }
+
+    /** Re-bound of an attached window with different content (warning → warning/block):
+     *  re-render, re-bound, re-apply per-content flags, and re-arm the warning dismiss timer
+     *  when still a warning. */
+    private fun rebindShown(displayId: Int, bounds: Rect, content: OverlayContent, onAttached: (() -> Unit)?) {
+        contents[displayId] = content
+        if (useAddView) {
+            val view = views[displayId] ?: return
+            view.bind(content, onAttached)
+            applyBounds(view, bounds)
+            applyContentFlags(view.layoutParams as WindowManager.LayoutParams, content)
+            runCatching { windowManagerFor(displayId).updateViewLayout(view, view.layoutParams) }
+        } else {
+            val dialog = dialogs[displayId] ?: return
+            dialogViews[displayId]?.bind(content, onAttached)
+            applyBounds(dialog, bounds)
+            dialog.window?.let { window ->
+                val lp = window.attributes
+                applyContentFlags(lp, content)
+                window.attributes = lp
+            }
+        }
+        if (content is OverlayContent.Warning) scheduleWarningDismiss(displayId)
+    }
+
+    /** §8 Step 4: the warning overlay auto-dismisses after 5 seconds (tap dismiss is wired
+     *  through the view's [BlockOverlayView] click contract). Instance identity guards a timer
+     *  armed for an older banner from dismissing whatever replaced it — e.g. the limit block
+     *  that upgrade-rebinds within the 5s window. */
+    private fun scheduleWarningDismiss(displayId: Int) {
+        val content = contents[displayId] ?: return
+        main.postDelayed({
+            if (contents[displayId] === content && content is OverlayContent.Warning) {
+                hide(stateMachine.currentGeneration, displayId)
+            }
+        }, WARNING_DISMISS_MS)
     }
 
     fun hide(generation: Long, displayId: Int) {
@@ -114,9 +180,48 @@ class OverlayController(
         shown.keys.toList().forEach { hide(generation, it) }
     }
 
+    /** The bar-free display area (both hosts' full-screen cards use it): a full-display
+     *  overlay draws above the navigation bar and swallows its touches, so Home/Back stop
+     *  working (device-caught 2026-09-13 — the card's own hint promised they always work). */
+    @Suppress("DEPRECATION") // getRealMetrics: deprecated in API 34, but the only non-cutout-aware path below API 30 (minSdk 24).
+    fun displayBounds(displayId: Int): Rect {
+        val display = displayManager.getDisplay(displayId) ?: return Rect()
+        val metrics = DisplayMetrics()
+        display.getRealMetrics(metrics)
+        val full = Rect(0, 0, metrics.widthPixels, metrics.heightPixels)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return full
+        val bars = appContext.createDisplayContext(display)
+            .getSystemService(WindowManager::class.java)
+            ?.currentWindowMetrics?.windowInsets
+            ?.getInsetsIgnoringVisibility(WindowInsets.Type.systemBars())
+            ?: return full
+        return Rect(
+            full.left + bars.left,
+            full.top + bars.top,
+            full.right - bars.right,
+            full.bottom - bars.bottom,
+        )
+    }
+
+    /** The warning banner occupies the top strip of the bar-free display area (§8 Step 10). */
+    fun warningBounds(displayId: Int): Rect {
+        val bounds = displayBounds(displayId)
+        val height = (WARNING_BANNER_DP * appContext.resources.displayMetrics.density).toInt()
+        return Rect(bounds.left, bounds.top, bounds.right, bounds.top + height)
+    }
+
+    /** Tap-dismiss for a warning banner (the view's click contract calls this). Only a
+     *  banner yields — never a block card. */
+    private fun dismissWarning(displayId: Int) {
+        if (shown[displayId] == true && contents[displayId] is OverlayContent.Warning) {
+            hide(stateMachine.currentGeneration, displayId)
+        }
+    }
+
     /** Called from the service's onDestroy; overlay windows are system-owned once the
      *  accessibility service unbinds, this just releases our references promptly. */
     fun detachAll() {
+        main.removeCallbacksAndMessages(null)
         dialogs.values.forEach { runCatching { it.hide() } }
         dialogs.clear()
         views.forEach { (id, view) -> if (view.isAttachedToWindow) runCatching { windowManagerFor(id).removeView(view) } }
@@ -127,14 +232,26 @@ class OverlayController(
 
     // --- stock Android: Dialog + FrameMetrics (plan AD 11.2) -----------------------------
 
-    private fun showDialog(generation: Long, displayId: Int, bounds: Rect, content: OverlayContent) {
+    private fun showDialog(
+        generation: Long,
+        displayId: Int,
+        bounds: Rect,
+        content: OverlayContent,
+        onAttached: (() -> Unit)?,
+    ) {
         val dialog = dialogFor(displayId) ?: return
         try {
-            dialogViews[displayId]?.bind(content)
+            dialogViews[displayId]?.bind(content, onAttached)
             applyBounds(dialog, bounds)
+            dialog.window?.let { window ->
+                val lp = window.attributes
+                applyContentFlags(lp, content)
+                window.attributes = lp
+            }
             dialog.show()
             shown[displayId] = true
             profiler.recordSubmission(generation, displayId, SystemClock.elapsedRealtimeNanos())
+            if (content is OverlayContent.Warning) scheduleWarningDismiss(displayId)
         } catch (t: Throwable) {
             Log.e(TAG, "overlay show failed category=${categorizeShowFailure(t)} display=$displayId gen=$generation", t)
             shown[displayId] = false
@@ -165,10 +282,11 @@ class OverlayController(
         // then stalled drawn-but-transparent on the stock emulator (emulator-caught
         // 2026-09-13: WM said HAS_DRAWN + isVisible + topmost, zero pixels until window
         // animations were disabled). Attribute writes must come after this line.
-        val view = BlockOverlayView(displayContext, { }, onOpenRecovery, onDifferentSite)
+        val view = BlockOverlayView(displayContext, { }, onOpenRecovery, onDifferentSite) { dismissWarning(displayId) }
         dialog.setContentView(view)
         val window = dialog.window ?: return null
         val lp = window.attributes
+        // Creation-time default; every show re-applies the per-content flags below.
         lp.flags = lp.flags or
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
@@ -220,16 +338,24 @@ class OverlayController(
 
     // --- Transsion XOS: bare addView (token-null Dialog windows rejected, 2026-08-27) ----
 
-    private fun showAddView(generation: Long, displayId: Int, bounds: Rect, content: OverlayContent) {
+    private fun showAddView(
+        generation: Long,
+        displayId: Int,
+        bounds: Rect,
+        content: OverlayContent,
+        onAttached: (() -> Unit)?,
+    ) {
         val view = viewFor(displayId) ?: return
         try {
-            view.bind(content)
+            view.bind(content, onAttached)
             applyBounds(view, bounds)
+            applyContentFlags(view.layoutParams as WindowManager.LayoutParams, content)
             val wm = windowManagerFor(displayId)
             if (view.isAttachedToWindow) wm.updateViewLayout(view, view.layoutParams)
             else wm.addView(view, view.layoutParams)
             shown[displayId] = true
             profiler.recordSubmission(generation, displayId, SystemClock.elapsedRealtimeNanos())
+            if (content is OverlayContent.Warning) scheduleWarningDismiss(displayId)
             Log.i(TAG, "shown display=$displayId gen=$generation curGen=${stateMachine.currentGeneration}")
         } catch (t: Throwable) {
             Log.e(TAG, "overlay show failed category=${categorizeShowFailure(t)} display=$displayId gen=$generation", t)
@@ -254,7 +380,7 @@ class OverlayController(
         views[displayId]?.let { return it }
         val display = displayManager.getDisplay(displayId) ?: return null
         val displayContext = appContext.createDisplayContext(display)
-        val view = BlockOverlayView(displayContext, { profiler.presented(displayId) }, onOpenRecovery, onDifferentSite)
+        val view = BlockOverlayView(displayContext, { profiler.presented(displayId) }, onOpenRecovery, onDifferentSite) { dismissWarning(displayId) }
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -305,14 +431,59 @@ class OverlayController(
         lp.y = bounds.top
     }
 
+    /** Overwrite the window flags for the content about to be shown (§8 Steps 4/5), then
+     *  re-apply the OEM focus exception. Runs on both hosts and on in-place rebinds — the
+     *  flags differ per content, not per window. */
+    private fun applyContentFlags(lp: WindowManager.LayoutParams, content: OverlayContent) {
+        lp.flags = flagsForContent(content, debugAllowsCapture = BuildConfig.DEBUG)
+        if (shouldTakeFocus(Build.MANUFACTURER, Build.VERSION.SDK_INT, takeFocusOverrides)) {
+            lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+        }
+    }
+
     companion object {
         private const val TAG = "MyExodusOverlay"
+
+        /** §8 Step 4: the warning banner auto-dismisses after 5 seconds. */
+        private const val WARNING_DISMISS_MS = 5_000L
+
+        /** Warning banner height in dp — the top strip that cannot swallow the app (§10). */
+        private const val WARNING_BANNER_DP = 96
+
+        /**
+         * Per-content window flags (§8 Steps 4/10; pure for direct testing). Blocks are
+         * touch-modal — `FLAG_NOT_TOUCH_MODAL` is never set, so input is intercepted. The
+         * daily-limit block is additionally focusable (no `FLAG_NOT_FOCUSABLE`) and carries
+         * `FLAG_SECURE` (Step 5: the block screen must not be screenshot-capturable) — except
+         * with [debugAllowsCapture], the debug-build-only visual-QA lift so the wall can be
+         * screencapped for review (user-approved 2026-09-15). The app/URL cover keeps its
+         * device-verified non-focusable flags untouched. Warnings are non-focusable and
+         * touch-transparent outside their own bounds so the app underneath stays usable,
+         * and the host auto-dismisses them.
+         */
+        fun flagsForContent(content: OverlayContent, debugAllowsCapture: Boolean = false): Int =
+            when (content) {
+                is OverlayContent.DailyLimitBlocked ->
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        (if (debugAllowsCapture) 0 else WindowManager.LayoutParams.FLAG_SECURE)
+                is OverlayContent.Warning ->
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                else ->
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            }
 
         /** Transsion XOS rejects TYPE_ACCESSIBILITY_OVERLAY (2026-08-27); the OEM-keyed
          *  exception shows TYPE_APPLICATION_OVERLAY instead, which needs the
          *  SYSTEM_ALERT_WINDOW appop ("display over other apps"). */
         fun isTranssion(): Boolean =
             Build.MANUFACTURER.lowercase() in setOf("infinix", "tecno", "itel")
+
+        /** Which window mechanism a host uses (pure for direct testing): Path B always, the
+         *  accessibility host only on the Transsion exception. */
+        fun usesApplicationOverlay(applicationOverlayHost: Boolean, transsion: Boolean): Boolean =
+            applicationOverlayHost || transsion
 
         /** True when the overlay window type is usable; the settings screen uses it to
          *  prompt the grant on Transsion devices. */

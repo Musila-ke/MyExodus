@@ -19,7 +19,21 @@ interface DailyUsageTrackerDao {
 
     @Query(
         "SELECT * FROM daily_usage_tracker " +
-            "WHERE profile_id = :profileId AND package_name = :packageName AND date_epoch = :dateEpoch",
+            "WHERE profile_id = :profileId AND package_name = :packageName " +
+            "AND local_date_anchor = :localDateAnchor",
     )
-    suspend fun findByKey(profileId: String, packageName: String, dateEpoch: Int): DailyUsageTracker?
+    suspend fun findByKey(profileId: String, packageName: String, localDateAnchor: String): DailyUsageTracker?
+
+    /** Latest row for the package — the accounting engine's read; a stale anchor is rolled
+     *  over in place rather than filtered out (Decision 20). */
+    @Query(
+        "SELECT * FROM daily_usage_tracker " +
+            "WHERE profile_id = :profileId AND package_name = :packageName " +
+            "ORDER BY local_date_anchor DESC LIMIT 1",
+    )
+    suspend fun findByPackage(profileId: String, packageName: String): DailyUsageTracker?
+
+    /** All tracker rows for the profile — the daily-maintenance sweep's read (§8 Step 8). */
+    @Query("SELECT * FROM daily_usage_tracker WHERE profile_id = :profileId")
+    suspend fun getForProfile(profileId: String): List<DailyUsageTracker>
 }

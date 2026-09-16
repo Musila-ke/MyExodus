@@ -94,7 +94,7 @@ class BlockerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        ForegroundBlockerService.activeBlockTarget = null
+        EnforcementForegroundService.activeBlockTarget = null
         super.onDestroy()
     }
 

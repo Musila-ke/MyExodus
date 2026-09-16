@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <application>
         <activity
             android:name=".blocking.DeviceVerificationActivity"
@@ -10,5 +11,11 @@
         <activity
             android:name=".accountability.PairingTestActivity"
             android:exported="true" />
+        <!-- Debug-only QA harness: driven by `am broadcast` from the host adb shell,
+             which cannot reach a non-exported receiver. Never present in release. -->
+        <receiver
+            android:name=".blocking.DeviceVerificationReceiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver" />
     </application>
 </manifest>

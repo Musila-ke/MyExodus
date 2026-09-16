@@ -6,6 +6,8 @@ import android.util.Log
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.SQLiteStatement
 import java.io.File
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.Arrays
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
@@ -83,6 +85,7 @@ class DatabaseMigration(
                         for (spec in TABLES) {
                             verified = copyTable(legacy, rules, spec) && verified
                         }
+                        verified = copyDailyUsageTracker(legacy, rules) && verified
                         verified = copyActivityLog(legacy, activity) && verified
                         if (!verified) return false
                     } finally {
@@ -154,6 +157,38 @@ class DatabaseMigration(
         }
     }
 
+    /**
+     * daily_usage_tracker left the generic spec list at v8 (enforcement plan v2 §8 Step 1):
+     * the legacy UTC epoch-day identity is retired for the (local date, IANA timezone) pair,
+     * so the copy stamps the plan's stated migration defaults instead of carrying date_epoch
+     * across. Legacy tracker rows are dormant (nothing ever fed usage), which is what makes
+     * anchoring them to the migration moment lossless in practice.
+     */
+    private fun copyDailyUsageTracker(legacy: SQLiteConnection, rules: SQLiteConnection): Boolean {
+        if (!tableExists(legacy, "daily_usage_tracker")) return true
+        legacy.prepare(
+            "SELECT tracker_id, profile_id, package_name, ms_used_today FROM daily_usage_tracker",
+        ).use { reader ->
+            rules.prepare(
+                "INSERT OR IGNORE INTO daily_usage_tracker (tracker_id, profile_id, package_name, " +
+                    "local_date_anchor, timezone_id_at_anchor, ms_used_today, warning1_state, " +
+                    "warning2_state, blocked_today) VALUES (?, ?, ?, ?, ?, ?, 'NOT_DUE', 'NOT_DUE', 0)",
+            ).use { writer ->
+                while (reader.step()) {
+                    writer.bindText(1, reader.getText(0) ?: "")
+                    writer.bindText(2, reader.getText(1) ?: "")
+                    writer.bindText(3, reader.getText(2) ?: "")
+                    writer.bindText(4, LocalDate.now().toString())
+                    writer.bindText(5, ZoneId.systemDefault().id)
+                    writer.bindLong(6, reader.getLong(3))
+                    writer.step()
+                    writer.reset()
+                }
+            }
+        }
+        return true
+    }
+
     private fun copyActivityLog(legacy: SQLiteConnection, activity: SQLiteDatabase): Boolean {
         if (!tableExists(legacy, "domain_event")) return true
         legacy.prepare(
@@ -192,6 +227,11 @@ class DatabaseMigration(
             ok = ok && oldCount == newCount
             Log.i(TAG, "Migration verify ${spec.old}->${spec.new}: $oldCount == $newCount")
         }
+        val oldTracker =
+            if (tableExists(legacy, "daily_usage_tracker")) count(legacy, "daily_usage_tracker") else 0L
+        val newTracker = count(rules, "daily_usage_tracker")
+        ok = ok && oldTracker == newTracker
+        Log.i(TAG, "Migration verify daily_usage_tracker: $oldTracker == $newTracker")
         val oldLog = if (tableExists(legacy, "domain_event")) count(legacy, "domain_event") else 0L
         val newLog = countActivity(activityPath, logKey)
         ok = ok && oldLog == newLog
@@ -255,11 +295,6 @@ class DatabaseMigration(
                 Column("time_range_start", Kind.LONG), Column("time_range_end", Kind.LONG),
                 Column("active_days_of_week", Kind.TEXT), Column("block_expires_at", Kind.LONG),
                 Column("severity_level", Kind.TEXT),
-            )),
-            TableSpec("daily_usage_tracker", "daily_usage_tracker", listOf(
-                Column("tracker_id", Kind.TEXT), Column("profile_id", Kind.TEXT),
-                Column("package_name", Kind.TEXT), Column("date_epoch", Kind.LONG),
-                Column("ms_used_today", Kind.LONG),
             )),
             TableSpec("habit_progress", "habit_progress", listOf(
                 Column("progress_id", Kind.TEXT), Column("profile_id", Kind.TEXT),

@@ -43,7 +43,10 @@ class BlockOverlayViewTest {
     private fun texts(v: BlockOverlayView): List<String> =
         (0 until v.childCount).flatMap { i ->
             val row = v.getChildAt(i) as ViewGroup
-            (0 until row.childCount).mapNotNull { (row.getChildAt(it) as? TextView)?.text?.toString() }
+            (0 until row.childCount).mapNotNull {
+                val text = row.getChildAt(it) as? TextView ?: return@mapNotNull null
+                text.text?.toString()?.takeIf { text.visibility == View.VISIBLE }
+            }
         }
 
     @Test
@@ -85,5 +88,57 @@ class BlockOverlayViewTest {
 
         assertTrue(buttons(v).all { it.visibility == View.GONE })
         assertTrue(texts(v).contains(context.getString(R.string.blocked_target_title, "AnkiDroid")))
+    }
+
+    // --- daily-limit content (enforcement plan v2 §8 Step 10) ---
+
+    @Test
+    fun dailyLimitBlock_namesApp_statesTheReset_hasNoActions_showsHomeHintOnly() {
+        val v = view()
+        // Uninstalled package: appLabel falls back to the package string.
+        v.bind(OverlayContent.DailyLimitBlocked("com.instagram.android"))
+
+        assertTrue(texts(v).any { it.contains("com.instagram.android") })
+        assertTrue(texts(v).contains(context.getString(R.string.limit_blocked_message)))
+        assertTrue(buttons(v).all { it.visibility == View.GONE })
+        // v1 pause-screen parity (user-directed 2026-09-15): the block screen's own hint —
+        // Home guidance for the wall's only escape. Never the cover's transient variant.
+        assertTrue(texts(v).contains(context.getString(R.string.block_screen_hint)))
+        assertTrue(texts(v).none { it == context.getString(R.string.overlay_hint) })
+    }
+
+    @Test
+    fun warning_showsCeilingOfRemainingMinutes_perLevel() {
+        val v = view()
+        // 4m05s left reads "about 5 min", never "4 min".
+        v.bind(OverlayContent.Warning(level = 1, remainingMs = 4 * 60_000L + 5_000L))
+        assertTrue(texts(v).contains(context.getString(R.string.limit_warning_title, 5)))
+        assertTrue(buttons(v).all { it.visibility == View.GONE })
+
+        v.bind(OverlayContent.Warning(level = 2, remainingMs = 60_000L))
+        assertTrue(texts(v).contains(context.getString(R.string.limit_warning_title_final, 1)))
+    }
+
+    @Test
+    fun tapDismissesBannersOnly() {
+        var dismissed = 0
+        val banner = BlockOverlayView(context, {}, recovered::add, differentSite::add) { dismissed++ }
+        banner.bind(OverlayContent.Warning(level = 1, remainingMs = 60_000L))
+        banner.performClick()
+        assertEquals(1, dismissed)
+
+        banner.bind(OverlayContent.DailyLimitBlocked("com.instagram.android"))
+        banner.performClick()
+        assertEquals("a block card must not dismiss on tap", 1, dismissed)
+    }
+
+    @Test
+    fun attachConfirm_isNeverAssumedAtBindTime() {
+        val confirmed = mutableListOf<Unit>()
+        val v = view()
+        v.bind(OverlayContent.DailyLimitBlocked("com.instagram.android"), onAttached = { confirmed.add(Unit) })
+        // Detached view: the callback waits for the attach pre-draw, it does not fire early
+        // (the §8 Step 4 eviction must never precede the card being on screen).
+        assertTrue(confirmed.isEmpty())
     }
 }

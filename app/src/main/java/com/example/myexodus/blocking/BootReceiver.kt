@@ -35,7 +35,7 @@ class BootReceiver : BroadcastReceiver() {
         publisher.loadFastPath()
         scope.launch { publisher.loadFromDb() }
         if (settings.enhancedModeEnabled) {
-            ForegroundBlockerService.start(context)
+            EnforcementForegroundService.start(context)
         }
     }
 
