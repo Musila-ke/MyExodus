@@ -1,7 +1,8 @@
 # Gate 2.5 secret scan config: generated build output is excluded (gitleaks would
-# otherwise flag the Firebase API key echoed into lint/logcat artifacts). The only
-# real source-tree hit is app/google-services.json's Android client key — shipped
-# in the APK by design (package+SHA-restricted), not a secret.
+# otherwise flag the Firebase API key echoed into lint/logcat artifacts).
+# app/google-services.json is local-only — required on disk for the google-services
+# plugin, but untracked + gitignored and purged from git history 2026-09-16. Its
+# Android client key is package+SHA-restricted and ships in the APK by design.
 title = "MyExodus gitleaks config"
 
 [extend]
@@ -10,9 +11,5 @@ useDefault = true
 [allowlist]
 paths = [
   '''app/build/''',
-]
-regexes = [
-  # The Android client key inside app/google-services.json (package+SHA-restricted,
-  # embedded in every shipped APK — per the header note above, a known non-secret).
-  '''AIzaSyDeLiUBmqHPVMe69tJjp_wjAT7QUYi4hp4''',
+  '''app/google-services.json''',
 ]
