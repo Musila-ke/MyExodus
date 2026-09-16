@@ -26,3 +26,6 @@ local.properties
 *.keystore
 *.p12
 keystore.properties
+
+# Firebase config — local-only; required on disk for the google-services plugin, never committed
+google-services.json
