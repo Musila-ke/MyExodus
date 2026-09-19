@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MyExodus leaf mark on the white field the logo was designed against. Foreground PNGs come
+     from design/brand/GenerateIcons.java at 108dp per density, mark inside the 66dp safe circle
+     so no mask crops the leaf tips. The monochrome layer reuses the same alpha for themed icons;
+     notification small icons (minSdk 26) derive their silhouette from it too. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@android:color/white" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

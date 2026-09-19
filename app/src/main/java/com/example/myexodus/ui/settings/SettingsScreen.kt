@@ -50,6 +50,7 @@ import com.example.myexodus.settings.overlaySettingsIntent
 import com.example.myexodus.settings.readProtectionChecks
 import com.example.myexodus.settings.usageAccessSettingsIntent
 import com.example.myexodus.telemetry.CrashReporting
+import com.example.myexodus.ui.BrandMark
 import com.example.myexodus.ui.EnhancedModeScreen
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.rememberWindowWidth
@@ -103,13 +104,19 @@ fun SettingsScreen(
             .padding(horizontal = sidePadding, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Column {
-            Text(stringResource(R.string.settings_title), style = MaterialTheme.typography.headlineSmall)
-            Text(
-                stringResource(R.string.settings_subtitle),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            BrandMark()
+            Column {
+                Text(stringResource(R.string.settings_title), style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    stringResource(R.string.settings_subtitle),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
 
         if (loaded != null) {

@@ -55,6 +55,7 @@ import com.example.myexodus.settings.notificationsGranted
 import com.example.myexodus.settings.overlaySettingsIntent
 import com.example.myexodus.settings.readProtectionChecks
 import com.example.myexodus.settings.usageAccessSettingsIntent
+import com.example.myexodus.ui.BrandLockup
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -195,6 +196,11 @@ fun SetupScreen(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
+                // Brand moment on the first stop only — repeating it on all five permission
+                // steps would be chrome on a screen whose job is granting access.
+                if (index == 0) {
+                    BrandLockup()
+                }
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
                         stringResource(R.string.setup_title),
