@@ -101,11 +101,20 @@ echo "==> enabling accessibility service"
 DUMMY_SVC="$APP/com.example.myexodus.blocking.NonexistentService"
 "$ADB" shell am force-stop "$APP"
 "$ADB" shell am start -n "$APP/.MainActivity" >/dev/null
+# A settings cycle landing within ~3s of process start no longer binds (device-observed
+# 2026-09-19: cycle at +3s → Enabled but never Bound; identical cycle at +10s → bound in
+# ~1s and delivering events). Let the process settle before the first cycle.
+sleep 8
 ready() {
   # Must see an event from a THIRD-PARTY app window: a degraded connection still delivers
   # our own app's and systemui's events but never application windows' (observed 2026-08-27:
   # probe passed on our own event, then the victim's WINDOW_STATE_CHANGED never arrived).
   "$ADB" logcat -c
+  # HOME first: if Settings is already frontmost (it is, after every failed probe),
+  # `am start` is a no-op with NO window transition → no WSC → the probe can never pass
+  # (device-observed 2026-09-19, three consecutive script runs). HOME guarantees the
+  # transition the probe is actually waiting for.
+  "$ADB" shell input keyevent KEYCODE_HOME
   "$ADB" shell am start -n com.android.settings/.Settings >/dev/null 2>&1
   local n=0
   while [ "$n" -lt 8 ]; do
@@ -126,7 +135,7 @@ for attempt in $(seq 1 8); do
   echo "    (attempt $attempt: no event flow yet — recycling service)"
   "$ADB" shell am force-stop "$APP"
   "$ADB" shell am start -n "$APP/.MainActivity" >/dev/null
-  sleep 2
+  sleep 8
 done
 [ -n "$BOUND" ] || { echo "FAILED: accessibility service never delivered events"; exit 1; }
 echo "    service bound and delivering events"

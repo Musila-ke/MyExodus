@@ -20,16 +20,13 @@ public class GenerateIcons {
     static final int CLEAR_BELOW = 30;   // distance to white that becomes fully transparent
     static final int SOLID_ABOVE = 80;   // distance that becomes fully opaque
 
-    /** density bucket name -> scale, sized in dp: legacy 48dp icons, 108dp adaptive canvas. */
+    /** density bucket name -> scale, sized in dp: 108dp adaptive canvas. */
     static final String[] BUCKETS = {"mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"};
     static final float[] SCALES = {1f, 1.5f, 2f, 3f, 4f};
 
-    // Share of the canvas the mark's bounding-box diagonal may occupy. The adaptive value keeps
-    // the pointy leaf tips inside the 66/108dp safe circle; the round value keeps them inside
-    // the icon's own circle.
+    // Share of the canvas the mark's bounding-box diagonal may occupy. Keeps the pointy leaf
+    // tips inside the 66/108dp safe circle, so no OEM mask crops them.
     static final double ADAPTIVE_DIAGONAL = 0.60;
-    static final double ROUND_DIAGONAL = 0.82;
-    static final double SQUARE_DIAGONAL = 0.86;
 
     public static void main(String[] args) throws Exception {
         BufferedImage master = ImageIO.read(MASTER);
@@ -47,10 +44,10 @@ public class GenerateIcons {
         write(fit(mark, 256), new File(RES, "drawable-nodpi/logo_mark.png"));
         write(fit(lockup, 320), new File(RES, "drawable-nodpi/logo_lockup.png"));
 
+        // No legacy raster launchers: minSdk 26 (ADR #26) means the adaptive icon in
+        // mipmap-anydpi is the only resource the launcher can resolve, so pre-26 PNGs
+        // would be unreachable dead weight (removed 2026-09-19).
         for (int i = 0; i < BUCKETS.length; i++) {
-            int icon = Math.round(48 * SCALES[i]);
-            write(plate(mark, icon, false), mipmap(i, "ic_launcher.png"));
-            write(plate(mark, icon, true), mipmap(i, "ic_launcher_round.png"));
             write(adaptive(mark, Math.round(108 * SCALES[i])), mipmap(i, "ic_launcher_foreground.png"));
         }
         System.out.println("done");
@@ -154,22 +151,6 @@ public class GenerateIcons {
         BufferedImage out = new BufferedImage(Math.max(1, w), Math.max(1, h), BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = quality(out);
         g.drawImage(src, 0, 0, out.getWidth(), out.getHeight(), null);
-        g.dispose();
-        return out;
-    }
-
-    /** Legacy icon: white field (square or circle) with the mark centred. */
-    static BufferedImage plate(BufferedImage mark, int size, boolean round) {
-        BufferedImage out = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g = quality(out);
-        g.setColor(Color.WHITE);
-        if (round) {
-            g.fillOval(0, 0, size, size);
-        } else {
-            g.fillRect(0, 0, size, size);
-        }
-        double diagonal = (round ? ROUND_DIAGONAL : SQUARE_DIAGONAL) * size;
-        drawFitted(g, mark, size, diagonal);
         g.dispose();
         return out;
     }

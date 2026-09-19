@@ -23,6 +23,12 @@ rules:
           - pattern: Log.$LEVEL($TAG, $SECRET)
           - pattern: Log.$LEVEL($TAG, $MSG, $SECRET)
           - pattern: Log.$LEVEL($TAG, $MSG, $E, $SECRET)
+      # A string *literal* that merely names a secret ("no FCM token") logs no
+      # value — the two 2026-09-19 findings on PushInstallationRegistrar were
+      # this shape. Only flag expressions that can carry a value.
+      - pattern-not: Log.$LEVEL($TAG, "...")
+      - pattern-not: Log.$LEVEL($TAG, $MSG, "...")
+      - pattern-not: Log.$LEVEL($TAG, $MSG, $E, "...")
       - metavariable-regex:
           metavariable: $SECRET
           regex: (?i).*(dek|cek|secret|keystore|keyset|master.?key|token|escrow|passphrase|password|private.?key|auth.?key).*
