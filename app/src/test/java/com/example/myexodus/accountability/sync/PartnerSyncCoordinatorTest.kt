@@ -25,6 +25,7 @@ import com.example.myexodus.data.db.DatabaseKeyManager
 import com.example.myexodus.data.db.KeyFailure
 import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.data.db.RulesStoreKeyManager
+import com.example.myexodus.data.db.entity.RecoverySession
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
@@ -226,6 +227,55 @@ class PartnerSyncCoordinatorTest {
         assertEquals(listOf<String?>("m-42", null), pullWakeIds)
     }
 
+    /** W5: a finished technique session rides the same drain as attempts — linked under the
+     *  signing window, payload `recovery:<tech>:<outcome>`, technique + outcome only (INV-13). */
+    @Test
+    fun recoverySession_warmWindow_becomesLinkedRecoveryEvent() = runTest {
+        enroll()
+        insertSession()
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(1, report.eventsLinked)
+        assertEquals(
+            "linked session carries the chain sequence",
+            1L,
+            factory.open()!!.recoverySessionDao().byId("s-1")!!.eventSequence,
+        )
+        val signed = decodeSigned(store.chainFor(pairId).single().envelope)
+        val payload = decodePayload(cipher.decrypt(cek, signed.unsigned.sequence, signed.unsigned.ciphertext))
+        assertEquals("recovery:urge_surfing:completed", payload.text)
+    }
+
+    /** W5 unpaired case: no pair, no remote step, row keeps its null sequence. */
+    @Test
+    fun unpaired_recoverySessionStaysLocalAndCallsNoRemoteStep() = runTest {
+        insertSession()
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(false, report.enrolled)
+        assertEquals(0, report.eventsLinked)
+        assertNull(
+            "session stays unlinked without a pair",
+            factory.open()!!.recoverySessionDao().byId("s-1")!!.eventSequence,
+        )
+        assertTrue(drainCalls.isEmpty())
+    }
+
+    /** A log-only episode (Req 10 — no technique practised) is born terminal and must never
+     *  reach the partner, even from an enrolled device with a warm window. */
+    @Test
+    fun logOnlySession_isNeverMirrored() = runTest {
+        enroll()
+        insertSession(technique = RecoverySession.TECHNIQUE_NONE)
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(0, report.eventsLinked)
+        assertTrue("no chain event for a technique-less log", store.chainFor(pairId).isEmpty())
+    }
+
     // ---- helpers ----
 
     private fun coordinator(
@@ -284,6 +334,24 @@ class PartnerSyncCoordinatorTest {
     private val signer = warmSigner()
 
     private suspend fun pending() = factory.open()!!.attemptLogDao().pendingEventCreation(10)
+
+    private suspend fun insertSession(
+        id: String = "s-1",
+        technique: String = "urge_surfing",
+        state: String = RecoverySession.STATE_COMPLETED,
+        startedAt: Long = 1_700_000_000_000L,
+    ) = factory.open()!!.recoverySessionDao().insert(
+        RecoverySession(
+            id = id,
+            technique = technique,
+            state = state,
+            startedAtEpochMs = startedAt,
+            endedAtEpochMs = startedAt + 60_000,
+            durationSec = 60,
+            zoneId = "Africa/Nairobi",
+            entry = RecoverySession.ENTRY_TAB,
+        ),
+    )
 
     private suspend fun recent() = factory.open()!!.attemptLogDao().recent(1)
 

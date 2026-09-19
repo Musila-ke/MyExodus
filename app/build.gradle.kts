@@ -26,6 +26,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Gate 2.5 coverage: AGP's `createDebugUnitTestCoverageReport` then emits the
+            // JaCoCo XML SonarQube ingests (build/reports/coverage/test/debug/report.xml).
+            enableUnitTestCoverage = true
+        }
         release {
             optimization {
                 enable = false

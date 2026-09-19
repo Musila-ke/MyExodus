@@ -59,6 +59,7 @@ import com.example.myexodus.ui.ruleRowState
 import com.example.myexodus.ui.scheduleSummary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 private const val ROUTE_LIST = "list"
@@ -77,6 +78,8 @@ fun RulesScreen(
     repository: RulesRepository,
     usageAccountingEngine: UsageAccountingEngine,
     modifier: Modifier = Modifier,
+    openRuleId: String? = null,
+    onOpenRuleConsumed: () -> Unit = {},
 ) {
     val profile by store.userProfileDao().observeActive().collectAsStateWithLifecycle(initialValue = null)
     val profileId = profile?.userId
@@ -92,6 +95,15 @@ fun RulesScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    // Finding #19: a Home block row hands over its rule id — open that editor directly.
+    LaunchedEffect(openRuleId) {
+        if (openRuleId != null) {
+            editRuleId = openRuleId
+            route = ROUTE_EDIT
+            onOpenRuleConsumed()
+        }
+    }
 
     // Optimistic pause state: shown immediately, dropped once the committed value matches,
     // cleared outright when the write fails (switch snaps back).
@@ -165,7 +177,7 @@ fun RulesScreen(
                     },
                     onTogglePause = { rule, enable ->
                         pendingPause = pendingPause + (rule.ruleId to enable)
-                        scope.launch {
+                        scope.launch(Dispatchers.IO) {
                             runCatching { repository.setEnabled(rule, enable) }
                                 .onFailure { failure ->
                                     pendingPause = pendingPause - rule.ruleId
@@ -385,7 +397,9 @@ private fun RuleRow(
                 scheduleSummary(rule, res),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                // Same allowance as the Home block row (finding #20): "Always on · until …"
+                // must not lose the expiry date to a one-line ellipsis.
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
         }

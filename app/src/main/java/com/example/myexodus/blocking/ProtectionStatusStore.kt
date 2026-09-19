@@ -53,9 +53,14 @@ class ProtectionStatusStore @Inject constructor(
         get() = prefs.getLong(KEY_LAST_KNOWN_GOOD, 0L)
         set(value) = prefs.edit { putLong(KEY_LAST_KNOWN_GOOD, value) }
 
-    /** Explicit user re-enable (banner button / notification action): clears both flags. */
+    /** Explicit user re-enable (banner button / notification action).
+     *
+     *  Deliberately clears only the flag, not [degradation]: the degradation value and the
+     *  posted alert are co-written by [ProtectionStatusMonitor.refresh]'s change-gated publish,
+     *  and nulling the value here would make that gate see "no change" and leave the stale
+     *  "Protection was stopped" notification posted (audit finding #14). Both call sites refresh
+     *  immediately after. */
     fun reenable() {
-        degradation = null
         requiresExplicitReEnable = false
     }
 

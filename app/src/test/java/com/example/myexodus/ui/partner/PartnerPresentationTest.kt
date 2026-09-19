@@ -1,6 +1,8 @@
 package com.example.myexodus.ui.partner
 
 import com.example.myexodus.accountability.state.ChainHead
+import com.example.myexodus.data.db.entity.RecoverySession
+import com.example.myexodus.recovery.RecoveryMirror
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -54,8 +56,28 @@ class PartnerPresentationTest {
 
     @Test
     fun activityText_parsesBothEventKinds() {
-        assertEquals(PartnerAlert("com.x", true, 42L), parseActivityText("override:com.x", 42L))
-        assertEquals(PartnerAlert("com.x", false, 42L), parseActivityText("blocked:com.x", 42L))
+        assertEquals(PartnerAlert.AppActivity("com.x", true, 42L), parseActivityText("override:com.x", 42L))
+        assertEquals(PartnerAlert.AppActivity("com.x", false, 42L), parseActivityText("blocked:com.x", 42L))
+    }
+
+    @Test
+    fun activityText_parsesRecoveryMirrorLines() {
+        assertEquals(
+            PartnerAlert.Recovery("urge_surfing", "completed", 42L),
+            parseActivityText(RecoveryMirror.text("urge_surfing", RecoverySession.STATE_COMPLETED), 42L),
+        )
+        assertEquals(
+            PartnerAlert.Recovery("sober", "abandoned", 42L),
+            parseActivityText("recovery:sober:abandoned", 42L),
+        )
+    }
+
+    @Test
+    fun activityText_malformedRecoveryLines_areNull_notPresented() {
+        assertNull(parseActivityText("recovery:urge_surfing", 42L))
+        assertNull(parseActivityText("recovery::completed", 42L))
+        assertNull(parseActivityText("recovery:urge_surfing:pending", 42L))
+        assertNull(parseActivityText("recovery:urge_surfing:completed:extra", 42L))
     }
 
     @Test
@@ -69,13 +91,13 @@ class PartnerPresentationTest {
     fun summarize_countsFromTheLocalDayBoundary_andCapsRecentAtFive() {
         val startOfToday = now - 3 * 3_600_000L
         val newestFirst = (0 until 7).map {
-            PartnerAlert("com.x$it", false, startOfToday - it * 3_600_000L)
+            PartnerAlert.AppActivity("com.x$it", false, startOfToday - it * 3_600_000L)
         }
         val summary = summarizeAlerts(newestFirst, startOfToday)
         assertEquals(7, summary.weekCount)
         assertEquals(1, summary.todayCount)
         assertEquals(5, summary.recent.size)
-        assertEquals("com.x0", summary.recent.first().target)
+        assertEquals("com.x0", (summary.recent.first() as PartnerAlert.AppActivity).target)
     }
 
     @Test

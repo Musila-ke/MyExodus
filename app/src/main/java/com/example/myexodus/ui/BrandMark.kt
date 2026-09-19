@@ -25,7 +25,7 @@ import com.example.myexodus.R
 
 /** Leaf mark alone, for headers where the app name is already on screen as text. */
 @Composable
-fun BrandMark(size: Dp = 40.dp, modifier: Modifier = Modifier) {
+fun BrandMark(modifier: Modifier = Modifier, size: Dp = 40.dp) {
     Image(
         painter = painterResource(R.drawable.logo_mark),
         contentDescription = null,
@@ -38,7 +38,7 @@ fun BrandMark(size: Dp = 40.dp, modifier: Modifier = Modifier) {
 
 /** Full lockup (mark + wordmark), for the one first-run brand moment. */
 @Composable
-fun BrandLockup(height: Dp = 72.dp, modifier: Modifier = Modifier) {
+fun BrandLockup(modifier: Modifier = Modifier, height: Dp = 72.dp) {
     Image(
         painter = painterResource(R.drawable.logo_lockup),
         contentDescription = null,

@@ -53,9 +53,14 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.MyExodus">
+        <!-- launchMode=singleTop: the shell is the app's root activity and must receive every
+            deep link (notification taps, widget, block-screen escape hatch) through
+            onNewIntent — with standard mode a launch to an existing task is delivered only as
+            a task-bring-to-front on some OEMs (XOS verified), silently dropping the extras. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:theme="@style/Theme.MyExodus"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

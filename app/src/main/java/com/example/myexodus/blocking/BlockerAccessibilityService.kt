@@ -21,6 +21,7 @@ import com.example.myexodus.blocking.recovery.RecoveryStateStore
 import com.example.myexodus.blocking.usage.EnforcementAction
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.blocking.usage.UsageSessionMachine
+import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.ui.appLabel
 import dagger.hilt.android.AndroidEntryPoint
@@ -348,16 +349,10 @@ class BlockerAccessibilityService : AccessibilityService() {
                     // cover shown mid-animation lands at the animation's rect with the app's
                     // keys tappable around it (device-caught 2026-09-16: 559x1242 at (80,179)
                     // when Calculator came to the front — the wall reported `shown` and stayed
-                    // short). One re-run once the animation has settled; skipped if the cover
-                    // is already gone (user left before the settle).
-                    mainHandler.postDelayed(
-                        {
-                            if (overlay.isShown(displayId)) {
-                                coverBlockedApp(generation, displayId, packageName)
-                            }
-                        },
-                        COVER_SETTLE_MS,
-                    )
+                    // short). A single fixed-delay re-run assumed that "a moment" has one length;
+                    // the animation can outlast it. Re-sample until two consecutive samples agree
+                    // on the target rect, capped, skipped whenever the cover is gone.
+                    settleCover(generation, displayId, packageName, previous = null, attempt = 1)
                 }
             }
             is BlockDecision.Allow -> {
@@ -630,11 +625,57 @@ class BlockerAccessibilityService : AccessibilityService() {
      *  Clamped to the bar-free display: panes extend behind the nav bar, and covering it
      *  swallows Home/Back (2026-09-13). */
     /** Whole-display cover, then the largest-window re-bound. The per-window root walk runs on
-     *  a block transition (and its one settle re-run), never per steady-state WSC
+     *  a block transition (and its bounded settle re-runs), never per steady-state WSC
      *  (2026-08-28 review). */
     private fun coverBlockedApp(generation: Long, displayId: Int, packageName: String) {
         overlay.show(generation, displayId, overlay.displayBounds(displayId), appBlockedContent(packageName))
         blockOtherRestrictedWindows(generation)
+    }
+
+    /** Settle re-run: re-cover until the deciding package's target rect is stable across two
+     *  consecutive samples (or [COVER_SETTLE_MAX_ATTEMPTS] is hit). [previous] is the last sample;
+     *  null on entry so the first re-run always happens, matching the pre-loop behavior. A sample
+     *  that reads no window is "not yet stable" — the window list can be momentarily empty
+     *  mid-switch, and treating that as settled would freeze the cover at the animation rect. */
+    private fun settleCover(
+        generation: Long,
+        displayId: Int,
+        packageName: String,
+        previous: Rect?,
+        attempt: Int,
+    ) {
+        if (attempt > COVER_SETTLE_MAX_ATTEMPTS) return
+        mainHandler.postDelayed(
+            {
+                if (generation != stateMachine.currentGeneration || !overlay.isShown(displayId)) {
+                    return@postDelayed
+                }
+                val current = restrictedWindowBounds(displayId, packageName)
+                if (current != null && current == previous) return@postDelayed
+                coverBlockedApp(generation, displayId, packageName)
+                settleCover(generation, displayId, packageName, current, attempt + 1)
+            },
+            COVER_SETTLE_INTERVAL_MS,
+        )
+    }
+
+    /** The rect the cover would land on for [packageName]: its largest window on [displayId],
+     *  clamped to the bar-free display — the same target [blockOtherRestrictedWindows] covers. */
+    private fun restrictedWindowBounds(displayId: Int, packageName: String): Rect? {
+        var best: Rect? = null
+        var bestArea = 0L
+        allWindows().forEach { w ->
+            if (w.displayIdOrDefault() != displayId) return@forEach
+            val root = runCatching { w.root }.getOrNull() ?: return@forEach
+            if (root.packageName?.toString() != packageName) return@forEach
+            val bounds = w.boundsInScreenOrNull ?: return@forEach
+            if (bounds.area() > bestArea) {
+                best = Rect(bounds)
+                bestArea = bounds.area()
+            }
+        }
+        val target = best ?: return null
+        return if (target.intersect(overlay.displayBounds(displayId))) target else null
     }
 
     private fun blockOtherRestrictedWindows(generation: Long) {
@@ -714,6 +755,7 @@ class BlockerAccessibilityService : AccessibilityService() {
         startActivity(
             Intent(this, MainActivity::class.java)
                 .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_RECOVERY)
+                .putExtra(MainActivity.EXTRA_RECOVERY_ENTRY, RecoverySession.ENTRY_BLOCK_SCREEN)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
         )
     }
@@ -849,10 +891,14 @@ class BlockerAccessibilityService : AccessibilityService() {
          *  render's eviction callback). */
         private const val BLOCK_EVICT_HIDE_MS = 1_000L
 
-        /** Re-bound delay after a block cover: long enough for an OEM task-switch animation to
-         *  settle (device-tuned on XOS 2026-09-16, where display metrics track the animating
-         *  task mid-switch). */
-        private const val COVER_SETTLE_MS = 700L
+        /** Beat between settle-loop samples (device-tuned on XOS 2026-09-16: an OEM task-switch
+         *  animation is still moving at ~700ms, measures settled by the following sample). */
+        private const val COVER_SETTLE_INTERVAL_MS = 700L
+
+        /** Cap on settle re-runs: with the two-consecutive-equal-samples stop this bounds a
+         *  pathological window-list (~4.2s worst case), matching DEFERRED_WSC's bounded-retry
+         *  posture — a genuinely stale block must not re-cover forever. */
+        private const val COVER_SETTLE_MAX_ATTEMPTS = 6
 
         /** True between onServiceConnected and onDestroy; the device suite waits on it because
          *  the accessibility re-bind after a process restart lags on XOS. */

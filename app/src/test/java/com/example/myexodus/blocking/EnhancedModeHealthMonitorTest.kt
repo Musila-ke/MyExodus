@@ -4,6 +4,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.view.accessibility.AccessibilityManager
 import androidx.test.core.app.ApplicationProvider
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -31,6 +32,12 @@ class EnhancedModeHealthMonitorTest {
         shadowOf(accessibilityManager).setEnabledAccessibilityServiceList(
             names.map { TestServiceInfo.accessibilityService(context.packageName, it) },
         )
+    }
+
+    @After
+    fun tearDown() {
+        // The in-process liveness flag is a process-global; never leak it across tests.
+        BlockerAccessibilityService.connected.set(false)
     }
 
     private fun notificationCount() =
@@ -94,5 +101,36 @@ class EnhancedModeHealthMonitorTest {
         assertFalse(monitor.advancedProtection.value)
         monitor.refresh()
         assertFalse(monitor.advancedProtection.value)
+    }
+
+    @Test
+    fun liveInstance_countsAsEnabled_evenWhilePlatformListReadsEmpty() {
+        // XOS/Transsion 2026-09-19: the client-side list read empty while the service was
+        // bound and delivering events; that must not render as "blocker off".
+        setEnabledServices()
+        BlockerAccessibilityService.connected.set(true)
+        val monitor = EnhancedModeHealthMonitor(context)
+        assertTrue(monitor.enabled.value)
+        assertEquals(0, notificationCount())
+    }
+
+    @Test
+    fun flakyListDrop_doesNotAlert_butGenuineDisableDoes() {
+        setEnabledServices(BlockerAccessibilityService::class.java.name)
+        val monitor = EnhancedModeHealthMonitor(context)
+        assertEquals(0, notificationCount())
+
+        // Flaky read: the list drops the service while the instance stays alive — not a disable.
+        setEnabledServices()
+        BlockerAccessibilityService.connected.set(true)
+        monitor.refresh()
+        assertTrue(monitor.enabled.value)
+        assertEquals(0, notificationCount())
+
+        // The genuine disable: the instance dies.
+        BlockerAccessibilityService.connected.set(false)
+        monitor.refresh()
+        assertFalse(monitor.enabled.value)
+        assertEquals(1, notificationCount())
     }
 }

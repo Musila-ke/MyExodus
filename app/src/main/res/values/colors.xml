@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Window background only — the UI palette lives in ui/theme/Color.kt (single source).
+         This XML copy exists because the window background is consumed by the platform theme
+         before Compose exists; keep it equal to SandLight (values-night/colors.xml = SandDark). -->
+    <color name="window_background">#FAF8F5</color>
+</resources>

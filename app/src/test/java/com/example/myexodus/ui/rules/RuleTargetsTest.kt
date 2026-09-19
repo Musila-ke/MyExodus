@@ -1,5 +1,6 @@
 package com.example.myexodus.ui.rules
 
+import com.example.myexodus.ui.toggleDay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue

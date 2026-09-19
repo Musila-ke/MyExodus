@@ -92,6 +92,21 @@ fun formatDuration(ms: Long): String {
     }
 }
 
+/** Monday-first day string ↔ the bitmask shape (bit0 = Monday), shared by both editors. */
+fun daysMaskToString(daysMask: Int): String =
+    (0..6).joinToString("") { if (daysMask and (1 shl it) != 0) "1" else "0" }
+
+fun daysStringToMask(days: String): Int =
+    (0..6).fold(0) { mask, index -> if (days.getOrNull(index) == '1') mask or (1 shl index) else mask }
+
+/** Flips one day, always returning a full seven characters — a short string would silently
+ *  mean "no day matches" once it reaches the mask conversion. */
+fun toggleDay(days: String, index: Int): String {
+    val chars = days.padEnd(7, '0').toCharArray()
+    chars[index] = if (chars[index] == '1') '0' else '1'
+    return String(chars)
+}
+
 fun daysLabel(activeDays: String, res: Resources): String? {
     if (activeDays.length < 7) return null
     if (activeDays.all { it == '1' }) return res.getString(R.string.days_every_day)

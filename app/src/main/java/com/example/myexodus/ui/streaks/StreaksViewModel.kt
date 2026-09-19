@@ -9,6 +9,7 @@ import com.example.myexodus.streaks.HabitSummary
 import com.example.myexodus.streaks.WithdrawalSeverity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -66,7 +67,10 @@ class StreaksViewModel @Inject constructor(
 
     /** ViewModel-init and foreground trigger (plan §8 Step 5 / Decision 9). */
     fun refresh() {
-        viewModelScope.launch {
+        // Repository work on IO: the store open is a synchronous SQLCipher call that can block
+        // seconds behind another opener's lock — on Dispatchers.Main that is an ANR from a
+        // plain app resume (device-caught 2026-09-19, whole-class fix: every launch below).
+        viewModelScope.launch(Dispatchers.IO) {
             repository.refreshActive()
             _habits.value = repository.habits()
             _resolved.value = true
@@ -75,7 +79,7 @@ class StreaksViewModel @Inject constructor(
 
     /** Multi-habit switch: the picked habit becomes the displayed one everywhere. */
     fun selectHabit(habitId: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             repository.selectHabit(habitId)
             _habits.value = repository.habits()
             _relapseNote.value = null
@@ -100,7 +104,7 @@ class StreaksViewModel @Inject constructor(
         recoveryStartAt: Long,
     ) {
         _setupError.value = null
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val profileId = rulesRepository.ensureActiveProfile().userId
             when (val result = repository.onboard(
                 profileId = profileId,
@@ -141,7 +145,7 @@ class StreaksViewModel @Inject constructor(
      *  days. The repository's DAO guard (`achieved_at IS NOT NULL`) makes each write safe. */
     fun acknowledgeMilestones(milestoneDays: List<Int>) {
         val habitId = state.value?.habitId ?: return
-        viewModelScope.launch { milestoneDays.forEach { repository.acknowledgeMilestone(habitId, it) } }
+        viewModelScope.launch(Dispatchers.IO) { milestoneDays.forEach { repository.acknowledgeMilestone(habitId, it) } }
     }
 
     /** §6 relapse logging; the debounce flag is the first line of §9 duplicate-tap defense. */
@@ -150,7 +154,7 @@ class StreaksViewModel @Inject constructor(
         if (_relapseInFlight.value) return
         _relapseInFlight.value = true
         _relapseNote.value = null
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val endedDays = habitDays(current.currentStreakElapsedMs)
                 val bestDays = habitDays(current.allTimeMaxElapsedMs)

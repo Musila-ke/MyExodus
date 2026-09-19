@@ -9,8 +9,10 @@ import com.example.myexodus.data.db.dao.HabitProgressDao
 import com.example.myexodus.data.db.dao.MilestoneEventDao
 import com.example.myexodus.data.db.dao.PolicyVersionDao
 import com.example.myexodus.data.db.dao.RecoveryPolicyDao
+import com.example.myexodus.data.db.dao.RecoverySessionDao
 import com.example.myexodus.data.db.dao.RecoveryStateDao
 import com.example.myexodus.data.db.dao.RecoveryStreakDao
+import com.example.myexodus.data.db.dao.RiskWindowDao
 import com.example.myexodus.data.db.dao.RestrictionRuleDao
 import com.example.myexodus.data.db.dao.UserProfileDao
 import com.example.myexodus.data.db.entity.AttemptLog
@@ -20,9 +22,11 @@ import com.example.myexodus.data.db.entity.HabitProgress
 import com.example.myexodus.data.db.entity.MilestoneEvent
 import com.example.myexodus.data.db.entity.PolicyVersion
 import com.example.myexodus.data.db.entity.RecoveryPolicy
+import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.data.db.entity.RecoveryState
 import com.example.myexodus.data.db.entity.RecoveryStreak
 import com.example.myexodus.data.db.entity.RestrictionRule
+import com.example.myexodus.data.db.entity.RiskWindow
 import com.example.myexodus.data.db.entity.UserProfile
 
 /**
@@ -46,8 +50,10 @@ import com.example.myexodus.data.db.entity.UserProfile
         AttemptLog::class,
         RecoveryStreak::class,
         MilestoneEvent::class,
+        RecoverySession::class,
+        RiskWindow::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 abstract class AppRulesStore : RoomDatabase() {
@@ -62,4 +68,6 @@ abstract class AppRulesStore : RoomDatabase() {
     abstract fun recoveryStateDao(): RecoveryStateDao
     abstract fun recoveryStreakDao(): RecoveryStreakDao
     abstract fun milestoneEventDao(): MilestoneEventDao
+    abstract fun recoverySessionDao(): RecoverySessionDao
+    abstract fun riskWindowDao(): RiskWindowDao
 }

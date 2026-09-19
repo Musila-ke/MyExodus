@@ -24,6 +24,7 @@ val Context.widgetSnapshotDataStore: DataStore<Preferences> by preferencesDataSt
 
 private val KEY_ENFORCEMENT = stringPreferencesKey("enforcement_state")
 private val KEY_STREAK_DAYS = intPreferencesKey("streak_days")
+private val KEY_HABIT_LABEL = stringPreferencesKey("habit_label")
 private val KEY_DISCREET = booleanPreferencesKey("discreet_mode")
 private val KEY_EVAL_UTC = longPreferencesKey("eval_utc")
 private val KEY_EVAL_ELAPSED = longPreferencesKey("eval_elapsed")
@@ -53,6 +54,10 @@ internal const val UNSET_BOOT_COUNT = -1
 data class ProtectionSnapshot(
     val enforcement: EnforcementStatus,
     val streakDays: Int?,
+    /** Which habit the day count belongs to (finding #12: with 2+ habits an unnamed number
+     *  is the wrong track as far as the user can tell). Null = no habit / not known yet;
+     *  absent in samples written before this field existed, which renders unlabelled. */
+    val habitLabel: String?,
     val discreet: Boolean,
     val evalUtc: Long,
     val evalElapsed: Long,
@@ -70,6 +75,7 @@ fun snapshotFrom(prefs: Preferences?): ProtectionSnapshot? {
             else -> EnforcementStatus.UNKNOWN
         },
         streakDays = prefs[KEY_STREAK_DAYS],
+        habitLabel = prefs[KEY_HABIT_LABEL],
         // Discreet is the default (FR5): an absent flag must never disclose.
         discreet = prefs[KEY_DISCREET] ?: true,
         evalUtc = evalUtc,
@@ -82,6 +88,8 @@ fun MutablePreferences.putSnapshot(snapshot: ProtectionSnapshot) {
     this[KEY_ENFORCEMENT] = snapshot.enforcement.name
     val streakDays = snapshot.streakDays
     if (streakDays == null) remove(KEY_STREAK_DAYS) else this[KEY_STREAK_DAYS] = streakDays
+    val habitLabel = snapshot.habitLabel
+    if (habitLabel == null) remove(KEY_HABIT_LABEL) else this[KEY_HABIT_LABEL] = habitLabel
     this[KEY_DISCREET] = snapshot.discreet
     this[KEY_EVAL_UTC] = snapshot.evalUtc
     this[KEY_EVAL_ELAPSED] = snapshot.evalElapsed

@@ -78,7 +78,14 @@ class EnhancedModeHealthMonitor @Inject constructor(
         _advancedProtection.value = isAdvancedProtectionEnabled()
     }
 
-    fun isServiceEnabled(): Boolean = appContext
+    /**
+     * "Enabled" = listed by the platform OR alive in this process. The client-side enabled list
+     * flaps on OEM builds — device-caught on XOS/Transsion 2026-09-19: it read empty while the
+     * service was bound and delivering window events. A live instance in this process is ground
+     * truth for "the service is up"; a real disable always unbinds it, so the enabled→disabled
+     * transition above is unaffected and a flaky read can no longer fire its alert.
+     */
+    fun isServiceEnabled(): Boolean = BlockerAccessibilityService.connected.get() || appContext
         .getSystemService(AccessibilityManager::class.java)
         .getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
         .any { it.resolveInfo?.serviceInfo?.name == BlockerAccessibilityService::class.java.name }

@@ -89,8 +89,11 @@ class ProtectionSnapshotWriter @Inject constructor(
                 // re-derived, so the widget can never disagree with the app (DRY).
                 // Known limitation (user-flagged 2026-09-17, V1 Req 36): this is the app's *displayed*
                 // habit only. The widget has no habit switcher, and the snapshot store is global (not
-                // per-widget) — so every instance shows the same habit. Deferred, not forgotten.
+                // per-widget) — so every instance shows the same habit. The label rides along so the
+                // surface names which track the number belongs to (finding #12); the switcher stays
+                // deferred and is recorded in the same breath.
                 streakDays = habits.state.value?.currentDay,
+                habitLabel = habits.state.value?.targetLabel,
                 discreet = settings.discreetMode,
                 evalUtc = nowUtc,
                 evalElapsed = SystemClock.elapsedRealtime(),
@@ -134,6 +137,7 @@ internal fun shouldRestamp(
     if (existing == null) return true
     if (existing.enforcement != next.enforcement) return true
     if (existing.streakDays != next.streakDays) return true
+    if (existing.habitLabel != next.habitLabel) return true
     if (existing.discreet != next.discreet) return true
     // The sample must carry the current boot count even when nothing else moved, or the freshness
     // gate would reject it as reboot-stale for as long as the enforcement value happens to match.

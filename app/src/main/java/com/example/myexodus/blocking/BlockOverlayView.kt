@@ -3,6 +3,7 @@ package com.example.myexodus.blocking
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
@@ -13,8 +14,21 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.compose.ui.graphics.toArgb
 import com.example.myexodus.R
 import com.example.myexodus.ui.appLabel
+import com.example.myexodus.ui.theme.MutedDark
+import com.example.myexodus.ui.theme.MutedLight
+import com.example.myexodus.ui.theme.OnPrimaryDark
+import com.example.myexodus.ui.theme.OnPrimaryLight
+import com.example.myexodus.ui.theme.SandDark
+import com.example.myexodus.ui.theme.SandLight
+import com.example.myexodus.ui.theme.SurfaceVariantDark
+import com.example.myexodus.ui.theme.SurfaceVariantLight
+import com.example.myexodus.ui.theme.TealDark
+import com.example.myexodus.ui.theme.TealLight
+import com.example.myexodus.ui.theme.TextDark
+import com.example.myexodus.ui.theme.TextLight
 
 /** What the blocking overlay shows and which actions it offers for the current block. */
 sealed interface OverlayContent {
@@ -54,9 +68,11 @@ sealed interface OverlayContent {
  * `filterTouchesWhenObscured` per NFR-S10: taps are discarded while another window obscures
  * this one. Reused per display — [bind] re-renders it for every show.
  *
- * Painted in the block screen's own theme colors (user-directed 2026-09-13: the cover showed
- * dark, the BlockerActivity card light — the swap read as two pause screens; matching colors
- * and type make it one continuous surface). Keep in step with [BlockerActivity.BlockScreen].
+ * Painted from the Desert Dawn palette constants, resolved per system dark mode at every
+ * [bind] (audit finding #16: hardcoded light hexes made the cover stay light while the
+ * dark-mode [BlockerActivity] card went dark — the same two-pause-screens swap the user
+ * flagged on 2026-09-13, mirrored). This view is outside Composition, so it reads the shared
+ * `ui.theme` constants directly rather than `MaterialTheme`; keep it that way — one palette.
  */
 @SuppressLint("ViewConstructor") // built in code only — never inflated from XML
 internal class BlockOverlayView(
@@ -75,26 +91,22 @@ internal class BlockOverlayView(
     private var pendingAttached: (() -> Unit)? = null
 
     private val title = TextView(context).apply {
-        setTextColor(0xFF1D1B19.toInt()) // TextLight
         textSize = 22f // titleLarge, as the block screen
         gravity = Gravity.CENTER
     }
     private val message = TextView(context).apply {
-        setTextColor(0xFF6E675E.toInt()) // MutedLight (onSurfaceVariant)
         textSize = 14f // bodyMedium
         gravity = Gravity.CENTER
     }
-    private val recoveryButton = overlayButton(R.string.overlay_open_recovery, primary = true)
-    private val differentSiteButton = overlayButton(R.string.overlay_different_site, primary = false)
+    private val recoveryButton = overlayButton(R.string.overlay_open_recovery)
+    private val differentSiteButton = overlayButton(R.string.overlay_different_site)
     private val hint = TextView(context).apply {
         setText(R.string.overlay_hint)
-        setTextColor(0xFF6E675E.toInt()) // MutedLight
         textSize = 12f // bodySmall
         gravity = Gravity.CENTER
     }
 
     init {
-        setBackgroundColor(0xFFFAF8F5.toInt()) // SandLight — the theme background
         filterTouchesWhenObscured = true
         addView(
             LinearLayout(context).apply {
@@ -117,6 +129,7 @@ internal class BlockOverlayView(
     fun bind(content: OverlayContent, onAttached: (() -> Unit)? = null) {
         bound = content
         pendingAttached = onAttached
+        applyPalette()
         when (content) {
             is OverlayContent.AppBlocked -> {
                 title.text = context.getString(R.string.blocked_target_title, content.target)
@@ -179,26 +192,25 @@ internal class BlockOverlayView(
         if (onAttached != null && isAttachedToWindow) scheduleAttachCallback()
     }
 
-    private fun overlayButton(textRes: Int, primary: Boolean): Button = Button(context).apply {
+    /** Scheme switch for this view: the block screen follows `isSystemInDarkTheme`, and this
+     *  cover must follow the same signal to stay one surface. Read at [bind], not construction,
+     *  so a reused window repaints correctly after a day/night switch. */
+    private val night: Boolean
+        get() = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+
+    private fun applyPalette() {
+        setBackgroundColor((if (night) SandDark else SandLight).toArgb())
+        title.setTextColor((if (night) TextDark else TextLight).toArgb())
+        message.setTextColor((if (night) MutedDark else MutedLight).toArgb())
+        hint.setTextColor((if (night) MutedDark else MutedLight).toArgb())
+        paintButton(recoveryButton, primary = true)
+        paintButton(differentSiteButton, primary = false)
+    }
+
+    private fun overlayButton(textRes: Int): Button = Button(context).apply {
         setText(textRes)
         isAllCaps = false
-        setTextColor(if (primary) Color.WHITE else 0xFF1D1B19.toInt())
-        // Pill shape + ripple, as the Compose M3 buttons on the block screen; the cover must
-        // not restyle at the hand-off. Paint order: ripple (masked to the pill) over the fill.
-        val radius = 20 * resources.displayMetrics.density
-        val mask = GradientDrawable().apply {
-            cornerRadius = radius
-            setColor(Color.WHITE)
-        }
-        val fill = GradientDrawable().apply {
-            cornerRadius = radius
-            setColor(if (primary) 0xFF0F766E.toInt() else 0xFFEFEAE2.toInt()) // TealLight / surfaceVariant
-        }
-        background = RippleDrawable(
-            ColorStateList.valueOf(if (primary) 0x33FFFFFF else 0x22000000),
-            fill,
-            mask,
-        )
         // Replacing the background drops the drawable's content insets (text ran edge-to-edge
         // over the pill) and the theme's button style keeps an elevation shadow the Compose
         // button does not have. M3 metrics instead: 24/8dp padding, 40dp min height, flat.
@@ -207,6 +219,36 @@ internal class BlockOverlayView(
         setPadding(padH, padV, padH, padV)
         minimumHeight = (40 * resources.displayMetrics.density).toInt()
         stateListAnimator = null
+    }
+
+    /** Pill shape + ripple, as the Compose M3 buttons on the block screen; the cover must not
+     *  restyle at the hand-off. Paint order: ripple (masked to the pill) over the fill. */
+    private fun paintButton(button: Button, primary: Boolean) {
+        val onPrimary = OnPrimaryLight.toArgb()
+        val onPrimaryDark = OnPrimaryDark.toArgb()
+        button.setTextColor(
+            if (primary) (if (night) onPrimaryDark else onPrimary) else (if (night) TextDark else TextLight).toArgb(),
+        )
+        val radius = 20 * resources.displayMetrics.density
+        val mask = GradientDrawable().apply {
+            cornerRadius = radius
+            setColor(Color.WHITE)
+        }
+        val fill = GradientDrawable().apply {
+            cornerRadius = radius
+            setColor(
+                if (primary) {
+                    (if (night) TealDark else TealLight).toArgb()
+                } else {
+                    (if (night) SurfaceVariantDark else SurfaceVariantLight).toArgb()
+                },
+            )
+        }
+        button.background = RippleDrawable(
+            ColorStateList.valueOf(if (primary) 0x33FFFFFF else 0x22000000),
+            fill,
+            mask,
+        )
     }
 
     private fun marginParams(top: Int = 0, bottom: Int = 0): LinearLayout.LayoutParams =

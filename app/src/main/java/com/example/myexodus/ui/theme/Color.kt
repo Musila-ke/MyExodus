@@ -6,6 +6,10 @@ import androidx.compose.ui.graphics.Color
 // gold-amber reserved for streaks/milestones. Light + dark variants.
 val SandLight = Color(0xFFFAF8F5)
 val SurfaceLight = Color(0xFFFFFFFF)
+// Named because the block overlay (a plain View, outside Composition) paints the on-teal text
+// and the neutral container from the same constants the scheme uses — one palette, no drift.
+val OnPrimaryLight = Color.White
+val SurfaceVariantLight = Color(0xFFEFEAE2)
 val TextLight = Color(0xFF1D1B19)
 val MutedLight = Color(0xFF6E675E)
 val TealLight = Color(0xFF0F766E)
@@ -15,6 +19,8 @@ val ErrorLight = Color(0xFFB3402F)
 
 val SandDark = Color(0xFF141311)
 val SurfaceDark = Color(0xFF1D1B19)
+val OnPrimaryDark = Color(0xFF0C211F)
+val SurfaceVariantDark = Color(0xFF2A2622)
 val TextDark = Color(0xFFF2EEE9)
 val MutedDark = Color(0xFFA39B90)
 val TealDark = Color(0xFF2FA598)

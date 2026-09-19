@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Recovery resource UI (plan v3 W1). Copy rule: neutral and descriptive — no efficacy
+  claims, no clinical or diagnostic language (plan §10; the "self-help tool, not medical
+  treatment" disclaimer lives on Settings → About). These are user-authored or
+  verified-contact surfaces; nothing here promises an outcome.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <string name="recovery_back">Back</string>
+    <string name="recovery_suggested_title">Try right now</string>
+    <string name="recovery_risk_window_note">You\'re inside one of your risk windows — low-effort options first.</string>
+
+    <!-- Coaching plan (W1 display, W3 editor) -->
+    <string name="recovery_plan_title">My plan</string>
+    <string name="recovery_plan_empty">Add your own steps, if-then plans, and values in Settings → Coaching plan.</string>
+    <string name="recovery_plan_steps">Steps</string>
+    <string name="recovery_plan_ifthen">If-then plans</string>
+    <string name="recovery_plan_values">Values</string>
+    <string name="recovery_plan_now">now</string>
+
+    <!-- Coaching plan editor (W3) -->
+    <string name="recovery_plan_editor_title">Coaching plan</string>
+    <string name="recovery_plan_editor_intro">Your own words, shown on the Recovery tab and while a technique runs. Up to five of each kind.</string>
+    <string name="recovery_plan_add">Add</string>
+    <string name="recovery_plan_add_title">Add</string>
+    <string name="recovery_plan_edit_title">Edit</string>
+    <string name="recovery_plan_edit">Edit</string>
+    <string name="recovery_plan_move_up">Move up</string>
+    <string name="recovery_plan_move_down">Move down</string>
+    <string name="recovery_plan_delete_title">Delete this?</string>
+    <string name="recovery_plan_delete_body">“%1$s” will be removed from your plan.</string>
+    <string name="recovery_plan_kind_cap">Five is the limit for each kind.</string>
+    <string name="recovery_plan_empty_kind">Nothing added yet.</string>
+    <string name="recovery_plan_hint_step">One small thing you can do</string>
+    <string name="recovery_plan_hint_ifthen">If … then …</string>
+    <string name="recovery_plan_hint_value">What matters more to you than this</string>
+    <string name="recovery_plan_window_label">Show this when</string>
+    <string name="recovery_plan_window_any">Any time</string>
+
+    <!-- Settings section (W3/W4 entry points) -->
+    <string name="settings_recovery_header">Recovery</string>
+    <string name="settings_recovery_plan_title">Coaching plan</string>
+    <string name="settings_recovery_plan_body">Your own steps, if-then plans, and values — shown on the Recovery tab and while a technique runs.</string>
+    <string name="settings_recovery_windows_title">Risk windows</string>
+    <string name="settings_recovery_windows_body">The times you\'re most likely to struggle. Inside a window, the lowest-effort techniques show first.</string>
+
+    <!-- Risk windows (W4 editor) -->
+    <string name="recovery_windows_title">Risk windows</string>
+    <string name="recovery_windows_intro">The times you\'re most likely to struggle. Inside a window, the lowest-effort techniques show first.</string>
+    <string name="recovery_windows_add">Add a window</string>
+    <string name="recovery_windows_add_title">New window</string>
+    <string name="recovery_windows_edit_title">Edit window</string>
+    <string name="recovery_windows_off">Off</string>
+    <string name="recovery_windows_overnight">The window ends the next day.</string>
+
+    <!-- Urge log (W2) -->
+    <string name="recovery_log_action">Log an urge</string>
+    <string name="recovery_log_title">Log this urge</string>
+    <string name="recovery_log_intensity">How strong is it right now?</string>
+    <string name="recovery_log_note">Logging keeps the block in place — this is not an override. Nothing here is shared with your partner.</string>
+    <string name="recovery_log_cancel">Cancel</string>
+    <string name="recovery_log_submit">Log it</string>
+
+    <!-- Technique titles and descriptions (catalog-driven, W4) -->
+    <string name="recovery_tech_urge_surfing_title">Paced breathing</string>
+    <string name="recovery_tech_urge_surfing_desc">Breathe 4 seconds in, 6 seconds out. Follow the circle — no need to count.</string>
+    <string name="recovery_tech_delay_timer_title">Wait 10 minutes</string>
+    <string name="recovery_tech_delay_timer_desc">Start a timer and read your if-then plans while you wait.</string>
+    <string name="recovery_tech_sober_title">Walk through the urge</string>
+    <string name="recovery_tech_sober_desc">Five short phases: stop, observe, breathe, expand, respond.</string>
+    <string name="recovery_tech_values_card_title">Read my values</string>
+    <string name="recovery_tech_values_card_desc">Your own words, one card at a time.</string>
+
+    <string name="recovery_effort_low">Low effort</string>
+    <string name="recovery_effort_medium">Medium effort</string>
+    <string name="recovery_effort_high">High effort</string>
+
+    <!-- Breathing pacer -->
+    <string name="recovery_pacer_choose_duration">How long?</string>
+    <string name="recovery_minutes">%1$d min</string>
+    <string name="recovery_pacer_start">Start</string>
+    <string name="recovery_pacer_pause">Pause</string>
+    <string name="recovery_pacer_breathe_in">Breathe in</string>
+    <string name="recovery_pacer_breathe_out">Breathe out</string>
+    <!-- Clock readout (m:ss), not a count of anything: no plural dimension exists.
+         tools:ignore silences lint's %d heuristic guess. -->
+    <string name="recovery_pacer_remaining" tools:ignore="PluralsCandidate">%1$d:%2$02d left</string>
+    <string name="recovery_pacer_finished">That\'s the set done. You can stop here or keep going.</string>
+    <string name="recovery_pacer_extend">Do another set</string>
+    <string name="recovery_pacer_haptics">Vibrate at each change</string>
+    <string-array name="recovery_pacer_prompts">
+        <item>Notice where you feel it — chest, shoulders, hands.</item>
+        <item>You don\'t have to act on it. Just keep breathing.</item>
+        <item>Let the air come out slower than it came in.</item>
+        <item>Stay with the count. Nothing else needs deciding right now.</item>
+        <item>If your attention wanders, come back to the next breath.</item>
+    </string-array>
+
+    <!-- Delay timer -->
+    <plurals name="recovery_delay_body">
+        <item quantity="one">Set the timer for %1$d minute. When it ends, decide then — not now.</item>
+        <item quantity="other">Set the timer for %1$d minutes. When it ends, decide then — not now.</item>
+    </plurals>
+    <string name="recovery_delay_start">Start the timer</string>
+    <string name="recovery_delay_remaining">%1$d:%2$02d</string>
+    <string name="recovery_delay_finished">Time\'s up. Decide what you want to do now.</string>
+    <string name="recovery_delay_no_ifthen">No if-then plans yet — add some in Settings → Coaching plan.</string>
+
+    <!-- Five-phase walkthrough -->
+    <string name="recovery_sober_progress">Phase %1$d of %2$d</string>
+    <string name="recovery_sober_stop_title">Stop</string>
+    <string name="recovery_sober_stop_body">Pause. Don\'t move toward it and don\'t push it away. Just stop for a moment.</string>
+    <string name="recovery_sober_observe_title">Observe</string>
+    <string name="recovery_sober_observe_body">What does it feel like right now — where is it, and how strong? Say it plainly, without judging it.</string>
+    <string name="recovery_sober_breathe_title">Breathe</string>
+    <string name="recovery_sober_breathe_body">Slow the breath. Breathe into the place you noticed, not against it.</string>
+    <string name="recovery_sober_expand_title">Expand</string>
+    <string name="recovery_sober_expand_body">Widen your attention past the urge — your body, the room, the sounds around you.</string>
+    <string name="recovery_sober_respond_title">Respond</string>
+    <string name="recovery_sober_respond_body">Choose your next move deliberately. Your if-then plans are below.</string>
+    <string name="recovery_sober_back">Back</string>
+    <string name="recovery_sober_next">Next</string>
+    <string name="recovery_sober_finish">Done</string>
+    <string name="recovery_sober_no_ifthen">No if-then plans yet — add some in Settings → Coaching plan.</string>
+
+    <!-- Values card -->
+    <string name="recovery_values_label">What matters to me</string>
+    <string name="recovery_values_next">Next</string>
+    <string name="recovery_values_empty">No values added yet — add some in Settings → Coaching plan.</string>
+
+    <!-- Shared run controls -->
+    <string name="recovery_done">I\'m done</string>
+    <string name="recovery_stop">Stop</string>
+
+    <!-- History (W7, behind the privacy gate) -->
+    <string name="recovery_history_title">History</string>
+    <string name="recovery_history_empty">No sessions logged yet.</string>
+    <string name="recovery_history_more">Load more</string>
+    <string name="recovery_history_completed">Completed</string>
+    <string name="recovery_history_abandoned">Stopped</string>
+    <string name="recovery_history_interrupted">Interrupted</string>
+    <string name="recovery_history_logged_only">Logged, no technique</string>
+
+    <!-- Privacy gate (W6) -->
+    <string name="recovery_gate_title_history">Unlock to see your history</string>
+    <string name="recovery_gate_title_plan">Unlock to edit your coaching plan</string>
+    <string name="recovery_gate_title_windows">Unlock to edit your risk windows</string>
+    <string name="recovery_gate_locked">Your history is locked.</string>
+    <string name="recovery_gate_unlock">Unlock</string>
+    <string name="recovery_gate_no_lock_banner">No screen lock is set on this device, so this screen isn\'t protected. Set one in system settings for privacy.</string>
+
+    <!-- Crisis resources (W6) -->
+    <string name="recovery_crisis_link">Need urgent help?</string>
+    <string name="recovery_crisis_link_body">Helplines and crisis services, verified for your region.</string>
+    <string name="recovery_crisis_back">Get help now</string>
+    <string name="recovery_crisis_title">Get help now</string>
+    <string name="recovery_crisis_intro">If you\'re in immediate danger, call your local emergency number. These services are run by independent organizations — the numbers below were checked by hand.</string>
+    <string name="recovery_crisis_not_emergency">These are not emergency services unless stated. If you are in immediate danger, contact emergency services in your country.</string>
+    <string name="recovery_crisis_call">Call %1$s</string>
+    <string name="recovery_crisis_open">Open website</string>
+    <string name="recovery_crisis_verified">Verified %1$s</string>
+
+</resources>

@@ -50,7 +50,10 @@ import com.example.myexodus.blocking.UrlPattern
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.ui.formatDate
+import com.example.myexodus.ui.DayChips
+import com.example.myexodus.ui.TimeField
 import com.example.myexodus.ui.formatTime
+import com.example.myexodus.ui.toggleDay
 import com.example.myexodus.ui.rememberAppLabel
 import java.time.DayOfWeek
 import java.time.Instant
@@ -59,6 +62,7 @@ import java.time.ZoneOffset
 import java.time.format.TextStyle
 import java.util.Locale
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 /** Visible starting window when Always on is switched off — editable, in the user's zone. */
@@ -147,7 +151,7 @@ fun RuleEditorScreen(
             error = duplicateMessage
             return
         }
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
             saving = true
             runCatching {
                 val base = initial ?: RestrictionRule(
@@ -400,14 +404,21 @@ fun RuleEditorScreen(
                 TextButton(onClick = {
                     confirmDelete = false
                     error = null
-                    scope.launch {
+                    scope.launch(Dispatchers.IO) {
                         saving = true
                         runCatching { repository.deleteRule(initial) }
                             .onSuccess { onDone() }
                             .onFailure { error = notSavedMessage(it, context) }
                         saving = false
                     }
-                }) { Text(stringResource(R.string.rules_delete_confirm)) }
+                }) {
+                    // Destructive confirm wears the error role (finding #18) — it must not
+                    // look identical to an affirmative/save action.
+                    Text(
+                        stringResource(R.string.rules_delete_confirm),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             },
             dismissButton = {
                 TextButton(onClick = { confirmDelete = false }) { Text(stringResource(R.string.rules_cancel)) }
@@ -427,32 +438,6 @@ private fun SectionCard(content: @Composable () -> Unit) {
             Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) { content() }
-    }
-}
-
-@Composable
-private fun TimeField(
-    label: String,
-    minutes: Long,
-    onChange: (Long) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var picking by remember { mutableStateOf(false) }
-    OutlinedButton(onClick = { picking = true }, modifier = modifier) {
-        Column {
-            Text(label, style = MaterialTheme.typography.labelMedium)
-            Text(formatTime(minutes), style = MaterialTheme.typography.bodyLarge)
-        }
-    }
-    if (picking) {
-        TimePickerDialog(
-            initialMinutes = minutes,
-            onConfirm = {
-                onChange(it)
-                picking = false
-            },
-            onDismiss = { picking = false },
-        )
     }
 }
 
@@ -488,70 +473,6 @@ private fun EndsRow(expiresAt: Long, onChange: (Long) -> Unit) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun DayChips(days: String, onChange: (String) -> Unit) {
-    val presets = listOf(
-        R.string.editor_days_every to "1111111",
-        R.string.editor_days_weekdays to "1111100",
-        R.string.editor_days_weekends to "0000011",
-    )
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(stringResource(R.string.editor_days), style = MaterialTheme.typography.bodyLarge)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            presets.forEach { (labelRes, value) ->
-                FilterChip(
-                    selected = days == value,
-                    onClick = { onChange(value) },
-                    label = { Text(stringResource(labelRes)) },
-                )
-            }
-        }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            (0..6).forEach { index ->
-                val selected = days.getOrNull(index) == '1'
-                FilterChip(
-                    selected = selected,
-                    // Never let the last day go: a days set with no day never blocks.
-                    onClick = { if (selected && days.count { it == '1' } == 1) return@FilterChip else onChange(toggleDay(days, index)) },
-                    label = {
-                        Text(
-                            DayOfWeek.of(index + 1)
-                                .getDisplayName(TextStyle.SHORT, LocalConfiguration.current.locales[0]),
-                        )
-                    },
-                )
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun TimePickerDialog(
-    initialMinutes: Long,
-    onConfirm: (Long) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val state = rememberTimePickerState(
-        initialHour = (initialMinutes / 60).toInt(),
-        initialMinute = (initialMinutes % 60).toInt(),
-        is24Hour = DateFormat.is24HourFormat(LocalContext.current),
-    )
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(onClick = { onConfirm(state.hour * 60L + state.minute) }) {
-                Text(stringResource(R.string.dialog_ok))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.rules_cancel)) }
-        },
-        text = { TimePicker(state = state) },
-    )
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ExpiryDateDialog(
@@ -585,12 +506,6 @@ private fun Long.toPickerDayMillis(): Long? = takeIf { it > 0 }?.let {
 private fun Long.toLocalEndOfDayMillis(): Long =
     Instant.ofEpochMilli(this).atZone(ZoneOffset.UTC).toLocalDate()
         .atTime(23, 59, 59).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-
-internal fun toggleDay(days: String, index: Int): String {
-    val chars = days.padEnd(7, '0').toCharArray()
-    chars[index] = if (chars[index] == '1') '0' else '1'
-    return String(chars)
-}
 
 /**
  * Website targets are stored as typed; validation only rejects what can never match — the

@@ -9,6 +9,7 @@ import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.AttemptLog
+import com.example.myexodus.recovery.RecoveryMirror
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 
@@ -132,34 +133,63 @@ class PartnerSyncCoordinator(
         )
     }
 
-    /** Attempts with no linked chain event get one now — but only while the auth window is
-     *  warm; a cold window stops the pass (every remaining attempt would fail the same way). */
+    /** Unlinked rows get a chain event now — but only while the auth window is warm; a cold
+     *  window stops the pass (every remaining row would fail the same way). Two queues share the
+     *  pass: block/override attempts (existing) and recovery sessions (W5), each linked in its
+     *  own table. */
     private suspend fun reconcileEvents(pairId: String): Int {
         val store = storeFactory.open() ?: return 0
-        val dao = store.attemptLogDao()
+        val attempts = store.attemptLogDao()
         var linked = 0
-        for (attempt in dao.pendingEventCreation(RECONCILE_BATCH)) {
-            val signature = try {
-                signer.beginSign()
-            } catch (e: Exception) {
-                if (signer.isUserNotAuthenticated(e)) break
-                Log.w(TAG, "signing init failed", e)
-                continue
+        for (attempt in attempts.pendingEventCreation(RECONCILE_BATCH)) {
+            when (val emit = emitActivity(pairId, "attempt ${attempt.id}", eventText(attempt))) {
+                is Emit.Created -> { attempts.linkEvent(attempt.id, emit.sequence); linked++ }
+                Emit.Skip -> Unit
+                Emit.Stop -> return linked
             }
-            try {
-                when (val result = creator.create(pairId, EventPayload(type = EventPayload.TYPE_ACTIVITY, text = eventText(attempt)), signature)) {
-                    is EventCreator.CreateResult.Created -> {
-                        dao.linkEvent(attempt.id, result.sequence)
-                        linked++
-                    }
-                    is EventCreator.CreateResult.Duplicate -> Log.w(TAG, "event duplicate for attempt ${attempt.id} — left unlinked")
-                    is EventCreator.CreateResult.Failed -> Log.w(TAG, "event creation failed for attempt ${attempt.id}: ${result.reason}")
-                }
-            } catch (e: UserNotAuthenticatedException) {
-                break
+        }
+        val sessions = store.recoverySessionDao()
+        for (session in sessions.pendingMirror(RECONCILE_BATCH)) {
+            when (val emit = emitActivity(pairId, "session ${session.id}", RecoveryMirror.text(session.technique, session.state))) {
+                is Emit.Created -> { sessions.linkEvent(session.id, emit.sequence); linked++ }
+                Emit.Skip -> Unit
+                Emit.Stop -> return linked
             }
         }
         return linked
+    }
+
+    /** Signs and creates one `TYPE_ACTIVITY` event. [Stop] is the cold-auth-window signal the
+     *  caller ends the pass on; the row stays unlinked for the next run either way. */
+    private suspend fun emitActivity(pairId: String, label: String, text: String): Emit {
+        val signature = try {
+            signer.beginSign()
+        } catch (e: Exception) {
+            if (signer.isUserNotAuthenticated(e)) return Emit.Stop
+            Log.w(TAG, "signing init failed", e)
+            return Emit.Skip
+        }
+        return try {
+            when (val result = creator.create(pairId, EventPayload(type = EventPayload.TYPE_ACTIVITY, text = text), signature)) {
+                is EventCreator.CreateResult.Created -> Emit.Created(result.sequence)
+                is EventCreator.CreateResult.Duplicate -> {
+                    Log.w(TAG, "event duplicate for $label — left unlinked")
+                    Emit.Skip
+                }
+                is EventCreator.CreateResult.Failed -> {
+                    Log.w(TAG, "event creation failed for $label: ${result.reason}")
+                    Emit.Skip
+                }
+            }
+        } catch (e: UserNotAuthenticatedException) {
+            Emit.Stop
+        }
+    }
+
+    private sealed interface Emit {
+        data class Created(val sequence: Long) : Emit
+        data object Skip : Emit
+        data object Stop : Emit
     }
 
     private fun eventText(attempt: AttemptLog): String = when (attempt.outcome) {

@@ -1,6 +1,7 @@
 package com.example.myexodus.ui.partner
 
 import com.example.myexodus.accountability.state.ChainHead
+import com.example.myexodus.recovery.RecoveryMirror
 import java.time.Instant
 import java.time.ZoneId
 
@@ -61,18 +62,37 @@ fun chainStatusFor(repairState: String, forked: Boolean): PartnerChainStatus = w
     else -> PartnerChainStatus.HEALTHY
 }
 
-/** One received activity event, decoded. */
-data class PartnerAlert(val target: String, val isOverride: Boolean, val atEpochMillis: Long)
+/** One received activity event, decoded. Sealed so a new activity kind cannot silently render
+ *  with another kind's copy: [AppActivity] carries the blocked package, [Recovery] the coarse
+ *  technique id + outcome the mirror ships (W5) — never notes or intensity. */
+sealed interface PartnerAlert {
+    val atEpochMillis: Long
+
+    data class AppActivity(
+        val target: String,
+        val isOverride: Boolean,
+        override val atEpochMillis: Long,
+    ) : PartnerAlert
+
+    data class Recovery(
+        val technique: String,
+        val outcome: String,
+        override val atEpochMillis: Long,
+    ) : PartnerAlert
+}
 
 /**
- * The two activity texts EventCreator writes ("blocked:<pkg>" / "override:<pkg>", §6). Any
- * other payload — a repair's "sync_request", a future event type — is not partner activity
- * and returns null rather than being presented as something it is not.
+ * The activity texts the app writes: "blocked:<pkg>" / "override:<pkg>" (§6) and
+ * "recovery:<technique>:<outcome>" (W5, [RecoveryMirror]). Any other payload — a repair's
+ * "sync_request", a future event type — is not partner activity and returns null rather than
+ * being presented as something it is not.
  */
 fun parseActivityText(text: String, atEpochMillis: Long): PartnerAlert? = when {
-    text.startsWith("override:") -> PartnerAlert(text.removePrefix("override:"), true, atEpochMillis)
-    text.startsWith("blocked:") -> PartnerAlert(text.removePrefix("blocked:"), false, atEpochMillis)
-    else -> null
+    text.startsWith("override:") -> PartnerAlert.AppActivity(text.removePrefix("override:"), true, atEpochMillis)
+    text.startsWith("blocked:") -> PartnerAlert.AppActivity(text.removePrefix("blocked:"), false, atEpochMillis)
+    else -> RecoveryMirror.parse(text)?.let { (technique, outcome) ->
+        PartnerAlert.Recovery(technique, outcome, atEpochMillis)
+    }
 }
 
 /** Dashboard summary over the decoded received events, newest first. */

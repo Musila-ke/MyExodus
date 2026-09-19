@@ -162,10 +162,7 @@ class AppRulesStoreFactory(
     ): AppRulesStore {
         val builder = Room.databaseBuilder(appContext, AppRulesStore::class.java, databaseName)
             .setJournalMode(journalMode)
-            .addMigrations(
-                MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
-                MIGRATION_6_7, MIGRATION_7_8,
-            )
+            .addMigrations(*ALL_MIGRATIONS)
             .addCallback(createCallback)
         if (encrypted) builder.setDriver(requireNotNull(encryption).newDriver())
         return builder.build()
@@ -211,6 +208,42 @@ class AppRulesStoreFactory(
     companion object {
         const val DB_NAME = "myexodus_rules.db"
         private const val TAG = "MyExodusDb"
+
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                // Recovery resource UI (plan v3 W7): the urge/recovery session log and the
+                // willpower windows. DDL is the exported v9 schema verbatim — Room validates
+                // the migrated file against it on open (AppRulesStoreMigrationTest covers the
+                // 8→9 leg on-device through MigrationTestHelper).
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS recovery_session (" +
+                        "id TEXT NOT NULL, technique TEXT NOT NULL, intensity_start INTEGER, " +
+                        "intensity_end INTEGER, state TEXT NOT NULL, " +
+                        "started_at_epoch_ms INTEGER NOT NULL, ended_at_epoch_ms INTEGER, " +
+                        "duration_sec INTEGER, zone_id TEXT NOT NULL, entry TEXT NOT NULL, " +
+                        "false_alarm INTEGER NOT NULL, event_sequence INTEGER, " +
+                        "PRIMARY KEY(id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_recovery_session_started_at_epoch_ms " +
+                        "ON recovery_session (started_at_epoch_ms)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_recovery_session_event_sequence " +
+                        "ON recovery_session (event_sequence)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS risk_window (" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "start_minute INTEGER NOT NULL, end_minute INTEGER NOT NULL, " +
+                        "days_mask INTEGER NOT NULL, enabled INTEGER NOT NULL)",
+                ).use { it.step() }
+                // Existing steps predate the kind column: STEP is the v1 meaning (Req 20).
+                connection.prepare(
+                    "ALTER TABLE coaching_step ADD COLUMN kind TEXT NOT NULL DEFAULT 'STEP'",
+                ).use { it.step() }
+            }
+        }
 
         val MIGRATION_7_8 = object : Migration(7, 8) {
             override suspend fun migrate(connection: SQLiteConnection) {
@@ -375,5 +408,18 @@ class AppRulesStoreFactory(
                 ).use { it.step() }
             }
         }
+
+        /**
+         * Every migration, oldest schema to current — the one list [build] registers. Declared
+         * last: the array reads the migration vals, so it must initialize after them. The
+         * accountability store lost two device upgrades to hand-maintained lists diverging
+         * (7→8 ADR #50, 9→10 ADR #58); this store had the same exposure, so
+         * `AppRulesStoreMigrationTest#allMigrations_coverEveryVersionStepToTheDeclaredSchemaVersion`
+         * asserts this list covers every step to the version Room creates for a fresh install.
+         */
+        val ALL_MIGRATIONS = arrayOf(
+            MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
+            MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+        )
     }
 }

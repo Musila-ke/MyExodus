@@ -96,13 +96,14 @@ class PartnerDashboardInstrumentedTest {
         assertEquals("fresh receive must read FRESH", SyncFreshness.FRESH, ui.freshness)
         assertEquals("healed chain must read HEALTHY", PartnerChainStatus.HEALTHY, ui.chainStatus)
         assertEquals(2, ui.alerts.todayCount)
-        val targets = ui.alerts.recent.map { it.target }.toSet()
+        val activityRows = ui.alerts.recent.filterIsInstance<PartnerAlert.AppActivity>()
+        val targets = activityRows.map { it.target }.toSet()
         assertEquals(
             "both activity rows must decode through the production pipeline",
             setOf("com.android.chrome", "com.android.settings"), targets,
         )
-        assertTrue("the override row must keep its kind", ui.alerts.recent.any { it.isOverride })
-        assertTrue("the blocked row must keep its kind", ui.alerts.recent.any { !it.isOverride })
+        assertTrue("the override row must keep its kind", activityRows.any { it.isOverride })
+        assertTrue("the blocked row must keep its kind", activityRows.any { !it.isOverride })
         log("RESULT dashboard=PASS keyId=${bRecord.mySenderKeyId} targets=$targets")
     }
 

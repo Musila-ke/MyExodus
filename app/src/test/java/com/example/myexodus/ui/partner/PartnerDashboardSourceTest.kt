@@ -184,7 +184,7 @@ class PartnerDashboardSourceTest {
         assertEquals(PartnerChainStatus.HEALTHY, paired.chainStatus)
         assertEquals(SyncFreshness.FRESH, paired.freshness)
         assertEquals(now - 60_000L, paired.lastSyncedAtEpochMillis)
-        assertEquals(listOf(PartnerAlert("com.x", false, now - 3_600_000L)), paired.alerts.recent)
+        assertEquals(listOf(PartnerAlert.AppActivity("com.x", false, now - 3_600_000L)), paired.alerts.recent)
         assertEquals(1, paired.alerts.todayCount)
     }
 

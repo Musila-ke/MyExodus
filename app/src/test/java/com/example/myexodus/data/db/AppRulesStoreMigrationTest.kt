@@ -2,9 +2,15 @@ package com.example.myexodus.data.db
 
 import android.app.Application
 import android.content.Context
+import androidx.room3.Room
 import androidx.sqlite.driver.AndroidSQLiteDriver
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.data.db.entity.AttemptLog
+import com.example.myexodus.data.db.entity.CoachingStep
+import com.example.myexodus.data.db.entity.RecoverySession
+import com.example.myexodus.data.db.entity.RiskWindow
+import com.example.myexodus.recovery.RecoveryResourceCatalog
+import java.io.RandomAccessFile
 import java.time.LocalDate
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -19,8 +25,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Rules-store migration chain 2→8 (recovery_state, attempt_log, is_enabled, streak tables,
- * daily-usage tracker day-identity reshape). The v2 baseline is the exact DDL Room generates
+ * Rules-store migration chain 2→9 (recovery_state, attempt_log, is_enabled, streak tables,
+ * daily-usage tracker day-identity reshape, recovery-session + risk-window tables). The v2 baseline is the exact DDL Room generates
  * for version 2 (verbatim copies of the SQL emitted by AppRulesStore_Impl), so the test proves
  * the real upgrade path end to end, including Room's post-migration schema validation (the
  * 2026-08-28 migration failure class) and that pre-existing rule rows survive the 4→5 column
@@ -53,7 +59,7 @@ class AppRulesStoreMigrationTest {
     }
 
     @Test
-    fun migration2to5_addsRecoveryStateAttemptLogAndIsEnabledAndRoomAcceptsSchema() {
+    fun migration2to9_addsEveryTableAndRoomAcceptsTheSchema() {
         val dbPath = context.getDatabasePath(AppRulesStoreFactory.DB_NAME).absolutePath
 
         AndroidSQLiteDriver().open(dbPath).use { conn ->
@@ -78,11 +84,16 @@ class AppRulesStoreMigrationTest {
                 "INSERT INTO daily_usage_tracker (tracker_id, profile_id, package_name, date_epoch, " +
                     "ms_used_today) VALUES ('t-legacy', 'p-1', 'com.instagram.android', 20820, 1000)",
             ).use { it.step() }
+            // v2-era coaching step (the pre-8 shape, no kind column): must read back as STEP.
+            conn.prepare(
+                "INSERT INTO coaching_step (step_id, profile_id, step_order, action_text, " +
+                    "associated_trigger_window) VALUES ('c-1', 'p-1', 1, 'Call my brother', '')",
+            ).use { it.step() }
             conn.prepare("PRAGMA user_version = 2").use { it.step() }
         }
 
         val store = factory.open()
-        assertNotNull("Store must open after migration 2→3→4→5", store)
+        assertNotNull("Store must open after the whole 2→9 chain", store)
         assertEquals(DatabaseHealth.Ready, healthStore.health.value)
 
         runBlocking {
@@ -119,6 +130,65 @@ class AppRulesStoreMigrationTest {
             assertEquals("NOT_DUE", tracker.warning2State)
             assertEquals(false, tracker.blockedToday)
             assertTrue(tracker.timezoneIdAtAnchor.isNotBlank())
+
+            // Recovery resource 8→9: both new tables are created and fully usable, and the
+            // pre-existing coaching_step table gains the kind column defaulted to STEP.
+            val sessions = store.recoverySessionDao()
+            assertEquals(0L, sessions.count())
+            sessions.insert(
+                RecoverySession(
+                    id = "s-1",
+                    technique = RecoveryResourceCatalog.URGE_SURFING,
+                    startedAtEpochMs = 1_700_000_000_000L,
+                    zoneId = "Africa/Nairobi",
+                    entry = RecoverySession.ENTRY_TAB,
+                ),
+            )
+            assertEquals(1, sessions.page(10, 0).size)
+            assertEquals(
+                "a STARTED row is not mirrorable",
+                0,
+                sessions.pendingMirror(10).size,
+            )
+
+            val windows = store.riskWindowDao()
+            assertEquals(0L, windows.count())
+            windows.insert(RiskWindow.DEFAULT)
+            assertEquals(1, windows.all().size)
+
+            // The legacy coaching_step row (inserted above with the v2 DDL) reads back as STEP.
+            val step = store.coachingStepDao().getForProfile("p-1").single()
+            assertEquals(CoachingStep.KIND_STEP, step.kind)
+        }
+    }
+
+    /**
+     * The ADR #58 guard, applied to this store: a hand-maintained migration list that misses a
+     * step leaves installed devices unable to open their DB. Reads the version Room actually
+     * creates for a fresh install (SQLite header offset 60) and requires [ALL_MIGRATIONS] to
+     * cover every step to it.
+     */
+    @Test
+    fun allMigrations_coverEveryVersionStepToTheDeclaredSchemaVersion() {
+        val scratch = "rules-migration-coverage.db"
+        context.deleteDatabase(scratch)
+        val db = Room.databaseBuilder(context, AppRulesStore::class.java, scratch).build()
+        runBlocking { db.restrictionRuleDao().getActiveRules() }
+        db.close()
+        val declared = RandomAccessFile(context.getDatabasePath(scratch), "r").use {
+            it.seek(60) // SQLite header: user_version, 4 bytes big-endian
+            it.readInt()
+        }
+        context.deleteDatabase(scratch)
+
+        val covered = AppRulesStoreFactory.ALL_MIGRATIONS
+            .map { it.startVersion to it.endVersion }
+            .toSet()
+        (1 until declared).forEach { from ->
+            assertTrue(
+                "no migration registered for v$from → v${from + 1} (declared schema v$declared)",
+                (from to from + 1) in covered,
+            )
         }
     }
 

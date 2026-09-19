@@ -10,6 +10,7 @@ import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.os.UserManager
+import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
@@ -32,6 +33,7 @@ import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.DatabaseHealth
 import com.example.myexodus.data.db.DatabaseHealthStore
 import com.example.myexodus.data.db.DatabaseMigration
+import com.example.myexodus.recovery.RecoverySessionRepository
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.widget.ProtectionSnapshotWriter
 import dagger.hilt.android.HiltAndroidApp
@@ -56,6 +58,7 @@ class MyExodusApp : Application(), Configuration.Provider {
     @Inject lateinit var crashReporting: CrashReporting
     @Inject lateinit var bootReconciliation: BootReconciliationStore
     @Inject lateinit var localWipeDetector: LocalWipeDetector
+    @Inject lateinit var recoverySessions: RecoverySessionRepository
     // Widget snapshot writer (widget spec §7 Step 3). Field injection here is the construction
     // trigger, not decoration: nothing calls into the writer from the app — its collectors and
     // its heartbeat only run while this process is alive, and this line is what starts them.
@@ -116,6 +119,10 @@ class MyExodusApp : Application(), Configuration.Provider {
             applicationScope.launch {
                 rulesStoreFactory.open()
                 databaseMigration.runOnceIfNeeded()
+                // W7 session recovery (v2 M2.4 adapted): urge sessions a process death left
+                // STARTED past the 15-minute bound close as INTERRUPTED, once per launch.
+                runCatching { recoverySessions.interruptStale(System.currentTimeMillis()) }
+                    .onFailure { Log.w(TAG, "stale recovery-session sweep failed", it) }
             }
         }
         registerActivityLifecycleCallbacks(backgroundCheckpointer)
@@ -198,6 +205,7 @@ class MyExodusApp : Application(), Configuration.Provider {
 
     private companion object {
         const val HEALTH_CHECK_WORK_NAME = "enhanced-mode-health-check"
+        const val TAG = "MyExodusApp"
     }
 
     /** App backgrounded (last activity stopped): bounded WAL growth on both stores. */

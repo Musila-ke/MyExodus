@@ -606,7 +606,7 @@ These do not block starting Steps 1–4.
 - **OQ-2:** Is `minInstances = 1` (small ongoing cost) justified once production T2 latency is measured against the Section 11 target? Decide after two weeks of production telemetry.
 - **OQ-3:** Should the product surface a partner-visible heartbeat/last-active signal to help distinguish "no news" from "force-stopped/uninstalled" (R-01)? Product/UX decision, not an engineering blocker.
 - **OQ-4:** Should `us-central1` be revisited for user-geography reasons once real distribution data exists (R-10)? Any change must keep Firestore and Functions colocated (AD-17a is the invariant; the specific region is not).
-- **OQ-5:** What is the acceptable monthly budget-alert threshold (AD-20b)? A specific figure must be set by product/finance before the alert can be configured.
+- **OQ-5:** What is the acceptable monthly budget-alert threshold (AD-20b)? **ANSWERED 2026-09-19 (owner): $2/month** (owner revised from $5 the same day). The budget + 80%/100% threshold alerts are configured on the project (task #34; `app/docs/MyExodus Monitoring.md` §3-4).
 - **OQ-6:** Should the optional app-level acknowledgment (T4, Section 14) be built in V1 or deferred to a fast-follow, given it materially improves observability but is not required for the core delivery path to function?
 
 ---
@@ -638,7 +638,7 @@ These do not block starting Steps 1–4.
 - [x] Unpair completes correctly both when the partner is reachable (`TERMINAL` with `REMOTE_SHRED_CONFIRMED`) and when it is not (`LOCAL_ONLY_TERMINATED` after 7 days), with UI language matching each case accurately. — `BilateralDeletionTest` + the mandated UI strings; supporting rules now deployed (2026-09-19).
 - [x] A local data wipe is detected and forces re-enrollment without attempting silent recovery. — Step 17, X6532-verified (photographed wipe card).
 - [x] Server-side rate limits (AD-23) reject excess writes before any dispatch work is attempted, verified via call-count assertions. — `relay-logic` handler tests asserting `listInstallations`/`dispatch` call counts (Step 18).
-- [ ] GCP budget alert and Cloud Function `maxInstances` are both configured and verified to fire/enforce in staging. — **partial:** `maxInstances` done and deployed (10/10/1/1, ADR #54); budget alert blocked on the OQ-5 figure (task #34); no staging environment exists (production-or-defer, recorded in ADR #54).
+- [ ] GCP budget alert and Cloud Function `maxInstances` are both configured and verified to fire/enforce in staging. — **configured 2026-09-19 (task #34); the firing-test half stays open, named not dropped:** `maxInstances` configured + deployed (10/10/1/1, ADR #54); budget + 80%/100% thresholds, 3 alert policies, 3 log-based metrics, the §14 dashboard, and the email channel all created via API and list-verified (`app/docs/MyExodus Monitoring.md` §4). What is NOT done: a synthetic firing test of the policies — the only honest trigger is real signal, and "in staging" has no staging environment to fire in (production-or-defer, ADR #54).
 
 ---
 

@@ -33,11 +33,14 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.blocking.AttemptRecorder
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
+import com.example.myexodus.blocking.ProtectionAuthority
 import com.example.myexodus.blocking.ProtectionDegradation
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.recovery.RecoveryStateStore
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.data.db.AppRulesStore
+import com.example.myexodus.recovery.RecoveryPlanRepository
+import com.example.myexodus.recovery.RecoverySessionRepository
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.StrictModeManager
 import com.example.myexodus.settings.WidgetSettings
@@ -45,6 +48,7 @@ import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.ui.home.HomeScreen
 import com.example.myexodus.ui.partner.PartnerDashboardSource
 import com.example.myexodus.ui.partner.PartnerScreen
+import com.example.myexodus.ui.recovery.RecoveryPrefs
 import com.example.myexodus.ui.recovery.RecoveryScreen
 import com.example.myexodus.ui.rules.RulesScreen
 import com.example.myexodus.ui.settings.SettingsScreen
@@ -79,6 +83,7 @@ fun AppShell(
     widgetSettings: WidgetSettings,
     onWidgetSettingsChanged: () -> Unit,
     degradation: ProtectionDegradation?,
+    authority: ProtectionAuthority? = null,
     onReenable: () -> Unit,
     streaks: StreaksViewModel,
     partnerSource: PartnerDashboardSource,
@@ -94,9 +99,16 @@ fun AppShell(
     onTabConsumed: () -> Unit = {},
     requestedHabit: String? = null,
     onHabitConsumed: () -> Unit = {},
+    planRepository: RecoveryPlanRepository,
+    sessions: RecoverySessionRepository,
+    prefs: RecoveryPrefs,
+    recoveryEntry: String? = null,
+    onRecoveryEntryConsumed: () -> Unit = {},
+    onRouteHome: () -> Unit = {},
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var pickerOpen by rememberSaveable { mutableStateOf(false) }
+    var openRuleId by rememberSaveable { mutableStateOf<String?>(null) }
     val expanded = rememberWindowWidth() == WindowWidth.EXPANDED
 
     // Plan §8 Step 5: the streak state is collected once here and consumed read-only by the
@@ -166,10 +178,15 @@ fun AppShell(
                         store = store,
                         monitor = monitor,
                         degradation = degradation,
+                        authority = authority,
                         onReenable = onReenable,
                         // §8 Step 6: the degraded banner's fix path is the Settings tab,
                         // where each mechanism's row names its own fix.
                         onOpenSettings = { tab = Tabs.indexOfFirst { it.first == "Settings" } },
+                        onOpenStreaks = { tab = 3 },
+                        onOpenRules = { tab = 1 },
+                        // Finding #19: a Home block row opens that rule's editor directly.
+                        onOpenRule = { ruleId -> openRuleId = ruleId; tab = 1 },
                         habit = habit,
                         onAcknowledgeMilestone = streaks::acknowledgeMilestones,
                         onSwitchHabit = { pickerOpen = true },
@@ -181,12 +198,20 @@ fun AppShell(
                         store = store,
                         repository = repository,
                         usageAccountingEngine = usageAccountingEngine,
+                        openRuleId = openRuleId,
+                        onOpenRuleConsumed = { openRuleId = null },
                         modifier = contentModifier,
                     )
                     tab == 2 -> RecoveryScreen(
                         repository = repository,
                         recoveryStore = recoveryStore,
                         attempts = attempts,
+                        planRepository = planRepository,
+                        sessions = sessions,
+                        prefs = prefs,
+                        entryHint = recoveryEntry,
+                        onEntryConsumed = onRecoveryEntryConsumed,
+                        onRouteHome = onRouteHome,
                         modifier = contentModifier,
                     )
                     tab == 3 -> StreaksScreen(
@@ -219,6 +244,9 @@ fun AppShell(
                         crashReporting = crashReporting,
                         widgetSettings = widgetSettings,
                         onWidgetSettingsChanged = onWidgetSettingsChanged,
+                        planRepository = planRepository,
+                        rulesRepository = repository,
+                        recoveryPrefs = prefs,
                         modifier = contentModifier,
                     )
                     else -> ComingSoonScreen(Tabs[tab].first, modifier = contentModifier)

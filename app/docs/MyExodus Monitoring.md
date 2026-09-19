@@ -7,8 +7,11 @@ requirement, exactly what exists in code, what exists as server log rails, and w
 configuration that still needs doing — with its blocker named.*
 
 Status as of 2026-09-19: client + server instrumentation COMPLETE and test-verified
-(664/0/0 JVM, 30/30 functions). GCP console configuration NOT done (task #34) — blocked on the
-OQ-5 monthly figure and console access.
+(664/0/0 JVM, 30/30 functions). **Console configuration DONE (task #34, 2026-09-19)** — created
+via the Google APIs using the firebase-tools OAuth token (no console clicks needed once the
+OQ-5 figure — $5/month — was supplied by the owner): 1 email notification channel, 3 alert
+policies, 3 log-based metrics, 1 dashboard, 1 budget alert; every artifact listed and verified
+in §4 (all enabled, all wired to the channel).
 
 ---
 
@@ -45,26 +48,31 @@ collection count.
 | T3 latency (§11: provider acceptance → notification posted) | **not client-measurable** — would require the receiver's clock; cross-device clock skew makes it dishonest | staging/harness only (ADR #46 virtual partner) |
 | T4 acknowledgment records | out of scope per plan (§14 "Optional"); ack records exist (Step 14) but are not aggregated | — |
 
-## 3. §17 line 639 — maxInstances (configured + deployed) and budget alert (blocked)
+## 3. §17 line 639 — maxInstances (configured + deployed) and budget alert (DONE)
 
 - `maxInstances` is set and deployed (functions deploy 2026-09-18): `registerPairing` 10
   (index.js:49), `relayMailboxMessage` 10 (relay.js:80), `dispatchSweep` 1 (sweep.js:26),
   `cleanupMailboxes` 1 (cleanup.js:24). AD-20a's load estimate (OQ-1) remains the bound's
   justification; the values are placeholders per AD-20a until OQ-1 is answered.
-- **Budget alert: BLOCKED, named not dropped.** §14 requires it at 80% of the monthly figure
-  set in §16 (OQ-5) — that figure is an unanswered product/finance decision, and the GCP
-  console/gcloud access side is likewise still to be set up. Task #34 tracks it.
+- **Budget alert: DONE 2026-09-19 (task #34).** OQ-5 answered by the owner: **$2/month**
+  (owner revised from $5 the same day; budget PATCHed via the Billing Budgets API).
+  Budget `MyExodus monthly budget (OQ-5: $2)` ($2.00, project-scoped to myexodus-53804)
+  with thresholds at 80% ($1.60) and 100%, notifying the monitoring email channel *and* the
+  billing admins (default IAM recipients kept). Pre-existing separate budget "Firebase Project
+  myexodus-53804" ($1, Firebase-auto-created) left untouched.
 
-## 4. GCP console configuration (task #34 — not code, needs user)
+## 4. GCP configuration (task #34 — DONE 2026-09-19, created via APIs)
 
-To be done in the Firebase/GCP console (project `myexodus`):
+Created with the firebase-tools OAuth token against the existing project (`myexodus-53804`;
+Firebase IS the GCP project — no separate product). Verified by list-and-read after creation:
 
-1. **Alert policy — error rate:** Cloud Function error rate > 5% over 15 minutes (§14 line 570).
-2. **Alert policy — sweep failure (R-03):** scheduler execution failure/delay signal.
-3. **Log-based counter metrics:** the four log rails in §2 (sweep terminal count, relay rate-limit
-   rejections per pair, plus dispatch failures if charted from logs).
-4. **Dashboards:** one per §14 bullet, wired to the metrics above or to Firestore queries.
-5. **Budget alert at 80%** of the OQ-5 monthly figure (blocked on that figure).
+1. **Notification channel:** `MyExodus owner email` — `projects/myexodus-53804/notificationChannels/18347258884556077313`, email → the project owner (`project-owner@example.invalid`, confirmed via `getIamPolicy` `roles/owner`), enabled. If Google sends an email-channel verification note, clicking it is the only remaining step.
+2. **Alert policy — error rate:** `MyExodus: Cloud Functions error rate > 5% (15m)` — ratio of `cloudfunctions.googleapis.com/function/execution_count` with `metric.labels.status="error"` over the same metric unfiltered, ALIGN_SUM over 900 s, threshold 0.05, severity ERROR (§14 line 570).
+3. **Alert policy — sweep failure (R-03):** `MyExodus: dispatch sweep not running (R-03)` — conditionAbsent on `retryDispatchSweep` execution_count for 30 min, severity WARNING (scheduler failure/delay signal).
+4. **Alert policy — terminal delivery:** `MyExodus: relay gave up on a delivery (terminal)` — user log metric `sweep_terminal_count` sum over 1 h > 0, severity ERROR (a push permanently undelivered after the 8-attempt cap).
+5. **Log-based counter metrics:** `sweep_terminal_count` (`jsonPayload.terminal > 0` on `dispatch sweep`), `relay_rate_limit_rejections` (label-extracted `pair_id`, `relayStatus="RATE_LIMITED"`), `dispatch_failures` (labels `terminal`, `provider`).
+6. **Dashboard:** `MyExodus — §14 Monitoring` (`projects/913808045052/dashboards/1cf1a456-177d-4132-a078-5b98bed816e0`) — CF executions by status, terminal sweeps/hour, rate-limit rejections per pair, dispatch failures, plus a text tile mapping every §14 metric to its rail (Crashlytics client events, Firestore queries, this dashboard, billing).
+7. **Budget alert:** see §3.
 
 §18 line 649 (dashboards live with one day of real staging data) has no staging environment in
 this project — the honest reading is: dashboards can go live on the production project

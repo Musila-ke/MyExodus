@@ -26,10 +26,12 @@ import androidx.lifecycle.lifecycleScope
 import com.example.myexodus.MainActivity
 import com.example.myexodus.R
 import com.example.myexodus.blocking.recovery.RecoveryStateStore
+import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.theme.MyExodusTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 /**
@@ -76,7 +78,9 @@ class BlockerActivity : ComponentActivity() {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     BlockScreen(
                         appLabel = rememberAppLabel(targetPackage),
-                        onOpenRecovery = { lifecycleScope.launch { openRecovery() } },
+                        // IO: the session write opens the store — a synchronous SQLCipher call
+                        // that must never run on Main while a wall is up (ADR #63).
+                        onOpenRecovery = { lifecycleScope.launch(Dispatchers.IO) { openRecovery() } },
                         modifier = Modifier.padding(innerPadding),
                     )
                 }
@@ -112,6 +116,7 @@ class BlockerActivity : ComponentActivity() {
         startActivity(
             Intent(this, MainActivity::class.java)
                 .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_RECOVERY)
+                .putExtra(MainActivity.EXTRA_RECOVERY_ENTRY, RecoverySession.ENTRY_BLOCK_SCREEN)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
         )
     }

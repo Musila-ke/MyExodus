@@ -31,6 +31,9 @@
     <string name="state_expired">Expired</string>
     <string name="state_blocked_now">Blocked now</string>
     <string name="state_not_active_now">Not active now</string>
+    <!-- Shown on block rows while nothing can detect apps: the rule's schedule may say
+         "blocking", but no enforcement is running. The Home banner names the cause + fix. -->
+    <string name="state_not_running">Not running</string>
     <string name="schedule_always_on">Always on</string>
     <string name="schedule_window">%1$s, %2$s</string>
     <string name="schedule_overnight_window">%1$s, %2$s (overnight)</string>
@@ -134,7 +137,7 @@
 
     <!-- Recovery screen -->
     <string name="recovery_title">Recovery</string>
-    <string name="recovery_subtitle">Friction timer and override status</string>
+    <string name="recovery_subtitle">Techniques, your plan, and support when an urge hits</string>
     <string name="recovery_timer_label">Friction timer</string>
     <string name="recovery_blocked_target">Blocked: %1$s</string>
     <string name="recovery_time_change_frozen">Time change detected — countdown frozen</string>
@@ -142,6 +145,10 @@
     <string name="recovery_override_unavailable">Override unavailable — try again later</string>
     <string name="recovery_overrides_logged">Overrides are logged on this device.</string>
     <string name="recovery_leave_note">Leaving MyExodus won’t stop the timer — the block lifts when it ends or when you override.</string>
+    <string name="recovery_override_confirm_title">Override the block?</string>
+    <string name="recovery_override_confirm_text">The block ends for good — it won’t restart on its own. To block it again later you’d create a new rule under Rules. This override is logged on this device.</string>
+    <string name="recovery_override_confirm_action">End the block</string>
+    <string name="recovery_override_confirm_cancel">Keep waiting</string>
     <string name="recovery_idle_title">No recovery session</string>
     <string name="recovery_idle_body">A recovery session starts when a blocked app opens and you tap “Open MyExodus Recovery”. Wait out the timer and the block is lifted for that rule.</string>
 
@@ -205,6 +212,7 @@
     <string name="partner_wipe_body">This phone’s pairing data went missing, so the connection to your partner was cleared and can’t be restored automatically. Pair again with a new code to reconnect. Until then, nothing is shared.</string>
     <string name="partner_paired_with">Paired with %1$s</string>
     <string name="partner_paired_since">Since %1$s</string>
+    <string name="partner_paired_explainer">That code identifies your partner’s device — they see the same code for you, so you can both confirm you paired with the right person.</string>
     <string name="partner_never_synced">Never synced yet</string>
     <string name="partner_last_synced">Last synced %1$s</string>
     <string name="partner_sync_delayed">Sync is taking longer than usual — the phone may be offline or paused by Android.</string>

@@ -15,6 +15,7 @@ import androidx.glance.appwidget.provideContent
 import androidx.glance.appwidget.updateAll
 import com.example.myexodus.MainActivity
 import com.example.myexodus.blocking.systemBootCount
+import com.example.myexodus.data.db.entity.RecoverySession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.catch
@@ -36,10 +37,12 @@ import kotlinx.coroutines.withContext
  */
 class DesertDawnWidget : GlanceAppWidget() {
 
-    /** Two breakpoints, and only two: a 2×1 has room for one line, anything taller gets the day
-     *  count plus the status word and the deep link (spec §7 Step 5). `WidgetContent` branches on
-     *  height alone, so whatever size a launcher actually reports picks the right variant. */
-    override val sizeMode: SizeMode = SizeMode.Responsive(setOf(COMPACT_SIZE, EXPANDED_SIZE))
+    /** Three breakpoints: a 2×1 has room for one line, anything taller gets the day count plus the
+     *  status word and the deep link (spec §7 Step 5). `WidgetContent` branches on height alone, so
+     *  whatever size a launcher actually reports picks the right variant; [NARROW_SIZE] exists so a
+     *  tall 2×2 maps to the expanded variant instead of stretching the compact one (finding #11). */
+    override val sizeMode: SizeMode =
+        SizeMode.Responsive(setOf(COMPACT_SIZE, EXPANDED_SIZE, NARROW_SIZE))
 
     /** Spec §14: composition failures in the app/widget-processing path are the app's to report —
      *  the launcher's own inflation failures are not observable from here and are not claimed. */
@@ -79,7 +82,8 @@ class DesertDawnWidget : GlanceAppWidget() {
                     view = view,
                     manageUrge = actionStartActivity(
                         appLaunchIntent(context)
-                            .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_RECOVERY),
+                            .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_RECOVERY)
+                            .putExtra(MainActivity.EXTRA_RECOVERY_ENTRY, RecoverySession.ENTRY_WIDGET),
                     ),
                     openApp = actionStartActivity(appLaunchIntent(context)),
                 )
@@ -122,6 +126,7 @@ private fun viewFor(context: Context, snapshot: ProtectionSnapshot?): WidgetView
         nowBootCount = systemBootCount(context),
     ),
     streakDays = snapshot?.streakDays,
+    habitLabel = snapshot?.habitLabel,
     discreet = snapshot?.discreet ?: true,
 )
 

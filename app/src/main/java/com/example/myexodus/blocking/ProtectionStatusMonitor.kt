@@ -42,7 +42,10 @@ enum class ProtectionAuthority {
  *  - The plan's "process reports itself alive (e.g., a heartbeat write)" is
  *    [BlockerAccessibilityService.connected] — the accessibility service and this app's
  *    services share one process, so a live object flag is strictly more accurate than a
- *    cross-process heartbeat and has no staleness window.
+ *    cross-process heartbeat and has no staleness window. It is also the sole Path A
+ *    liveness input: the platform's client-side enabled list flaps on OEM builds
+ *    (device-caught on XOS/Transsion 2026-09-19 — see [refresh]), and ANDing it in produced
+ *    false "Limited" status while Path A was fully alive.
  *  - The plan has no app-side master switch; this app does ([EnhancedModeSettings] gates both
  *    the accessibility service's per-event work and the foreground service's run). Master off
  *    means neither path is detecting, so authority is DEGRADED_NO_DETECTION — the honest
@@ -56,7 +59,6 @@ enum class ProtectionAuthority {
 class ProtectionStatusMonitor @Inject constructor(
     @ApplicationContext private val appContext: Context,
     private val settings: EnhancedModeSettings,
-    private val health: EnhancedModeHealthMonitor,
     private val store: ProtectionStatusStore,
     private val crashReporting: CrashReporting,
 ) {
@@ -76,8 +78,13 @@ class ProtectionStatusMonitor @Inject constructor(
      */
     fun refresh(): ProtectionAuthority {
         val enrolled = settings.enhancedModeEnabled
-        val a11yAlive = runCatching { health.isServiceEnabled() }.getOrDefault(false) &&
-            BlockerAccessibilityService.connected.get()
+        // Path A liveness is the in-process service instance, not the platform's client-side
+        // enabled list. That list flaps on OEM builds (XOS/Transsion, device-caught
+        // 2026-09-19: it read empty while the service was bound and delivering window events,
+        // freezing the Home chip on a false "Limited" while Path A was fully alive). A real
+        // disable always unbinds, which clears `connected` on the spot — so this direction
+        // stays exact.
+        val a11yAlive = runCatching { BlockerAccessibilityService.connected.get() }.getOrDefault(false)
         val usageAccess = runCatching { appContext.hasUsageAccess() }.getOrDefault(false)
         val overlayGranted = runCatching { OverlayController.overlayPermissionGranted(appContext) }
             .getOrDefault(false)

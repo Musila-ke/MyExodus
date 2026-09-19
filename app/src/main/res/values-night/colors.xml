@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Keep equal to SandDark in ui/theme/Color.kt (see values/colors.xml for why). -->
+    <color name="window_background">#141311</color>
+</resources>

@@ -41,8 +41,11 @@ import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.UnpairPhase
 import com.example.myexodus.accountability.state.UnpairState
 import com.example.myexodus.ui.WindowWidth
+import com.example.myexodus.ui.recovery.outcomeLabel
+import com.example.myexodus.ui.recovery.techniqueTitle
 import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.rememberWindowWidth
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
@@ -62,11 +65,12 @@ import java.time.format.DateTimeFormatter
 fun PartnerScreen(
     source: PartnerDashboardSource,
     notificationsEnabled: Boolean,
+    onFixNotifications: () -> Unit,
+    onCheckNow: suspend () -> Boolean,
+    modifier: Modifier = Modifier,
     /** §8 Step 16: true while the system dialog can still be raised (33+, not yet asked);
      *  false means the only fix path left is the settings screen. */
     notificationsRequestable: Boolean = false,
-    onFixNotifications: () -> Unit,
-    onCheckNow: suspend () -> Boolean,
     onRespondToApproval: suspend (requestEventId: String, approve: Boolean) -> Boolean = { _, _ -> false },
     /** Step 14: biometric-gated unpair initiation. False (cancelled/refused) leaves the pair
      *  intact — the local shred is unconditional once the request is acted on, so a refused
@@ -74,7 +78,6 @@ fun PartnerScreen(
     onUnpair: suspend (pairId: String) -> Boolean = { _ -> false },
     /** Step 14: deletes the dismissed terminal card's journal row (guarded in the journal). */
     onDismissUnpair: suspend (pairId: String) -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<PartnerDashboardUi?>(null) }
@@ -94,7 +97,7 @@ fun PartnerScreen(
     }
 
     val runCheckNow: () -> Unit = {
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
             checking = true
             checkFailed = false
             val ok = runCatching { onCheckNow() }.getOrDefault(false)
@@ -111,7 +114,7 @@ fun PartnerScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) scope.launch { reload() }
+            if (event == Lifecycle.Event.ON_RESUME) scope.launch(Dispatchers.IO) { reload() }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -195,7 +198,7 @@ fun PartnerScreen(
                 dismissing = dismissing,
                 onCheckNow = runCheckNow,
                 onDismiss = {
-                    scope.launch {
+                    scope.launch(Dispatchers.IO) {
                         dismissing = true
                         runCatching { onDismissUnpair(current.pairId) }
                         dismissing = false
@@ -218,7 +221,7 @@ fun PartnerScreen(
                         respondingTo = respondingTo,
                         respondFailed = respondFailed,
                         onRespond = { requestEventId, approve ->
-                            scope.launch {
+                            scope.launch(Dispatchers.IO) {
                                 respondingTo = requestEventId
                                 respondFailed = false
                                 val ok = runCatching { onRespondToApproval(requestEventId, approve) }
@@ -255,7 +258,7 @@ fun PartnerScreen(
                             TextButton(
                                 onClick = {
                                     confirmingUnpair = false
-                                    scope.launch {
+                                    scope.launch(Dispatchers.IO) {
                                         unpairing = true
                                         unpairFailed = false
                                         val ok = runCatching { onUnpair(current.pairId) }
@@ -580,6 +583,14 @@ private fun PartnerCard(state: PartnerDashboardUi.Paired) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // Finding #6: the key-id fragment was a bare mystery string to a first-time
+            // user. No alias exists in the pairing model, so the card explains the code
+            // instead of inventing a name.
+            Text(
+                stringResource(R.string.partner_paired_explainer),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -694,17 +705,22 @@ private fun StatBlock(label: String, value: Int) {
 
 @Composable
 private fun AlertRow(alert: PartnerAlert) {
-    val appLabel = rememberAppLabel(alert.target)
+    // Non-shaming by design (W5): a recovery row states what was practised, never that the
+    // partner "failed" — the outcome labels are the neutral ones the history screen uses.
+    val (label, kindRes) = when (alert) {
+        is PartnerAlert.AppActivity -> rememberAppLabel(alert.target) to
+            (if (alert.isOverride) R.string.partner_alert_override else R.string.partner_alert_blocked)
+        is PartnerAlert.Recovery -> stringResource(techniqueTitle(alert.technique)) to
+            outcomeLabel(alert.outcome.uppercase())
+    }
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(appLabel, style = MaterialTheme.typography.bodyMedium)
+        Text(label, style = MaterialTheme.typography.bodyMedium)
         Text(
-            stringResource(
-                if (alert.isOverride) R.string.partner_alert_override else R.string.partner_alert_blocked,
-            ) + " · " + relativeTimeText(System.currentTimeMillis(), alert.atEpochMillis),
+            stringResource(kindRes) + " · " + relativeTimeText(System.currentTimeMillis(), alert.atEpochMillis),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

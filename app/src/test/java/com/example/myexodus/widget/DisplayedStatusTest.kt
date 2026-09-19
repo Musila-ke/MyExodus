@@ -26,6 +26,7 @@ class DisplayedStatusTest {
     ) = ProtectionSnapshot(
         enforcement = enforcement,
         streakDays = 12,
+        habitLabel = null,
         discreet = true,
         evalUtc = evalUtc,
         evalElapsed = evalElapsed,

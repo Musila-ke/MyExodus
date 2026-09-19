@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -60,7 +61,11 @@ import com.example.myexodus.accountability.sync.PartnerRolloutGate
 import com.example.myexodus.accountability.sync.PushInstallationRegistrar
 import com.example.myexodus.accountability.sync.runPartnerSyncPass
 import com.example.myexodus.blocking.recovery.RecoveryStateStore
+import com.example.myexodus.recovery.RecoveryPlanRepository
+import com.example.myexodus.recovery.RecoverySessionRepository
+import com.example.myexodus.ui.recovery.RecoveryPrefs
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
+import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.DatabaseHealth
 import com.example.myexodus.data.db.DatabaseHealthStore
@@ -74,6 +79,7 @@ import com.example.myexodus.settings.readProtectionChecks
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.ui.AppShell
+import com.example.myexodus.ui.SecureSurfaces
 import com.example.myexodus.ui.partner.PartnerDashboardSource
 import com.example.myexodus.widget.ProtectionSnapshotWriter
 import com.example.myexodus.ui.setup.SetupScreen
@@ -99,11 +105,16 @@ class MainActivity : FragmentActivity() {
      *  selects it before showing Home so the splash card belongs to the right habit. */
     private var requestedHabit by mutableStateOf<String?>(null)
 
+    /** Which surface sent the user to the Recovery tab (block screen vs. widget). Labels the
+     *  session rows the visit creates (v3 W7 `RecoverySession.entry`). */
+    private var requestedRecoveryEntry by mutableStateOf<String?>(null)
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         requestedTab = intent.getStringExtra(EXTRA_START_TAB)
         requestedHabit = intent.getStringExtra(EXTRA_START_HABIT)
+        requestedRecoveryEntry = intent.getStringExtra(EXTRA_RECOVERY_ENTRY)
     }
 
     @Inject lateinit var rulesStoreFactory: AppRulesStoreFactory
@@ -137,6 +148,11 @@ class MainActivity : FragmentActivity() {
     // Already constructed by MyExodusApp at process start; injected here only to re-publish the
     // snapshot the moment the discreet/detailed toggle flips (widget spec §5 Decision 10).
     @Inject lateinit var widgetSnapshotWriter: ProtectionSnapshotWriter
+    // Recovery-resource feature (v3 W1/W2/W7): the plan items shown during a technique, the
+    // session log, and the haptic-pacing preference.
+    @Inject lateinit var recoveryPlanRepository: RecoveryPlanRepository
+    @Inject lateinit var recoverySessions: RecoverySessionRepository
+    @Inject lateinit var recoveryPrefs: RecoveryPrefs
 
     private val streaksViewModel: StreaksViewModel by viewModels()
 
@@ -152,12 +168,16 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         requestedTab = intent.getStringExtra(EXTRA_START_TAB)
         requestedHabit = intent.getStringExtra(EXTRA_START_HABIT)
+        requestedRecoveryEntry = intent.getStringExtra(EXTRA_RECOVERY_ENTRY)
         enableEdgeToEdge()
         setContent {
             MyExodusTheme {
                 // §8.2: permission/degradation state is re-checked on every resume of
                 // MainActivity — the banner never relies on a stale read.
                 var degradation by remember { mutableStateOf(protectionStatus.degradation) }
+                // Finding #13: the status chip and the degradation banner must read the same
+                // authority in the same frame — the chip's own tri-state comes from here.
+                val authority by protectionStatusMonitor.authority.collectAsStateWithLifecycle()
                 // §9 row 468 / acceptance line 631: the partner dashboard's banner is a
                 // persistent, live state — re-checked on every resume, never a stale read.
                 var notificationsEnabled by remember {
@@ -192,17 +212,42 @@ class MainActivity : FragmentActivity() {
                     lifecycle.addObserver(observer)
                     onDispose { lifecycle.removeObserver(observer) }
                 }
-                val rulesStore = remember { rulesStoreFactory.open() }
+                // W6/INV-11: any composed secure surface turns on FLAG_SECURE for the shared
+                // window (the recovery tab, session history, coaching editor each declare it).
+                val secureSurfaces by SecureSurfaces.composed.collectAsStateWithLifecycle()
+                LaunchedEffect(secureSurfaces > 0) {
+                    val secure = secureSurfaces > 0
+                    if (secure) {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    } else {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    }
+                    // API 33+: the recents thumbnail bypasses FLAG_SECURE on some OEMs.
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        setRecentsScreenshotEnabled(!secure)
+                    }
+                }
+                // The shell's store handle resolves OFF Main and is re-resolved per health
+                // transition: open() is a synchronous SQLCipher open (key derivation +
+                // migrations + schema prime) that blocks seconds behind another opener's
+                // lock — on Main during composition that is an ANR (device-caught 2026-09-19,
+                // ADR #63). Health-keyed re-resolution also hands the shell a fresh handle
+                // after a user-confirmed reset or a successful retry instead of the stale
+                // (closed) instance it cached before.
+                var rulesStore by remember { mutableStateOf<AppRulesStore?>(null) }
                 val health = healthStore.health.collectAsStateWithLifecycle().value
                 // EncryptionUpgradePending is deliberately usable (plan §8 Step 0: pending
                 // conversion must not block the app — it runs on the plaintext store meanwhile).
                 val usable = health == DatabaseHealth.Ready ||
                     health == DatabaseHealth.EncryptionUpgradePending
+                LaunchedEffect(health) {
+                    if (usable) rulesStore = withContext(Dispatchers.IO) { rulesStoreFactory.open() }
+                }
                 // V1 ships no onboarding; rules FK a profile row, so the single local profile
                 // is created on first launch (idempotent — see RulesRepository).
                 LaunchedEffect(health) {
                     if (usable) {
-                        runCatching { rulesRepository.ensureActiveProfile() }
+                        runCatching { withContext(Dispatchers.IO) { rulesRepository.ensureActiveProfile() } }
                             .onFailure { Log.w(TAG, "Profile bootstrap failed", it) }
                     }
                 }
@@ -234,7 +279,7 @@ class MainActivity : FragmentActivity() {
                             refreshProtectionChecks()
                         },
                     )
-                } else if (usable) {
+                } else if (usable && rulesStore != null) {
                     AppShell(
                         store = rulesStore,
                         encryptionPending = health == DatabaseHealth.EncryptionUpgradePending,
@@ -249,6 +294,7 @@ class MainActivity : FragmentActivity() {
                         widgetSettings = widgetSettings,
                         onWidgetSettingsChanged = widgetSnapshotWriter::publish,
                         degradation = degradation,
+                        authority = authority,
                         streaks = streaksViewModel,
                         partnerSource = partnerDashboardSource,
                         partnerNotificationsEnabled = notificationsEnabled,
@@ -278,6 +324,23 @@ class MainActivity : FragmentActivity() {
                         onTabConsumed = { requestedTab = null },
                         requestedHabit = requestedHabit,
                         onHabitConsumed = { requestedHabit = null },
+                        planRepository = recoveryPlanRepository,
+                        sessions = recoverySessions,
+                        prefs = recoveryPrefs,
+                        recoveryEntry = requestedRecoveryEntry,
+                        onRecoveryEntryConsumed = { requestedRecoveryEntry = null },
+                        // Req 10: logging an urge keeps the restriction and hands the device
+                        // back to the user's home screen. OEM home intents are the known trap,
+                        // so a resolver miss is logged rather than crashing the flow.
+                        onRouteHome = {
+                            runCatching {
+                                startActivity(
+                                    Intent(Intent.ACTION_MAIN)
+                                        .addCategory(Intent.CATEGORY_HOME)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                )
+                            }.onFailure { Log.w(TAG, "Route-home intent unresolved", it) }
+                        },
                         onReenable = {
                             protectionStatus.reenable()
                             // Recompute right away: clearing APP_STOPPED can immediately
@@ -294,6 +357,9 @@ class MainActivity : FragmentActivity() {
                                 lifecycleScope.launch(Dispatchers.IO) { recoveryManager.discardCorruptFiles() }
                             },
                             onReset = {
+                                // Drop the handle first: the reset closes the old database,
+                                // and the health-keyed effect above re-resolves the new one.
+                                rulesStore = null
                                 lifecycleScope.launch(Dispatchers.IO) { rulesStoreFactory.resetAndReopen() }
                             },
                             onRetry = {
@@ -399,6 +465,9 @@ class MainActivity : FragmentActivity() {
 
         /** Milestone notification deep link: which habit's Home to show. */
         const val EXTRA_START_HABIT = "extra_start_habit"
+
+        /** Which surface opened the Recovery tab — a `RecoverySession.ENTRY_*` constant. */
+        const val EXTRA_RECOVERY_ENTRY = "extra_recovery_entry"
         const val TAB_RECOVERY = "Recovery"
 
         /** Milestone notifications land here: the splash card renders at the top of Home

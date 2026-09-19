@@ -18,6 +18,7 @@ class WidgetSnapshotTest {
     private val sample = ProtectionSnapshot(
         enforcement = EnforcementStatus.ACTIVE,
         streakDays = 12,
+        habitLabel = "No smoking",
         discreet = false,
         evalUtc = 1_800_000_000_000L,
         evalElapsed = 500_000L,
@@ -36,6 +37,14 @@ class WidgetSnapshotTest {
         val prefs = mutablePreferencesOf()
         prefs.putSnapshot(sample.copy(streakDays = null))
         assertNull(snapshotFrom(prefs)?.streakDays)
+    }
+
+    @Test
+    fun removedHabit_clearsTheStaleLabel() {
+        // Habit removed: the label must vanish with it, not keep naming a track that is gone.
+        val prefs = mutablePreferencesOf()
+        prefs.putSnapshot(sample.copy(streakDays = null, habitLabel = null))
+        assertNull(snapshotFrom(prefs)?.habitLabel)
     }
 
     @Test

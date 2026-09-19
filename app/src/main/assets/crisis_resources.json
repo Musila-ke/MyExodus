@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "note": "Owner-maintained crisis contacts (plan v3 W6/W8). Every entry must keep source + lastVerifiedAt current: CrisisResourcesReleaseTest fails the build otherwise, and the screen shows the verification date so a stale list is visible, not silent.",
+  "resources": [
+    {
+      "id": "ke-redcross-1199",
+      "region": "KE",
+      "name": "Kenya Red Cross — Mental Health Hotline",
+      "description": "Toll-free, 24/7 emotional support and crisis counselling.",
+      "phone": "1199",
+      "sms": "",
+      "url": "https://www.redcross.or.ke",
+      "source": "https://www.redcross.or.ke",
+      "lastVerifiedAt": "2026-09-19"
+    },
+    {
+      "id": "ke-befrienders",
+      "region": "KE",
+      "name": "Befrienders Kenya",
+      "description": "Confidential suicide-prevention support by phone, SMS, and WhatsApp. Weekdays 9am–5pm.",
+      "phone": "+254722178177",
+      "sms": "+254722178177",
+      "url": "https://www.befrienderskenya.org",
+      "source": "https://lifeline-international.com/member/kenya/",
+      "lastVerifiedAt": "2026-09-19"
+    },
+    {
+      "id": "ke-emergency",
+      "region": "KE",
+      "name": "Emergency services",
+      "description": "Police, ambulance, and fire. If you are in immediate danger, call now.",
+      "phone": "999",
+      "sms": "",
+      "url": "",
+      "source": "https://www.ca.go.ke (Kenya Telecommunication Numbering Plan, May 2025)",
+      "lastVerifiedAt": "2026-09-19"
+    },
+    {
+      "id": "us-988",
+      "region": "US",
+      "name": "988 Suicide & Crisis Lifeline",
+      "description": "Call or text 988 — free, confidential support, 24/7.",
+      "phone": "988",
+      "sms": "988",
+      "url": "https://988lifeline.org",
+      "source": "https://988lifeline.org",
+      "lastVerifiedAt": "2026-09-19"
+    },
+    {
+      "id": "us-crisis-text-line",
+      "region": "US",
+      "name": "Crisis Text Line",
+      "description": "Text HOME to 741741 to reach a crisis counsellor by text, 24/7.",
+      "phone": "",
+      "sms": "741741",
+      "url": "https://www.crisistextline.org",
+      "source": "https://www.crisistextline.org",
+      "lastVerifiedAt": "2026-09-19"
+    },
+    {
+      "id": "us-samhsa",
+      "region": "US",
+      "name": "SAMHSA National Helpline",
+      "description": "Free, confidential treatment referral and information for substance use, 24/7.",
+      "phone": "18006624357",
+      "sms": "",
+      "url": "https://www.samhsa.gov/find-help/national-helpline",
+      "source": "https://www.samhsa.gov/find-help/national-helpline",
+      "lastVerifiedAt": "2026-09-19"
+    },
+    {
+      "id": "global-findahelpline",
+      "region": "GLOBAL",
+      "name": "Find A Helpline",
+      "description": "Verified helplines in over 130 countries — phone, text, and chat, by topic.",
+      "phone": "",
+      "sms": "",
+      "url": "https://findahelpline.com",
+      "source": "https://findahelpline.com (ThroughLine, with IASP)",
+      "lastVerifiedAt": "2026-09-19"
+    }
+  ]
+}

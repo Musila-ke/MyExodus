@@ -175,6 +175,50 @@ class AppRulesStoreMigrationInstrumentedTest {
     }
 
     @Test
+    fun migrate8To9_addsRecoveryTables_andDefaultsExistingStepsToStepKind() = runTest {
+        val v8 = helper.createDatabase(8)
+        seedProfileAndHabit(v8)
+        exec(
+            v8,
+            "INSERT INTO coaching_step (step_id, profile_id, step_order, action_text, " +
+                "associated_trigger_window) VALUES ('c-1', 'profile-1', 1, 'Call my brother', '')",
+        )
+
+        val v9 = helper.runMigrationsAndValidate(9, listOf(AppRulesStoreFactory.MIGRATION_8_9))
+
+        // The pre-existing coaching item keeps its text and reads back as a plain STEP (Req 20:
+        // everything authored before the kind column existed was a step).
+        assertEquals(1L, count(v9, "coaching_step"))
+        v9.prepare("SELECT action_text, kind FROM coaching_step WHERE step_id = ?").use { stmt ->
+            stmt.bindText(1, "c-1")
+            assertTrue(stmt.step())
+            assertEquals("Call my brother", stmt.getText(0))
+            assertEquals("STEP", stmt.getText(1))
+        }
+
+        // Both new tables are usable end to end after the migration, including the autoincrement
+        // primary key (risk_window) and the terminal-state mirror filter (recovery_session).
+        assertEquals(0L, count(v9, "recovery_session"))
+        exec(
+            v9,
+            "INSERT INTO recovery_session (id, technique, state, started_at_epoch_ms, zone_id, " +
+                "entry, false_alarm) VALUES ('s-1', 'urge_surfing', 'COMPLETED', 1, " +
+                "'Africa/Nairobi', 'TAB', 0)",
+        )
+        exec(
+            v9,
+            "INSERT INTO risk_window (start_minute, end_minute, days_mask, enabled) " +
+                "VALUES (1200, 360, 127, 1)",
+        )
+        assertEquals(1L, count(v9, "recovery_session"))
+        assertEquals(1L, count(v9, "risk_window"))
+        assertEquals(
+            1L,
+            v9.prepare("SELECT id FROM risk_window").use { it.step(); it.getLong(0) },
+        )
+    }
+
+    @Test
     fun interruptedMigration_rollsBackAtomically_leavingTheOldSchemaAndData() = runTest {
         val v7 = helper.createDatabase(7)
         seedProfileAndHabit(v7)

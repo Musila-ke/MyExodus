@@ -29,14 +29,21 @@ import com.example.myexodus.R
 internal data class WidgetView(
     val status: DisplayedStatus,
     val streakDays: Int?,
+    /** Names the track the day count belongs to (audit finding #12: with 2+ habits an unlabelled
+     *  number is the wrong track as far as the user can tell). Null = no habit, or a sample from
+     *  before the field existed. */
+    val habitLabel: String?,
     val discreet: Boolean,
 )
 
-/** Declared sizes, bracketing what the tested launchers actually report for a 2×1 and a 4×2 cell.
- *  They are breakpoint hints, not identities — [EXPANDED_MIN_HEIGHT] is what the layout branches
- *  on, so any size a launcher reports picks the right variant (spec §7 Step 5/§12). */
+/** Declared sizes, bracketing what the tested launchers actually report for a 2×1, a 4×2, and the
+ *  tall 2×2. They are breakpoint hints, not identities — [EXPANDED_MIN_HEIGHT] is what the layout
+ *  branches on, so any size a launcher reports picks the right variant (spec §7 Step 5/§12).
+ *  [NARROW_SIZE] exists because a 2×2 reports roughly 120×110: without a preset near it the
+ *  launcher maps the cell to [COMPACT_SIZE] by width and the bottom half renders empty. */
 internal val COMPACT_SIZE = DpSize(120.dp, 60.dp)
 internal val EXPANDED_SIZE = DpSize(260.dp, 110.dp)
+internal val NARROW_SIZE = DpSize(120.dp, 110.dp)
 
 /** A 4×1 has the width for the expanded row but not the height for a button plus two lines, so
  *  height is the only axis that decides. Tune against real launcher values, not in the abstract. */
@@ -59,20 +66,22 @@ internal fun DesertDawnWidgetContent(view: WidgetView, manageUrge: Action, openA
     // cold-start/resume path re-checks protection and re-publishes the snapshot (spec NFR5).
     // The inner "Manage urge" target keeps its own click — RemoteViews gives the child priority.
     Scaffold(modifier = GlanceModifier.clickable(openApp)) {
-        // Compact shows one line: the day count alone, or "Day 12 · Protected" when the user has
-        // opted into the status word — it still has to fit a 2×1.
+        // Compact shows one line only. Discreet: the day count. Not discreet: the status word
+        // alone — "Day 12 · Not protected" needs ~140dp at readable sizes and the measured 2×1
+        // budget is 124dp, so any combined line either clips or drops to 11sp. A clipped status
+        // word is an incomplete claim, which is what FR3a forbids, so the status wins the line.
+        // Not gold: gold is the streak token, and the status word is not a streak (finding #10).
         if (LocalSize.current.height < EXPANDED_MIN_HEIGHT) {
-            // Measured on the fleet launcher (XOS, 5-column 720px @320dpi): a 2×1 gives the text
-            // 124dp. The day-only line is ~60dp at 18sp; the detailed line needs ~141dp at 18sp
-            // and clips, so it drops to 14sp (~110dp for "Day 12 · Protected"). Both stay single
-            // line: truncating the status word would leave the claim incomplete, which is exactly
-            // what FR3a forbids.
             Box(GlanceModifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = if (view.discreet) dayText else "$dayText · $statusText",
+                    text = if (view.discreet) dayText else statusText,
                     style = TextStyle(
-                        color = GlanceTheme.colors.tertiary,
-                        fontSize = if (view.discreet) 18.sp else 14.sp,
+                        color = if (view.discreet) {
+                            GlanceTheme.colors.tertiary
+                        } else {
+                            GlanceTheme.colors.onBackground
+                        },
+                        fontSize = if (view.discreet) 18.sp else 16.sp,
                         fontWeight = FontWeight.Bold,
                     ),
                     maxLines = 1,
@@ -96,6 +105,17 @@ internal fun DesertDawnWidgetContent(view: WidgetView, manageUrge: Action, openA
                 maxLines = 1,
             )
             if (!view.discreet) {
+                // Which habit the number belongs to, under the number it explains.
+                view.habitLabel?.let { label ->
+                    Text(
+                        text = label,
+                        style = TextStyle(
+                            color = GlanceTheme.colors.onBackground,
+                            fontSize = 12.sp,
+                        ),
+                        maxLines = 1,
+                    )
+                }
                 Text(
                     text = statusText,
                     style = TextStyle(color = GlanceTheme.colors.onBackground, fontSize = 14.sp),

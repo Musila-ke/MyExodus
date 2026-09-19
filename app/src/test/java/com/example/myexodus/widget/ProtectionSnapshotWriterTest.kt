@@ -20,12 +20,14 @@ class ProtectionSnapshotWriterTest {
     private fun snapshot(
         enforcement: EnforcementStatus = EnforcementStatus.ACTIVE,
         streakDays: Int? = 12,
+        habitLabel: String? = "No smoking",
         discreet: Boolean = true,
         evalUtc: Long = nowUtc - MINUTE,
         evalBootCount: Int = 42,
     ) = ProtectionSnapshot(
         enforcement = enforcement,
         streakDays = streakDays,
+        habitLabel = habitLabel,
         discreet = discreet,
         evalUtc = evalUtc,
         evalElapsed = 500_000L,
@@ -95,6 +97,19 @@ class ProtectionSnapshotWriterTest {
         // change" by a null-vs-value comparison.
         assertTrue(
             shouldRestamp(existing = snapshot(), next = snapshot(streakDays = null), nowUtc = nowUtc),
+        )
+    }
+
+    @Test
+    fun habitLabelChange_isWritten() {
+        // Switching the tracked habit moves the label under the unchanged day count; the widget
+        // must not keep naming the old track (finding #12).
+        assertTrue(
+            shouldRestamp(
+                existing = snapshot(),
+                next = snapshot(habitLabel = "No alcohol"),
+                nowUtc = nowUtc,
+            ),
         )
     }
 

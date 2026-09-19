@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.MyExodus" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Window background = Desert Dawn SandLight (audit finding #15): the window shows before the
+         first Compose frame and behind edge-to-edge insets, and the Material default is a cold
+         near-white that flashes against the brand surface on every cold start. The dark variant
+         lives in values-night/themes.xml; keep both in step with ui/theme/Color.kt. -->
+    <style name="Theme.MyExodus" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
 </resources>

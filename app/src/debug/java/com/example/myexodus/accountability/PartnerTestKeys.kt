@@ -1,5 +1,6 @@
 package com.example.myexodus.accountability
 
+import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import java.security.KeyPairGenerator
@@ -67,7 +68,7 @@ object PartnerTestKeys {
 
     private fun generateSigning() {
         val challenge = ByteArray(32).also { SecureRandom().nextBytes(it) }
-        val spec = KeyGenParameterSpec.Builder(
+        val builder = KeyGenParameterSpec.Builder(
             SIGNING_ALIAS,
             KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
         )
@@ -76,14 +77,22 @@ object PartnerTestKeys {
             .setUserAuthenticationRequired(true)
             .setInvalidatedByBiometricEnrollment(false)
             .setAttestationChallenge(challenge)
-            .setUserAuthenticationParameters(900, KeyProperties.AUTH_BIOMETRIC_STRONG)
-            .build()
+        if (Build.VERSION.SDK_INT >= 30) {
+            builder.setUserAuthenticationParameters(900, KeyProperties.AUTH_BIOMETRIC_STRONG)
+        } else {
+            @Suppress("DEPRECATION")
+            builder.setUserAuthenticationValidityDurationSeconds(900)
+        }
         KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEYSTORE)
-            .apply { initialize(spec) }
+            .apply { initialize(builder.build()) }
             .generateKeyPair()
     }
 
     private fun generateAgreement() {
+        // Same platform floor as the real identity keys: in-Keystore ECDH needs API 31+.
+        if (Build.VERSION.SDK_INT < 31) {
+            throw UnsupportedOperationException("in-Keystore ECDH requires API 31+")
+        }
         val spec = KeyGenParameterSpec.Builder(AGREEMENT_ALIAS, KeyProperties.PURPOSE_AGREE_KEY)
             .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
             .setUserAuthenticationRequired(false)

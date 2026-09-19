@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Night variant of Theme.MyExodus (audit finding #15): without it the window (pre-first-frame
+         background, splash, and the area behind edge-to-edge insets) stayed light in dark mode.
+         Parent swapped to the dark Material theme; the Compose side already follows the system. -->
+    <style name="Theme.MyExodus" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
+</resources>

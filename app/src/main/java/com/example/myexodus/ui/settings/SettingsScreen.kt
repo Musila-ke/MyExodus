@@ -2,6 +2,7 @@ package com.example.myexodus.ui.settings
 
 import android.os.Build
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,6 +38,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.R
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
+import com.example.myexodus.blocking.RulesRepository
+import com.example.myexodus.recovery.RecoveryPlanRepository
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.IntegrityStatus
 import com.example.myexodus.settings.ProtectionChecks
@@ -53,6 +56,9 @@ import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.ui.BrandMark
 import com.example.myexodus.ui.EnhancedModeScreen
 import com.example.myexodus.ui.WindowWidth
+import com.example.myexodus.ui.recovery.CoachingPlanScreen
+import com.example.myexodus.ui.recovery.RecoveryPrefs
+import com.example.myexodus.ui.recovery.RiskWindowsScreen
 import com.example.myexodus.ui.rememberWindowWidth
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -74,12 +80,18 @@ fun SettingsScreen(
     crashReporting: CrashReporting,
     widgetSettings: WidgetSettings,
     onWidgetSettingsChanged: () -> Unit,
+    planRepository: RecoveryPlanRepository,
+    rulesRepository: RulesRepository,
+    recoveryPrefs: RecoveryPrefs,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val serviceEnabled by monitor.enabled.collectAsStateWithLifecycle()
     var checks by remember { mutableStateOf<ProtectionChecks?>(null) }
+    // The two recovery editors are full-screen panes of this tab (the Recovery tab's own
+    // pattern): null = the settings list, otherwise the open editor.
+    var recoveryPane by remember { mutableStateOf<String?>(null) }
 
     // Permissions change in system Settings while this screen is backgrounded; re-read on
     // every resume so a granted permission is never shown as missing.
@@ -97,6 +109,22 @@ fun SettingsScreen(
 
     val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
     val loaded = checks
+    if (recoveryPane == PANE_COACHING_PLAN) {
+        CoachingPlanScreen(
+            planRepository = planRepository,
+            rulesRepository = rulesRepository,
+            prefs = recoveryPrefs,
+            onBack = { recoveryPane = null },
+            modifier = modifier,
+        )
+    } else if (recoveryPane == PANE_RISK_WINDOWS) {
+        RiskWindowsScreen(
+            planRepository = planRepository,
+            prefs = recoveryPrefs,
+            onBack = { recoveryPane = null },
+            modifier = modifier,
+        )
+    } else {
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -134,7 +162,52 @@ fun SettingsScreen(
 
         WidgetSection(widgetSettings, onWidgetSettingsChanged)
 
+        RecoveryPlanSection(
+            onOpenPlan = { recoveryPane = PANE_COACHING_PLAN },
+            onOpenWindows = { recoveryPane = PANE_RISK_WINDOWS },
+        )
+
         PrivacySection(crashReporting)
+    }
+    }
+}
+
+private const val PANE_COACHING_PLAN = "coaching_plan"
+private const val PANE_RISK_WINDOWS = "risk_windows"
+
+/** W3/W4: the two user-authored recovery surfaces — their own words and their risk windows. */
+@Composable
+private fun RecoveryPlanSection(onOpenPlan: () -> Unit, onOpenWindows: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(stringResource(R.string.settings_recovery_header), style = MaterialTheme.typography.titleMedium)
+        SettingsLinkRow(
+            titleRes = R.string.settings_recovery_plan_title,
+            bodyRes = R.string.settings_recovery_plan_body,
+            onClick = onOpenPlan,
+        )
+        SettingsLinkRow(
+            titleRes = R.string.settings_recovery_windows_title,
+            bodyRes = R.string.settings_recovery_windows_body,
+            onClick = onOpenWindows,
+        )
+    }
+}
+
+@Composable
+private fun SettingsLinkRow(titleRes: Int, bodyRes: Int, onClick: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(stringResource(titleRes), style = MaterialTheme.typography.titleMedium)
+            Text(
+                stringResource(bodyRes),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
