@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+   Home-screen widget (V1 Req 36), widget spec §7 Step 7.
+
+   The two declared sizes bracket what tested launchers actually report for a 2×1 and a 4×2 cell;
+   `WidgetContent` branches on height alone, so any size in between still picks the right variant.
+
+   updatePeriodMillis="0": the app drives every refresh itself (snapshot writes, and the resize
+   callback Glance already wires to onAppWidgetOptionsChanged). The platform's own periodic
+   AppWidget update would only add wakeups that render an unchanged snapshot.
+
+   previewImage is a capture of the real 4×2 render (drawable-nodpi/widget_preview.png), not a
+   mock-up: it is what the widget actually looks like in Desert Dawn, so the launcher picker cannot
+   promise a design the widget doesn't draw. Re-capture from the device if the layout changes.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:description="@string/widget_description"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:minHeight="40dp"
+    android:minWidth="110dp"
+    android:previewImage="@drawable/widget_preview"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellHeight="1"
+    android:targetCellWidth="2"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen"
+    tools:targetApi="31" />

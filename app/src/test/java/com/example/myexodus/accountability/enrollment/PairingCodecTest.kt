@@ -7,18 +7,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * §10 step 1: the QR carries the single-use token (plus its pairId) — NOT the enrollment
+ * §10 step 1: the QR carries the single-use token (plus its session id) — NOT the enrollment
  * payload, which overflows QR capacity with a real attestation chain (2953 B ceiling,
- * caught on-device 2026-08-30). A pairId disagreement between token and wrapper is
+ * caught on-device 2026-08-30). A session-id disagreement between token and wrapper is
  * rejected before anything touches the relay.
  */
 class PairingCodecTest {
 
-    private val pairId = "a1b2c3d4e5f60718"
+    private val sessionId = "a1b2c3d4e5f60718"
 
-    private fun token(pairId: String = this.pairId) = PairingToken(
+    private fun token(sessionId: String = this.sessionId) = PairingToken(
         token = ByteArray(32) { 1 },
-        pairId = pairId,
+        sessionId = sessionId,
         expiresAtEpochMillis = 1_700_000_000_000L,
     )
 
@@ -27,8 +27,8 @@ class PairingCodecTest {
         val t = token()
         val decoded = PairingCodec.decode(PairingCodec.encode(t))
         assertArrayEquals(t.token, decoded.token.token)
-        assertEquals(t.pairId, decoded.token.pairId)
-        assertEquals(t.pairId, decoded.pairId)
+        assertEquals(t.sessionId, decoded.token.sessionId)
+        assertEquals(t.sessionId, decoded.sessionId)
         assertEquals(t.expiresAtEpochMillis, decoded.token.expiresAtEpochMillis)
     }
 
@@ -40,8 +40,8 @@ class PairingCodecTest {
     }
 
     @Test
-    fun pairIdMismatchBetweenTokenAndContentIsRejected() {
-        val qr = PairingCodec.encodeWithPairId(token(pairId), "different-pair")
+    fun sessionIdMismatchBetweenTokenAndContentIsRejected() {
+        val qr = PairingCodec.encodeWithSessionId(token(sessionId), "different-session")
         assertThrows(IllegalArgumentException::class.java) { PairingCodec.decode(qr) }
     }
 }

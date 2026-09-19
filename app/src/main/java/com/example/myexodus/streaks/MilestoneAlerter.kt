@@ -2,6 +2,7 @@ package com.example.myexodus.streaks
 
 import android.content.Context
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.notifications.NotificationAccess
 
 /**
  * §6/§8 Step 4 "milestone alarm firing", kept out of the receiver so it is testable without
@@ -32,7 +33,7 @@ class MilestoneAlerter(
         val habit = store.habitProgressDao().getById(streak.habitId) ?: return
         // §6 step 4 / §9: denied permission skips silently WITHOUT consuming the claim, so the
         // §14 delivery counter keeps meaning "a notification was actually posted".
-        if (!StreakNotifications.canPost(context)) return
+        if (!NotificationAccess.canPost(context)) return
         val nowWall = readings().tWallMillis
         if (store.milestoneEventDao().claimNotification(streakId, milestoneDay, nowWall) != 1) return
 

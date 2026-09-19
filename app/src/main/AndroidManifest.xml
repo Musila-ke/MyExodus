@@ -102,6 +102,18 @@
             android:name=".streaks.MilestoneAlarmReceiver"
             android:exported="false" />
 
+        <!-- Partner Pillar v2 plan §8 Step 7 (client FCM transport): receives the relay's
+            data-only wake signal (AD-11 — generic messageId + type, never content) and
+            enqueues the partner-sync pass. exported=false: FCM delivers via the app's own
+            process through Google Play services, not through a public component. -->
+        <service
+            android:name=".accountability.sync.PartnerMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <!-- §8.1 app-block detection + enforcement plan v2 §8 Step 5 daily-usage-limit
             enforcement, one always-on service (folded 2026-09-15 per user ruling). specialUse
             requires the subtype property on API 34+; the declaration is part of the
@@ -156,6 +168,24 @@
                 android:name="android.net.VpnService.SUPPORTS_ALWAYS_ON"
                 android:value="false" />
         </service>
+
+        <!-- Home-screen widget (V1 Req 36), widget spec §7 Steps 4/7. exported=true is required,
+            not a weakening: the launcher's AppWidgetHost broadcasts APPWIDGET_UPDATE from another
+            process/UID and would be blocked otherwise (§10). updatePeriodMillis=0 in the provider
+            info — the app drives every refresh itself. -->
+        <receiver
+            android:name=".widget.DesertDawnWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/desert_dawn_widget_info" />
+        </receiver>
 
         <!-- isAccessibilityTool=false (enforcement plan v2 §8 Step 4): this service enforces
             user-configured restrictions, it does not assist accessibility — the flag keeps

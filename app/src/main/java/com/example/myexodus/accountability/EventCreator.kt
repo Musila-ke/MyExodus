@@ -11,10 +11,12 @@ import com.example.myexodus.accountability.serialization.UnsignedEnvelope
 import com.example.myexodus.accountability.serialization.encodePayload
 import com.example.myexodus.accountability.serialization.eventHash
 import com.example.myexodus.accountability.state.ChainStateStore
+import com.example.myexodus.accountability.state.SessionKeyManager
 import java.security.KeyFactory
 import java.security.PrivateKey
 import java.security.Signature
 import java.security.spec.X509EncodedKeySpec
+import java.util.UUID
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -33,11 +35,14 @@ class EventCreator(
     private val signer: AccountabilitySigner,
     private val epochStore: IdentityEpochStore,
     private val agreementPrivateKey: () -> PrivateKey,
+    private val sessionKeyManager: SessionKeyManager,
 ) {
 
     sealed interface CreateResult {
-        /** Appended; [sequence] links the attempt-log row to this chain event (§14). */
-        data class Created(val sequence: Long) : CreateResult
+        /** Appended; [sequence] links the attempt-log row to this chain event (§14), and
+         *  [messageId] addresses its outbox row / mailbox document (the Step 13 unpair journal
+         *  needs it to poll the partner's ack). */
+        data class Created(val sequence: Long, val messageId: String) : CreateResult
 
         /** Identical event already chained (idempotent re-creation). */
         data object Duplicate : CreateResult
@@ -47,13 +52,26 @@ class EventCreator(
 
     private val createMutex = Mutex()
 
-    suspend fun create(pairId: String, payload: EventPayload, signature: Signature): CreateResult {
+    /** [messageId] pins the outbox/mailbox id the caller already journaled (the Step 14 unpair
+     *  protocol writes its journal row before the event exists, so the ack address is stable
+     *  across a crash); null mints a fresh id. */
+    suspend fun create(
+        pairId: String,
+        payload: EventPayload,
+        signature: Signature,
+        messageId: String? = null,
+    ): CreateResult {
         // sequence read + append must be one critical section: concurrent creates would
         // compute the same sequence and fork the chain.
-        return createMutex.withLock { createLocked(pairId, payload, signature) }
+        return createMutex.withLock { createLocked(pairId, payload, signature, messageId) }
     }
 
-    private suspend fun createLocked(pairId: String, payload: EventPayload, signature: Signature): CreateResult {
+    private suspend fun createLocked(
+        pairId: String,
+        payload: EventPayload,
+        signature: Signature,
+        pinnedMessageId: String?,
+    ): CreateResult {
         val enrollment = enrollmentDao.getByPairId(pairId)
             ?: return CreateResult.Failed("not enrolled")
         val mySenderKeyId = enrollment.mySenderKeyId
@@ -63,25 +81,34 @@ class EventCreator(
         val sequence = (head?.lastSequence ?: 0L) + 1
         val previousHash = head?.lastEventHash
 
+        // AD-12 (Step 15): the rotation check runs in the same critical section as the append,
+        // so no envelope can escape under an epoch that was already due for rotation.
+        val nowMillis = System.currentTimeMillis()
+        val rotated = sessionKeyManager.rotateIfDue(pairId, mySenderKeyId, nowMillis)
+        val keyEpoch = rotated ?: head?.keyEpoch ?: 0
+
         val cek = cekDerivation.deriveCek(
             pairId,
             agreementPrivateKey(),
             KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(enrollment.partnerAgreementPubKey)),
         )
+        val sessionKey = cekDerivation.deriveSessionKey(cek, keyEpoch)
         val unsigned = UnsignedEnvelope(
             senderKeyId = mySenderKeyId,
             epoch = epochStore.current(),
             sequence = sequence,
             previousEventHash = previousHash,
-            nonce = eventCipher.nonce(cek, sequence),
-            ciphertext = eventCipher.encrypt(cek, sequence, encodePayload(payload)),
-            createdAtEpochMillis = System.currentTimeMillis(),
+            nonce = eventCipher.nonce(sessionKey, sequence),
+            ciphertext = eventCipher.encrypt(sessionKey, sequence, encodePayload(payload)),
+            createdAtEpochMillis = nowMillis,
+            keyEpoch = keyEpoch,
         )
         signature.update(eventHash(unsigned))
         val envelope = SignedEnvelope(unsigned, signer.finishSign(signature))
 
-        return when (store.appendLocal(pairId, envelope)) {
-            is ChainStateStore.AppendResult.Appended -> CreateResult.Created(sequence)
+        val messageId = pinnedMessageId ?: UUID.randomUUID().toString()
+        return when (store.appendLocal(pairId, envelope, messageId)) {
+            is ChainStateStore.AppendResult.Appended -> CreateResult.Created(sequence, messageId)
             is ChainStateStore.AppendResult.Duplicate -> CreateResult.Duplicate
             is ChainStateStore.AppendResult.Gap -> CreateResult.Failed("chain gap")
             is ChainStateStore.AppendResult.Fork -> CreateResult.Failed("forked chain")

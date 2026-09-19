@@ -29,9 +29,12 @@ import org.junit.runner.RunWith
  * periodic worker dispatched by the production WorkManager, and its stale-row rollover
  * (UsageAccountingEngine.rolloverStaleDays). The production pin is next 00:05
  * (dumpsys-verified separately); a production
- * image cannot have its clock moved, so the test re-enqueues the same unique work with
- * UPDATE + a one-second-past [PeriodicWorkRequestBuilder.setNextScheduleTimeOverride] to
- * make it due now, then restores the production enqueue in a finally-style tail.
+ * image cannot have its clock moved, so the test makes the work due now with a
+ * one-second-past [PeriodicWorkRequestBuilder.setNextScheduleTimeOverride] — AFTER
+ * cancelling the existing spec: WM 2.11 honours a past-time override only while the work
+ * has never run (periodCount == 0), clamping it to lastEnqueue + interval otherwise, and
+ * UPDATE on a CANCELLED spec deletes and re-enqueues it fresh. It restores the production
+ * enqueue in a finally-style tail.
  */
 @RunWith(AndroidJUnit4::class)
 class DailyMaintenanceWorkerInstrumentedTest {
@@ -79,10 +82,13 @@ class DailyMaintenanceWorkerInstrumentedTest {
         )
 
         // UPDATE, not the production KEEP: this test's spec must replace the device's pin.
+        // Cancel the stale spec first — a past-time override only fires for never-run work.
+        val workManager = WorkManager.getInstance(context)
+        workManager.cancelUniqueWork(DAILY_MAINTENANCE_WORK_NAME)
+        awaitCancelled(workManager)
         val dueNow = PeriodicWorkRequestBuilder<DailyMaintenanceWorker>(24, TimeUnit.HOURS)
             .setNextScheduleTimeOverride(System.currentTimeMillis() - 1_000L)
             .build()
-        val workManager = WorkManager.getInstance(context)
         workManager.enqueueUniquePeriodicWork(
             DAILY_MAINTENANCE_WORK_NAME, ExistingPeriodicWorkPolicy.UPDATE, dueNow,
         )
@@ -105,15 +111,18 @@ class DailyMaintenanceWorkerInstrumentedTest {
 
         // Restore the production state: drop the test spec, then re-pin next 00:05.
         workManager.cancelUniqueWork(DAILY_MAINTENANCE_WORK_NAME)
-        val clearDeadline = System.currentTimeMillis() + 10_000L
-        while (System.currentTimeMillis() < clearDeadline) {
-            val remaining = workManager
-                .getWorkInfosForUniqueWork(DAILY_MAINTENANCE_WORK_NAME).get()
+        awaitCancelled(workManager)
+        trackerDao.delete(row)
+        enqueueDailyMaintenance(context)
+    }
+
+    private suspend fun awaitCancelled(workManager: WorkManager) {
+        val deadline = System.currentTimeMillis() + 10_000L
+        while (System.currentTimeMillis() < deadline) {
+            val remaining = workManager.getWorkInfosForUniqueWork(DAILY_MAINTENANCE_WORK_NAME).get()
                 .any { it.state != WorkInfo.State.CANCELLED }
             if (!remaining) break
             delay(200)
         }
-        trackerDao.delete(row)
-        enqueueDailyMaintenance(context)
     }
 }

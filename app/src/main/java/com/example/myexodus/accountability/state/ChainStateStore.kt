@@ -1,9 +1,12 @@
 package com.example.myexodus.accountability.state
 
+import android.util.Log
 import androidx.room3.withWriteTransaction
 import com.example.myexodus.accountability.serialization.SignedEnvelope
+import com.example.myexodus.accountability.serialization.UnsignedEnvelope
 import com.example.myexodus.accountability.serialization.encodeSigned
 import com.example.myexodus.accountability.serialization.eventHash
+import java.util.UUID
 
 /**
  * §7.3 State Manager: hash-chain validation (FR4: continuity + sequence monotonicity),
@@ -13,7 +16,13 @@ import com.example.myexodus.accountability.serialization.eventHash
  * enrollment layer (Phase 4). Callers must verify signatures before appendLocal/receiveRemote;
  * the store enforces chain structure, duplicate/fork/gap/expiry semantics (§9).
  */
-class ChainStateStore(private val db: AccountabilityDatabase) {
+class ChainStateStore(
+    private val db: AccountabilityDatabase,
+    /** §14 line 581 telemetry seam: fired once per security-relevant chain transition
+     *  ([EVENT_CHAIN_TAMPER_SUSPECTED] / [EVENT_CHAIN_INCOMPLETE]). A function seam, not a
+     *  telemetry dependency, so every JVM test constructs the store with the default no-op. */
+    private val onSecuritySignal: (String) -> Unit = {},
+) {
 
     sealed interface AppendResult {
         /** Event stored and the chain head advanced. */
@@ -32,11 +41,36 @@ class ChainStateStore(private val db: AccountabilityDatabase) {
         data object Rejected : AppendResult
     }
 
-    suspend fun appendLocal(pairId: String, envelope: SignedEnvelope): AppendResult =
-        validateAndAppend(pairId, envelope, ChainEvent.DIRECTION_SENT)
+    /** [messageId] lets a caller that must later address this message's mailbox document
+     *  (the Step 13 unpair journal) pin the id instead of receiving a store-internal UUID. */
+    suspend fun appendLocal(
+        pairId: String,
+        envelope: SignedEnvelope,
+        messageId: String? = null,
+    ): AppendResult =
+        db.withWriteTransaction { appendOutcome(pairId, envelope, ChainEvent.DIRECTION_SENT, messageId) }
 
-    suspend fun receiveRemote(pairId: String, envelope: SignedEnvelope): AppendResult =
-        validateAndAppend(pairId, envelope, ChainEvent.DIRECTION_RECEIVED)
+    /**
+     * Remote append with AD-10b dedup: [messageId] (when given) is the mailbox message's
+     * document id — the chain append and the `processed_events` marker commit in ONE
+     * transaction, so a crash between them can never double-process or lose the marker. A
+     * messageId seen before is a no-op duplicate (§6 step 7: check before fetch/verify).
+     */
+    suspend fun receiveRemote(
+        pairId: String,
+        envelope: SignedEnvelope,
+        messageId: String? = null,
+        atEpochMillis: Long = 0L,
+    ): AppendResult = db.withWriteTransaction {
+        if (messageId != null && db.processedEventDao().contains(messageId)) {
+            return@withWriteTransaction AppendResult.Duplicate
+        }
+        val result = appendOutcome(pairId, envelope, ChainEvent.DIRECTION_RECEIVED)
+        if (messageId != null && result in PROCESSED_OUTCOMES) {
+            db.processedEventDao().insert(ProcessedEvent(messageId, atEpochMillis))
+        }
+        result
+    }
 
     /** Outbox: unsent local events oldest-first (§7.3). */
     suspend fun pendingSentEvents(pairId: String, limit: Int = 100): List<ChainEvent> =
@@ -47,44 +81,181 @@ class ChainStateStore(private val db: AccountabilityDatabase) {
         db.chainEventDao().update(event.copy(syncState = ChainEvent.SYNC_STATE_SENT))
     }
 
-    /** §9 terminal state: PENDING_GAP events older than 7 days become PERMANENTLY_INCOMPLETE. */
-    suspend fun expireGaps(pairId: String, nowEpochMillis: Long): Int =
-        db.chainEventDao().expireGaps(pairId, nowEpochMillis - GAP_EXPIRY_MILLIS)
-
-    /** Sequences awaiting backfill, oldest-first — consumed by the sync engines (§9 reverse channel). */
-    suspend fun gapSequences(pairId: String): List<Long> =
-        db.chainEventDao().gapSequences(pairId)
+    /** Sequences awaiting repair for [senderKeyId]'s chain, oldest-first (Step 11). */
+    suspend fun gapSequences(pairId: String, senderKeyId: String): List<Long> =
+        db.chainEventDao().gapSequences(pairId, senderKeyId)
 
     suspend fun chainFor(pairId: String): List<ChainEvent> = db.chainEventDao().chainFor(pairId)
+
+    /** One stored event by chain position — the Step 11 replay anchor lookup (AD-08b). */
+    suspend fun storedEvent(pairId: String, senderKeyId: String, sequence: Long): ChainEvent? =
+        db.chainEventDao().getBySequence(pairId, senderKeyId, sequence)
 
     /** This sender's own chain head: the last local event's sequence + hash (single-row read). */
     suspend fun localHead(pairId: String, senderKeyId: String): ChainHead? =
         db.chainHeadDao().get(pairId, senderKeyId)
 
-    /** §10 bilateral deletion: wipes the pair's chain and head atomically (enrollment handled by caller). */
-    suspend fun deletePairData(pairId: String) = db.withWriteTransaction {
-        db.chainEventDao().deleteByPair(pairId)
-        db.chainHeadDao().deleteByPair(pairId)
+    /**
+     * AD-12 rotation (Step 15): advances this sender's epoch and anchors it at [atEpochMillis]
+     * ([ChainHead.keyEpochStartSequence] = the last event of the closing epoch). Returns the
+     * new epoch, or null when the head vanished mid-flight (unpair).
+     */
+    suspend fun advanceKeyEpoch(pairId: String, senderKeyId: String, atEpochMillis: Long): Int? =
+        db.withWriteTransaction {
+            val head = db.chainHeadDao().get(pairId, senderKeyId) ?: return@withWriteTransaction null
+            val next = head.keyEpoch + 1
+            db.chainHeadDao().update(
+                head.copy(
+                    keyEpoch = next,
+                    keyEpochStartedAtEpochMillis = atEpochMillis,
+                    keyEpochStartSequence = head.lastSequence,
+                ),
+            )
+            next
+        }
+
+    /** Heads with a repair in flight or concluded (AD-08) — the coordinator's work list. */
+    suspend fun repairHeads(pairId: String): List<ChainHead> = db.chainHeadDao().repairHeads(pairId)
+
+    /** Step 11 requester side: records that a SyncRequest went out at [atEpochMillis]. The
+     *  first request anchors the AD-08 30-day recovery window. */
+    suspend fun markRepairRequested(pairId: String, senderKeyId: String, atEpochMillis: Long) =
+        db.withWriteTransaction {
+            val head = db.chainHeadDao().get(pairId, senderKeyId) ?: return@withWriteTransaction
+            db.chainHeadDao().update(
+                head.copy(
+                    repairState = ChainHead.REPAIR_PENDING,
+                    repairFirstRequestedAtEpochMillis = head.repairFirstRequestedAtEpochMillis ?: atEpochMillis,
+                    repairLastRequestedAtEpochMillis = atEpochMillis,
+                ),
+            )
+        }
+
+    /** AD-08 stage 2: the 30-day window lapsed with no reply — stop requesting, start the
+     *  promotion path to the terminal state. */
+    suspend fun markRecoveryExhausted(pairId: String, senderKeyId: String, atEpochMillis: Long) =
+        db.withWriteTransaction {
+            val head = db.chainHeadDao().get(pairId, senderKeyId) ?: return@withWriteTransaction
+            db.chainHeadDao().update(
+                head.copy(
+                    repairState = ChainHead.REPAIR_RECOVERY_EXHAUSTED,
+                    repairLastRequestedAtEpochMillis = atEpochMillis,
+                ),
+            )
+        }
+
+    /** AD-08 stage 3 (§9 row 457): neutral terminal — the missing range is gone. Gap rows go
+     *  terminal with the head; the chain is never conflated with TAMPER_SUSPECTED. */
+    suspend fun markChainIncomplete(pairId: String, senderKeyId: String) = db.withWriteTransaction {
+        db.chainEventDao().markGapsChainIncomplete(pairId, senderKeyId)
+        val head = db.chainHeadDao().get(pairId, senderKeyId) ?: return@withWriteTransaction
+        db.chainHeadDao().update(head.copy(repairState = ChainHead.REPAIR_CHAIN_INCOMPLETE))
+        onSecuritySignal(EVENT_CHAIN_INCOMPLETE)
     }
 
-    private suspend fun validateAndAppend(
+    /**
+     * §9 row 458 / §12 line 525: a message from a sender with a repair in flight failed
+     * verification — that is the tamper signal (replays are byte-identical re-sends, so an
+     * active repair is the only discriminator between a tampered replay and ordinary noise).
+     * Sets TAMPER_SUSPECTED and flags the chain forked: further automatic trust is blocked
+     * pending manual re-pair. Returns whether a repair was actually in flight (the caller's
+     * only way to tell TAMPER_SUSPECTED from a plain SIGNATURE_INVALID).
+     */
+    suspend fun flagTamperIfRepairing(pairId: String): Boolean = db.withWriteTransaction {
+        val heads = db.chainHeadDao().repairHeads(pairId)
+            .filter { it.repairState in ChainHead.ACTIVE_REPAIR_STATES }
+        for (head in heads) {
+            Log.w(TAG, "TAMPER_SUSPECTED: message from pair=${head.pairId} sender=${head.senderKeyId} failed verification during repair")
+            db.chainHeadDao().update(head.copy(forked = true, repairState = ChainHead.REPAIR_TAMPER_SUSPECTED))
+        }
+        if (heads.isNotEmpty()) onSecuritySignal(EVENT_CHAIN_TAMPER_SUSPECTED)
+        heads.isNotEmpty()
+    }
+
+    /**
+     * Step 11 responder side: re-publish this device's own stored events after
+     * [afterSequence] as fresh outbox rows — exact stored bytes, new messageId (the byte
+     * identity is what lets the requester's chain logic absorb them). Capped by
+     * [REPLAY_BATCH_LIMIT]; the requester's 24h re-request cadence covers the remainder.
+     */
+    suspend fun enqueueReplay(
+        pairId: String,
+        senderKeyId: String,
+        afterSequence: Long,
+        limit: Int = REPLAY_BATCH_LIMIT,
+    ): Int = db.withWriteTransaction {
+        val events = db.chainEventDao().sentEventsAfter(pairId, senderKeyId, afterSequence, limit)
+        for (event in events) {
+            db.outboxDao().insert(
+                Outbox(
+                    messageId = UUID.randomUUID().toString(),
+                    eventId = event.id,
+                    envelopeBytes = event.envelope,
+                    status = Outbox.STATUS_PENDING,
+                    createdAtEpochMillis = event.createdAtEpochMillis,
+                ),
+            )
+        }
+        events.size
+    }
+
+    /** Step 13 unpair: one message's outbox snapshot (status + exact bytes + mailbox-document
+     *  metadata) — read before the wipe so the journal can outlive the row it describes. */
+    suspend fun outboxSnapshot(messageId: String): OutboxRowSnapshot? = db.outboxDao().snapshotOf(messageId)
+
+    /** §10 bilateral deletion: wipes the pair's chain, head, outbound, and approval rows
+     *  atomically (enrollment handled by caller; the unpair journal deliberately survives —
+     *  it is a different table and must outlive the wipe). */
+    suspend fun deletePairData(pairId: String) = db.withWriteTransaction {
+        db.outboxDao().deleteByPair(pairId) // before the events delete — the subquery reads events
+        db.chainEventDao().deleteByPair(pairId)
+        db.chainHeadDao().deleteByPair(pairId)
+        db.approvalRequestDao().deleteByPair(pairId)
+    }
+
+    /**
+     * Plan §8 Step 17 (AD-22): the wipe-detection counterpart of [deletePairData] — with no
+     * enrollment there is no pairId to scope to, and the pre-wipe wipe (without a shred) is by
+     * definition the pair data's last owner. Clears exactly the pair-scoped tables the
+     * enrollment would have owned; enrollments (none by detection's premise), the unpair
+     * journal (ADR #49: outlives its pair by design) and processed_events (messageId-keyed,
+     * pair-less replay protection) all survive.
+     */
+    suspend fun wipeAllPairData() = db.withWriteTransaction {
+        db.outboxDao().deleteAll()
+        db.chainEventDao().deleteAll()
+        db.chainHeadDao().deleteAll()
+        db.approvalRequestDao().deleteAll()
+    }
+
+    /** Transaction body — callers wrap it in [db.withWriteTransaction]. */
+    private suspend fun appendOutcome(
         pairId: String,
         envelope: SignedEnvelope,
         direction: String,
-    ): AppendResult = db.withWriteTransaction {
+        messageId: String? = null,
+    ): AppendResult {
         val unsigned = envelope.unsigned
         val sender = unsigned.senderKeyId
         val hash = eventHash(unsigned)
         val head = db.chainHeadDao().get(pairId, sender)
 
         if (head == null) {
-            return@withWriteTransaction when {
+            return when {
                 unsigned.sequence != 1L -> insertGapOrConflict(pairId, envelope, direction, hash, unsigned.sequence, null)
                 unsigned.previousEventHash != null -> AppendResult.Rejected
                 else -> {
-                    insertRow(pairId, envelope, direction, hash, ChainEvent.SYNC_STATE_PENDING)
+                    insertRow(pairId, envelope, direction, hash, ChainEvent.SYNC_STATE_PENDING, messageId)
                     db.chainHeadDao().insert(
-                        ChainHead(pairId = pairId, senderKeyId = sender, lastSequence = 1, lastEventHash = hash),
+                        ChainHead(
+                            pairId = pairId,
+                            senderKeyId = sender,
+                            lastSequence = 1,
+                            lastEventHash = hash,
+                            // Step 15: the chain's first event anchors whatever epoch it is on.
+                            keyEpoch = unsigned.keyEpoch,
+                            keyEpochStartedAtEpochMillis = unsigned.createdAtEpochMillis,
+                        ),
                     )
                     AppendResult.Appended
                 }
@@ -92,9 +263,9 @@ class ChainStateStore(private val db: AccountabilityDatabase) {
         }
 
         // Forked chains are permanently blocked (§9) — even for gap rows.
-        if (head.forked) return@withWriteTransaction AppendResult.Rejected
+        if (head.forked) return AppendResult.Rejected
 
-        when {
+        return when {
             unsigned.sequence == head.lastSequence -> if (sameAsStored(pairId, sender, unsigned.sequence, hash)) {
                 AppendResult.Duplicate
             } else {
@@ -106,13 +277,13 @@ class ChainStateStore(private val db: AccountabilityDatabase) {
                 when {
                     stored == null ->
                         if (unsigned.previousEventHash.contentEquals(head.lastEventHash)) {
-                            appendAndAdvance(pairId, envelope, direction, hash, head)
+                            appendAndAdvance(pairId, envelope, direction, hash, head, messageId)
                         } else {
                             flagFork(head)
                         }
 
                     stored.syncState == ChainEvent.SYNC_STATE_PENDING_GAP && stored.eventHash.contentEquals(hash) ->
-                        fillGap(pairId, sender, stored, hash, head)
+                        fillGap(pairId, envelope, stored, hash, head)
 
                     stored.eventHash.contentEquals(hash) -> AppendResult.Duplicate
 
@@ -136,10 +307,30 @@ class ChainStateStore(private val db: AccountabilityDatabase) {
         direction: String,
         hash: ByteArray,
         head: ChainHead,
+        messageId: String? = null,
     ): AppendResult {
-        insertRow(pairId, envelope, direction, hash, ChainEvent.SYNC_STATE_PENDING)
-        return cascadeFrom(pairId, head.senderKeyId, head.copy(lastSequence = head.lastSequence + 1, lastEventHash = hash))
+        insertRow(pairId, envelope, direction, hash, ChainEvent.SYNC_STATE_PENDING, messageId)
+        val advanced = head.withEpochOf(envelope.unsigned).copy(lastSequence = head.lastSequence + 1, lastEventHash = hash)
+        return cascadeFrom(pairId, head.senderKeyId, advanced)
     }
+
+    /**
+     * Step 15: the head carries the highest epoch seen on this chain. An envelope under a
+     * later epoch advances it and anchors the epoch at the envelope's signed creation time —
+     * the same value the sender's own rotation wrote, so both devices agree on the epoch's
+     * start without any clock reconciliation. An epoch-0 head from before MIGRATION_8_9 gets
+     * its anchor from the next event it sees.
+     */
+    private fun ChainHead.withEpochOf(u: UnsignedEnvelope): ChainHead =
+        if (u.keyEpoch > keyEpoch) {
+            copy(
+                keyEpoch = u.keyEpoch,
+                keyEpochStartedAtEpochMillis = u.createdAtEpochMillis,
+                keyEpochStartSequence = lastSequence,
+            )
+        } else {
+            copy(keyEpochStartedAtEpochMillis = keyEpochStartedAtEpochMillis ?: u.createdAtEpochMillis)
+        }
 
     /** Advances the head, then absorbs any contiguous stored gaps behind it (§9 backfill completion). */
     private suspend fun cascadeFrom(pairId: String, sender: String, newHead: ChainHead): AppendResult {
@@ -152,23 +343,60 @@ class ChainStateStore(private val db: AccountabilityDatabase) {
             db.chainEventDao().update(next.copy(syncState = ChainEvent.SYNC_STATE_PENDING))
             head = head.copy(lastSequence = head.lastSequence + 1, lastEventHash = next.eventHash)
         }
+        // Successful recovery: the replayed segment closed every gap — end the repair before
+        // the head write lands, so the state and the chain can never disagree.
+        if (head.repairState in ChainHead.ACTIVE_REPAIR_STATES &&
+            db.chainEventDao().gapSequences(pairId, sender).isEmpty()
+        ) {
+            head = head.copy(
+                repairState = ChainHead.REPAIR_NONE,
+                repairFirstRequestedAtEpochMillis = null,
+                repairLastRequestedAtEpochMillis = null,
+            )
+        }
         db.chainHeadDao().update(head)
         return AppendResult.Appended
     }
 
-    private suspend fun fillGap(pairId: String, sender: String, stored: ChainEvent, hash: ByteArray, head: ChainHead): AppendResult {
+    /** AD-08 stage 1 entry — idempotent; only an untouched (NONE) head starts a repair. An
+     *  exhausted/terminal head stays: a new gap must not restart a lapsed recovery window. */
+    private suspend fun markRepairPending(head: ChainHead) {
+        if (head.repairState != ChainHead.REPAIR_NONE) return
+        db.chainHeadDao().update(head.copy(repairState = ChainHead.REPAIR_PENDING))
+    }
+
+    private suspend fun fillGap(
+        pairId: String,
+        envelope: SignedEnvelope,
+        stored: ChainEvent,
+        hash: ByteArray,
+        head: ChainHead,
+    ): AppendResult {
         // The gap row's link to its predecessor was never validated at insertion time (there
         // was no predecessor yet). Refuse to advance the head over a broken link — the sender
         // claimed a different previous hash than the chain actually holds, so flag the fork.
         if (!stored.previousEventHash.contentEquals(head.lastEventHash)) return flagFork(head)
         // The previously gap-flagged event is now contiguous; store it normally and advance.
         db.chainEventDao().update(stored.copy(syncState = ChainEvent.SYNC_STATE_PENDING))
-        return cascadeFrom(pairId, sender, head.copy(lastSequence = head.lastSequence + 1, lastEventHash = hash))
+        val advanced = head.withEpochOf(envelope.unsigned).copy(lastSequence = head.lastSequence + 1, lastEventHash = hash)
+        return cascadeFrom(pairId, head.senderKeyId, advanced)
     }
 
-    /** A conflicting event at any position flags the chain FORKED and blocks it (§9). */
+    /** A conflicting event at any position flags the chain FORKED and blocks it (§9). While a
+     *  repair is in flight this is the AD-08 hash-verification failure of a supplied replay
+     *  segment, which escalates to TAMPER_SUSPECTED (§9 row 458) — never a benign case. */
     private suspend fun flagFork(head: ChainHead): AppendResult {
-        db.chainHeadDao().update(head.copy(forked = true))
+        val tampered = head.repairState in ChainHead.ACTIVE_REPAIR_STATES
+        if (tampered) {
+            Log.w(TAG, "TAMPER_SUSPECTED: replay for pair=${head.pairId} sender=${head.senderKeyId} failed hash verification during repair")
+            onSecuritySignal(EVENT_CHAIN_TAMPER_SUSPECTED)
+        }
+        db.chainHeadDao().update(
+            head.copy(
+                forked = true,
+                repairState = if (tampered) ChainHead.REPAIR_TAMPER_SUSPECTED else head.repairState,
+            ),
+        )
         return AppendResult.Fork
     }
 
@@ -184,6 +412,11 @@ class ChainStateStore(private val db: AccountabilityDatabase) {
         return when {
             stored == null -> {
                 insertRow(pairId, envelope, direction, hash, ChainEvent.SYNC_STATE_PENDING_GAP)
+                // AD-08 stage 1: a buffered orphan starts the repair path — same transaction,
+                // so no pass can observe a gap without its REPAIR_PENDING marker. A headless
+                // namespace cannot be marked: AD-08b requests need an attested head to anchor
+                // (sequence + hash) on, and the re-delivered predecessors create the head.
+                head?.let { markRepairPending(it) }
                 AppendResult.Gap
             }
 
@@ -205,25 +438,57 @@ class ChainStateStore(private val db: AccountabilityDatabase) {
         direction: String,
         hash: ByteArray,
         syncState: String,
+        messageId: String? = null,
     ) {
         val u = envelope.unsigned
-        db.chainEventDao().insert(
-            ChainEvent(
-                pairId = pairId,
-                senderKeyId = u.senderKeyId,
-                epoch = u.epoch,
-                sequence = u.sequence,
-                previousEventHash = u.previousEventHash,
-                eventHash = hash,
-                envelope = encodeSigned(envelope),
-                direction = direction,
-                createdAtEpochMillis = u.createdAtEpochMillis,
-                syncState = syncState,
-            ),
+        val row = ChainEvent(
+            pairId = pairId,
+            senderKeyId = u.senderKeyId,
+            epoch = u.epoch,
+            sequence = u.sequence,
+            previousEventHash = u.previousEventHash,
+            eventHash = hash,
+            envelope = encodeSigned(envelope),
+            direction = direction,
+            createdAtEpochMillis = u.createdAtEpochMillis,
+            syncState = syncState,
         )
+        val eventId = db.chainEventDao().insert(row)
+        // AD-06b: local events get their outbox row in this same transaction — messageId is
+        // generated once here (or caller-pinned) and the stored bytes are the ones every
+        // retry transmits.
+        if (direction == ChainEvent.DIRECTION_SENT) {
+            db.outboxDao().insert(
+                Outbox(
+                    messageId = messageId ?: UUID.randomUUID().toString(),
+                    eventId = eventId,
+                    envelopeBytes = row.envelope,
+                    status = Outbox.STATUS_PENDING,
+                    createdAtEpochMillis = u.createdAtEpochMillis,
+                ),
+            )
+        }
     }
 
     companion object {
-        const val GAP_EXPIRY_MILLIS = 7L * 24 * 60 * 60 * 1000
+        private const val TAG = "MyExodusChainStore"
+
+        /** §14 line 581: the two §9 outcomes that are counted separately — a rising
+         *  TAMPER_SUSPECTED count is a security signal, a rising CHAIN_INCOMPLETE count is a
+         *  product/retention signal, and they must never be blended into one number. */
+        const val EVENT_CHAIN_TAMPER_SUSPECTED = "chain_tamper_suspected"
+        const val EVENT_CHAIN_INCOMPLETE = "chain_incomplete"
+
+        /** Step 11 replay bound: one repair answer per request; the re-request cadence covers
+         *  anything longer (a 30-day window is ~30 chances to catch up). */
+        const val REPLAY_BATCH_LIMIT = 100
+
+        /**
+         * Outcomes whose message is fully consumed and gets marked in `processed_events`
+         * (AD-10b). Fork/Rejected are deliberately NOT marked — the event was not incorporated,
+         * so the message stays subject to re-delivery (and stays un-acked) rather than being
+         * silently forgotten.
+         */
+        private val PROCESSED_OUTCOMES = setOf(AppendResult.Appended, AppendResult.Duplicate, AppendResult.Gap)
     }
 }

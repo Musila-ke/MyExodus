@@ -50,6 +50,7 @@ class PairingTestActivity : FragmentActivity() {
 
     private var uid: String? = null
     private var pendingAwait: PairingFlow.InitiatorAwait? = null
+    private var pendingToken: PairingToken? = null
     private var pendingSignature: Signature? = null
     private lateinit var confirmButton: Button
 
@@ -193,14 +194,14 @@ class PairingTestActivity : FragmentActivity() {
             }
             val qr = initiation.getOrThrow()
             val text = Base64.encodeToString(qr.qrBytes, Base64.NO_WRAP)
-            log("QR ready — pair id ${qr.token.pairId} (also logged as QR_TEXT for capture)")
+            log("QR ready — session ${qr.token.sessionId} (also logged as QR_TEXT for capture)")
             Log.i(TAG, "QR_TEXT: $text")
             // Single-device run: the base64 is too long for adb input text, so cache it for
             // the "load last QR" button instead of shell-injecting it.
             runCatching { File(cacheDir, QR_CACHE_FILE).writeText(text) }
             qrImage.setImageBitmap(renderQr(text))
-            log("waiting for the partner's redemption (up to 10 min)...")
-            val await = runCatching { entryPoint.pairingFlow().awaitPartner(qr.token.pairId, PairingToken.TTL_MILLIS) }
+            log("waiting for the partner's response (up to 10 min)...")
+            val await = runCatching { entryPoint.pairingFlow().awaitPartner(qr.token, PairingToken.TTL_MILLIS) }
             if (await.isFailure) {
                 log("await failed: ${await.exceptionOrNull()?.message}")
                 return@launch
@@ -210,6 +211,7 @@ class PairingTestActivity : FragmentActivity() {
                 return@launch
             }
             pendingAwait = await.getOrNull()
+            pendingToken = qr.token
             log("PARTNER VERIFIED. SAS (compare on both devices): ${await.getOrNull()?.sas}")
             log("if both devices show the same SAS, tap 'SAS matched — sign & confirm'")
             confirmButton.isEnabled = true
@@ -218,10 +220,13 @@ class PairingTestActivity : FragmentActivity() {
 
     private fun confirmAsInitiator() {
         val await = pendingAwait ?: run { log("no verified partner material yet"); return }
+        val token = pendingToken ?: run { log("no pending token — re-initiate"); return }
         val myUid = requireUid() ?: return
-        signWithBiometric("Sign transcript as initiator") { signature ->
+        signWithBiometric("Sign pairing proof as initiator") { signature ->
             lifecycleScope.launch {
-                val outcome = runCatching { entryPoint.pairingFlow().submitInitiatorSignature(await, myUid, signature) }
+                val outcome = runCatching {
+                    entryPoint.pairingFlow().submitInitiatorSignature(await, token, myUid, signature)
+                }
                 log("initiator outcome: ${outcome.getOrNull() ?: outcome.exceptionOrNull()}")
             }
         }
@@ -230,7 +235,7 @@ class PairingTestActivity : FragmentActivity() {
     private fun completeAsPartner(qrBytes: ByteArray, signature: Signature) {
         val myUid = requireUid() ?: return
         lifecycleScope.launch {
-            log("verifying initiator identity, signing transcript, redeeming token...")
+            log("verifying initiator identity, signing transcript + proof, responding on token...")
             val outcome = runCatching { entryPoint.pairingFlow().complete(qrBytes, myUid, signature) }
             log("partner outcome: ${outcome.getOrNull() ?: outcome.exceptionOrNull()}")
             (outcome.getOrNull() as? PairingFlow.Outcome.Paired)?.let {

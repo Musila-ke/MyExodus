@@ -1,0 +1,16 @@
+{
+  "name": "myexodus-functions",
+  "private": true,
+  "description": "Partner Pillar v2 Cloud Functions — pairing registration, push relay, retry sweep, rate limits (plan §8 Steps 3/5/6/18).",
+  "main": "index.js",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "firebase-admin": "14.4.0",
+    "firebase-functions": "7.4.0"
+  }
+}

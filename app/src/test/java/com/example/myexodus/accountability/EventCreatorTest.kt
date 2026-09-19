@@ -16,7 +16,9 @@ import com.example.myexodus.accountability.serialization.encodePayload
 import com.example.myexodus.accountability.serialization.eventHash
 import com.example.myexodus.accountability.state.AccountabilityDatabase
 import com.example.myexodus.accountability.state.ChainEvent
+import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.accountability.state.ChainStateStore
+import com.example.myexodus.accountability.state.SessionKeyManager
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
@@ -80,6 +82,7 @@ class EventCreatorTest {
             signer = signer,
             epochStore = epochStore,
             agreementPrivateKey = { myAgreement.private },
+            sessionKeyManager = SessionKeyManager(store),
         )
         runBlocking {
             db.enrollmentDao().upsert(
@@ -104,7 +107,7 @@ class EventCreatorTest {
     @Test
     fun createdEvent_isChainedVerifiableAndDecryptable() = runTest {
         val result = creator.create(pairId, EventPayload(type = "activity", text = "check-in"), signing())
-        assertEquals(EventCreator.CreateResult.Created(1L), result)
+        assertEquals(1L, (result as EventCreator.CreateResult.Created).sequence)
 
         val row = store.chainFor(pairId).single()
         assertEquals(mySenderKeyId, row.senderKeyId)
@@ -145,6 +148,35 @@ class EventCreatorTest {
     fun notEnrolled_returnsFailed() = runTest {
         val result = creator.create("pair-unknown", EventPayload(text = ""), signing())
         assertEquals(EventCreator.CreateResult.Failed("not enrolled"), result)
+    }
+
+    @Test
+    fun rotationDue_newEnvelopeCarriesTheNextEpochUnderItsSessionKey() = runTest {
+        // §8 Step 15 / AD-12: the 500th event of an epoch is the last one; the next envelope
+        // is created under the rotated epoch's derived session key and declares it on the wire.
+        db.chainHeadDao().insert(
+            ChainHead(
+                pairId = pairId,
+                senderKeyId = mySenderKeyId,
+                lastSequence = SessionKeyManager.ROTATE_AFTER_EVENTS,
+                lastEventHash = ByteArray(32) { 3 },
+                keyEpoch = 0,
+                keyEpochStartedAtEpochMillis = 1_700_000_000_000L,
+                keyEpochStartSequence = 0,
+            ),
+        )
+
+        val created = creator.create(pairId, EventPayload(type = "activity", text = "rotated"), signing())
+        assertEquals(501L, (created as EventCreator.CreateResult.Created).sequence)
+
+        val signed = decodeSigned(store.chainFor(pairId).single().envelope)
+        assertEquals(1, signed.unsigned.keyEpoch)
+        assertEquals(1, db.chainHeadDao().get(pairId, mySenderKeyId)!!.keyEpoch)
+
+        // The partner derives the same session key from the CEK alone — no key exchange.
+        val sessionKey = cekDerivation.deriveSessionKey(cek, 1)
+        val payload = decodePayload(cipher.decrypt(sessionKey, signed.unsigned.sequence, signed.unsigned.ciphertext))
+        assertEquals("rotated", payload.text)
     }
 
     // Note: a same-millisecond double-create collapses to Duplicate via the chain store

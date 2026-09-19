@@ -41,6 +41,7 @@ import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.IntegrityStatus
 import com.example.myexodus.settings.ProtectionChecks
 import com.example.myexodus.settings.StrictModeManager
+import com.example.myexodus.settings.WidgetSettings
 import com.example.myexodus.settings.accessibilitySettingsIntent
 import com.example.myexodus.settings.appInfoSettingsIntent
 import com.example.myexodus.settings.batteryOptimizationSettingsIntent
@@ -70,6 +71,8 @@ fun SettingsScreen(
     strictMode: StrictModeManager,
     settings: EnhancedModeSettings,
     crashReporting: CrashReporting,
+    widgetSettings: WidgetSettings,
+    onWidgetSettingsChanged: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -122,7 +125,54 @@ fun SettingsScreen(
 
         EnhancedModeScreen(monitor, strictMode, settings)
 
+        WidgetSection(widgetSettings, onWidgetSettingsChanged)
+
         PrivacySection(crashReporting)
+    }
+}
+
+/**
+ * The widget's own copy setting (V1 Req 36 FR5/FR6). Default-on discreet: the home screen is the
+ * most exposed surface this app has, so the disclosure-free wording is what a user gets without
+ * asking. Writing the value here does not render anything — the callback re-publishes the snapshot,
+ * and the writer's `updateAll()` is what reaches the launcher (widget spec §5 Decision 10).
+ */
+@Composable
+private fun WidgetSection(settings: WidgetSettings, onChanged: () -> Unit) {
+    var discreet by remember { mutableStateOf(settings.discreetMode) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(stringResource(R.string.settings_widget_header), style = MaterialTheme.typography.titleMedium)
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        stringResource(R.string.settings_widget_discreet_title),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        stringResource(R.string.settings_widget_discreet_body),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = discreet,
+                    onCheckedChange = { enabled ->
+                        settings.discreetMode = enabled
+                        discreet = enabled
+                        onChanged()
+                    },
+                )
+            }
+        }
     }
 }
 

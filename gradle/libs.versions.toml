@@ -23,6 +23,7 @@ robolectric = "4.16"
 androidxTestCore = "1.7.0"
 bcprov = "1.85.2"
 datastoreTink = "1.3.0-alpha10"
+glance = "1.1.1"
 tinkAndroid = "1.23.0"
 peteroCbor = "4.5.6"
 cameraX = "1.6.2"
@@ -79,15 +80,20 @@ androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx"
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigation" }
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-appcheck-playintegrity = { group = "com.google.firebase", name = "firebase-appcheck-playintegrity" }
+firebase-appcheck-debug-testing = { group = "com.google.firebase", name = "firebase-appcheck-debug-testing" }
 camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "cameraX" }
 camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "cameraX" }
 camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "cameraX" }
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
 firebase-firestore = { group = "com.google.firebase", name = "firebase-firestore" }
+firebase-functions = { group = "com.google.firebase", name = "firebase-functions" }
 firebase-auth = { group = "com.google.firebase", name = "firebase-auth" }
 firebase-crashlytics = { group = "com.google.firebase", name = "firebase-crashlytics" }
+firebase-config = { group = "com.google.firebase", name = "firebase-config" }
 androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
+androidx-glance-appwidget = { group = "androidx.glance", name = "glance-appwidget", version.ref = "glance" }
+androidx-glance-material3 = { group = "androidx.glance", name = "glance-material3", version.ref = "glance" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

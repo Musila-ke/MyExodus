@@ -1,81 +1,143 @@
 rules_version = '2';
-// §8.4 Accountability-Partner Protocol Firestore rules (deploy via Firebase Console / CLI —
-// console deployment is a separate user step; emulator suite verification is §18).
+// Partner Pillar v2 Firestore rules (plan §8 Step 1 / AD-02, AD-18a/b, AD-19, AD-23).
+// Supersedes the v1 accountability-protocol rules (pairs / accountability_events /
+// backfill_requests / pairing_tokens / deleted_pairs): no production pairs exist (no
+// pairing UI has shipped), so there is no data to migrate — the v2 document layout is
+// adopted wholesale. Deployment (CLI/Console) is a separate user step; the rules-emulator
+// suite is plan §12.
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Canonical pair state document: cross-document validation target ("rules are not filters").
-    // Created by either member during enrollment; membership is read/write-gated.
-    match /pairs/{pairId} {
-      // Create is the enrollment step: the doc does not exist yet, so the creator asserts
-      // membership in the new doc (the read/update/delete rules keep everything else gated).
-      // The tombstone guard closes the revocation-reopen gap: after §10 deletion deletes
-      // this doc, either former member could otherwise re-create it (members is
-      // self-asserted) and reopen the mailbox for the pair. deleted_pairs is append-only,
-      // so a revoked pair can never be re-created (2026-08-31 review fix).
-      allow create: if request.resource.data.members is map
-        && request.resource.data.members[request.auth.uid] == true
-        && !exists(/databases/$(database)/documents/deleted_pairs/$(pairId));
-      // resource == null: reads of *nonexistent* docs must not be denied, or the redemption
-      // transaction's pre-create read of the pair doc aborts with PERMISSION_DENIED (caught
-      // on-device 2026-08-30) and existing docs stay membership-gated.
-      allow read, update, delete: if resource == null || request.auth.uid in resource.data.members;
+    // Server-side pairing record. Written ONLY by the registerPairing Cloud Function
+    // (admin SDK bypasses rules), which requires matching signed transcript hashes from
+    // both devices (plan §8 Step 3 / AD-02). Client writes are denied outright — which
+    // also structurally removes the v1 revocation-reopen gap, since a client can no
+    // longer create or re-create a pairing document.
+    // Read: `resource == null` is a rule error (denial), not a false — clients must treat
+    // PERMISSION_DENIED on this read as "not yet registered" (same trap the v1 rules
+    // documented, caught on-device 2026-08-30). Do not add a null-permitting branch: that
+    // would let any authenticated user probe whether two known uids are paired.
+    //
+    // Amendment (plan §8 Step 13 / AD-13b): the ONE client write is revocation — a member
+    // may flip active -> terminated, status field only, one-way. create/delete stay denied,
+    // so the v1 revocation-reopen gap remains structurally closed; the mailbox create rule
+    // (status == 'active') makes every further partner write impossible (Req 29). The losing
+    // racer in a mutual unpair gets PERMISSION_DENIED, which the client treats as a no-op.
+    match /pairings/{pairId} {
+      allow read: if request.auth != null && request.auth.uid in resource.data.members;
+      allow update: if request.auth != null
+        && request.auth.uid in resource.data.members
+        && resource.data.status == 'active'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && request.resource.data.status == 'terminated';
+      allow create, delete: if false;
     }
 
-    // Mailbox. create is gated on pair membership via the cross-document exists() check and the
-    // 1 MiB envelope cap; entries are immutable — update/delete are denied outright.
-    match /accountability_events/{eventId} {
-      allow create: if request.auth.uid == request.resource.data.authorUid
-        && exists(/databases/$(database)/documents/pairs/$(request.resource.data.pairId))
+    // Mailbox: the recipient-scoped delivery channel (plan §8 Step 1). messageId is
+    // client-generated and used as the document id (AD-09), so a retried write of the
+    // same Outbox row is an idempotent overwrite by construction. payload is opaque
+    // base64 ciphertext; the real 4096-byte payload limit and base64 well-formedness are
+    // enforced in the relay function (AD-19 — rules cannot count the decoded bytes).
+    // hasOnly + types + a coarse size bound are defense-in-depth, not the boundary.
+    match /mailboxes/{recipientUid}/messages/{messageId} {
+      // Read: the recipient (owner) as before, plus the message's AUTHOR — the relay marks a
+      // rejected message with `relayStatus` on this document, and that marker is the send
+      // failure the author's client must be able to observe distinctly (§8 Step 18, §9:
+      // RATE_LIMITED is not a network failure). The author already wrote every field here
+      // (content, ciphertext, pairId); only "was it relayed" is newly visible. Same
+      // author-read shape as the ack rule below.
+      allow read: if request.auth.uid == recipientUid
+        || resource.data.senderUid == request.auth.uid;
+      allow create: if request.auth != null
+        && request.resource.data.senderUid == request.auth.uid
+        && request.resource.data.keys().hasOnly(
+             ['senderId', 'senderUid', 'pairId', 'payload', 'keyEpoch', 'timestamp'])
+        && request.resource.data.senderId is string
         && request.resource.data.pairId is string
-        && request.resource.data.pairId.size() < 64
-        && request.resource.data.envelope.size() < 1048576;
-      allow read: if request.auth.uid == resource.data.partnerUid
-        || request.auth.uid == resource.data.authorUid;
+        && request.resource.data.pairId.size() <= 128
+        && request.resource.data.payload is string
+        && request.resource.data.payload.size() <= 8192
+        && request.resource.data.keyEpoch is int
+        && request.resource.data.keyEpoch >= 0
+        && request.resource.data.timestamp == request.time
+        && exists(/databases/$(database)/documents/pairings/$(request.resource.data.pairId))
+        && get(/databases/$(database)/documents/pairings/$(request.resource.data.pairId)).data.status == 'active'
+        && request.auth.uid in get(/databases/$(database)/documents/pairings/$(request.resource.data.pairId)).data.members;
+      // Immutable after create; deletion is exclusively the scheduled cleanup function's
+      // job (AD-18b). A client must never be able to delete a mailbox document.
       allow update, delete: if false;
-    }
 
-    // §9 reverse channel: a receiver holding a gap requests the sender re-publish one
-    // sequence. Create/read/delete are pair-member-gated; requests are short-lived
-    // (deleted by the responding sender after fulfillment).
-    match /backfill_requests/{requestId} {
-      function isMember(uid, pairId) {
-        return uid in get(/databases/$(database)/documents/pairs/$(pairId)).data.members;
+      // Per-installation acknowledgment (AD-18b), written by the recipient device itself
+      // after it has processed the event. The cleanup function deletes a message only
+      // once every registered installation has an ack (or the 30-day cap is reached).
+      //
+      // Read: the recipient (owner) as before, plus the message's AUTHOR — the AD-13b
+      // remote-erasure evidence is the initiator reading the ack on the deletion request it
+      // wrote. exists() guards the get() so a cleaned-up message is a plain denial, never a
+      // rule error. The author already knows the message content; only "was it processed"
+      // is newly visible, which is exactly the evidence AD-13b defines.
+      match /acks/{installationId} {
+        allow read: if request.auth.uid == recipientUid
+          || (exists(/databases/$(database)/documents/mailboxes/$(recipientUid)/messages/$(messageId))
+              && get(/databases/$(database)/documents/mailboxes/$(recipientUid)/messages/$(messageId)).data.senderUid == request.auth.uid);
+        allow create: if request.auth.uid == recipientUid
+          && request.resource.data.keys().hasOnly(['ackedAt'])
+          && request.resource.data.ackedAt == request.time;
+        allow update, delete: if false;
       }
-      allow create: if request.auth.uid != null
-        && request.resource.data.pairId is string
-        && isMember(request.auth.uid, request.resource.data.pairId)
-        && request.resource.data.requesterUid == request.auth.uid;
-      allow read, delete: if request.auth.uid != null
-        && isMember(request.auth.uid, resource.data.pairId);
-      allow update: if false;
     }
 
-    // §10 revocation tombstones: append-only record written by BilateralDeletion just before
-    // it deletes the pair doc. Guards the pair create rule above against revocation-reopen.
-    // The tombstone's own create is gated on the pair doc still existing + membership, so it
-    // can only be written by a current member; no other operation is allowed on it.
-    match /deleted_pairs/{pairId} {
-      allow create: if request.auth.uid != null
-        && exists(/databases/$(database)/documents/pairs/$(pairId))
-        && request.auth.uid in get(/databases/$(database)/documents/pairs/$(pairId)).data.members
-        && !exists(/databases/$(database)/documents/deleted_pairs/$(pairId));
-      allow read, update, delete: if false;
+    // Per-device/provider push registrations (AD-18a). provider is constrained to the
+    // transports that exist (plan §8 Steps 7/8); token freshness is tracked via updatedAt.
+    match /users/{uid}/push_installations/{installationId} {
+      allow read: if request.auth.uid == uid;
+      allow create, update: if request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(
+             ['provider', 'token', 'platform', 'appVersion', 'updatedAt', 'createdAt'])
+        && request.resource.data.provider in ['fcm', 'hms']
+        && request.resource.data.token is string
+        && request.resource.data.token.size() > 0
+        && request.resource.data.token.size() <= 4096
+        && request.resource.data.platform is string
+        && request.resource.data.appVersion is string
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if request.auth.uid == uid;
     }
 
-    // §10 step 1 pairing tokens. The document id is SHA-256(token), so a token document is
-    // unaddressable without the token itself — possession is the read/delete gate, and the
-    // lifetime gate (single-use + expiry, §10 steps 1/3) is enforced by comparing the
-    // stored expiresAt Timestamp to request.time. The redemption transaction deletes the
-    // document, so a second redemption reads nothing.
+    // Pairing rendezvous (user-ruled 2026-09-18: the SAS/QR public-key exchange stays as
+    // shipped — the pairing QR cannot carry the initiator's attestation payload, device-
+    // caught 2026-08-30). Document id = SHA-256(token), so possession of the 256-bit token
+    // is the read capability; lifetime is enforced against request.time. The initiator
+    // creates it; the partner updates it with its own material + transcript signature
+    // (pinned fields: the update cannot alter creatorUid / payload / expiresAt); whoever
+    // holds the token deletes it once the registerPairing function has activated the pair.
+    // This document is transport only — it grants no authority. Authority is the signed
+    // proof registered through the function (AD-02 / §8 Step 3).
     match /pairing_tokens/{tokenId} {
-      allow create: if request.auth.uid != null
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['creatorUid', 'expiresAt', 'payload'])
         && request.resource.data.creatorUid == request.auth.uid
-        && request.resource.data.pairId is string
         && request.resource.data.expiresAt > request.time;
-      allow read, delete: if request.auth.uid != null
+      allow read: if request.auth != null
         && (resource == null || resource.data.expiresAt > request.time);
-      allow update: if false;
+      // Single-use: the first partner response commits; a concurrent second update then
+      // sees partnerUid already present and is denied (atomic — rules evaluate the read
+      // state at commit). The client maps that denial to TokenAlreadyUsed.
+      allow update: if request.auth != null
+        && resource.data.expiresAt > request.time
+        && !('partnerUid' in resource.data)
+        && request.resource.data.keys().hasOnly(
+             ['creatorUid', 'expiresAt', 'payload', 'partnerUid', 'partnerPayload', 'partnerSignature'])
+        && request.resource.data.creatorUid == resource.data.creatorUid
+        && request.resource.data.expiresAt == resource.data.expiresAt
+        && request.resource.data.payload == resource.data.payload
+        && request.resource.data.partnerUid == request.auth.uid;
+      allow delete: if request.auth != null
+        && (resource == null || resource.data.expiresAt > request.time);
     }
+
+    // Relay bookkeeping + rate counters: function-only (AD-10, AD-23).
+    match /relay-dispatch/{document=**} { allow read, write: if false; }
+    match /rate-limits/{document=**} { allow read, write: if false; }
   }
 }

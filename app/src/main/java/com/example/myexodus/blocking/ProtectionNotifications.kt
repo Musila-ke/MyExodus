@@ -1,18 +1,17 @@
 package com.example.myexodus.blocking
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
 import com.example.myexodus.MainActivity
 import com.example.myexodus.R
+import com.example.myexodus.notifications.NotificationAccess
 
 /**
  * Notification surface for app-block protection (blocking-core plan §8.2/§9): the FGS
@@ -116,22 +115,16 @@ object ProtectionNotifications {
     }
 
     /** Posts or clears the degraded alert; no-op silently when notifications are denied. */
+    // Suppressed: the gate is NotificationAccess.canPost (the only way in), which lint can't
+    // trace through a helper.
+    @SuppressLint("MissingPermission")
     fun updateDegraded(context: Context, degradation: ProtectionDegradation?) {
         val manager = NotificationManagerCompat.from(context)
         if (degradation == null) {
             manager.cancel(NOTIF_DEGRADED)
             return
         }
-        // POST_NOTIFICATIONS exists only on 33+; pre-33 that check reports DENIED for an
-        // unknown permission, so the real gate there is areNotificationsEnabled (same
-        // reasoning as EnforcementForegroundService.checkNotificationsPermission).
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+        if (!NotificationAccess.canPost(context)) return
         manager.notify(NOTIF_DEGRADED, degraded(context, degradation))
     }
 }

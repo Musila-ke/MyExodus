@@ -11,7 +11,7 @@ import java.security.MessageDigest
 data class UnsignedEnvelope(
     /** Hex SHA-256 of the sender's signing public key. */
     val senderKeyId: String,
-    /** Key rotation epoch; 0 for the first identity key (§7.6). */
+    /** Identity key epoch; 0 for the first identity key (§7.6). */
     val epoch: Int,
     val sequence: Long,
     /** Hash of the previous event in the chain; null for the first event. */
@@ -19,6 +19,12 @@ data class UnsignedEnvelope(
     val nonce: ByteArray,
     val ciphertext: ByteArray,
     val createdAtEpochMillis: Long,
+    /**
+     * AD-12 session-key epoch: which derived session key this ciphertext is under, so the
+     * receiver selects it deterministically instead of trial-decrypting. Absent from the wire
+     * at 0 — pre-rotation envelopes keep their exact bytes (and their signatures).
+     */
+    val keyEpoch: Int = 0,
 ) {
 
     fun canonicalBytes(): ByteArray = encodeUnsigned(this)
@@ -54,35 +60,29 @@ private const val K_PREV_HASH = "p"
 private const val K_NONCE = "n"
 private const val K_CIPHERTEXT = "c"
 private const val K_CREATED_AT = "t"
+private const val K_KEY_EPOCH = "ke"
 private const val K_SIGNATURE = "sig"
 
-fun encodeUnsigned(e: UnsignedEnvelope): ByteArray = CanonicalCbor.encodeMap(
-    listOf(
-        K_VERSION to CanonicalCbor.int(UnsignedEnvelope.VERSION.toLong()),
-        K_SENDER_KEY_ID to CanonicalCbor.text(e.senderKeyId),
-        K_EPOCH to CanonicalCbor.int(e.epoch.toLong()),
-        K_SEQUENCE to CanonicalCbor.int(e.sequence),
-        K_PREV_HASH to (e.previousEventHash?.let { CanonicalCbor.bytes(it) }
-            ?: CBORObject.Null),
-        K_NONCE to CanonicalCbor.bytes(e.nonce),
-        K_CIPHERTEXT to CanonicalCbor.bytes(e.ciphertext),
-        K_CREATED_AT to CanonicalCbor.int(e.createdAtEpochMillis),
-    ),
-)
+private fun unsignedEntries(e: UnsignedEnvelope): List<Pair<String, CBORObject>> = listOf(
+    K_VERSION to CanonicalCbor.int(UnsignedEnvelope.VERSION.toLong()),
+    K_SENDER_KEY_ID to CanonicalCbor.text(e.senderKeyId),
+    K_EPOCH to CanonicalCbor.int(e.epoch.toLong()),
+    K_SEQUENCE to CanonicalCbor.int(e.sequence),
+    K_PREV_HASH to (e.previousEventHash?.let { CanonicalCbor.bytes(it) }
+        ?: CBORObject.Null),
+    K_NONCE to CanonicalCbor.bytes(e.nonce),
+    K_CIPHERTEXT to CanonicalCbor.bytes(e.ciphertext),
+    K_CREATED_AT to CanonicalCbor.int(e.createdAtEpochMillis),
+) + if (e.keyEpoch != 0) {
+    listOf(K_KEY_EPOCH to CanonicalCbor.int(e.keyEpoch.toLong()))
+} else {
+    emptyList()
+}
+
+fun encodeUnsigned(e: UnsignedEnvelope): ByteArray = CanonicalCbor.encodeMap(unsignedEntries(e))
 
 fun encodeSigned(e: SignedEnvelope): ByteArray = CanonicalCbor.encodeMap(
-    listOf(
-        K_VERSION to CanonicalCbor.int(UnsignedEnvelope.VERSION.toLong()),
-        K_SENDER_KEY_ID to CanonicalCbor.text(e.unsigned.senderKeyId),
-        K_EPOCH to CanonicalCbor.int(e.unsigned.epoch.toLong()),
-        K_SEQUENCE to CanonicalCbor.int(e.unsigned.sequence),
-        K_PREV_HASH to (e.unsigned.previousEventHash?.let { CanonicalCbor.bytes(it) }
-            ?: CBORObject.Null),
-        K_NONCE to CanonicalCbor.bytes(e.unsigned.nonce),
-        K_CIPHERTEXT to CanonicalCbor.bytes(e.unsigned.ciphertext),
-        K_CREATED_AT to CanonicalCbor.int(e.unsigned.createdAtEpochMillis),
-        K_SIGNATURE to CanonicalCbor.bytes(e.signature),
-    ),
+    unsignedEntries(e.unsigned) + listOf(K_SIGNATURE to CanonicalCbor.bytes(e.signature)),
 )
 
 /** Decodes a received signed envelope; throws on malformed or unsupported structure. */
@@ -99,6 +99,8 @@ fun decodeSigned(bytes: ByteArray): SignedEnvelope {
         nonce = obj[K_NONCE].GetByteString(),
         ciphertext = obj[K_CIPHERTEXT].GetByteString(),
         createdAtEpochMillis = obj[K_CREATED_AT].AsInt64(),
+        keyEpoch = obj.get(K_KEY_EPOCH)?.takeIf { !it.isNull }?.AsInt32() ?: 0,
     )
+    require(unsigned.keyEpoch >= 0) { "negative keyEpoch ${unsigned.keyEpoch}" }
     return SignedEnvelope(unsigned, obj[K_SIGNATURE].GetByteString())
 }

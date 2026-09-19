@@ -10,10 +10,14 @@
         <exclude domain="database" path="." />
         <exclude domain="sharedpref" path="." />
         <exclude domain="file" path="rules_snapshot.json" />
+        <!-- Widget snapshot (widget spec §10): Preferences DataStore lives in files/datastore/.
+             Device-local protection state — the boot count in it is meaningless elsewhere. -->
+        <exclude domain="file" path="datastore/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="database" path="." />
         <exclude domain="sharedpref" path="." />
         <exclude domain="file" path="rules_snapshot.json" />
+        <exclude domain="file" path="datastore/" />
     </device-transfer>
 </data-extraction-rules>

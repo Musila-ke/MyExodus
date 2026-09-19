@@ -16,6 +16,7 @@ import com.example.myexodus.accountability.serialization.decodeSigned
 import com.example.myexodus.accountability.serialization.eventHash
 import com.example.myexodus.accountability.state.AccountabilityDatabase
 import com.example.myexodus.accountability.state.ChainStateStore
+import com.example.myexodus.accountability.state.SessionKeyManager
 import com.example.myexodus.blocking.AttemptRecorder
 import com.example.myexodus.data.db.ActivityLogKeyManager
 import com.example.myexodus.data.db.AppRulesStoreFactory
@@ -74,7 +75,11 @@ class PartnerSyncCoordinatorTest {
 
     private var drainCalls = mutableListOf<Triple<String, String, String>>()
     private var pullCalls = mutableListOf<String>()
-    private var backfillCalls = 0
+    private var pullWakeIds = mutableListOf<String?>()
+    private var repairCalls = 0
+    private var rejectionChecks = mutableListOf<Pair<String, String>>()
+    private var rejectionsToReport = 0
+    private val stepOrder = mutableListOf<String>()
 
     @Before
     fun setUp() {
@@ -109,7 +114,7 @@ class PartnerSyncCoordinatorTest {
         assertNull("attempt stays unlinked without a pair", pending().single().eventSequence)
         assertTrue(drainCalls.isEmpty())
         assertTrue(pullCalls.isEmpty())
-        assertEquals(0, backfillCalls)
+        assertEquals(0, repairCalls)
     }
 
     @Test
@@ -125,7 +130,8 @@ class PartnerSyncCoordinatorTest {
         assertEquals(true, report.drained)
         assertEquals(2, report.drainedCount)
         assertEquals(3, report.pulledCount)
-        assertEquals(1, backfillCalls)
+        assertEquals(1, repairCalls)
+        assertEquals(2, report.repairRequestsCreated)
 
         val signed = decodeSigned(store.chainFor(pairId).single().envelope)
         assertTrue("partner can verify the event", signer.verify(mySigning.public, eventHash(signed.unsigned), signed.signature))
@@ -181,22 +187,50 @@ class PartnerSyncCoordinatorTest {
     }
 
     @Test
-    fun drainFailure_doesNotSkipPullOrBackfill() = runTest {
+    fun drainFailure_doesNotSkipPullOrRepair() = runTest {
         enroll()
-        coordinator = coordinator(warmSigner(), drain = FirestoreRelay.DrainResult.Failed("network down"))
+        coordinator = coordinator(warmSigner(), drain = MailboxOutboxDrainer.DrainResult.Failed("network down"))
 
         val report = coordinator.syncOnce()
 
         assertEquals(false, report.drained)
         assertEquals("pull still ran", 3, report.pulledCount)
-        assertEquals(1, backfillCalls)
+        assertEquals(1, repairCalls)
+    }
+
+    /** §8 Step 18: the relay-rejection read-back runs before the drain — this pass's own
+     *  writes are not yet SENT, so they can never be checked against a relay that has not
+     *  run — and its finding rides the report. */
+    @Test
+    fun rejectionCheck_runsBeforeTheDrain_andItsFindingRidesTheReport() = runTest {
+        enroll()
+        rejectionsToReport = 2
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(listOf(pairId to "partner"), rejectionChecks)
+        assertEquals(2, report.rejectionsFound)
+        assertEquals("rejection check precedes the drain", listOf("rejection", "drain"), stepOrder)
+        assertEquals("rejections do not disturb the drain", true, report.drained)
+    }
+
+    /** §6 step 3 expedited path: the wake's messageId rides the work input into the pull, so
+     *  the out-of-order arrival is handled before the watermark query could miss it. */
+    @Test
+    fun wakeMessageId_isForwardedToThePull() = runTest {
+        enroll()
+
+        coordinator.syncOnce("m-42")
+        coordinator.syncOnce()
+
+        assertEquals(listOf<String?>("m-42", null), pullWakeIds)
     }
 
     // ---- helpers ----
 
     private fun coordinator(
         signer: AccountabilitySigner,
-        drain: FirestoreRelay.DrainResult = FirestoreRelay.DrainResult.Sent(2),
+        drain: MailboxOutboxDrainer.DrainResult = MailboxOutboxDrainer.DrainResult.Sent(2),
     ) = PartnerSyncCoordinator(
         enrollmentDao = db.enrollmentDao(),
         storeFactory = factory,
@@ -208,18 +242,26 @@ class PartnerSyncCoordinatorTest {
             signer = signer,
             epochStore = IdentityEpochStore(db.identityEpochDao()),
             agreementPrivateKey = { myAgreement.private },
+            sessionKeyManager = SessionKeyManager(store),
         ),
         signer = signer,
         resolveUids = { pairId -> if (pairId == this.pairId) "me" to "partner" else null },
         drainOutbox = { pId, authorUid, partnerUid ->
+            stepOrder += "drain"
             drainCalls += Triple(pId, authorUid, partnerUid)
             drain
         },
-        pullMailbox = { pId, myUid ->
+        checkRejections = { pId, partnerUid ->
+            stepOrder += "rejection"
+            rejectionChecks += pId to partnerUid
+            rejectionsToReport
+        },
+        pullMailbox = { pId, myUid, messageId ->
             pullCalls += pId
+            pullWakeIds += messageId
             FirestoreMailboxReceiver.PullResult(appended = 3)
         },
-        respondToBackfill = { _, _, _, _ -> backfillCalls++; 2 },
+        repairPass = { repairCalls++; 2 },
     )
 
     private fun enroll() = runBlocking {

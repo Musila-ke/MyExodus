@@ -7,9 +7,11 @@ import java.security.SecureRandom
 import java.security.spec.X509EncodedKeySpec
 
 /**
- * §6.1 transcript-bound SAS. The transcript T binds the pair id to both agreement public
+ * §6.1 transcript-bound SAS. The transcript T binds the session id to both agreement public
  * keys in a canonical order (min/max by encoded bytes), so both devices derive the same T
  * regardless of who initiated. SAS = Truncate(SHA256(T), 40 bits) shown as 5 decimal digits.
+ * The session id is the random per-attempt id from the pairing token — NOT the durable
+ * [durablePairIdOf], which only exists once both uids are known (AD-02).
  */
 object EnrollmentTranscript {
 
@@ -17,10 +19,10 @@ object EnrollmentTranscript {
 
     fun pubKeyBytes(publicKey: PublicKey): ByteArray = publicKey.encoded
 
-    /** T = DOMAIN || pairId || min(PubA, PubB) || max(PubA, PubB) — order-independent. */
-    fun transcript(pairId: String, pubKeyA: ByteArray, pubKeyB: ByteArray): ByteArray {
+    /** T = DOMAIN || sessionId || min(PubA, PubB) || max(PubA, PubB) — order-independent. */
+    fun transcript(sessionId: String, pubKeyA: ByteArray, pubKeyB: ByteArray): ByteArray {
         val (min, max) = if (compareBytes(pubKeyA, pubKeyB) <= 0) pubKeyA to pubKeyB else pubKeyB to pubKeyA
-        return DOMAIN.toByteArray(Charsets.UTF_8) + pairId.toByteArray(Charsets.UTF_8) + min + max
+        return DOMAIN.toByteArray(Charsets.UTF_8) + sessionId.toByteArray(Charsets.UTF_8) + min + max
     }
 
     private fun compareBytes(a: ByteArray, b: ByteArray): Int {
@@ -38,16 +40,28 @@ object EnrollmentTranscript {
         for (i in 0 until SAS_DIGIT_COUNT) append((digest[i].toInt() and 0xFF) % 10)
     }
 
-    fun newPairId(): String {
+    fun newSessionId(): String {
         val bytes = ByteArray(8).also { SecureRandom().nextBytes(it) }
         return bytes.joinToString("") { "%02x".format(it) }
     }
 
-    /** §10: the sender key id is hex SHA-256 of the signing public key's DER SPKI. */
-    fun senderKeyId(signingPubKeyBytes: ByteArray): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest(signingPubKeyBytes)
+    /**
+     * AD-02: pairId = min(uidA, uidB) + "_" + max(uidA, uidB) — computed identically in
+     * functions/index.js pairIdOf. Plain lexicographic comparison, same as the JS `<`
+     * operator (Firebase uids are ASCII alphanumerics, so code-unit order is unambiguous).
+     */
+    fun durablePairIdOf(uidA: String, uidB: String): String {
+        val (min, max) = if (uidA <= uidB) uidA to uidB else uidB to uidA
+        return "${min}_${max}"
+    }
+
+    fun sha256Hex(bytes: ByteArray): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
         return digest.joinToString("") { "%02x".format(it) }
     }
+
+    /** §10: the sender key id is hex SHA-256 of the signing public key's DER SPKI. */
+    fun senderKeyId(signingPubKeyBytes: ByteArray): String = sha256Hex(signingPubKeyBytes)
 
     fun parsePublicKey(der: ByteArray): PublicKey =
         KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(der))

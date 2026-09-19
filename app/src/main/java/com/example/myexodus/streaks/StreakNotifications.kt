@@ -1,19 +1,16 @@
 package com.example.myexodus.streaks
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
 import com.example.myexodus.MainActivity
 import com.example.myexodus.R
+import com.example.myexodus.notifications.NotificationAccess
 
 /**
  * §6/§8 Step 4 milestone notification surface: the best-effort system notification for a
@@ -25,21 +22,8 @@ object StreakNotifications {
 
     private const val CHANNEL_MILESTONES = "streak_milestones"
 
-    /** §9: denied is silent — the splash card is the guaranteed path. Callers that claim the
-     *  notification slot first (the §14 delivery counter) must check this before claiming.
-     *  POST_NOTIFICATIONS exists only on 33+; pre-33 a raw checkSelfPermission reports DENIED
-     *  for an unknown permission (a false "denied" on every pre-33 device), so the real gate
-     *  there is areNotificationsEnabled — same pattern as EnforcementForegroundService. */
-    fun canPost(context: Context): Boolean =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-                PackageManager.PERMISSION_GRANTED &&
-                NotificationManagerCompat.from(context).areNotificationsEnabled()
-        } else {
-            NotificationManagerCompat.from(context).areNotificationsEnabled()
-        }
-
-    // Suppressed: the gate is canPost (the only way in), which lint can't trace through a helper.
+    // Suppressed: the gate is NotificationAccess.canPost (the only way in), which lint can't
+    // trace through a helper.
     @SuppressLint("MissingPermission")
     fun postMilestone(
         context: Context,
@@ -48,7 +32,7 @@ object StreakNotifications {
         habitLabel: String,
         habitId: String,
     ) {
-        if (!canPost(context)) return
+        if (!NotificationAccess.canPost(context)) return
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(
                 CHANNEL_MILESTONES,

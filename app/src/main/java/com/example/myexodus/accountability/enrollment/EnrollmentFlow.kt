@@ -21,23 +21,23 @@ class EnrollmentFlow(
     private val cekDerivation: CekDerivation,
 ) {
 
-    /** SAS both users compare out-of-band; identical only when both hold the same pairId + keys. */
+    /** SAS both users compare out-of-band; identical only when both hold the same sessionId + keys. */
     fun deriveSas(
-        pairId: String,
+        sessionId: String,
         myAgreementPubKey: PublicKey,
         partnerAgreementPubKey: PublicKey,
     ): String {
         val t = EnrollmentTranscript.transcript(
-            pairId,
+            sessionId,
             EnrollmentTranscript.pubKeyBytes(myAgreementPubKey),
             EnrollmentTranscript.pubKeyBytes(partnerAgreementPubKey),
         )
         return EnrollmentTranscript.sas(t)
     }
 
-    /** Updates the biometric [Signature] with the transcript and produces the signature. */
-    fun signTranscript(signature: Signature, transcriptBytes: ByteArray): ByteArray {
-        signature.update(transcriptBytes)
+    /** Updates the biometric [Signature] with the message bytes and produces the signature. */
+    fun signMessage(signature: Signature, messageBytes: ByteArray): ByteArray {
+        signature.update(messageBytes)
         return signer.finishSign(signature)
     }
 
@@ -51,16 +51,17 @@ class EnrollmentFlow(
      * §10 verification of the partner's exchange material: the chain must attest (origin
      * GENERATED, purpose SIGN, StrongBox or TEE), the challenge must match, and the
      * signature must be over this session's transcript with the attested key. The signature
-     * is a separate pair-document field, not payload material ([EnrollmentPayload]): the
-     * partner signs only after the initiator's key arrives at redemption (§6.1 ordering).
+     * is a separate token-document field, not payload material ([EnrollmentPayload]): the
+     * partner signs only after the initiator's key arrives from the token document
+     * (§6.1 ordering).
      */
     fun verifyPartnerMaterial(
-        expectedPairId: String,
+        expectedSessionId: String,
         payload: EnrollmentPayload,
         transcriptBytes: ByteArray,
         transcriptSignature: ByteArray,
     ): PartnerVerification {
-        if (payload.pairId != expectedPairId) return PartnerVerification.Rejected("pairId mismatch")
+        if (payload.sessionId != expectedSessionId) return PartnerVerification.Rejected("sessionId mismatch")
         val chain = parseChain(payload) ?: return PartnerVerification.Rejected("malformed certificate chain")
         when (val attestation = attestationVerifier.verify(chain, payload.attestationChallenge)) {
             is AttestationVerifier.VerificationResult.Rejected ->
@@ -75,10 +76,10 @@ class EnrollmentFlow(
     }
 
     /**
-     * §10 step 2 (initiator half): attestation-only check of the initiator's payload from
-     * the redemption. The initiator cannot sign the transcript before the partner's
-     * agreement key exists (§6.1 ordering), so its signature lands in the pair document
-     * later and is verified with [verifyTranscriptSignature].
+     * §10 step 2 (initiator half): attestation-only device-to-device check of the
+     * initiator's payload from the token document (§3 — unchanged). The initiator cannot
+     * sign before the partner's agreement key exists (§6.1 ordering); its signature is the
+     * registerPairing proof, verified cryptographically by the Cloud Function (§8 Step 3).
      */
     fun verifyHardwareIdentity(payload: EnrollmentPayload): PartnerVerification {
         val chain = parseChain(payload) ?: return PartnerVerification.Rejected("malformed certificate chain")
@@ -88,13 +89,6 @@ class EnrollmentFlow(
             is AttestationVerifier.VerificationResult.Verified -> PartnerVerification.Verified(chain[0].publicKey)
         }
     }
-
-    /** §10 step 3: the partner verifies the initiator's transcript signature from the pair document. */
-    fun verifyTranscriptSignature(
-        signingPublicKey: PublicKey,
-        transcriptBytes: ByteArray,
-        signature: ByteArray,
-    ): Boolean = signer.verify(signingPublicKey, transcriptBytes, signature)
 
     /** §6.1 step 5: the pairwise CEK — memory only, never persisted (§5). */
     fun deriveCek(pairId: String, myAgreementKey: PrivateKey, partnerAgreementPubKey: PublicKey): ByteArray =

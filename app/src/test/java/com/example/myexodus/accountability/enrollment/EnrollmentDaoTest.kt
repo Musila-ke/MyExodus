@@ -2,15 +2,15 @@ package com.example.myexodus.accountability.enrollment
 
 import android.app.Application
 import android.content.Context
+import androidx.room3.ColumnInfo
 import androidx.room3.Database
+import androidx.room3.Entity
 import androidx.room3.Room
 import androidx.room3.RoomDatabase
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.accountability.state.AccountabilityDatabase
 import com.example.myexodus.accountability.state.ChainEvent
 import com.example.myexodus.accountability.state.ChainEventDao
-import com.example.myexodus.accountability.state.ChainHead
-import com.example.myexodus.accountability.state.ChainHeadDao
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
@@ -56,6 +56,12 @@ class EnrollmentDaoTest {
             AccountabilityDatabase.MIGRATION_1_2,
             AccountabilityDatabase.MIGRATION_2_3,
             AccountabilityDatabase.MIGRATION_3_4, // watermark column (mailbox quota fix)
+            AccountabilityDatabase.MIGRATION_4_5, // outbox, processed_events, key_epoch
+            AccountabilityDatabase.MIGRATION_5_6, // AD-08 repair columns
+            AccountabilityDatabase.MIGRATION_6_7, // approval_requests + pairing epoch
+            AccountabilityDatabase.MIGRATION_7_8, // unpair journal (AD-13a/b)
+            AccountabilityDatabase.MIGRATION_8_9, // Step 15 rotation anchors
+            AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
         ).build()
 
     @Test
@@ -108,7 +114,7 @@ class EnrollmentDaoTest {
             ),
         )
         v1.close()
-        db = openDatabase() // Room validates the schema and runs the 1->2->3 migration chain
+        db = openDatabase() // Room validates the schema and runs the full 1->…->6 migration chain
         assertEquals(1, db.chainEventDao().chainFor("pair-1").size)
         db.enrollmentDao().upsert(record("a1b2c3d4e5f60718"))
         assertEquals("a1b2c3d4e5f60718", db.enrollmentDao().getByPairId("a1b2c3d4e5f60718")?.pairId)
@@ -116,8 +122,22 @@ class EnrollmentDaoTest {
 }
 
 /** The v1 schema exactly as Room generated it when only the chain tables existed. */
-@Database(entities = [ChainEvent::class, ChainHead::class], version = 1, exportSchema = false)
+@Database(entities = [ChainEvent::class, ChainHeadV1::class], version = 1, exportSchema = false)
 abstract class V1Database : RoomDatabase() {
     abstract fun chainEventDao(): ChainEventDao
-    abstract fun chainHeadDao(): ChainHeadDao
 }
+
+/**
+ * The v1 `chain_heads` shape — no `key_epoch` (added by MIGRATION_4_5). The live [ChainHead]
+ * entity cannot stand in here: its generated DDL already carries the column, which would make
+ * the seed file a v5-shaped table and turn the migration's ADD COLUMN into a duplicate-column
+ * error.
+ */
+@Entity(tableName = "chain_heads", primaryKeys = ["pair_id", "sender_key_id"])
+data class ChainHeadV1(
+    @ColumnInfo(name = "pair_id") val pairId: String,
+    @ColumnInfo(name = "sender_key_id") val senderKeyId: String,
+    @ColumnInfo(name = "last_sequence") val lastSequence: Long,
+    @ColumnInfo(name = "last_event_hash") val lastEventHash: ByteArray,
+    @ColumnInfo(name = "forked") val forked: Boolean = false,
+)

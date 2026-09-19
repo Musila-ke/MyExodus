@@ -20,8 +20,10 @@ import com.google.firebase.firestore.FirebaseFirestore
  *
  * Per run: create chain events for attempts not yet linked (reconcile — heals the §6
  * attempt-first/cross-DB ordering, cold signing window, or a crash between event creation
- * and the link write), drain the outbox, pull the partner's mailbox, answer backfill
- * requests. Steps are independent — a drain failure never skips the pull.
+ * and the link write), advance the Step 11 chain-repair protocol (escalations + due
+ * SyncRequests, before the drain so a fresh request ships this pass — the responder side
+ * runs inline in the pull's handler), drain the outbox into the partner's mailbox, pull
+ * this device's own mailbox. Steps are independent — a drain failure never skips the pull.
  *
  * Signing is best-effort: the biometric auth window (NFR4, 900s) gates [AccountabilitySigner];
  * when it is cold the events stay unlinked and the next run with a warm window delivers them.
@@ -33,9 +35,22 @@ class PartnerSyncCoordinator(
     private val creator: EventCreator,
     private val signer: AccountabilitySigner,
     private val resolveUids: suspend (pairId: String) -> Pair<String, String>?,
-    private val drainOutbox: suspend (pairId: String, authorUid: String, partnerUid: String) -> FirestoreRelay.DrainResult,
-    private val pullMailbox: suspend (pairId: String, myUid: String) -> FirestoreMailboxReceiver.PullResult,
-    private val respondToBackfill: suspend (pairId: String, mySenderKeyId: String, authorUid: String, partnerUid: String) -> Int,
+    private val drainOutbox: suspend (pairId: String, authorUid: String, partnerUid: String) -> MailboxOutboxDrainer.DrainResult,
+    private val pullMailbox: suspend (pairId: String, myUid: String, messageId: String?) -> FirestoreMailboxReceiver.PullResult,
+    private val repairPass: suspend (pairId: String) -> Int,
+    /** Step 13: the 72h approval sweep — run before the pull so an expired request the pull
+     *  is about to answer can never be decided past its deadline by the responder UI. */
+    private val expireApprovals: suspend (pairId: String) -> Int = { 0 },
+    /** Step 13 unpair: continue in-flight unpairs (re-delivery, owed ack, ack poll, timeout).
+     *  Runs BEFORE the enrollment early-return — a shredded device has no enrollment, and its
+     *  unfinished unpair is exactly what still needs this pass. */
+    private val resumeUnpairs: suspend () -> Unit = {},
+    /** Step 15 (AD-12): the rotation sweep. [EventCreator] also checks before every envelope,
+     *  so this covers the idle pair — a 30-day-old epoch with no new traffic still rolls. */
+    private val rotateKeys: suspend (pairId: String, mySenderKeyId: String) -> Int? = { _, _ -> null },
+    /** Step 18 (AD-23): read back the relay's rejection marker for sent rows. Runs BEFORE the
+     *  drain so this pass's own writes are never checked against a relay that has not run. */
+    private val checkRejections: suspend (pairId: String, partnerUid: String) -> Int = { _, _ -> 0 },
 ) {
 
     data class SyncReport(
@@ -45,37 +60,63 @@ class PartnerSyncCoordinator(
         val drained: Boolean = false,
         val drainedCount: Int = 0,
         val pulledCount: Int = 0,
-        val backfilledCount: Int = 0,
+        val repairRequestsCreated: Int = 0,
+        val approvalsExpired: Int = 0,
+        /** Non-null when this pass rotated the pair's session key (Step 15). */
+        val rotatedKeyEpoch: Int? = null,
+        /** Sent messages this pass read back as rejected by the relay (Step 18; any marker —
+         *  `RATE_LIMITED` is the one the §9 error table names). */
+        val rejectionsFound: Int = 0,
     )
 
-    suspend fun syncOnce(): SyncReport {
+    /** [wakeMessageId] carries the FCM wake's own message id (null on periodic/deleted-messages
+     *  runs): the pull handles it first so an out-of-order arrival cannot be missed by the
+     *  watermark query (plan §6 step 3's expedited path). */
+    suspend fun syncOnce(wakeMessageId: String? = null): SyncReport {
+        runCatching { resumeUnpairs() }.onFailure { Log.w(TAG, "unpair resume failed", it) }
         val enrollment = enrollmentDao.all().firstOrNull()
             ?: return SyncReport() // Unpaired: attempts stay local (§6 attempt log is the record).
         val uids = resolveUids(enrollment.pairId) ?: return SyncReport(enrolled = true)
         val (myUid, partnerUid) = uids
 
+        val rotated = runCatching { rotateKeys(enrollment.pairId, enrollment.mySenderKeyId) }
+            .onFailure { Log.w(TAG, "session key rotation failed", it) }
+            .getOrNull()
+        if (rotated != null) Log.i(TAG, "session key rotated to epoch $rotated")
+
         val linked = reconcileEvents(enrollment.pairId)
+
+        // Step 11 before the drain: a request created now is delivered by this same pass.
+        val repairs = runCatching { repairPass(enrollment.pairId) }
+            .onFailure { Log.w(TAG, "repair pass failed", it) }
+            .getOrDefault(0)
+
+        val expiredApprovals = runCatching { expireApprovals(enrollment.pairId) }
+            .onFailure { Log.w(TAG, "approval expiry sweep failed", it) }
+            .getOrDefault(0)
+
+        // Before the drain: rows sent by earlier passes are settled by the relay by now, and
+        // this pass's own writes are not yet SENT, so they are never read back prematurely.
+        val rejected = runCatching { checkRejections(enrollment.pairId, partnerUid) }
+            .onFailure { Log.w(TAG, "rejection check failed", it) }
+            .getOrDefault(0)
 
         var drained = false
         var drainedCount = 0
         when (val outcome = drainOutbox(enrollment.pairId, myUid, partnerUid)) {
-            is FirestoreRelay.DrainResult.Sent -> {
+            is MailboxOutboxDrainer.DrainResult.Sent -> {
                 drained = true
                 drainedCount = outcome.eventsDelivered
                 Log.i(TAG, "drain: ${outcome.eventsDelivered} event(s) delivered")
             }
-            is FirestoreRelay.DrainResult.PermissionDenied -> Log.w(TAG, "drain: PERMISSION_DENIED — not retried (§9)")
-            is FirestoreRelay.DrainResult.Failed -> Log.w(TAG, "drain failed: ${outcome.reason} (retried next run)")
+            is MailboxOutboxDrainer.DrainResult.PermissionDenied -> Log.w(TAG, "drain: PERMISSION_DENIED — rows left pending, retried next run")
+            is MailboxOutboxDrainer.DrainResult.Failed -> Log.w(TAG, "drain failed: ${outcome.reason} (retried next run)")
         }
 
-        val pulled = runCatching { pullMailbox(enrollment.pairId, myUid) }
+        val pulled = runCatching { pullMailbox(enrollment.pairId, myUid, wakeMessageId) }
             .onFailure { Log.w(TAG, "mailbox pull failed", it) }
             .getOrNull()
         if (pulled != null && pulled.isNotEnrolled) Log.w(TAG, "mailbox pull: not enrolled (pair state gone?)")
-
-        val backfilled = runCatching {
-            respondToBackfill(enrollment.pairId, enrollment.mySenderKeyId, myUid, partnerUid)
-        }.onFailure { Log.w(TAG, "backfill response failed", it) }.getOrDefault(0)
 
         return SyncReport(
             enrolled = true,
@@ -84,7 +125,10 @@ class PartnerSyncCoordinator(
             drained = drained,
             drainedCount = drainedCount,
             pulledCount = pulled?.appended ?: 0,
-            backfilledCount = backfilled,
+            repairRequestsCreated = repairs,
+            approvalsExpired = expiredApprovals,
+            rotatedKeyEpoch = rotated,
+            rejectionsFound = rejected,
         )
     }
 
@@ -130,9 +174,10 @@ class PartnerSyncCoordinator(
 }
 
 /**
- * Resolves (myUid, partnerUid) for a pair: anonymous sign-in if needed, then the pair
- * document's `members` map (the rules gate the read to members; the doc is the only local
- * source of the partner's uid — it is deliberately never persisted on-device).
+ * Resolves (myUid, partnerUid) for a pair: anonymous sign-in if needed, then the v2
+ * `/pairings/{pairId}` document's `members` **array** (Step 1 rules shape — an array, unlike
+ * the retired v1 `pairs` map). The rules gate the read to members; the doc is the only local
+ * source of the partner's uid — it is deliberately never persisted on-device.
  */
 class PairUidResolver(
     private val appContext: Context,
@@ -145,12 +190,10 @@ class PairUidResolver(
             ?: runCatching { auth.signInAnonymously().await() }.getOrNull()?.user
             ?: return null
         val members = runCatching {
-            firestore.collection(FirestoreSchema.PAIRS_COLLECTION).document(pairId).get()
-                .await()
-                .get("members")
+            FirestoreSchema.pairingDocument(firestore, pairId).get().await().get("members")
         }.getOrNull() ?: return null
-        val partner = (members as? Map<*, *>)?.keys
-            ?.mapNotNull { it as? String }
+        val partner = (members as? List<*>)
+            ?.filterIsInstance<String>()
             ?.firstOrNull { it != user.uid } ?: return null
         return user.uid to partner
     }

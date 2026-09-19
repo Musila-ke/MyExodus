@@ -26,4 +26,11 @@ data class EnrollmentRecord(
      * next pull starts after it instead of re-reading the whole mailbox. Null = never pulled.
      */
     @ColumnInfo(name = "mailbox_watermark_ts") val mailboxWatermarkTsEpochMillis: Long? = null,
+    /**
+     * AD-07: the partnership epoch this enrollment was created under (server-assigned by
+     * registerPairing, read from the pair doc). Disable-approval responses are rejected when
+     * their carried epoch differs — a response minted before a re-pair can never apply after it.
+     * 0 = pre-v7 enrollment (treated as epoch 0, matching a server doc that never re-paired).
+     */
+    @ColumnInfo(name = "pairing_epoch") val pairingEpoch: Int = 0,
 )

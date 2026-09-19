@@ -47,4 +47,7 @@ object CanonicalCbor {
     fun bytes(value: ByteArray): CBORObject = CBORObject.FromObject(value)
 
     fun int(value: Long): CBORObject = CBORObject.FromObject(value)
+
+    /** CBOR simple values 20/21 (0xF4/0xF5) — deterministic, no form choices. */
+    fun bool(value: Boolean): CBORObject = CBORObject.FromObject(value)
 }

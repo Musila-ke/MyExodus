@@ -1,6 +1,7 @@
 package com.example.myexodus.accountability.enrollment
 
 import com.example.myexodus.accountability.crypto.Hkdf
+import java.nio.ByteBuffer
 import java.security.PrivateKey
 import java.security.PublicKey
 
@@ -27,10 +28,29 @@ class CekDerivation {
     fun derivePairingKey(cek: ByteArray): ByteArray =
         Hkdf.derive(cek, PAIRING_KEY_INFO.toByteArray(Charsets.UTF_8), PAIRING_KEY_LENGTH)
 
+    /**
+     * AD-12: the per-epoch session key `K_epoch = HKDF(CEK, "StrictMode-session-key" || epoch)`.
+     * Epoch 0 IS the raw CEK — ciphertext written before rotation (and every stored envelope,
+     * envelope tests, and the animated-QR budget) stays decryptable under its original key.
+     * Deterministic on both sides, so the receiver derives exactly the sender's key.
+     *
+     * This bounds the exposure window of an individual session key; it is NOT forward secrecy —
+     * the CEK can re-derive every epoch (AD-12, documented there).
+     */
+    fun deriveSessionKey(cek: ByteArray, keyEpoch: Int): ByteArray =
+        if (keyEpoch == 0) {
+            cek
+        } else {
+            val info = SESSION_KEY_INFO.toByteArray(Charsets.UTF_8) +
+                ByteBuffer.allocate(4).putInt(keyEpoch).array()
+            Hkdf.derive(cek, info, CEK_LENGTH)
+        }
+
     companion object {
         const val INFO = "StrictMode-CEK"
         const val CEK_LENGTH = 32
         const val PAIRING_KEY_INFO = "StrictMode-pairing-key"
         const val PAIRING_KEY_LENGTH = 32
+        const val SESSION_KEY_INFO = "StrictMode-session-key"
     }
 }

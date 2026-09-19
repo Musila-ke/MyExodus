@@ -7,7 +7,9 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-private val LightColorScheme = lightColorScheme(
+// Internal, not private: the home-screen widget renders from these same two schemes
+// (widget/DesertDawnGlanceTheme.kt) so Desert Dawn keeps exactly one definition.
+internal val LightColorScheme = lightColorScheme(
     primary = TealLight,
     onPrimary = Color.White,
     primaryContainer = Color(0xFFD2ECE8),
@@ -43,7 +45,7 @@ private val LightColorScheme = lightColorScheme(
     onErrorContainer = Color(0xFF5C1F16),
 )
 
-private val DarkColorScheme = darkColorScheme(
+internal val DarkColorScheme = darkColorScheme(
     primary = TealDark,
     onPrimary = Color(0xFF0C211F),
     primaryContainer = Color(0xFF123C37),

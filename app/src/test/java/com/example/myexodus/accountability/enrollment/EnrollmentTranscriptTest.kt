@@ -24,7 +24,7 @@ class EnrollmentTranscriptTest {
     }
 
     @Test
-    fun transcript_bindsPairIdAndKeys() {
+    fun transcript_bindsSessionIdAndKeys() {
         val a = EnrollmentTranscript.pubKeyBytes(keyPair().public)
         val b = EnrollmentTranscript.pubKeyBytes(keyPair().public)
         assertNotEquals(
@@ -59,9 +59,23 @@ class EnrollmentTranscriptTest {
     }
 
     @Test
-    fun newPairId_is16HexCharsAndUnique() {
-        val p1 = EnrollmentTranscript.newPairId()
-        val p2 = EnrollmentTranscript.newPairId()
+    fun durablePairId_isOrderIndependentMinMax() {
+        // AD-02 — must match functions/index.js pairIdOf for the same uid pair.
+        assertEquals("uid-a_uid-b", EnrollmentTranscript.durablePairIdOf("uid-a", "uid-b"))
+        assertEquals("uid-a_uid-b", EnrollmentTranscript.durablePairIdOf("uid-b", "uid-a"))
+    }
+
+    @Test
+    fun sha256Hex_isTheSameDigestRuleAsTheSenderKeyId() {
+        val bytes = ByteArray(16) { it.toByte() }
+        assertEquals(64, EnrollmentTranscript.sha256Hex(bytes).length)
+        assertEquals(EnrollmentTranscript.senderKeyId(bytes), EnrollmentTranscript.sha256Hex(bytes))
+    }
+
+    @Test
+    fun newSessionId_is16HexCharsAndUnique() {
+        val p1 = EnrollmentTranscript.newSessionId()
+        val p2 = EnrollmentTranscript.newSessionId()
         assertEquals(16, p1.length)
         assertTrue(p1.matches(Regex("[0-9a-f]{16}")))
         assertNotEquals(p1, p2)

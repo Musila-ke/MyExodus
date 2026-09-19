@@ -62,6 +62,26 @@ class EnvelopeTest {
         assertTrue(!eventHash(e).contentEquals(eventHash(e3)))
     }
 
+    @Test
+    fun keyEpoch_zero_leavesTheWireFormatUntouched() {
+        // AD-12 back-compat: an epoch-0 envelope must be byte-identical to a pre-Step-15 one,
+        // so every stored envelope (and its signature) stays valid — the field is absent, not
+        // zero-encoded.
+        val encoded = encodeUnsigned(envelope())
+        val map = CanonicalCbor.decodeMap(encoded)
+        assertTrue(!map.ContainsKey(com.upokecenter.cbor.CBORObject.FromObject("ke")))
+        assertEquals(0, decodeSigned(encodeSigned(SignedEnvelope(envelope(), ByteArray(8)))).unsigned.keyEpoch)
+    }
+
+    @Test
+    fun keyEpoch_roundTripsAboveZero() {
+        val e = envelope().copy(keyEpoch = 5)
+        val decoded = decodeSigned(encodeSigned(SignedEnvelope(e, ByteArray(8))))
+        assertEquals(5, decoded.unsigned.keyEpoch)
+        // The epoch is signed material — changing it changes the hash the signature covers.
+        assertTrue(!eventHash(e).contentEquals(eventHash(envelope())))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun decode_rejectsTruncated() {
         decodeSigned(byteArrayOf(0xa2.toByte(), 0x61))

@@ -20,7 +20,7 @@ class PairingTokenTest {
         val a = PairingToken.generate(now)
         val b = PairingToken.generate(now)
         assertFalse(a.token.contentEquals(b.token))
-        assertNotEquals(a.pairId, b.pairId)
+        assertNotEquals(a.sessionId, b.sessionId)
         assertEquals(PairingToken.TOKEN_BYTE_LENGTH, a.token.size)
         assertEquals(now + PairingToken.TTL_MILLIS, a.expiresAtEpochMillis)
     }
@@ -38,7 +38,7 @@ class PairingTokenTest {
         val token = PairingToken.generate(1_700_000_000_000L)
         val decoded = decodePairingToken(encodePairingToken(token))
         assertArrayEquals(token.token, decoded.token)
-        assertEquals(token.pairId, decoded.pairId)
+        assertEquals(token.sessionId, decoded.sessionId)
         assertEquals(token.expiresAtEpochMillis, decoded.expiresAtEpochMillis)
     }
 
@@ -47,7 +47,7 @@ class PairingTokenTest {
         val bytes = CanonicalCbor.encodeMap(
             listOf(
                 "tk" to CanonicalCbor.bytes(ByteArray(16)),
-                "p" to CanonicalCbor.text("a1b2"),
+                "s" to CanonicalCbor.text("a1b2"),
                 "e" to CanonicalCbor.int(1_700_000_000_000L),
             ),
         )

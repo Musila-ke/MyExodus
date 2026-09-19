@@ -27,7 +27,7 @@ import javax.inject.Singleton
  * there only).
  */
 @Singleton
-class AccountabilityKeyStore @Inject constructor() {
+open class AccountabilityKeyStore @Inject constructor() {
 
     private val keyStore: KeyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
 
@@ -98,8 +98,10 @@ class AccountabilityKeyStore @Inject constructor() {
     fun agreementPublicKey(): PublicKey = keyStore.getCertificate(AGREEMENT_ALIAS)?.publicKey
         ?: error("agreement key missing")
 
-    /** Non-extractable ECDH private key for CEK re-derivation (§6.1 step 5); never leaves Keystore. */
-    fun agreementPrivateKey(): PrivateKey =
+    /** Non-extractable ECDH private key for CEK re-derivation (§6.1 step 5); never leaves Keystore.
+     *  Open so the virtual-partner harness can substitute its attested test key (ADR #46) — the
+     *  same seam [AccountabilitySigner.beginSign] provides for signing. */
+    open fun agreementPrivateKey(): PrivateKey =
         keyStore.getKey(AGREEMENT_ALIAS, null) as? PrivateKey ?: error("agreement key missing")
 
     /**

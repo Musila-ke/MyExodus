@@ -1,14 +1,23 @@
 {
   "indexes": [
     {
-      "collectionGroup": "accountability_events",
-      "queryScope": "COLLECTION",
+      "collectionGroup": "installations",
+      "queryScope": "COLLECTION_GROUP",
       "fields": [
-        { "fieldPath": "pairId", "order": "ASCENDING" },
-        { "fieldPath": "partnerUid", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "ASCENDING" }
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "attempts", "order": "ASCENDING" }
       ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "messages",
+      "fieldPath": "timestamp",
+      "indexes": [
+        { "queryScope": "COLLECTION", "order": "ASCENDING" },
+        { "queryScope": "COLLECTION", "order": "DESCENDING" },
+        { "queryScope": "COLLECTION_GROUP", "order": "ASCENDING" }
+      ]
+    }
+  ]
 }

@@ -1,0 +1,12 @@
+{
+  "name": "myexodus-rules-test",
+  "private": true,
+  "description": "Firestore security-rules emulator suite (plan §12) — the §13 CI gate that must pass before every rules deployment. Run: npm test (needs the Firebase CLI; the Firestore emulator needs Java 11+).",
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore --project demo-myexodus \"node --test\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "5.0.2",
+    "firebase": "12.19.0"
+  }
+}

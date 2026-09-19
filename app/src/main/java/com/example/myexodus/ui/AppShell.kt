@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Handshake
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.SelfImprovement
@@ -39,8 +40,11 @@ import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.StrictModeManager
+import com.example.myexodus.settings.WidgetSettings
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.ui.home.HomeScreen
+import com.example.myexodus.ui.partner.PartnerDashboardSource
+import com.example.myexodus.ui.partner.PartnerScreen
 import com.example.myexodus.ui.recovery.RecoveryScreen
 import com.example.myexodus.ui.rules.RulesScreen
 import com.example.myexodus.ui.settings.SettingsScreen
@@ -53,6 +57,8 @@ private val Tabs = listOf(
     "Rules" to Icons.Default.Shield,
     "Recovery" to Icons.Default.SelfImprovement,
     "Streaks" to Icons.Default.LocalFireDepartment,
+    // §7 item 12: the partner pillar's dashboard — one tab, not a sub-navigation.
+    "Partner" to Icons.Default.Handshake,
     "Settings" to Icons.Default.Settings,
 )
 
@@ -70,9 +76,19 @@ fun AppShell(
     strictMode: StrictModeManager,
     settings: EnhancedModeSettings,
     crashReporting: CrashReporting,
+    widgetSettings: WidgetSettings,
+    onWidgetSettingsChanged: () -> Unit,
     degradation: ProtectionDegradation?,
     onReenable: () -> Unit,
     streaks: StreaksViewModel,
+    partnerSource: PartnerDashboardSource,
+    partnerNotificationsEnabled: Boolean,
+    partnerNotificationsRequestable: Boolean,
+    onFixNotifications: () -> Unit,
+    onPartnerCheckNow: suspend () -> Boolean,
+    onRespondToApproval: suspend (requestEventId: String, approve: Boolean) -> Boolean = { _, _ -> false },
+    onUnpair: suspend (pairId: String) -> Boolean = { _ -> false },
+    onDismissUnpair: suspend (pairId: String) -> Unit = {},
     encryptionPending: Boolean = false,
     requestedTab: String? = null,
     onTabConsumed: () -> Unit = {},
@@ -120,6 +136,9 @@ fun AppShell(
                             onClick = { tab = index },
                             icon = { Icon(icon, contentDescription = label) },
                             label = { Text(label, maxLines = 1, softWrap = false) },
+                            // Six destinations: labels on selection only (the platform's
+                            // LabelVisibilityMode.AUTO behavior for 4+), else they crowd.
+                            alwaysShowLabel = false,
                         )
                     }
                 }
@@ -182,11 +201,24 @@ fun AppShell(
                         onRelapse = streaks::logRelapse,
                         modifier = contentModifier,
                     )
-                    tab == 4 -> SettingsScreen(
+                    tab == 4 -> PartnerScreen(
+                        source = partnerSource,
+                        notificationsEnabled = partnerNotificationsEnabled,
+                        notificationsRequestable = partnerNotificationsRequestable,
+                        onFixNotifications = onFixNotifications,
+                        onCheckNow = onPartnerCheckNow,
+                        onRespondToApproval = onRespondToApproval,
+                        onUnpair = onUnpair,
+                        onDismissUnpair = onDismissUnpair,
+                        modifier = contentModifier,
+                    )
+                    tab == 5 -> SettingsScreen(
                         monitor = monitor,
                         strictMode = strictMode,
                         settings = settings,
                         crashReporting = crashReporting,
+                        widgetSettings = widgetSettings,
+                        onWidgetSettingsChanged = onWidgetSettingsChanged,
                         modifier = contentModifier,
                     )
                     else -> ComingSoonScreen(Tabs[tab].first, modifier = contentModifier)

@@ -16,14 +16,13 @@ import org.bouncycastle.cert.X509v3CertificateBuilder
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * Enrollment orchestration tests. The attestation chain itself (PKIX to the Google root) is
  * exercised on-device (§12 hardware matrix); here the verifier is stubbed to exercise the
- * flow's own logic: pairId binding, chain decoding, transcript-signature verification.
+ * flow's own logic: sessionId binding, chain decoding, transcript-signature verification.
  */
 class EnrollmentFlowTest {
 
@@ -66,17 +65,17 @@ class EnrollmentFlowTest {
             cekDerivation = CekDerivation(),
         )
 
-    private val pairId = "a1b2c3d4e5f60718"
+    private val sessionId = "a1b2c3d4e5f60718"
     private val partnerKeys = keyPair()
     private val myKeys = keyPair()
     private val transcriptBytes = EnrollmentTranscript.transcript(
-        pairId,
+        sessionId,
         EnrollmentTranscript.pubKeyBytes(myKeys.public),
         EnrollmentTranscript.pubKeyBytes(partnerKeys.public),
     )
 
     private fun payload() = EnrollmentPayload(
-        pairId = pairId,
+        sessionId = sessionId,
         signingChain = listOf(certStub(partnerKeys).encoded),
         attestationChallenge = ByteArray(32) { 5 },
         agreementPublicKey = EnrollmentTranscript.pubKeyBytes(partnerKeys.public),
@@ -84,8 +83,8 @@ class EnrollmentFlowTest {
 
     @Test
     fun sas_agreesBetweenDevices() {
-        val sasA = flow().deriveSas(pairId, myKeys.public, partnerKeys.public)
-        val sasB = flow().deriveSas(pairId, partnerKeys.public, myKeys.public)
+        val sasA = flow().deriveSas(sessionId, myKeys.public, partnerKeys.public)
+        val sasB = flow().deriveSas(sessionId, partnerKeys.public, myKeys.public)
         assertEquals(sasA, sasB)
         assertEquals(5, sasA.length)
     }
@@ -93,7 +92,7 @@ class EnrollmentFlowTest {
     @Test
     fun verifyPartnerMaterial_acceptsValidExchange() {
         val signature = signWith(partnerKeys, transcriptBytes)
-        val result = flow().verifyPartnerMaterial(pairId, payload(), transcriptBytes, signature)
+        val result = flow().verifyPartnerMaterial(sessionId, payload(), transcriptBytes, signature)
         assertTrue(result is EnrollmentFlow.PartnerVerification.Verified)
         assertEquals(
             partnerKeys.public.encoded.toList(),
@@ -104,41 +103,41 @@ class EnrollmentFlowTest {
     @Test
     fun verifyPartnerMaterial_rejectsTamperedSignature() {
         val signature = signWith(partnerKeys, "other".toByteArray())
-        assertTrue(flow().verifyPartnerMaterial(pairId, payload(), transcriptBytes, signature) is EnrollmentFlow.PartnerVerification.Rejected)
+        assertTrue(flow().verifyPartnerMaterial(sessionId, payload(), transcriptBytes, signature) is EnrollmentFlow.PartnerVerification.Rejected)
     }
 
     @Test
-    fun verifyPartnerMaterial_rejectsPairIdMismatch() {
+    fun verifyPartnerMaterial_rejectsSessionIdMismatch() {
         val otherPair = EnrollmentTranscript.transcript(
             "deadbeefdeadbeef",
             EnrollmentTranscript.pubKeyBytes(myKeys.public),
             EnrollmentTranscript.pubKeyBytes(partnerKeys.public),
         )
-        val result = flow().verifyPartnerMaterial(pairId, payload(), transcriptBytes, signWith(partnerKeys, otherPair))
+        val result = flow().verifyPartnerMaterial(sessionId, payload(), transcriptBytes, signWith(partnerKeys, otherPair))
         assertTrue(result is EnrollmentFlow.PartnerVerification.Rejected)
     }
 
     @Test
     fun verifyPartnerMaterial_rejectsFailedAttestation() {
         val result = flow(AttestationVerifier.VerificationResult.Rejected("origin is not GENERATED"))
-            .verifyPartnerMaterial(pairId, payload(), transcriptBytes, signWith(partnerKeys, transcriptBytes))
+            .verifyPartnerMaterial(sessionId, payload(), transcriptBytes, signWith(partnerKeys, transcriptBytes))
         assertTrue(result is EnrollmentFlow.PartnerVerification.Rejected)
     }
 
     @Test
     fun verifyPartnerMaterial_rejectsMalformedChain() {
         val bad = payload().copy(signingChain = listOf(byteArrayOf(1, 2, 3)))
-        val result = flow().verifyPartnerMaterial(pairId, bad, transcriptBytes, signWith(partnerKeys, transcriptBytes))
+        val result = flow().verifyPartnerMaterial(sessionId, bad, transcriptBytes, signWith(partnerKeys, transcriptBytes))
         assertTrue(result is EnrollmentFlow.PartnerVerification.Rejected)
     }
 
     @Test
-    fun signTranscript_returnsVerifiableSignature() {
+    fun signMessage_returnsVerifiableSignature() {
         val flow = flow()
         val sig = Signature.getInstance("SHA256withECDSA").apply {
             initSign(myKeys.private)
         }
-        val signature = flow.signTranscript(sig, transcriptBytes)
+        val signature = flow.signMessage(sig, transcriptBytes)
         assertTrue(AccountabilitySigner().verify(myKeys.public, transcriptBytes, signature))
     }
 
@@ -163,13 +162,5 @@ class EnrollmentFlowTest {
         val result = flow(AttestationVerifier.VerificationResult.Rejected("origin is not GENERATED"))
             .verifyHardwareIdentity(payload())
         assertTrue(result is EnrollmentFlow.PartnerVerification.Rejected)
-    }
-
-    @Test
-    fun verifyTranscriptSignature_acceptsOnlyTheAttestedKey() {
-        val flow = flow()
-        val transcript = transcriptBytes
-        assertTrue(flow.verifyTranscriptSignature(partnerKeys.public, transcript, signWith(partnerKeys, transcript)))
-        assertFalse(flow.verifyTranscriptSignature(partnerKeys.public, transcript, signWith(myKeys, transcript)))
     }
 }

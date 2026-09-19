@@ -21,6 +21,11 @@
     <string name="protection_paused_text">MyExodus can’t tell which app is open right now, so blocks won’t start. Open MyExodus to see what’s off and turn protection back on.</string>
     <string name="protection_paused_action">Fix</string>
 
+    <!-- Partner activity (AD-11/NFR2): deliberately generic — the tray never carries the
+         partner's alias or the event type; detail lives behind opening the app. -->
+    <string name="partner_event_title">New activity from your partner</string>
+    <string name="partner_event_text">Open MyExodus to see what changed.</string>
+
     <!-- Rule state labels and schedule summaries (shared by Home and Rules rows) -->
     <string name="state_paused">Paused</string>
     <string name="state_expired">Expired</string>
@@ -172,4 +177,103 @@
     <string name="setup_overlay_title">Display over other apps</string>
     <string name="setup_overlay_body">Lets MyExodus show the block screen on top of a blocked app, including the fallback used when Accessibility is off. Without it, that fallback can’t block or warn.</string>
     <string name="setup_overlay_action">Open Display over other apps settings</string>
+
+    <!-- Home-screen widget (V1 Req 36). Every string here is discreet by default: a day count,
+         and only if the user opts in, one status word. No recovery vocabulary is reachable in
+         discreet mode (widget spec FR5). "Manage urge" is the app's own term for the Recovery
+         tab's entry point, so the widget reuses it rather than inventing a second name. -->
+    <string name="widget_label">Streak</string>
+    <string name="widget_description">Your day count at a glance.</string>
+    <string name="widget_day_count">Day %1$d</string>
+    <string name="widget_day_unknown">No streak yet</string>
+    <string name="widget_manage_urge">Manage urge</string>
+    <string name="widget_status_protected">Protected</string>
+    <string name="widget_status_unprotected">Not protected</string>
+    <string name="widget_status_unverified">Unverified</string>
+    <!-- Partner dashboard (plan §7 item 12 / FR3): the paired device's last-known shared
+         state. Copy never promises real-time delivery (AD-05 best-effort cadence) and keeps
+         the §9 chain states distinct — "some history missing" is neutral; the unverified
+         state blocks trust and names re-pairing as the fix, without claiming it is automatic. -->
+    <string name="partner_title">Partner</string>
+    <string name="partner_subtitle">Shared from the phone you’re paired with</string>
+    <string name="partner_loading">Loading saved partner state…</string>
+    <string name="partner_unpaired_title">No partner yet</string>
+    <string name="partner_unpaired_body">After you pair with an accountability partner, the activity their phone shares shows up here.</string>
+    <!-- Step 17 (AD-22): forced re-enrollment — the pair data was lost locally, recovery is
+         deliberately not attempted, and the only route forward is pairing again. -->
+    <string name="partner_wipe_title">Pairing data was lost</string>
+    <string name="partner_wipe_body">This phone’s pairing data went missing, so the connection to your partner was cleared and can’t be restored automatically. Pair again with a new code to reconnect. Until then, nothing is shared.</string>
+    <string name="partner_paired_with">Paired with %1$s</string>
+    <string name="partner_paired_since">Since %1$s</string>
+    <string name="partner_never_synced">Never synced yet</string>
+    <string name="partner_last_synced">Last synced %1$s</string>
+    <string name="partner_sync_delayed">Sync is taking longer than usual — the phone may be offline or paused by Android.</string>
+    <string name="partner_sync_note">Updates arrive when both phones are online. There is no instant delivery.</string>
+    <string name="partner_sync_rate_limited">Some recent updates came in faster than the server allows, so they weren’t sent as instant alerts. They’ll arrive with the next sync.</string>
+    <string name="partner_check_now">Check now</string>
+    <string name="partner_check_now_running">Checking…</string>
+    <string name="partner_check_now_failed">Couldn’t reach the server. Check your connection and try again.</string>
+    <string name="partner_activity_title">Recent activity</string>
+    <string name="partner_activity_today">Today</string>
+    <string name="partner_activity_week">This week</string>
+    <string name="partner_activity_empty">No shared activity in the last 7 days.</string>
+    <string name="partner_alert_blocked">Blocked</string>
+    <string name="partner_alert_override">Override used</string>
+    <string name="partner_chain_catching_up_title">Catching up</string>
+    <string name="partner_chain_catching_up_body">Some recent events are still coming in. This usually clears up on its own.</string>
+    <string name="partner_chain_incomplete_title">Some history missing</string>
+    <string name="partner_chain_incomplete_body">Some earlier events couldn’t be synced, so they won’t appear. Newer activity is not affected.</string>
+    <string name="partner_chain_unverified_title">Shared activity can’t be trusted</string>
+    <string name="partner_chain_unverified_body">An event from this phone failed verification. Until you pair again, new activity from it is not trusted.</string>
+    <string name="partner_notifications_off_title">Notifications are off</string>
+    <string name="partner_notifications_off_body">MyExodus can’t tell you when new partner activity arrives. Allow notifications to get these alerts.</string>
+    <string name="partner_notifications_enable">Allow notifications</string>
+    <string name="partner_notifications_open_settings">Open notification settings</string>
+
+    <!-- Step 13 disable-approval (§8 Step 12, AD-07/AD-16): the responder decides with a
+         hash-chain verification badge shown before the buttons; a blocked chain disables
+         responding rather than hiding the request. Tray copy stays generic (NFR2). -->
+    <string name="approval_request_title">Approval request from your partner</string>
+    <string name="approval_request_text">Open MyExodus to review and respond.</string>
+    <string name="approval_decision_title">Your partner responded</string>
+    <string name="approval_decision_text">Open MyExodus to see the decision.</string>
+    <string name="partner_approvals_title">Requests awaiting your decision</string>
+    <string name="partner_approvals_expires">Expires in %1$s</string>
+    <string name="partner_approvals_badge_ok">Verified against your partner’s chain</string>
+    <string name="partner_approvals_badge_ok_catching_up">Verified — some earlier events are still coming in</string>
+    <string name="partner_approvals_badge_blocked">Your partner’s chain can’t be trusted, so responding is blocked. Pair again to restore trust.</string>
+    <string name="partner_approvals_approve">Approve</string>
+    <string name="partner_approvals_reject">Reject</string>
+    <string name="partner_approvals_working">Waiting for your confirmation…</string>
+    <string name="partner_approvals_failed">Couldn’t record your decision. The request is still open — try again.</string>
+    <string name="partner_my_requests_title">Your requests</string>
+    <string name="partner_my_requests_requested">Awaiting your partner’s decision</string>
+    <string name="partner_my_requests_approved">Approved</string>
+    <string name="partner_my_requests_rejected">Rejected</string>
+    <string name="partner_my_requests_expired">Expired with no decision</string>
+    <string name="partner_my_requests_consumed">Approval used</string>
+    <string name="partner_approval_prompt_approve">Approve request</string>
+    <string name="partner_approval_prompt_reject">Reject request</string>
+    <string name="partner_approval_prompt_subtitle">Confirm with your device key</string>
+    <!-- Step 14 unpair (§8 Step 13 copy — AD-13b: local is guaranteed, remote is best-effort
+         and only ever claimed from the partner device's own confirmation). -->
+    <string name="partner_unpair_title">End partnership</string>
+    <string name="partner_unpair_body">This erases your partner’s data on this device immediately. Your partner’s phone erases its own copy next time it’s online — that part can’t be forced.</string>
+    <string name="partner_unpair_action">End partnership</string>
+    <string name="partner_unpair_dialog_title">End this partnership?</string>
+    <string name="partner_unpair_dialog_body">Your partner’s data on this device is erased right away. Their phone erases its copy the next time it connects — you’ll see here when that’s confirmed. If their phone never connects again, it can’t be confirmed.</string>
+    <string name="partner_unpair_dialog_cancel">Keep partnership</string>
+    <string name="partner_unpair_working">Ending the partnership…</string>
+    <string name="partner_unpair_failed">Couldn’t end the partnership. Check your connection and try again.</string>
+    <string name="partner_unpair_local_done">Your data on this device has been erased</string>
+    <string name="partner_unpair_waiting">Waiting to confirm your partner’s device has also erased its data</string>
+    <string name="partner_unpair_confirmed">Your partner’s device has also erased its data.</string>
+    <string name="partner_unpair_unconfirmed">Could not confirm your partner’s device erased its data.</string>
+    <string name="partner_unpair_responder_done">Your partner ended the partnership. Your data for it on this device has been erased.</string>
+    <string name="partner_unpair_responder_acking">Letting your partner’s device know your copy is erased…</string>
+    <string name="partner_unpair_dismiss">Done</string>
+
+    <string name="settings_widget_header">Widget</string>
+    <string name="settings_widget_discreet_title">Discreet widget</string>
+    <string name="settings_widget_discreet_body">Show only the day count on the home screen. Turn off to add the protection status word.</string>
 </resources>

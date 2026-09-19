@@ -1,12 +1,15 @@
 package com.example.myexodus.data.db
 
 import android.content.Context
+import androidx.room3.migration.Migration
 import androidx.room3.testing.MigrationTestHelper
 import androidx.sqlite.SQLiteConnection
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlinx.coroutines.test.runTest
 import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
 import org.junit.After
@@ -122,6 +125,97 @@ class AppRulesStoreMigrationInstrumentedTest {
             v7.prepare("SELECT is_selected FROM habit_progress WHERE progress_id = 'h-2'")
                 .use { it.step(); it.getLong(0) },
         )
+    }
+
+    @Test
+    fun migrate7To8_rebuildsDailyTrackerWithDayIdentity_andPreservesUsage() = runTest {
+        val v7 = helper.createDatabase(7)
+        seedProfileAndHabit(v7)
+        exec(
+            v7,
+            "INSERT INTO daily_usage_tracker (tracker_id, profile_id, package_name, date_epoch, " +
+                "ms_used_today) VALUES ('t-1', 'profile-1', 'com.instagram.android', 123456, 900000)",
+        )
+
+        val v8 = helper.runMigrationsAndValidate(8, listOf(AppRulesStoreFactory.MIGRATION_7_8))
+
+        // The rebuild keeps the row; the day identity becomes (local date, IANA timezone) and
+        // the per-day warning/block state starts fresh (Decision 20, ADR #39).
+        assertEquals(1L, count(v8, "daily_usage_tracker"))
+        v8.prepare(
+            "SELECT profile_id, package_name, ms_used_today, local_date_anchor, " +
+                "timezone_id_at_anchor, warning1_state, warning2_state, blocked_today " +
+                "FROM daily_usage_tracker WHERE tracker_id = ?",
+        ).use { stmt ->
+            stmt.bindText(1, "t-1")
+            assertTrue(stmt.step())
+            assertEquals("profile-1", stmt.getText(0))
+            assertEquals("com.instagram.android", stmt.getText(1))
+            assertEquals("usage must survive the rebuild", 900000L, stmt.getLong(2))
+            assertEquals("old rows anchor to the migration's local day", LocalDate.now().toString(), stmt.getText(3))
+            assertEquals(ZoneId.systemDefault().id, stmt.getText(4))
+            assertEquals("NOT_DUE", stmt.getText(5))
+            assertEquals("NOT_DUE", stmt.getText(6))
+            assertEquals(0L, stmt.getLong(7))
+        }
+
+        // The uniqueness key is now the new day identity: a second row for the same
+        // (profile, package, local date) is rejected.
+        val duplicateRejected = runCatching {
+            exec(
+                v8,
+                "INSERT INTO daily_usage_tracker (tracker_id, profile_id, package_name, " +
+                    "local_date_anchor, timezone_id_at_anchor, ms_used_today, warning1_state, " +
+                    "warning2_state, blocked_today) VALUES ('t-2', 'profile-1', " +
+                    "'com.instagram.android', '${LocalDate.now()}', '${ZoneId.systemDefault().id}', " +
+                    "0, 'NOT_DUE', 'NOT_DUE', 0)",
+            )
+        }.isFailure
+        assertTrue("the (profile, package, day) uniqueness key must hold", duplicateRejected)
+    }
+
+    @Test
+    fun interruptedMigration_rollsBackAtomically_leavingTheOldSchemaAndData() = runTest {
+        val v7 = helper.createDatabase(7)
+        seedProfileAndHabit(v7)
+        exec(
+            v7,
+            "INSERT INTO daily_usage_tracker (tracker_id, profile_id, package_name, date_epoch, " +
+                "ms_used_today) VALUES ('t-1', 'profile-1', 'com.instagram.android', 123456, 900000)",
+        )
+
+        // Process death mid-upgrade, deterministically: the production migration's own SQL up
+        // to a point, then a throw. Room runs each migration in one transaction, so the
+        // partial work must not survive.
+        val dying = object : Migration(7, 8) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS daily_usage_tracker_new (" +
+                        "tracker_id TEXT NOT NULL, profile_id TEXT NOT NULL, " +
+                        "package_name TEXT NOT NULL)",
+                ).use { it.step() }
+                throw IllegalStateException("process died mid-migration")
+            }
+        }
+        val threw = runCatching { helper.runMigrationsAndValidate(8, listOf(dying)) }.isFailure
+        assertTrue("the failure must propagate (the upgrade did not complete)", threw)
+
+        SQLCipherDriver(TEST_KEY, null, null).open(dbFile.path).use { conn ->
+            assertEquals(
+                "rolled back to the pre-migration version",
+                7L,
+                conn.prepare("PRAGMA user_version").use { it.step(); it.getLong(0) },
+            )
+            // The old shape and its data are intact — no half-migrated file.
+            assertEquals(1L, count(conn, "daily_usage_tracker"))
+            assertEquals(
+                900000L,
+                conn.prepare("SELECT ms_used_today FROM daily_usage_tracker WHERE tracker_id = 't-1'")
+                    .use { it.step(); it.getLong(0) },
+            )
+            val halfTable = runCatching { count(conn, "daily_usage_tracker_new") }.isSuccess
+            assertTrue("the half-created table must not survive the rollback", !halfTable)
+        }
     }
 
     /** Valid for any schema ≥5: the columns it names are not changed by 5→6 or 6→7. */

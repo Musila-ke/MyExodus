@@ -103,9 +103,11 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     implementation(libs.firebase.firestore)
+    implementation(libs.firebase.functions)
     implementation(libs.firebase.appcheck.playintegrity)
     implementation(libs.firebase.auth)
     implementation(libs.firebase.crashlytics)
+    implementation(libs.firebase.config)
     implementation(libs.camera.core)
     implementation(libs.camera.camera2)
     implementation(libs.camera.lifecycle)
@@ -113,6 +115,10 @@ dependencies {
     implementation(libs.bcprov.jdk18on)
     implementation(libs.androidx.datastore.tink)
     implementation(libs.androidx.datastore.preferences)
+    // Home-screen widget (V1 Req 36). Pinned per the widget spec §5 Decision 12′, re-verified
+    // against the AndroidX release page 2026-09-16: 1.1.1 stable, 1.2.0-rc01 RC-only.
+    implementation(libs.androidx.glance.appwidget)
+    implementation(libs.androidx.glance.material3)
     implementation(libs.tink.android)
     implementation(libs.petero.cbor)
     testImplementation(libs.junit)
@@ -126,8 +132,17 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.test.uiautomator)
     androidTestImplementation(libs.androidx.room.testing)
+    // App Check enforcement (task #21): instrumented tests that hit the real Firestore must be
+    // able to force the debug provider on non-attesting devices (emulator) — documented path,
+    // secret passed via `am instrument -e firebaseAppCheckDebugSecret <token>`. The debug build
+    // also needs it as debugImplementation: the artifact's manifest carries the ComponentRegistrar
+    // meta-data, and only the app APK's manifest is read for component discovery (a test-APK-only
+    // registrar would never be seen at runtime).
+    androidTestImplementation(libs.firebase.appcheck.debug.testing)
+    debugImplementation(libs.firebase.appcheck.debug.testing)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
-    // Debug-only: the pairing harness prompts for biometric signing (V1 UI will move this to main).
-    debugImplementation(libs.androidx.biometric)
+    // Step 13: the Partner tab's approve/reject signs a chain event via BiometricPrompt —
+    // moved from debugImplementation (the harness no longer owns the only prompt).
+    implementation(libs.androidx.biometric)
 }

@@ -31,6 +31,8 @@ data class ChainEvent(
         const val SYNC_STATE_PENDING = "PENDING"
         const val SYNC_STATE_SENT = "SENT"
         const val SYNC_STATE_PENDING_GAP = "PENDING_GAP"
-        const val SYNC_STATE_PERMANENTLY_INCOMPLETE = "PERMANENTLY_INCOMPLETE"
+
+        /** AD-08 terminal gap state (§9 row 457): reached only after the 30-day repair window. */
+        const val SYNC_STATE_CHAIN_INCOMPLETE = "CHAIN_INCOMPLETE"
     }
 }

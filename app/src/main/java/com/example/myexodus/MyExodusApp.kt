@@ -16,8 +16,10 @@ import androidx.work.Configuration
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.example.myexodus.accountability.state.LocalWipeDetector
 import com.example.myexodus.accountability.sync.AppCheckInstaller
-import com.example.myexodus.accountability.sync.PartnerSyncWorker
+import com.example.myexodus.accountability.sync.PartnerNotifications
+import com.example.myexodus.accountability.sync.enqueuePartnerSync
 import com.example.myexodus.blocking.BootReconciliationStore
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.HealthCheckWorker
@@ -31,6 +33,7 @@ import com.example.myexodus.data.db.DatabaseHealth
 import com.example.myexodus.data.db.DatabaseHealthStore
 import com.example.myexodus.data.db.DatabaseMigration
 import com.example.myexodus.telemetry.CrashReporting
+import com.example.myexodus.widget.ProtectionSnapshotWriter
 import dagger.hilt.android.HiltAndroidApp
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -52,10 +55,29 @@ class MyExodusApp : Application(), Configuration.Provider {
     @Inject lateinit var databaseHealthStore: DatabaseHealthStore
     @Inject lateinit var crashReporting: CrashReporting
     @Inject lateinit var bootReconciliation: BootReconciliationStore
+    @Inject lateinit var localWipeDetector: LocalWipeDetector
+    // Widget snapshot writer (widget spec §7 Step 3). Field injection here is the construction
+    // trigger, not decoration: nothing calls into the writer from the app — its collectors and
+    // its heartbeat only run while this process is alive, and this line is what starts them.
+    @Inject lateinit var protectionSnapshotWriter: ProtectionSnapshotWriter
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var foregroundActivities = 0
+
+    // True only when this process was started by `am instrument` (the test APK's classes are
+    // loaded into the app process; production devices never load androidx.test). Instrumented
+    // DB suites own the rules-store files and drive open/migration with their own factories —
+    // this bootstrap's encrypted open (plaintext→encrypted conversion) and production
+    // DatabaseMigration would convert or consume those files mid-test. X6532-observed
+    // 2026-09-19: bootstrap open landed inside DatabaseMigrationInstrumentedTest's window
+    // ("file unlinked while open" → SQLITE_IOERR_SHORT_READ on its raw read).
+    private val underInstrumentation: Boolean by lazy {
+        System.getProperty("robolectric") == null &&
+            runCatching {
+                Class.forName("androidx.test.platform.app.InstrumentationRegistry")
+            }.isSuccess
+    }
 
     private val accessibilityStateListener = AccessibilityManager.AccessibilityStateChangeListener {
         healthMonitor.refresh()
@@ -71,6 +93,8 @@ class MyExodusApp : Application(), Configuration.Provider {
         // §8.5: App Check provider in place before ANY Firestore op (mailbox pull, backfill
         // responder, drain) — app-startup install covers paths that never route through drainOutbox.
         AppCheckInstaller.install(this)
+        // Plan §8 Step 16's sync_status channel: debug-only (never user-visible in release).
+        PartnerNotifications.ensureSyncStatusChannel(this)
         // Decision 12 opt-out: FirebaseInitProvider ran before this call, so this is what the
         // stored preference overrides from the first moment of each process.
         crashReporting.applyStoredPreference()
@@ -88,9 +112,11 @@ class MyExodusApp : Application(), Configuration.Provider {
         // Open FIRST: Room 3 creates the schema lazily on first DAO access, and the migration's
         // INSERTs fail with "no such table" against an unprimed store (caught 2026-08-28 review).
         // Migration no-ops when already complete.
-        applicationScope.launch {
-            rulesStoreFactory.open()
-            databaseMigration.runOnceIfNeeded()
+        if (!underInstrumentation) {
+            applicationScope.launch {
+                rulesStoreFactory.open()
+                databaseMigration.runOnceIfNeeded()
+            }
         }
         registerActivityLifecycleCallbacks(backgroundCheckpointer)
         // §8 Step 9: USER_UNLOCKED is delivered dynamically-only (never a manifest receiver).
@@ -120,11 +146,17 @@ class MyExodusApp : Application(), Configuration.Provider {
                 "api" to Build.VERSION.SDK_INT.toString(),
             )
             enqueueHealthCheck()
-            enqueuePartnerSync()
+            enqueuePartnerSync(this)
             enqueueDailyMaintenance(this)
             // §8 Step 9: this boot's deferred reconciliation, if any (cold-start BOOT_COUNT
             // check + the locked-boot receiver's pending mark).
             reconcileBootIfNeeded()
+            // §8 Step 17 (AD-22, NFR7): app-start wipe check — clears orphaned pair data and
+            // reports the §14 trigger metric. Recovery is deliberately not attempted; the
+            // Partner screen names SAS/QR re-enrollment as the only route forward.
+            applicationScope.launch {
+                if (localWipeDetector.detect()) crashReporting.nonFatal("local_wipe_detected")
+            }
         }
         // Mid-session disablement (plan §8 Step 10): catch sooner than the next periodic tick.
         getSystemService(AccessibilityManager::class.java)
@@ -140,17 +172,6 @@ class MyExodusApp : Application(), Configuration.Provider {
         )
     }
 
-    /** §14 partner sync housekeeping (plan §7 Decision 7): attempt → event reconcile, outbox
-     *  drain, mailbox pull, backfill response. No-op per run when unpaired. */
-    private fun enqueuePartnerSync() {
-        val request = PeriodicWorkRequestBuilder<PartnerSyncWorker>(15, TimeUnit.MINUTES).build()
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            PARTNER_SYNC_WORK_NAME,
-            ExistingPeriodicWorkPolicy.KEEP,
-            request,
-        )
-    }
-
     /** §8 Step 9: post-unlock reconciliation — open the store, refresh protection status,
      *  re-enqueue the daily maintenance job, then claim the boot. The store's guard makes the
      *  second trigger for the same boot count a no-op (§12) and reports it (§14). Idempotent,
@@ -159,7 +180,7 @@ class MyExodusApp : Application(), Configuration.Provider {
     private fun reconcileBootIfNeeded() {
         applicationScope.launch {
             bootReconciliation.reconcileOnce(systemBootCount(this@MyExodusApp)) {
-                rulesStoreFactory.open()
+                if (!underInstrumentation) rulesStoreFactory.open()
                 statusMonitor.refresh()
                 enqueueDailyMaintenance(this@MyExodusApp)
             }
@@ -177,7 +198,6 @@ class MyExodusApp : Application(), Configuration.Provider {
 
     private companion object {
         const val HEALTH_CHECK_WORK_NAME = "enhanced-mode-health-check"
-        const val PARTNER_SYNC_WORK_NAME = "partner-sync"
     }
 
     /** App backgrounded (last activity stopped): bounded WAL growth on both stores. */

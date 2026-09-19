@@ -29,3 +29,10 @@ keystore.properties
 
 # Firebase config — local-only; required on disk for the google-services plugin, never committed
 google-services.json
+
+# Firebase CLI / emulator run logs
+*-debug.log
+
+# Node workspaces (functions/, rules-test/) — dependencies are local (npm install), never committed
+node_modules/
+.firebase/
