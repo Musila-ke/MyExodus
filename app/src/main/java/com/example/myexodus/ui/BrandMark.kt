@@ -20,7 +20,7 @@ import com.example.myexodus.R
  * near-black dark surface swallows entirely. Both placements therefore sit the art on a white
  * plate — invisible in light mode (the surface there is already white), an app-icon-style chip
  * at night. The plate stays white in both modes on purpose: it is brand, not palette.
- * Assets come from design/brand/GenerateIcons.java.
+ * Assets come from scripts/GenerateIcons.java.
  */
 
 /** Leaf mark alone, for headers where the app name is already on screen as text. */
