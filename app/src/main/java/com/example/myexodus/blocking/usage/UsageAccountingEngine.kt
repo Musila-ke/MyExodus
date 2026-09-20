@@ -2,6 +2,7 @@ package com.example.myexodus.blocking.usage
 
 import android.util.Log
 import androidx.room3.withWriteTransaction
+import com.example.myexodus.blocking.dayScopeCoversToday
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.DailyUsageTracker
 import com.example.myexodus.data.db.entity.isExpiredAt
@@ -106,6 +107,15 @@ class UsageAccountingEngine(
             // contribute yesterday's usage to today's decision.
             val rolledOver = tracker.localDateAnchor != today
             if (rolledOver) tracker = tracker.rolledOverTo(today)
+
+            // (b2) day scope (user decision 2026-09-20): on a day the rule does not cover the
+            // rule is inactive — nothing accrues, nothing warns, nothing blocks, so an inactive
+            // day can never eat into an active day's budget. Judged in the rule's zone (the
+            // window's anchor); the tracker's own anchor stays device-local (Decision 20).
+            if (!dayScopeCoversToday(rule.activeDaysOfWeek, rule.timezone)) {
+                if (rolledOver) trackerDao.update(tracker)
+                return@withWriteTransaction EnforcementAction.NoAction
+            }
 
             // (c) accumulate.
             tracker = tracker.copy(msUsedToday = tracker.msUsedToday + incrementMs)

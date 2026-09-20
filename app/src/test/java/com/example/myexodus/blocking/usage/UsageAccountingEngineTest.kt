@@ -18,6 +18,7 @@ import com.example.myexodus.data.db.entity.DailyUsageTracker
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.UserProfile
 import java.time.LocalDate
+import java.time.ZoneId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -238,6 +239,36 @@ class UsageAccountingEngineTest {
         assertNull(engine.remainingBudgetMs(PKG))
     }
 
+    // --- rule day scope (user decision 2026-09-20: days bound the whole rule) ---
+
+    @Test
+    fun inactiveDay_noAccrualNoBlock_evenAboveTheLimit() = runTest {
+        setDayScope(daysExceptToday())
+        // 45 min against a 30 min limit: on an active day this is Block — on an inactive day
+        // the rule does not operate, so nothing accrues, nothing blocks, and no row is even
+        // opened for the day.
+        assertEquals(NoAction, engine.processUsageObservation(PKG, 45 * MIN, 10 * SEC))
+        assertNull(trackerRow())
+    }
+
+    @Test
+    fun activeDay_stillAccruesAndBlocks() = runTest {
+        setDayScope(daysOnlyToday())
+        assertEquals(Block, engine.processUsageObservation(PKG, 45 * MIN, 10 * SEC))
+        assertEquals(45 * MIN, trackerRow()!!.msUsedToday)
+    }
+
+    @Test
+    fun inactiveDay_stillRollsAStaleRow_withoutAccruing() = runTest {
+        setDayScope(daysExceptToday())
+        seedTracker(LocalDate.now().minusDays(1).toString(), msUsed = 29 * MIN, blocked = true)
+        assertEquals(NoAction, engine.processUsageObservation(PKG, 1 * MIN, 10 * SEC))
+        val row = trackerRow()!!
+        assertEquals(LocalDate.now().toString(), row.localDateAnchor)
+        assertEquals(0L, row.msUsedToday)
+        assertEquals(false, row.blockedToday)
+    }
+
     // --- rolloverStaleDays (§8 Step 8 daily-maintenance sweep) ---
 
     @Test
@@ -298,6 +329,22 @@ class UsageAccountingEngineTest {
     private suspend fun setLimit(limitMs: Long) {
         val rule = db.restrictionRuleDao().getById(RULE_ID)!!
         db.restrictionRuleDao().update(rule.copy(dailyLimitMs = limitMs))
+    }
+
+    /** Sets the rule's day scope to the given days, in the device zone — the zone these tests
+     *  compute "today" in, so the day scope and the assertion cannot disagree near midnight. */
+    private suspend fun setDayScope(days: String) {
+        val rule = db.restrictionRuleDao().getById(RULE_ID)!!
+        db.restrictionRuleDao().update(rule.copy(activeDaysOfWeek = days, timezone = ZoneId.systemDefault().id))
+    }
+
+    private fun daysExceptToday(): String = dayString(invert = true)
+
+    private fun daysOnlyToday(): String = dayString(invert = false)
+
+    private fun dayString(invert: Boolean): String {
+        val todayIndex = LocalDate.now().dayOfWeek.value - 1
+        return (0..6).joinToString("") { index -> if ((index == todayIndex) != invert) "1" else "0" }
     }
 
     private class FakeKeyManager : DatabaseKeyManager {

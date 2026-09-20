@@ -96,9 +96,11 @@ fun HomeScreen(
     val serviceEnabled by monitor.enabled.collectAsStateWithLifecycle()
     val profile by store.userProfileDao().observeActive().collectAsStateWithLifecycle(initialValue = null)
     val profileId = profile?.userId
+    // null until the first emission: a cold start must not flash "No blocks yet" at a user
+    // who has blocks (streak card's own loading rule, applied to the list).
     val rules by remember(profileId) {
         profileId?.let { store.restrictionRuleDao().observeByProfile(it) } ?: emptyFlow()
-    }.collectAsStateWithLifecycle(initialValue = emptyList())
+    }.collectAsStateWithLifecycle(initialValue = null)
     val attemptCounts by store.attemptLogDao().observeBlockedCounts()
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val countsByTarget = remember(attemptCounts) { attemptCounts.associate { it.target to it.count } }
@@ -160,7 +162,7 @@ fun HomeScreen(
         }
         item(key = "blocks") {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                BlocksHeader(count = rules.size, attempts = countsByTarget.values.sum())
+                BlocksHeader(count = rules?.size ?: 0, attempts = countsByTarget.values.sum())
                 BlocksCard(
                     rules = rules,
                     countsByTarget = countsByTarget,
@@ -393,7 +395,7 @@ private fun BlocksHeader(count: Int, attempts: Int) {
 
 @Composable
 private fun BlocksCard(
-    rules: List<RestrictionRule>,
+    rules: List<RestrictionRule>?,
     countsByTarget: Map<String, Int>,
     nowEpochMillis: Long,
     protectionPaused: Boolean,
@@ -405,7 +407,15 @@ private fun BlocksCard(
         shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        if (rules.isEmpty()) {
+        if (rules == null) {
+            Box(
+                Modifier.padding(16.dp).fillMaxWidth().height(40.dp)
+                    .background(
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                        MaterialTheme.shapes.small,
+                    ),
+            )
+        } else if (rules.isEmpty()) {
             Column(
                 Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),

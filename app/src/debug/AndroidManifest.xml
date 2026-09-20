@@ -17,5 +17,11 @@
             android:name=".blocking.DeviceVerificationReceiver"
             android:exported="true"
             tools:ignore="ExportedReceiver" />
+        <!-- Emulator-only App Check substitution (two-device rig). A provider so it runs
+             before Application.onCreate and can seed AppCheckInstaller before the install. -->
+        <provider
+            android:name=".accountability.DebugAppCheckProvider"
+            android:authorities="${applicationId}.debug-appcheck"
+            android:exported="false" />
     </application>
 </manifest>

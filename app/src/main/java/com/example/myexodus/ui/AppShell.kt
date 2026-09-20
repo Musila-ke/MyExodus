@@ -48,6 +48,7 @@ import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.ui.home.HomeScreen
 import com.example.myexodus.ui.partner.PartnerDashboardSource
 import com.example.myexodus.ui.partner.PartnerScreen
+import com.example.myexodus.ui.partner.UnpairOutcome
 import com.example.myexodus.ui.recovery.RecoveryPrefs
 import com.example.myexodus.ui.recovery.RecoveryScreen
 import com.example.myexodus.ui.rules.RulesScreen
@@ -92,7 +93,7 @@ fun AppShell(
     onFixNotifications: () -> Unit,
     onPartnerCheckNow: suspend () -> Boolean,
     onRespondToApproval: suspend (requestEventId: String, approve: Boolean) -> Boolean = { _, _ -> false },
-    onUnpair: suspend (pairId: String) -> Boolean = { _ -> false },
+    onUnpair: suspend (pairId: String) -> UnpairOutcome = { UnpairOutcome.FAILED },
     onDismissUnpair: suspend (pairId: String) -> Unit = {},
     encryptionPending: Boolean = false,
     requestedTab: String? = null,

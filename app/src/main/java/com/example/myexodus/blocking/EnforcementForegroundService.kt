@@ -133,10 +133,7 @@ class EnforcementForegroundService : Service() {
             "api" to Build.VERSION.SDK_INT.toString(),
         )
         ProtectionNotifications.createChannels(this)
-        startForeground(
-            ProtectionNotifications.NOTIF_FGS,
-            ProtectionNotifications.ongoing(this),
-        )
+        enterForeground()
         // Path B's host: bare addView + TYPE_APPLICATION_OVERLAY on every device (the
         // accessibility token type is unavailable to a plain foreground service).
         usageOverlay = OverlayController(
@@ -152,11 +149,28 @@ class EnforcementForegroundService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        enterForeground()
         start()
         // START_STICKY: after a crash the system restarts us with a null intent, which is
         // exactly the §8.1 "startup (including after a crash) recompute from current state"
         // path — no stale-overlay detection exists or is attempted.
         return START_STICKY
+    }
+
+    /**
+     * Every `startForegroundService()` call — including one on this existing service — re-arms
+     * the contract to post a foreground notification within seconds; `onCreate` alone missed it
+     * when a second start arrived while the service already ran (the app returning to the
+     * foreground), and the platform killed the process with
+     * `ForegroundServiceDidNotStartInTimeException` (X6532, 2026-09-19; reproduced: ON_START →
+     * `refreshProtectionChecks` → `start()` → 30 s deadline → crash). Re-asserting per start
+     * also repairs any state where the service lost its foreground status while still started.
+     */
+    private fun enterForeground() {
+        startForeground(
+            ProtectionNotifications.NOTIF_FGS,
+            ProtectionNotifications.ongoing(this),
+        )
     }
 
     private fun start() {
@@ -408,6 +422,10 @@ class EnforcementForegroundService : Service() {
 
     /** One accounting write + render, on Path B's own engine dispatcher. */
     private fun accountUsage(tick: UsageSessionMachine.Tick) {
+        // Same mid-session re-check as Path A: an edit that removes the limit (or pauses the
+        // rule) between session-open and tick must stop crediting — the engine treats a limit
+        // of 0 as "already at limit" and would wall a rule that no longer has one.
+        if (!isLimitTracked(tick.packageName)) return
         scope.launch {
             runCatching {
                 // Refine the cadence before the write: the budget read is advisory, and a
@@ -469,11 +487,14 @@ class EnforcementForegroundService : Service() {
         }
     }
 
-    /** A tracked package = an enabled rule with a real limit — mirrors BlockDecisionEngine
-     *  Rule 2's `dailyLimitMs > 0` gate and the snapshot's disabled-rule filtering. Read off
-     *  the cached snapshot: no DB I/O on the poll path. */
-    private fun isLimitTracked(packageName: String): Boolean =
-        (publisher.snapshot.appRules[packageName]?.dailyLimitMs ?: 0L) > 0L
+    /** A tracked package = an enabled rule with a real limit, on a day the rule covers —
+     *  mirrors BlockDecisionEngine Rule 2's `dailyLimitMs > 0` gate plus the rule's day scope
+     *  (a rule not active today never accrues, so it must not open a session). Read off the
+     *  cached snapshot: no DB I/O on the poll path. */
+    private fun isLimitTracked(packageName: String): Boolean {
+        val rule = publisher.snapshot.appRules[packageName] ?: return false
+        return rule.dailyLimitMs > 0L && dayScopeCoversToday(rule.activeDaysOfWeek, rule.timezone)
+    }
 
     /** Deterministic hide on screen-off, mirroring Path A's: the keyguard foreground change
      *  can lag seconds, and a wall left on the lock screen would greet the user on unlock.

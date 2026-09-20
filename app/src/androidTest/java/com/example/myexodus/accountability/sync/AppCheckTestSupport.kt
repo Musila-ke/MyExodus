@@ -4,6 +4,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.google.firebase.FirebaseApp
 import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
+import com.google.firebase.appcheck.debug.internal.StorageHelper
 
 /**
  * Task #21 (App Check enforcement is ON): the instrumented suites reach the real Firestore, so
@@ -20,8 +21,14 @@ import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
  * is accepted under enforcement" evidence. The install is deliberately not reverted: a run
  * either wants the debug provider for every Firestore leg or for none.
  *
- * The secret plumbing (instrumentation arg → provider) comes from the
- * `firebase-appcheck-debug-testing` artifact's registrar; nothing here reads the secret itself.
+ * The secret is seeded into the provider's own storage ([StorageHelper], keyed by persistence
+ * key; the provider resolves it at construction). The `firebase-appcheck-debug-testing`
+ * artifact's registrar used to supply it implicitly, but that artifact cannot sit on the app
+ * classpath: its DebugSecretProvider reads InstrumentationRegistry unguarded and crashes
+ * provider creation in every normal (non-instrumented) run. On the emulator the debug provider
+ * is already constructed at app startup (DebugAppCheckProvider override) from the app-local
+ * persisted secret, so a per-run `-e` secret has no effect there — that persisted secret is
+ * the one registered with the console.
  */
 object AppCheckTestSupport {
 
@@ -32,6 +39,7 @@ object AppCheckTestSupport {
     fun useDebugProviderIfRequested(vararg apps: FirebaseApp) {
         if (debugSecret.isNullOrEmpty()) return
         apps.forEach { app ->
+            StorageHelper(app.applicationContext, app.persistenceKey).saveDebugSecret(debugSecret)
             FirebaseAppCheck.getInstance(app)
                 .installAppCheckProviderFactory(DebugAppCheckProviderFactory.getInstance())
         }

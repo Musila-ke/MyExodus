@@ -3,6 +3,7 @@ package com.example.myexodus.accountability.sync
 import android.content.Context
 import android.os.UserManager
 import android.util.Log
+import com.google.firebase.appcheck.AppCheckProviderFactory
 import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory
 import java.util.concurrent.atomic.AtomicBoolean
@@ -17,6 +18,16 @@ object AppCheckInstaller {
 
     private val installed = AtomicBoolean(false)
 
+    /**
+     * Substitution point for builds that cannot attest (debug source set only — the emulator
+     * has no Play Integrity, and Firestore enforcement would reject every write). Set by the
+     * debug manifest's provider, which runs before `MyExodusApp.onCreate` — providers are
+     * created before the Application. Always null in release: the classes that assign it are
+     * not on the release classpath.
+     */
+    @Volatile
+    var factoryOverride: AppCheckProviderFactory? = null
+
     fun install(context: Context) {
         // Pre-unlock (LOCKED_BOOT_COMPLETED, plan §8.5): App Check's StorageHelper reads CE
         // SharedPreferences on its own background thread, which throws pre-unlock and crashes
@@ -27,18 +38,18 @@ object AppCheckInstaller {
             Log.i(TAG, "App Check install deferred: user not unlocked")
             return
         }
-        if (installed.compareAndSet(false, true)) {
-            try {
-                // javap-verified on 19.4.1: instance method on the default-app FirebaseAppCheck.
-                FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                    PlayIntegrityAppCheckProviderFactory.getInstance(),
-                )
-            } catch (e: IllegalStateException) {
-                // No FirebaseApp — e.g. Robolectric unit tests, where the FirebaseInitProvider
-                // from the manifest does not run. In production FirebaseInitProvider always
-                // initializes before Application.onCreate, so this is a test-env-only skip.
-                Log.w(TAG, "App Check install skipped: Firebase not initialized", e)
-            }
+        if (installed.get()) return
+        try {
+            // javap-verified on 19.4.1: instance method on the default-app FirebaseAppCheck.
+            FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                factoryOverride ?: PlayIntegrityAppCheckProviderFactory.getInstance(),
+            )
+            // Latched only on success: a failed install (no FirebaseApp — e.g. Robolectric unit
+            // tests, where the manifest's FirebaseInitProvider never runs) must stay retryable,
+            // so a later call in the same process can still install.
+            installed.set(true)
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "App Check not installed; will retry on next call", e)
         }
     }
 

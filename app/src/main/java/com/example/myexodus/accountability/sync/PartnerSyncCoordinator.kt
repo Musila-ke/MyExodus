@@ -217,14 +217,32 @@ class PairUidResolver(
         AppCheckInstaller.install(appContext)
         val auth = FirebaseAuth.getInstance()
         val user = auth.currentUser
-            ?: runCatching { auth.signInAnonymously().await() }.getOrNull()?.user
-            ?: return null
+            ?: runCatching { auth.signInAnonymously().await() }
+                .onFailure { Log.w(TAG, "pair $pairId: anonymous sign-in failed", it) }
+                .getOrNull()
+                ?.user
+        if (user == null) {
+            Log.w(TAG, "pair $pairId: no uid — sign-in unavailable")
+            return null
+        }
         val members = runCatching {
             FirestoreSchema.pairingDocument(firestore, pairId).get().await().get("members")
-        }.getOrNull() ?: return null
-        val partner = (members as? List<*>)
-            ?.filterIsInstance<String>()
-            ?.firstOrNull { it != user.uid } ?: return null
+        }
+            .onFailure { Log.w(TAG, "pair $pairId: pairing document read failed", it) }
+            .getOrNull()
+        if (members == null) {
+            Log.w(TAG, "pair $pairId: pairing document missing or has no members field")
+            return null
+        }
+        val partner = (members as? List<*>)?.filterIsInstance<String>()?.firstOrNull { it != user.uid }
+        if (partner == null) {
+            Log.w(TAG, "pair $pairId: no other member (members=${(members as? List<*>)?.size ?: "not a list"})")
+            return null
+        }
         return user.uid to partner
+    }
+
+    private companion object {
+        const val TAG = "MyExodusPairUidResolver"
     }
 }

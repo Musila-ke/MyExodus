@@ -3,6 +3,8 @@ package com.example.myexodus
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -81,6 +83,7 @@ import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.ui.AppShell
 import com.example.myexodus.ui.SecureSurfaces
 import com.example.myexodus.ui.partner.PartnerDashboardSource
+import com.example.myexodus.ui.partner.UnpairOutcome
 import com.example.myexodus.widget.ProtectionSnapshotWriter
 import com.example.myexodus.ui.setup.SetupScreen
 import com.example.myexodus.ui.streaks.StreaksViewModel
@@ -307,7 +310,7 @@ class MainActivity : FragmentActivity() {
                             }
                         },
                         onPartnerCheckNow = {
-                            runCatching {
+                            isOnline() && runCatching {
                                 runPartnerSyncPass(
                                     pushInstallationRegistrar,
                                     partnerRolloutGate,
@@ -392,15 +395,17 @@ class MainActivity : FragmentActivity() {
     /**
      * Step 14 initiator: resolve the pair's uids, biometric-gate the signed deletion request,
      * then run [BilateralDeletion.initiate] — journal, deliver, shred. A cancelled prompt or
-     * refused signature aborts before anything is journaled, so the pair stays fully intact.
+     * refused signature aborts before anything is journaled, so the pair stays fully intact
+     * and the screen reports the cancel as nothing having happened, not as a failure.
      */
-    private suspend fun endPartnership(pairId: String): Boolean {
-        val (myUid, partnerUid) = pairUidResolver.resolve(pairId) ?: return false
+    private suspend fun endPartnership(pairId: String): UnpairOutcome {
+        val (myUid, partnerUid) = pairUidResolver.resolve(pairId)
+            ?: return UnpairOutcome.FAILED
         val signature = signWithBiometric(getString(R.string.partner_unpair_action))
-            ?: return false
+            ?: return UnpairOutcome.CANCELLED
         return when (bilateralDeletion.initiate(pairId, myUid, partnerUid, signature)) {
-            is BilateralDeletion.DeletionResult.Deleted -> true
-            is BilateralDeletion.DeletionResult.Failed -> false
+            is BilateralDeletion.DeletionResult.Deleted -> UnpairOutcome.UNPAIRED
+            is BilateralDeletion.DeletionResult.Failed -> UnpairOutcome.FAILED
         }
     }
 
@@ -409,45 +414,66 @@ class MainActivity : FragmentActivity() {
      * X6532: when initSign succeeds, authenticate with the Signature as a CryptoObject;
      * when keystore2 rejects initSign without a fresh auth token, prompt WITHOUT crypto and
      * initSign inside the success callback (the 900s window, §NFR4, makes that valid).
+     *
+     * The prompt must be raised on the main thread: every caller reaches this from
+     * `Dispatchers.IO`, and BiometricPrompt's FragmentManager throws "Must be called from main
+     * thread of fragment host" if constructed or authenticated off-main. Keystore work stays on
+     * the caller's dispatcher (NFR3).
      */
-    private suspend fun signWithBiometric(title: String): Signature? = suspendCancellableCoroutine { cont ->
+    private suspend fun signWithBiometric(title: String): Signature? {
         val signature = Signature.getInstance(AccountabilitySigner.SIGNATURE_ALGORITHM)
-        val cryptoReady = runCatching { signature.initSign(accountabilityKeyStore.signingPrivateKey()) }.isSuccess
-        val prompt = BiometricPrompt(
-            this,
-            ContextCompat.getMainExecutor(this),
-            object : BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    val signed = if (cryptoReady) {
-                        result.cryptoObject?.signature
-                    } else {
-                        runCatching { signature.initSign(accountabilityKeyStore.signingPrivateKey()) }
-                            .map { signature }
-                            .getOrNull()
-                    }
-                    cont.resume(signed)
-                }
+        val cryptoReady = runCatching { signature.initSign(accountabilityKeyStore.signingPrivateKey()) }
+            .isSuccess
+        return withContext(Dispatchers.Main.immediate) {
+            suspendCancellableCoroutine { cont ->
+                val prompt = BiometricPrompt(
+                    this@MainActivity,
+                    ContextCompat.getMainExecutor(this@MainActivity),
+                    object : BiometricPrompt.AuthenticationCallback() {
+                        override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                            val signed = if (cryptoReady) {
+                                result.cryptoObject?.signature
+                            } else {
+                                runCatching { signature.initSign(accountabilityKeyStore.signingPrivateKey()) }
+                                    .map { signature }
+                                    .getOrNull()
+                            }
+                            cont.resume(signed)
+                        }
 
-                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    Log.w(TAG, "approval biometric prompt: $errString")
-                    cont.resume(null)
-                }
+                        override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                            Log.w(TAG, "approval biometric prompt: $errString")
+                            cont.resume(null)
+                        }
 
-                override fun onAuthenticationFailed() = Unit
-            },
-        )
-        cont.invokeOnCancellation { prompt.cancelAuthentication() }
-        val promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle(title)
-            .setSubtitle(getString(R.string.partner_approval_prompt_subtitle))
-            .setNegativeButtonText(getString(android.R.string.cancel))
-            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-            .build()
-        if (cryptoReady) {
-            prompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(signature))
-        } else {
-            prompt.authenticate(promptInfo)
+                        override fun onAuthenticationFailed() = Unit
+                    },
+                )
+                cont.invokeOnCancellation { prompt.cancelAuthentication() }
+                val promptInfo = BiometricPrompt.PromptInfo.Builder()
+                    .setTitle(title)
+                    .setSubtitle(getString(R.string.partner_approval_prompt_subtitle))
+                    .setNegativeButtonText(getString(android.R.string.cancel))
+                    .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                    .build()
+                if (cryptoReady) {
+                    prompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(signature))
+                } else {
+                    prompt.authenticate(promptInfo)
+                }
+            }
         }
+    }
+
+    /** "Check now" is a promise, and Firestore cannot keep it honestly offline: queued writes
+     *  complete locally and the sync pass returns a clean report, so the button would claim a
+     *  sync that never left the device. The radio is the only truthful pre-check, and the
+     *  failure copy already tells the user to check the connection. (Rationale from Firestore's
+     *  documented offline-write-queue semantics; no air-gapped device run backs this line.) */
+    private fun isOnline(): Boolean {
+        val manager = getSystemService(ConnectivityManager::class.java) ?: return true
+        val capabilities = manager.getNetworkCapabilities(manager.activeNetwork) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     /** §8 Step 6: protection status is re-evaluated on every resume through the shared

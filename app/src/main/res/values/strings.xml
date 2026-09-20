@@ -35,8 +35,7 @@
          "blocking", but no enforcement is running. The Home banner names the cause + fix. -->
     <string name="state_not_running">Not running</string>
     <string name="schedule_always_on">Always on</string>
-    <string name="schedule_window">%1$s, %2$s</string>
-    <string name="schedule_overnight_window">%1$s, %2$s (overnight)</string>
+    <string name="schedule_overnight_window">%1$s (overnight)</string>
     <string name="schedule_daily_limit">%1$s daily limit</string>
     <string name="schedule_until">until %1$s</string>
     <string name="schedule_none">No schedule set</string>
@@ -71,12 +70,20 @@
     <string name="editor_website_hint">example.com or https://example.com/path</string>
     <string name="editor_target_missing">Choose the app you want to block.</string>
     <string name="editor_target_invalid">That doesn’t look like a website address. Try example.com.</string>
-    <string name="editor_always_on">Always on</string>
-    <string name="editor_always_on_hint">Blocks every hour of every day until paused or deleted.</string>
-    <string name="editor_daily_limit_title">Daily limit</string>
-    <string name="editor_daily_limit_hint">Blocked after this much use in a day. Starts counting now, resets at midnight.</string>
-    <string name="editor_daily_limit_field_label">Minutes per day</string>
+    <string name="editor_mode_title">How should this be blocked?</string>
+    <string name="editor_mode_missing">Choose at least one way to block.</string>
+    <string name="editor_always_on">Block all day</string>
+    <string name="editor_always_on_hint">Every hour of the day, on the days you pick. Overrides the settings below.</string>
+    <string name="editor_window_title">On a schedule</string>
+    <string name="editor_window_hint">Blocked between these times, on the days you pick.</string>
+    <string name="editor_daily_limit_title">Limit daily use</string>
+    <string name="editor_daily_limit_hint">Blocked after this much use in a day, on the days you pick. Resets at midnight.</string>
+    <string name="editor_limit_hours">Hours</string>
+    <string name="editor_limit_minutes">Minutes</string>
+    <string name="editor_limit_preview">= blocked after %1$s a day</string>
     <string name="editor_daily_limit_invalid">Enter at least 1 minute for the daily limit.</string>
+    <string name="editor_daily_limit_too_large">A daily limit must be under 24 hours. A day only has 24 hours, so this would never block — pick a shorter limit.</string>
+    <string name="editor_active_days">Active on</string>
     <string name="editor_from">From</string>
     <string name="editor_to">To</string>
     <string name="editor_overnight">Overnight — ends the next day.</string>

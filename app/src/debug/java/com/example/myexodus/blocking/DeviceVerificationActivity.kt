@@ -38,7 +38,7 @@ import kotlinx.coroutines.runBlocking
  * drives the parts that need shell powers (key presses, touch injection) by reacting to
  * MARKER log lines, and asserts the tapjacking result from the victim's logcat lines.
  *
- * Host usage: am start -n <app>/.blocking.DeviceVerificationActivity --es suite <functional|latency|multiwindow|browser|fgs|fgs-down|sync|seed-ui|clear-ui|usage-seed|usage-clear> [--ez requireService false] [--ez preSplit true (multiwindow only: the suite seeds, logs MARKER_MULTIWINDOW_SEEDED, and waits for the host to form the split — host launches the victim fullscreen, then Recents → Split screen → pick a partner app; the suite observes, never launches)] [usage-seed: --es pkg <pkg> --ei limitMs <n> --ei usedMs <n> [--es anchorDate <yyyy-MM-dd> --es tzAnchor <tzid> — §12 rollover/tz-change legs; defaults: today / device tz] [--es w1 <NOT_DUE|PENDING_DELIVERY|DELIVERED> --es w2 <same> — §12 mid-day-change-while-pending leg; default NOT_DUE] [--ez notifyEngine true — mirrors the editor's post-save onDailyLimitChanged call]; usage-clear: --es pkg <pkg>]. Focus-free row reads (mid-measurement): `am broadcast -n <app>/.blocking.DeviceVerificationReceiver -a usage-read --es pkg <pkg>`.
+ * Host usage: am start -n <app>/.blocking.DeviceVerificationActivity --es suite <functional|latency|multiwindow|browser|fgs|fgs-down|sync|seed-ui|clear-ui|usage-seed|usage-clear> [--ez requireService false] [--ez preSplit true (multiwindow only: the suite seeds, logs MARKER_MULTIWINDOW_SEEDED, and waits for the host to form the split — host launches the victim fullscreen, then Recents → Split screen → pick a partner app; the suite observes, never launches)] [usage-seed: --es pkg <pkg> --ei limitMs <n> --ei usedMs <n> [--es days <7-char Mon-first, default 1111111 — rule day scope] [--ez quotaOnly true — no window at all: the pure daily-limit rule] [--es anchorDate <yyyy-MM-dd> --es tzAnchor <tzid> — §12 rollover/tz-change legs; defaults: today / device tz] [--es w1 <NOT_DUE|PENDING_DELIVERY|DELIVERED> --es w2 <same> — §12 mid-day-change-while-pending leg; default NOT_DUE] [--ez notifyEngine true — mirrors the editor's post-save onDailyLimitChanged call]; usage-clear: --es pkg <pkg>]. Focus-free row reads (mid-measurement): `am broadcast -n <app>/.blocking.DeviceVerificationReceiver -a usage-read --es pkg <pkg>`.
  *
  * `seed-ui`/`clear-ui` seed and remove four rules (one per live-state branch of the home
  * dashboard) for UI screenshot verification; they keep existing data — no DB reset.
@@ -169,25 +169,40 @@ class DeviceVerificationActivity : Activity() {
         val profile = store.userProfileDao().observeActive().first() ?: PROFILE.also {
             store.userProfileDao().insert(it)
         }
+        // Day scope + shape of the rule under test (2026-09-20 matrix leg): the default keeps
+        // the §12 matrix rule — windowed, outside its window, every day — while --es days and
+        // --ez quotaOnly seed the newly expressible states (day-scoped rules, and a pure
+        // daily-limit rule with no window at all).
+        val days = intent.getStringExtra(EXTRA_DAYS) ?: EVERY_DAY
+        require(days.length == 7 && days.all { it == '0' || it == '1' }) { "bad --es days '$days'" }
+        val quotaOnly = intent.getBooleanExtra(EXTRA_QUOTA_ONLY, false)
         val repo = entryPoint.rulesRepository()
         val existing = store.restrictionRuleDao().getByProfileAndPackage(profile.userId, pkg)
+        // Windowed + outside its window (mirrors the device matrix rule): the schedule
+        // must stay Allow so the daily limit governs — an always-on seed would wall on
+        // the schedule and the engine would never see the package. The window is placed
+        // 5h AHEAD of seed time rather than at a fixed clock hour: a fixed 22:00–07:00
+        // window walled every night-time QA run ("outside its window" only held during
+        // day runs — caught on-device 2026-09-15 verifying the connect-time re-acquire).
+        val nowMin = LocalTime.now().toSecondOfDay() / 60
+        val windowStart = if (quotaOnly) null else ((nowMin + 300) % 1440).toLong()
+        val windowEnd = if (quotaOnly) null else ((nowMin + 360) % 1440).toLong()
         if (existing != null) {
-            repo.updateRule(existing.copy(dailyLimitMs = limitMs, isEnabled = true))
+            repo.updateRule(
+                existing.copy(
+                    dailyLimitMs = limitMs, isEnabled = true,
+                    timeRangeStart = windowStart, timeRangeEnd = windowEnd,
+                    activeDaysOfWeek = days, timezone = TimeZone.getDefault().id,
+                ),
+            )
         } else {
-            // Windowed + outside its window (mirrors the device matrix rule): the schedule
-            // must stay Allow so the daily limit governs — an always-on seed would wall on
-            // the schedule and the engine would never see the package. The window is placed
-            // 5h AHEAD of seed time rather than at a fixed clock hour: a fixed 22:00–07:00
-            // window walled every night-time QA run ("outside its window" only held during
-            // day runs — caught on-device 2026-09-15 verifying the connect-time re-acquire).
-            val nowMin = LocalTime.now().toSecondOfDay() / 60
             repo.insertRule(
                 RestrictionRule(
                     ruleId = "rule-${System.nanoTime()}", profileId = profile.userId,
                     blockedPackage = pkg, targetType = "APP", isAlwaysOn = false,
-                    dailyLimitMs = limitMs, timeRangeStart = ((nowMin + 300) % 1440).toLong(),
-                    timeRangeEnd = ((nowMin + 360) % 1440).toLong(),
-                    activeDaysOfWeek = "1111111", timezone = TimeZone.getDefault().id,
+                    dailyLimitMs = limitMs, timeRangeStart = windowStart,
+                    timeRangeEnd = windowEnd,
+                    activeDaysOfWeek = days, timezone = TimeZone.getDefault().id,
                     blockExpiresAt = 0L, severityLevel = "HIGH",
                 ),
             )
@@ -655,6 +670,8 @@ class DeviceVerificationActivity : Activity() {
         const val EXTRA_USED_MS = "usedMs"
         const val EXTRA_ANCHOR_DATE = "anchorDate"
         const val EXTRA_TZ_ANCHOR = "tzAnchor"
+        const val EXTRA_DAYS = "days"
+        const val EXTRA_QUOTA_ONLY = "quotaOnly"
         const val EXTRA_W1 = "w1"
         const val EXTRA_W2 = "w2"
         const val EXTRA_NOTIFY_ENGINE = "notifyEngine"

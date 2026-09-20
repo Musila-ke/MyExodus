@@ -33,10 +33,33 @@ class RuleTargetsTest {
     }
 
     @Test
+    fun websiteTarget_emojiAndOverlongHosts_surviveCanonicalization() {
+        // adb cannot type emoji (input text is ASCII-only), so this path is pinned in JVM:
+        // canonicalization must never throw on a label the IDN transform rejects.
+        assertTrue("Emoji hosts are valid IDN, and must not crash the editor", isValidWebsiteTarget("😀.com"))
+        assertEquals(targetKey("😀.com", "WEBSITE"), targetKey("😀.com", "WEBSITE"))
+
+        val long = "a".repeat(80) + ".com"
+        assertTrue(isValidWebsiteTarget(long))
+        assertEquals(long, targetKey(long, "WEBSITE"))
+
+        assertTrue(isValidWebsiteTarget("${"b".repeat(70)}.com"))
+    }
+
+    @Test
     fun toggleDay_flipsOneDay_permanentlySevenChars() {
         assertEquals("0111111", toggleDay("1111111", 0))
         assertEquals("1111111", toggleDay("0111111", 0))
         assertEquals("1111110", toggleDay("1111111", 6))
         assertEquals("1000000", toggleDay("0000000", 0))
+    }
+
+    @Test
+    fun toggleDay_neverClearsTheLastDay() {
+        // "No days" would never match, so the rule could never fire — the guard lives in the
+        // pure function (both editors inherit it), not in the chip's onClick.
+        assertEquals("0000010", toggleDay("0000010", 5))
+        assertEquals("1000000", toggleDay("1000000", 0))
+        assertEquals("can still flip when two remain", "0000001", toggleDay("0000011", 5))
     }
 }

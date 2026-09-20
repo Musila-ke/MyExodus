@@ -3,6 +3,7 @@ package com.example.myexodus.ui
 import android.content.res.Resources
 import com.example.myexodus.R
 import com.example.myexodus.blocking.BlockDecisionEngine
+import com.example.myexodus.blocking.EVERY_DAY
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.isExpiredAt
 import java.time.DayOfWeek
@@ -45,7 +46,9 @@ fun ruleRowState(rule: RestrictionRule, nowEpochMillis: Long, res: Resources): R
     }
 }
 
-/** Human summary of a rule's schedule: window (+overnight), days, limit, expiry. */
+/** Human summary of a rule's schedule: mechanism (+overnight), day scope, limit, expiry.
+ *  Days scope the whole rule (user decision 2026-09-20), so they print once — and only when
+ *  they narrow the rule from every day. */
 fun scheduleSummary(rule: RestrictionRule, res: Resources): String {
     val parts = mutableListOf<String>()
     if (rule.isAlwaysOn) {
@@ -53,14 +56,15 @@ fun scheduleSummary(rule: RestrictionRule, res: Resources): String {
     }
     if (rule.timeRangeStart != null && rule.timeRangeEnd != null) {
         val window = "${formatTime(rule.timeRangeStart)}–${formatTime(rule.timeRangeEnd)}"
-        val days = daysLabel(rule.activeDaysOfWeek, res)
-        parts += if (rule.isOvernight) {
-            res.getString(R.string.schedule_overnight_window, window, days ?: res.getString(R.string.days_every_day))
-        } else {
-            days?.let { res.getString(R.string.schedule_window, window, it) } ?: window
-        }
+        parts += if (rule.isOvernight) res.getString(R.string.schedule_overnight_window, window) else window
     }
-    if (rule.dailyLimitMs > 0) parts += res.getString(R.string.schedule_daily_limit, formatDuration(rule.dailyLimitMs))
+    // A limit beside "always on" is inert — the rule already covers every hour — so the row
+    // never claims it. The editor zeroes it on save; this is for rules saved before that.
+    if (rule.dailyLimitMs > 0 && !rule.isAlwaysOn) {
+        parts += res.getString(R.string.schedule_daily_limit, formatDuration(rule.dailyLimitMs))
+    }
+    val days = daysLabel(rule.activeDaysOfWeek, res)
+    if (days != null && rule.activeDaysOfWeek != EVERY_DAY) parts += days
     // 0 = never expires (engine semantics); Long.MAX_VALUE is the harness's "never" sentinel —
     // rendering it as a date shows year 292278994.
     if (rule.blockExpiresAt > 0 && rule.blockExpiresAt < FAR_FUTURE_EPOCH_MILLIS) {
@@ -100,8 +104,10 @@ fun daysStringToMask(days: String): Int =
     (0..6).fold(0) { mask, index -> if (days.getOrNull(index) == '1') mask or (1 shl index) else mask }
 
 /** Flips one day, always returning a full seven characters — a short string would silently
- *  mean "no day matches" once it reaches the mask conversion. */
+ *  mean "no day matches" once it reaches the mask conversion. Clearing the last remaining day
+ *  is refused: a days set with no day never matches, so the whole rule could never fire. */
 fun toggleDay(days: String, index: Int): String {
+    if (days.getOrNull(index) == '1' && days.count { it == '1' } == 1) return days
     val chars = days.padEnd(7, '0').toCharArray()
     chars[index] = if (chars[index] == '1') '0' else '1'
     return String(chars)

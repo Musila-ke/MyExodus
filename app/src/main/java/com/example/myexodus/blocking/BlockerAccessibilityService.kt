@@ -476,6 +476,11 @@ class BlockerAccessibilityService : AccessibilityService() {
      *  Path A's health signal — Step 6 replaces this seam with the monitor check. The engine
      *  transaction runs off the main thread (NFR4: failures are logged, never crash-loops). */
     private fun accountUsage(tick: UsageSessionMachine.Tick) {
+        // The rule may have lost its limit (or been paused/expired) mid-session: sessions open
+        // only for tracked rules, but an edit can land between open and tick. Re-checked here,
+        // off the transactionally-republished snapshot, because the engine's contract is
+        // "callers never send untracked rules" — a limit of 0 reaching it means Block (§9).
+        if (!isLimitTracked(tick.packageName)) return
         scope.launch {
             runCatching {
                 val action = usageEngine.processUsageObservation(
@@ -546,11 +551,14 @@ class BlockerAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** A tracked package = an enabled rule with a real limit — mirrors BlockDecisionEngine
-     *  Rule 2's `dailyLimitMs > 0` gate and the snapshot's disabled-rule filtering. Read off
-     *  the cached snapshot: no DB I/O on the event path. */
-    private fun isLimitTracked(packageName: String): Boolean =
-        (publisher.snapshot.appRules[packageName]?.dailyLimitMs ?: 0L) > 0L
+    /** A tracked package = an enabled rule with a real limit, on a day the rule covers —
+     *  mirrors BlockDecisionEngine Rule 2's `dailyLimitMs > 0` gate plus the rule's day scope
+     *  (a rule not active today never accrues, so it must not open a session). Read off the
+     *  cached snapshot: no DB I/O on the event path. */
+    private fun isLimitTracked(packageName: String): Boolean {
+        val rule = publisher.snapshot.appRules[packageName] ?: return false
+        return rule.dailyLimitMs > 0L && dayScopeCoversToday(rule.activeDaysOfWeek, rule.timezone)
+    }
 
     /** Multi-window (plan §8 Step 5 / Decision 10): an Allow for one window must not lift
      *  the cover off a restricted pane beside it — scrolling the allowed pane's Settings

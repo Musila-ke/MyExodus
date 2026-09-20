@@ -1,6 +1,7 @@
 package com.example.myexodus.ui
 
 import android.text.format.DateFormat
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -62,14 +63,18 @@ internal fun TimeField(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun DayChips(days: String, onChange: (String) -> Unit) {
+internal fun DayChips(
+    days: String,
+    onChange: (String) -> Unit,
+    @StringRes labelRes: Int = R.string.editor_days,
+) {
     val presets = listOf(
         R.string.editor_days_every to "1111111",
         R.string.editor_days_weekdays to "1111100",
         R.string.editor_days_weekends to "0000011",
     )
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(stringResource(R.string.editor_days), style = MaterialTheme.typography.bodyLarge)
+        Text(stringResource(labelRes), style = MaterialTheme.typography.bodyLarge)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             presets.forEach { (labelRes, value) ->
                 FilterChip(
@@ -84,8 +89,8 @@ internal fun DayChips(days: String, onChange: (String) -> Unit) {
                 val selected = days.getOrNull(index) == '1'
                 FilterChip(
                     selected = selected,
-                    // Never let the last day go: a days set with no day never matches.
-                    onClick = { if (selected && days.count { it == '1' } == 1) return@FilterChip else onChange(toggleDay(days, index)) },
+                    // [toggleDay] itself refuses to clear the last remaining day.
+                    onClick = { onChange(toggleDay(days, index)) },
                     label = {
                         Text(
                             DayOfWeek.of(index + 1)

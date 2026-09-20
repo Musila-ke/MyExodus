@@ -52,6 +52,13 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
+ * How a user-initiated unpair ended. A cancelled biometric prompt is not a failure: the
+ * user chose to stop, nothing was journaled, and the pair is untouched — so the screen must
+ * say nothing rather than tell them something went wrong.
+ */
+enum class UnpairOutcome { UNPAIRED, CANCELLED, FAILED }
+
+/**
  * Partner tab (plan §7 items 12-13 / V1 Req 7): last-known partner state from verified local
  * events, with an explicit "last synced" line — cache-first per §11 (the load is a local
  * Room read, no network on paint). The screen owns no persistence and never overstates
@@ -72,10 +79,10 @@ fun PartnerScreen(
      *  false means the only fix path left is the settings screen. */
     notificationsRequestable: Boolean = false,
     onRespondToApproval: suspend (requestEventId: String, approve: Boolean) -> Boolean = { _, _ -> false },
-    /** Step 14: biometric-gated unpair initiation. False (cancelled/refused) leaves the pair
+    /** Step 14: biometric-gated unpair initiation. CANCELLED (refused prompt) leaves the pair
      *  intact — the local shred is unconditional once the request is acted on, so a refused
      *  prompt must abort before anything is journaled. */
-    onUnpair: suspend (pairId: String) -> Boolean = { _ -> false },
+    onUnpair: suspend (pairId: String) -> UnpairOutcome = { UnpairOutcome.FAILED },
     /** Step 14: deletes the dismissed terminal card's journal row (guarded in the journal). */
     onDismissUnpair: suspend (pairId: String) -> Unit = {},
 ) {
@@ -225,6 +232,7 @@ fun PartnerScreen(
                                 respondingTo = requestEventId
                                 respondFailed = false
                                 val ok = runCatching { onRespondToApproval(requestEventId, approve) }
+                                    .onFailure { Log.w(TAG, "approval response threw", it) }
                                     .getOrDefault(false)
                                 respondingTo = null
                                 respondFailed = !ok
@@ -261,10 +269,11 @@ fun PartnerScreen(
                                     scope.launch(Dispatchers.IO) {
                                         unpairing = true
                                         unpairFailed = false
-                                        val ok = runCatching { onUnpair(current.pairId) }
-                                            .getOrDefault(false)
+                                        val outcome = runCatching { onUnpair(current.pairId) }
+                                            .onFailure { Log.w(TAG, "unpair initiation threw", it) }
+                                            .getOrDefault(UnpairOutcome.FAILED)
                                         unpairing = false
-                                        unpairFailed = !ok
+                                        unpairFailed = outcome == UnpairOutcome.FAILED
                                         reload()
                                     }
                                 },

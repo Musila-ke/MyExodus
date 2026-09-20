@@ -138,13 +138,16 @@ dependencies {
     androidTestImplementation(libs.androidx.test.uiautomator)
     androidTestImplementation(libs.androidx.room.testing)
     // App Check enforcement (task #21): instrumented tests that hit the real Firestore must be
-    // able to force the debug provider on non-attesting devices (emulator) — documented path,
-    // secret passed via `am instrument -e firebaseAppCheckDebugSecret <token>`. The debug build
-    // also needs it as debugImplementation: the artifact's manifest carries the ComponentRegistrar
-    // meta-data, and only the app APK's manifest is read for component discovery (a test-APK-only
-    // registrar would never be seen at runtime).
-    androidTestImplementation(libs.firebase.appcheck.debug.testing)
-    debugImplementation(libs.firebase.appcheck.debug.testing)
+    // able to force the debug provider on non-attesting devices — documented path, secret passed
+    // via `am instrument -e firebaseAppCheckDebugSecret <token>` (AppCheckTestSupport seeds it).
+    // Deliberately NOT firebase-appcheck-debug-testing: its registrar, once merged into the app
+    // manifest (required for component discovery on the app classpath), makes every normal debug
+    // run crash provider creation — its DebugSecretProvider reads InstrumentationRegistry
+    // unguarded, and a non-instrumented process has no arguments bundle (found 2026-09-20).
+    // The plain artifact's provider takes that secret provider as an OPTIONAL component instead,
+    // so with -testing absent it falls back to a persisted, generated debug secret.
+    androidTestImplementation(libs.firebase.appcheck.debug)
+    debugImplementation(libs.firebase.appcheck.debug)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
     // Step 13: the Partner tab's approve/reject signs a chain event via BiometricPrompt —

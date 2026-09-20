@@ -62,7 +62,15 @@
             android:exported="true"
             android:launchMode="singleTop"
             android:theme="@style/Theme.MyExodus"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode">
+            <!-- configChanges (the androidx Compose template set) keeps in-flight session state
+                alive: recreation reset the delay timer and the pacer, and made the recovery
+                session log an ABANDONED row plus a fresh row on every rotation (rotation
+                reproduced on the X6532, 2026-09-19 — the rule editor's plain-remember banner
+                vanished while its saveable text survived, proving the Activity was destroyed).
+                A genuine recreation (process death) is still covered: the app-start sweep
+                relabels stale STARTED rows INTERRUPTED, and the tint controls re-read prefs. -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 

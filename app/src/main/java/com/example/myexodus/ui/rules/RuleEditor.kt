@@ -21,6 +21,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -42,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
@@ -52,11 +54,13 @@ import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.ui.formatDate
 import com.example.myexodus.ui.DayChips
 import com.example.myexodus.ui.TimeField
+import com.example.myexodus.ui.formatDuration
 import com.example.myexodus.ui.formatTime
 import com.example.myexodus.ui.toggleDay
 import com.example.myexodus.ui.rememberAppLabel
 import java.time.DayOfWeek
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.TextStyle
@@ -70,15 +74,20 @@ private const val DEFAULT_START_MINUTES = 22 * 60L
 private const val DEFAULT_END_MINUTES = 7 * 60L
 
 private const val MINUTE_MS = 60_000L
+private const val MILLIS_PER_DAY = 86_400_000L
 
 private const val TAG = "RuleEditor"
 
 /**
- * Create/edit one block. One rule = one target + one window (the shipped model); the schedule
- * fields carry the engine's own semantics — a window is start-inclusive/end-exclusive, and
- * `end <= start` is the engine's overnight form, so equal times are rejected at save (§8.1).
- * Writes go through [RulesRepository]; nothing is reported saved unless the transaction
- * committed, and a failure keeps the editor open with the reason on screen (plan §6.1/§9).
+ * Create/edit one block. One rule = one target + a combination of three independent mechanisms
+ * ("block all day", a schedule window, a daily limit) + one day scope that bounds the whole
+ * rule; at least one mechanism is required (user decision 2026-09-20 — the old form defaulted
+ * to always-on and forced a window off it, which is what made a plain daily limit unreachable).
+ * The schedule fields carry the engine's own semantics — a window is start-inclusive/
+ * end-exclusive, and `end <= start` is the engine's overnight form, so equal times are rejected
+ * at save (§8.1). Writes go through [RulesRepository]; nothing is reported saved unless the
+ * transaction committed, and a failure keeps the editor open with the reason on screen
+ * (plan §6.1/§9).
  */
 @Composable
 fun RuleEditorScreen(
@@ -98,11 +107,19 @@ fun RuleEditorScreen(
 
     var targetValue by rememberSaveable { mutableStateOf(initial?.blockedPackage ?: target.orEmpty()) }
     var showPicker by rememberSaveable { mutableStateOf(false) }
-    var limitEnabled by rememberSaveable { mutableStateOf((initial?.dailyLimitMs ?: 0L) > 0L) }
-    var limitText by rememberSaveable {
-        mutableStateOf(initial?.dailyLimitMs?.takeIf { it > 0L }?.div(MINUTE_MS)?.toString() ?: "30")
+    // A new rule starts with nothing selected — picking the mode is the first deliberate
+    // choice, never a default the user has to notice and undo.
+    var alwaysOn by rememberSaveable { mutableStateOf(initial?.isAlwaysOn ?: false) }
+    var windowEnabled by rememberSaveable {
+        mutableStateOf(initial?.timeRangeStart != null && initial?.timeRangeEnd != null)
     }
-    var isAlwaysOn by rememberSaveable { mutableStateOf(initial?.isAlwaysOn ?: true) }
+    var limitEnabled by rememberSaveable { mutableStateOf((initial?.dailyLimitMs ?: 0L) > 0L) }
+    var limitHours by rememberSaveable {
+        mutableStateOf(initial?.dailyLimitMs?.takeIf { it > 0L }?.div(60 * MINUTE_MS)?.toString() ?: "0")
+    }
+    var limitMinutes by rememberSaveable {
+        mutableStateOf(initial?.dailyLimitMs?.takeIf { it > 0L }?.div(MINUTE_MS)?.rem(60)?.toString() ?: "30")
+    }
     var startMinutes by rememberSaveable { mutableLongStateOf(initial?.timeRangeStart ?: DEFAULT_START_MINUTES) }
     var endMinutes by rememberSaveable { mutableLongStateOf(initial?.timeRangeEnd ?: DEFAULT_END_MINUTES) }
     var days by rememberSaveable { mutableStateOf(initial?.activeDaysOfWeek ?: "1111111") }
@@ -111,9 +128,14 @@ fun RuleEditorScreen(
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
+    val scrollState = rememberScrollState()
 
     // "Add app" has no target yet: open the chooser right away.
     LaunchedEffect(Unit) { if (isApp && targetValue.isBlank()) showPicker = true }
+
+    // The banner sits above the form while Save sits below it: from the bottom of a long form
+    // a rejected save is otherwise invisible — the message has to come to the user.
+    LaunchedEffect(error) { if (error != null) scrollState.animateScrollTo(0) }
 
     // Resolved at composition — save() is a click handler, not a composable (lint: resource
     // reads on LocalContext are not configuration-aware).
@@ -122,20 +144,29 @@ fun RuleEditorScreen(
     val sameTimeMessage = stringResource(R.string.editor_same_time_error)
     val duplicateMessage = stringResource(R.string.editor_target_duplicate)
     val limitInvalidMessage = stringResource(R.string.editor_daily_limit_invalid)
+    val limitTooLargeMessage = stringResource(R.string.editor_daily_limit_too_large)
+    val noModeMessage = stringResource(R.string.editor_mode_missing)
 
     fun save() {
         error = null
         val value = targetValue.trim()
-        // §9: the UI clamps the daily limit's minimum to 1 minute; an unset limit stores 0
-        // (the engine's "untracked for Rule 2" value — schedule blocking is unaffected).
-        val limitMinutes = limitText.trim().toLongOrNull()
-        val limitInvalid = isApp && limitEnabled && (limitMinutes == null || limitMinutes < 1L)
-        val newLimitMs = if (isApp && limitEnabled && !limitInvalid) limitMinutes!! * MINUTE_MS else 0L
+        // The limit is app-only (the engine tracks packages); a website rule always stores 0.
+        val limitTotalMinutes = parseLimitTotalMinutes(limitHours, limitMinutes)
+        val modeError = validateBlockMode(
+            alwaysOn = alwaysOn,
+            windowEnabled = windowEnabled,
+            limitEnabled = isApp && limitEnabled,
+            startMinutes = startMinutes,
+            endMinutes = endMinutes,
+            limitTotalMinutes = limitTotalMinutes,
+        )
         val invalid = when {
             isApp && value.isEmpty() -> missingTargetMessage
             !isApp && !isValidWebsiteTarget(value) -> invalidTargetMessage
-            !isAlwaysOn && startMinutes == endMinutes -> sameTimeMessage
-            limitInvalid -> limitInvalidMessage
+            modeError == ModeError.NoneSelected -> noModeMessage
+            modeError == ModeError.SameTime -> sameTimeMessage
+            modeError == ModeError.LimitInvalid -> limitInvalidMessage
+            modeError == ModeError.LimitTooLarge -> limitTooLargeMessage
             else -> null
         }
         if (invalid != null) {
@@ -151,6 +182,15 @@ fun RuleEditorScreen(
             error = duplicateMessage
             return
         }
+        val fields = composeRuleFields(
+            alwaysOn = alwaysOn,
+            windowEnabled = windowEnabled,
+            limitEnabled = isApp && limitEnabled,
+            startMinutes = startMinutes,
+            endMinutes = endMinutes,
+            days = days,
+            limitTotalMinutes = limitTotalMinutes,
+        )
         scope.launch(Dispatchers.IO) {
             saving = true
             runCatching {
@@ -159,7 +199,7 @@ fun RuleEditorScreen(
                     profileId = repository.ensureActiveProfile().userId,
                     blockedPackage = value,
                     targetType = targetType,
-                    isAlwaysOn = true,
+                    isAlwaysOn = false,
                     dailyLimitMs = 0L,
                     timeRangeStart = null,
                     timeRangeEnd = null,
@@ -170,13 +210,11 @@ fun RuleEditorScreen(
                 )
                 val rule = base.copy(
                     blockedPackage = value,
-                    dailyLimitMs = newLimitMs,
-                    isAlwaysOn = isAlwaysOn,
-                    // Always on means no window: the stored rule stays honest, so every row
-                    // and the engine read the same thing.
-                    timeRangeStart = if (isAlwaysOn) null else startMinutes,
-                    timeRangeEnd = if (isAlwaysOn) null else endMinutes,
-                    activeDaysOfWeek = if (isAlwaysOn) "1111111" else days,
+                    dailyLimitMs = fields.dailyLimitMs,
+                    isAlwaysOn = fields.isAlwaysOn,
+                    timeRangeStart = fields.timeRangeStart,
+                    timeRangeEnd = fields.timeRangeEnd,
+                    activeDaysOfWeek = fields.activeDaysOfWeek,
                     timezone = timezone,
                     blockExpiresAt = expiresAt,
                 )
@@ -186,7 +224,9 @@ fun RuleEditorScreen(
                 // new value is committed (warnings back to NOT_DUE, blockedToday re-derived
                 // in both directions). Only edits can have a tracker row; a failure here
                 // leaves state the next observation re-derives, so it never blocks the save.
-                if (isApp && initial != null && initial.dailyLimitMs != newLimitMs && newLimitMs > 0L) {
+                if (isApp && initial != null && initial.dailyLimitMs != fields.dailyLimitMs &&
+                    fields.dailyLimitMs > 0L
+                ) {
                     runCatching { usageAccountingEngine.onDailyLimitChanged(value) }
                         .onFailure { Log.w(TAG, "Daily-limit recompute failed after save", it) }
                 }
@@ -199,7 +239,7 @@ fun RuleEditorScreen(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -253,64 +293,41 @@ fun RuleEditorScreen(
                     onValueChange = { targetValue = it },
                     singleLine = true,
                     placeholder = { Text(stringResource(R.string.editor_website_hint)) },
+                    // A hostname is not prose: sentence capitalization turned "github.com"
+                    // into "GitHub.com" on-device (XOS IME, 2026-09-19).
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Uri,
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrectEnabled = false,
+                    ),
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
 
-        // Rule 2 (daily quota) is an app-only mechanism — the engine tracks packages, so a
-        // website rule is never offered a limit that could not be enforced.
-        if (isApp) {
-            SectionCard {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            stringResource(R.string.editor_daily_limit_title),
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        Text(
-                            stringResource(R.string.editor_daily_limit_hint),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(checked = limitEnabled, onCheckedChange = { limitEnabled = it })
-                }
-                if (limitEnabled) {
-                    OutlinedTextField(
-                        value = limitText,
-                        onValueChange = { limitText = it.filter(Char::isDigit) },
-                        singleLine = true,
-                        label = { Text(stringResource(R.string.editor_daily_limit_field_label)) },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-        }
-
         SectionCard {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.editor_always_on), style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        stringResource(R.string.editor_always_on_hint),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(checked = isAlwaysOn, onCheckedChange = { isAlwaysOn = it })
-            }
+            Text(
+                stringResource(R.string.editor_mode_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
 
-            if (!isAlwaysOn) {
+            ModeRow(
+                title = stringResource(R.string.editor_always_on),
+                hint = stringResource(R.string.editor_always_on_hint),
+                checked = alwaysOn,
+                enabled = true,
+                onCheckedChange = { alwaysOn = it },
+            )
+
+            ModeRow(
+                title = stringResource(R.string.editor_window_title),
+                hint = stringResource(R.string.editor_window_hint),
+                checked = windowEnabled,
+                // Overridden while "all the time" is on: shown, not editable, values kept.
+                enabled = !alwaysOn,
+                onCheckedChange = { windowEnabled = it },
+            )
+            if (windowEnabled && !alwaysOn) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -340,8 +357,60 @@ fun RuleEditorScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                DayChips(days = days, onChange = { days = it })
             }
+
+            // Rule 2 (daily quota) is an app-only mechanism — the engine tracks packages, so a
+            // website rule is never offered a limit that could not be enforced.
+            if (isApp) {
+                ModeRow(
+                    title = stringResource(R.string.editor_daily_limit_title),
+                    hint = stringResource(R.string.editor_daily_limit_hint),
+                    checked = limitEnabled,
+                    enabled = !alwaysOn,
+                    onCheckedChange = { limitEnabled = it },
+                )
+                if (limitEnabled && !alwaysOn) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        LimitNumberField(
+                            label = stringResource(R.string.editor_limit_hours),
+                            value = limitHours,
+                            onChange = { limitHours = it },
+                            modifier = Modifier.weight(1f),
+                        )
+                        LimitNumberField(
+                            label = stringResource(R.string.editor_limit_minutes),
+                            value = limitMinutes,
+                            onChange = { limitMinutes = it },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    // The whole point of h+m fields: no mental math. Show the total — and past a
+                    // full day say why it is refused, rather than echoing an inert limit.
+                    parseLimitTotalMinutes(limitHours, limitMinutes)?.let { totalMinutes ->
+                        val tooLarge = totalMinutes >= MINUTES_PER_DAY
+                        Text(
+                            if (tooLarge) {
+                                stringResource(R.string.editor_daily_limit_too_large)
+                            } else {
+                                stringResource(R.string.editor_limit_preview, formatDuration(totalMinutes * MINUTE_MS))
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (tooLarge) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
+
+            // Day scope is rule-level (user decision 2026-09-20): the days here bound every
+            // mechanism above — "Block all day" on weekends only is a weekend lockdown.
+            DayChips(
+                days = days,
+                onChange = { days = it },
+                labelRes = R.string.editor_active_days,
+            )
 
             // Expiry applies to every rule (Req 5), not just windowed ones: the recovery
             // unlock expires always-on rules too, so the editor must be able to re-arm them.
@@ -427,6 +496,50 @@ fun RuleEditorScreen(
     }
 }
 
+/** One blocking mechanism row: title + hint + switch. Disabled rows keep their checked
+ *  state — the value survives while another mechanism overrides it. */
+@Composable
+private fun ModeRow(
+    title: String,
+    hint: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(
+                hint,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+    }
+}
+
+@Composable
+private fun LimitNumberField(
+    label: String,
+    value: String,
+    onChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { onChange(it.filter(Char::isDigit).take(4)) },
+        singleLine = true,
+        label = { Text(label) },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = modifier,
+    )
+}
+
 @Composable
 private fun SectionCard(content: @Composable () -> Unit) {
     Surface(
@@ -480,7 +593,10 @@ private fun ExpiryDateDialog(
     onConfirm: (Long) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val state = rememberDatePickerState(initialSelectedDateMillis = initialEpochMillis.toPickerDayMillis())
+    val state = rememberDatePickerState(
+        initialSelectedDateMillis = initialEpochMillis.toPickerDayMillis(),
+        selectableDates = NotPastDates,
+    )
     DatePickerDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
@@ -497,6 +613,12 @@ private fun ExpiryDateDialog(
     ) { DatePicker(state = state) }
 }
 
+/** A past expiry lifts the rule the moment it is saved (engine Rule 3) — never offerable. */
+private object NotPastDates : SelectableDates {
+    override fun isSelectableDate(utcTimeMillis: Long): Boolean =
+        utcTimeMillis >= LocalDate.now().toEpochDay() * MILLIS_PER_DAY
+}
+
 /** Stored expiry is an end-of-day instant; the picker works in UTC whole days. */
 private fun Long.toPickerDayMillis(): Long? = takeIf { it > 0 }?.let {
     Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate()
@@ -506,6 +628,74 @@ private fun Long.toPickerDayMillis(): Long? = takeIf { it > 0 }?.let {
 private fun Long.toLocalEndOfDayMillis(): Long =
     Instant.ofEpochMilli(this).atZone(ZoneOffset.UTC).toLocalDate()
         .atTime(23, 59, 59).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+/** Validation outcome of the block-mode form; the caller maps it to copy. */
+internal enum class ModeError { NoneSelected, SameTime, LimitInvalid, LimitTooLarge }
+
+/** A usage day is 24 h long, so a limit at or above this can never fire (user-reported
+ *  2026-09-20: "30 hrs a day" was accepted and would have been an inert rule). */
+internal const val MINUTES_PER_DAY = 24 * 60
+
+internal fun parseLimitTotalMinutes(hours: String, minutes: String): Long? {
+    val h = hours.trim().toLongOrNull() ?: return null
+    val m = minutes.trim().toLongOrNull() ?: return null
+    val total = h * 60 + m
+    return total.takeIf { it > 0 }
+}
+
+/**
+ * The editor's rules: at least one mechanism selected, a selected window must not be zero-length
+ * (equal start/end is the engine's overnight form, ambiguous as a new rule), and a selected
+ * limit must total between 1 minute and one day. All checks are skipped for mechanisms
+ * "all the time" overrides.
+ */
+internal fun validateBlockMode(
+    alwaysOn: Boolean,
+    windowEnabled: Boolean,
+    limitEnabled: Boolean,
+    startMinutes: Long,
+    endMinutes: Long,
+    limitTotalMinutes: Long?,
+): ModeError? = when {
+    !alwaysOn && !windowEnabled && !limitEnabled -> ModeError.NoneSelected
+    !alwaysOn && windowEnabled && startMinutes == endMinutes -> ModeError.SameTime
+    !alwaysOn && limitEnabled && limitTotalMinutes == null -> ModeError.LimitInvalid
+    !alwaysOn && limitEnabled && limitTotalMinutes != null && limitTotalMinutes >= MINUTES_PER_DAY ->
+        ModeError.LimitTooLarge
+    else -> null
+}
+
+/** The stored fields a rule ends up with. "All the time" stores no window and no limit — the
+ *  stored rule stays honest (rows and engine read the same thing), while the form keeps the
+ *  user's values so flipping the switch back restores them. Days are stored for every rule:
+ *  they scope the whole rule, not just a window. */
+internal data class RuleFields(
+    val isAlwaysOn: Boolean,
+    val timeRangeStart: Long?,
+    val timeRangeEnd: Long?,
+    val activeDaysOfWeek: String,
+    val dailyLimitMs: Long,
+)
+
+internal fun composeRuleFields(
+    alwaysOn: Boolean,
+    windowEnabled: Boolean,
+    limitEnabled: Boolean,
+    startMinutes: Long,
+    endMinutes: Long,
+    days: String,
+    limitTotalMinutes: Long?,
+): RuleFields {
+    val window = !alwaysOn && windowEnabled
+    val limit = !alwaysOn && limitEnabled
+    return RuleFields(
+        isAlwaysOn = alwaysOn,
+        timeRangeStart = if (window) startMinutes else null,
+        timeRangeEnd = if (window) endMinutes else null,
+        activeDaysOfWeek = days,
+        dailyLimitMs = if (limit) (limitTotalMinutes ?: 0L) * MINUTE_MS else 0L,
+    )
+}
 
 /**
  * Website targets are stored as typed; validation only rejects what can never match — the
