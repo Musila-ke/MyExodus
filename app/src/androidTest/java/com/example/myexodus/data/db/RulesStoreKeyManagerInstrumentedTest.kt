@@ -32,6 +32,7 @@ class RulesStoreKeyManagerInstrumentedTest {
 
     @Before
     fun setUp() {
+        assumeEmulatorOnly()
         recovery().resetAllData()
     }
 

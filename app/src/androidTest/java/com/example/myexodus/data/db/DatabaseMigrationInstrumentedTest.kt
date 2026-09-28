@@ -32,6 +32,7 @@ class DatabaseMigrationInstrumentedTest {
 
     @Before
     fun setUp() {
+        assumeEmulatorOnly()
         healthStore = DatabaseHealthStore()
         recovery = RecoveryManager(context, legacyKeys, activityKeys, RulesStoreKeyManager(context), healthStore)
         recovery.resetAllData()

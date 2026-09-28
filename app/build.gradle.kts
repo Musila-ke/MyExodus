@@ -85,6 +85,26 @@ tasks.named("check") {
     dependsOn(domainUsageCiChecks)
 }
 
+// Instrumented-run safety guard (2026-09-28): AGP's connected tasks install through UTP, which
+// UNINSTALLS the app and the test APK when the run ends. The next install then gets a fresh
+// app UID and an empty data directory — on a physical handset that is the user's live rules
+// store, wrapped keys, permissions and Firebase identity. It happened: three connected runs
+// against the X6532 on 2026-09-28 destroyed the owner's install. Connected runs are
+// emulator-only; device legs go through `install -r` + `adb shell am instrument`, which never
+// uninstall.
+tasks.matching { it.name.startsWith("connected") && it.name.endsWith("AndroidTest") }.configureEach {
+    doFirst {
+        val serial = System.getenv("ANDROID_SERIAL").orEmpty()
+        check(serial.startsWith("emulator-")) {
+            "Refusing to run $name: connected instrumented runs uninstall the app afterwards, " +
+                "destroying the data directory of whatever device they touch. " +
+                "Set ANDROID_SERIAL=emulator-5554 (currently " +
+                (if (serial.isEmpty()) "unset" else "'$serial'") + "), or install with " +
+                "`install -r` and run `adb shell am instrument` for the physical device."
+        }
+    }
+}
+
 ksp {
     // Room schema export (§8 Step 1 / §12): MigrationTestHelper needs the versioned schema
     // JSONs. Room 3's compiler still reads the `room.schemaLocation` processor option

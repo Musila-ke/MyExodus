@@ -33,6 +33,7 @@ class MilestoneSchemaInstrumentedTest {
 
     @Before
     fun setUp() {
+        assumeEmulatorOnly()
         health = DatabaseHealthStore()
         recovery = RecoveryManager(context, legacyKeys, activityKeys, rulesKeys, health)
         recovery.resetAllData()

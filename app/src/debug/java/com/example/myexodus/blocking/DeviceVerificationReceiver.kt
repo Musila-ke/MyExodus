@@ -652,30 +652,56 @@ class DeviceVerificationReceiver : BroadcastReceiver() {
 
     /**
      * #52's device evidence: the store open here runs the real v11→v12 migration first (the
-     * factory's onOpen path), so `user_version` reads 12 only if the migration chain executed on
-     * this device's SQLCipher database; a failed migration throws and the receiver's catch logs
-     * it instead — both outcomes are visible. The per-pair group-by is the fan-out census: after
-     * the migration both link tables are empty by design (no backfill; pre-v12 deliveries stay
-     * excluded via `event_sequence`, whose census prints alongside).
+     * factory's onOpen path), so `user_version` reads the newest version only if the migration
+     * chain executed on this device's SQLCipher database; a failed migration throws and the
+     * receiver's catch logs it instead — both outcomes are visible. The per-pair group-by is the
+     * fan-out census: after the v12 migration both link tables are empty by design (no backfill;
+     * pre-v12 deliveries stay excluded via `event_sequence`, whose census prints alongside), and
+     * after v13 the activity journal/link/projection tables are new and likewise unbackfilled.
      */
     private suspend fun mirrorRead(context: Context) {
         val store = entryPoint(context).appRulesStoreFactory().open() ?: error("store unavailable")
         store.useWriterConnection { tx ->
             suspend fun long(sql: String): Long =
                 tx.usePrepared(sql) { if (it.step()) it.getLong(0) else -1L }
-            Log.i(TAG, "mirror schema user_version=${long("PRAGMA user_version")} (expect 12 — ADR #111)")
-            listOf("attempt_mirror_link", "recovery_mirror_link").forEach { table ->
+            Log.i(TAG, "mirror schema user_version=${long("PRAGMA user_version")} (expect 13 — ADR #111 v12, ADR #115 v13)")
+            listOf(
+                "attempt_mirror_link",
+                "recovery_mirror_link",
+                "partner_activity_link",
+            ).forEach { table ->
                 Log.i(TAG, "mirror table $table rows=${long("SELECT count(*) FROM $table")}")
                 tx.usePrepared("SELECT pair_id, count(*) FROM $table GROUP BY pair_id ORDER BY pair_id") { st ->
                     while (st.step()) Log.i(TAG, "mirror links $table pair=${st.getText(0)} n=${st.getLong(1)}")
                 }
             }
+            // ADR #115 census: the journal is written unconditionally by the domain transactions and
+            // only drained for enrolled pairs, so a non-zero journal with zero links is the expected
+            // shape on a device whose pairs are all gone — it is not an error.
+            Log.i(
+                TAG,
+                "activity journal rows=${long("SELECT count(*) FROM partner_activity_outbox")} " +
+                    "unlinked=${long("SELECT count(*) FROM partner_activity_outbox o LEFT JOIN partner_activity_link l ON o.event_id = l.event_id WHERE l.event_id IS NULL")} " +
+                    "projections=${long("SELECT count(*) FROM partner_activity_projection")} " +
+                    "pinned=${long("SELECT count(*) FROM partner_activity_projection WHERE pinned_message_text IS NOT NULL")}",
+            )
             Log.i(
                 TAG,
                 "mirror sources attempts=${long("SELECT count(*) FROM attempt_log")} " +
                     "attemptsLegacyLinked=${long("SELECT count(*) FROM attempt_log WHERE event_sequence IS NOT NULL")} " +
                     "sessions=${long("SELECT count(*) FROM recovery_session")} " +
                     "sessionsLegacyLinked=${long("SELECT count(*) FROM recovery_session WHERE event_sequence IS NOT NULL")}",
+            )
+            // A zero census here means every rule/attempt/streak row is gone too — the census is
+            // what separates "the owner has no attempts yet" from "this database is not the one
+            // the app has been writing to" (or was reset).
+            Log.i(
+                TAG,
+                "mirror store rules=${long("SELECT count(*) FROM restriction_rules")} " +
+                    "streaks=${long("SELECT count(*) FROM habit_progress")} " +
+                    "milestones=${long("SELECT count(*) FROM milestone_events")} " +
+                    "coaching=${long("SELECT count(*) FROM coaching_step")} " +
+                    "ledger=${long("SELECT count(*) FROM usage_ledger")}",
             )
         }
     }

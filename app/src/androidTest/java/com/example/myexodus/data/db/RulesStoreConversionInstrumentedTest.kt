@@ -39,6 +39,7 @@ class RulesStoreConversionInstrumentedTest {
 
     @Before
     fun setUp() {
+        assumeEmulatorOnly()
         recovery().resetAllData()
     }
 

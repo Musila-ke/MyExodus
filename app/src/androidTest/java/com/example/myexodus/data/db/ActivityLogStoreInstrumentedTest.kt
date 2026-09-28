@@ -25,6 +25,7 @@ class ActivityLogStoreInstrumentedTest {
 
     @Before
     fun setUp() {
+        assumeEmulatorOnly()
         resetAll()
     }
 

@@ -10,6 +10,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -23,6 +24,9 @@ class AppRulesStoreInstrumentedTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val legacyKeys = AndroidDatabaseKeyManager(context)
     private val activityKeys = ActivityLogKeyManager(context)
+
+    @Before
+    fun deviceSafetyGuard() = assumeEmulatorOnly()
 
     private fun newFactory(): Triple<AppRulesStoreFactory, DatabaseHealthStore, RecoveryManager> {
         val healthStore = DatabaseHealthStore()
