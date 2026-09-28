@@ -1,6 +1,8 @@
 package com.example.myexodus.streaks
 
 import androidx.room3.withWriteTransaction
+import com.example.myexodus.accountability.activity.PartnerActivityJournal
+import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.HabitProgress
@@ -47,6 +49,10 @@ import kotlinx.coroutines.sync.withLock
  * - Milestone stamping also runs on the held (backward-clock) evaluation path: the accumulator
  *   is unchanged there, but a milestone crossed by durable state (e.g. a fresh install
  *   upgrading mid-streak) must still surface its splash card.
+ * - Partner-visible activity (partner-activity plan Appendix A.3) is journalled inside these
+ *   same transactions via [PartnerActivityJournal]: STREAK_UPDATED on a day crossing only,
+ *   MILESTONE_REACHED per newly stamped day, RELAPSE_RECORDED after the rollover. Consent
+ *   flags and the absence of fan-out here are the emitter's contract, not this class's.
  */
 
 /** One row of the habit switcher. */
@@ -351,7 +357,7 @@ class HabitRepository(
             is StreakEvaluation.RejectedBackwardClock -> {
                 // Nothing persisted (§9): hold the last valid accumulator, retry next evaluation.
                 anomalyLog.append(evaluation.anomaly)
-                stampAchievedMilestones(db, streak, streak.currentStreakElapsedMs, readings.tWallMillis)
+                stampAchievedMilestones(db, habitId, streak, streak.currentStreakElapsedMs, readings.tWallMillis)
                 Outcome.Settled(habitStateOf(db, habit, streak))
             }
 
@@ -380,7 +386,14 @@ class HabitRepository(
                 }
                 db.habitProgressDao().raiseAllTimeMax(habitId, evaluation.currentStreakElapsedMs)
                 evaluation.anomaly?.let(anomalyLog::append)
-                stampAchievedMilestones(db, streak, evaluation.currentStreakElapsedMs, readings.tWallMillis)
+                stampAchievedMilestones(db, habitId, streak, evaluation.currentStreakElapsedMs, readings.tWallMillis)
+                if (dayOf(evaluation.currentStreakElapsedMs) > dayOf(streak.currentStreakElapsedMs)) {
+                    // Appendix A.3: day-crossing only — bounds the partner feed to one
+                    // STREAK_UPDATED per clean day instead of one per evaluation.
+                    PartnerActivityJournal.emitForHabit(
+                        db, habitId, EventPayload.TYPE_STREAK_UPDATED, readings.tWallMillis,
+                    )
+                }
                 Outcome.Settled(
                     habitStateOf(
                         db,
@@ -399,6 +412,7 @@ class HabitRepository(
      */
     private suspend fun stampAchievedMilestones(
         db: AppRulesStore,
+        habitId: String,
         streak: RecoveryStreak,
         currentStreakElapsedMs: Long,
         tWallMillis: Long,
@@ -408,7 +422,14 @@ class HabitRepository(
                 it.achievedAt == null && currentStreakElapsedMs >= it.milestoneDay * StreakTimer.DAY_MS
             }
             .forEach {
-                db.milestoneEventDao().markAchieved(streak.streakId, it.milestoneDay, tWallMillis)
+                val stamped = db.milestoneEventDao().markAchieved(streak.streakId, it.milestoneDay, tWallMillis)
+                // Appendix A.3: one MILESTONE_REACHED per *newly* stamped day — a day already
+                // achieved by a racing writer must not be re-announced to the partner.
+                if (stamped > 0) {
+                    PartnerActivityJournal.emitForHabit(
+                        db, habitId, EventPayload.TYPE_MILESTONE_REACHED, tWallMillis,
+                    )
+                }
             }
     }
 
@@ -469,6 +490,14 @@ class HabitRepository(
         )
         db.milestoneEventDao().insertAll(milestoneRows(newStreakId))
 
+        // Appendix A.3: post-rollover snapshot (day 0, empty milestone list, bumped count).
+        // The occurrence is the relapse time — backdated when logged retrospectively — while
+        // the journal's retention clock stays real write time.
+        PartnerActivityJournal.emitForHabit(
+            db, habitId, EventPayload.TYPE_RELAPSE_RECORDED,
+            occurredAtMs = relapsedAt, createdAtMs = readings.tWallMillis,
+        )
+
         return RelapseResult.RolledOver(requireNotNull(loadState(db, habitId)))
     }
 
@@ -496,13 +525,16 @@ class HabitRepository(
                 habit.allTimeMaxStreakElapsedMs,
                 streak.currentStreakElapsedMs,
             ),
-            currentDay = (streak.currentStreakElapsedMs / StreakTimer.DAY_MS).toInt(),
+            currentDay = dayOf(streak.currentStreakElapsedMs),
             habitDurationYears = habit.habitDurationYears,
             severity = severity,
             withdrawalWeeks = WithdrawalCurve.weeks(habit.habitDurationYears, severity),
             milestones = db.milestoneEventDao().getForStreak(streak.streakId),
         )
     }
+
+    /** Completed clean days of an accumulator — the display-day definition [HabitState] uses. */
+    private fun dayOf(elapsedMs: Long): Int = (elapsedMs / StreakTimer.DAY_MS).toInt()
 
     private fun RecoveryStreak.toAnchor() = StreakAnchor(
         tWallLastObserved = tWallLastObserved,

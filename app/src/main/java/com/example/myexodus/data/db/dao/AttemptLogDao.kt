@@ -21,15 +21,30 @@ interface AttemptLogDao {
     @Query("SELECT * FROM attempt_log ORDER BY occurred_at_epoch_millis DESC LIMIT :limit")
     suspend fun recent(limit: Int): List<AttemptLog>
 
-    /** §14 reconcile: attempts not yet linked to a chain event, oldest first. */
+    /**
+     * §14 reconcile: attempts not yet mirrored to THIS pair, oldest first (ADR #111). The
+     * link table — not `event_sequence` — is what the pending check reads, so one pair's
+     * delivery never hides the row from another. `event_sequence` stays only as the pre-v12
+     * single-link marker: a row carrying it was delivered before per-pair links existed and is
+     * excluded for every pair (never re-mirrored, so no duplicates).
+     */
     @Query(
         "SELECT * FROM attempt_log WHERE event_sequence IS NULL " +
+            "AND NOT EXISTS (SELECT 1 FROM attempt_mirror_link l " +
+            "WHERE l.attempt_id = attempt_log.id AND l.pair_id = :pairId) " +
             "ORDER BY occurred_at_epoch_millis ASC LIMIT :limit",
     )
-    suspend fun pendingEventCreation(limit: Int): List<AttemptLog>
+    suspend fun pendingEventCreation(pairId: String, limit: Int): List<AttemptLog>
 
-    @Query("UPDATE attempt_log SET event_sequence = :sequence WHERE id = :id")
-    suspend fun linkEvent(id: Long, sequence: Long)
+    /** Exactly-once per (attempt, pair): re-linking the same pair is a no-op (ADR #111). */
+    @Query(
+        "INSERT OR IGNORE INTO attempt_mirror_link (attempt_id, pair_id, sequence) " +
+            "VALUES (:id, :pairId, :sequence)",
+    )
+    suspend fun linkEvent(id: Long, pairId: String, sequence: Long)
+
+    @Query("SELECT sequence FROM attempt_mirror_link WHERE attempt_id = :id AND pair_id = :pairId")
+    suspend fun linkSequence(id: Long, pairId: String): Long?
 
     @Query("SELECT count(*) FROM attempt_log")
     suspend fun count(): Long

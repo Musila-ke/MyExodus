@@ -95,6 +95,29 @@ fun parseActivityText(text: String, atEpochMillis: Long): PartnerAlert? = when {
     }
 }
 
+/**
+ * The partner's shared recovery aggregate (plan §4.6 / §8.11 delta), as the dashboard renders
+ * it: days free, milestones met, relapse count, and — separately — when the last *event*
+ * arrived. Activity recency ([lastEventOccurredAtEpochMillis]) and sync recency
+ * (`PartnerDashboardUi.Paired.lastSyncedAtEpochMillis`) are two different facts and are never
+ * blended into one line: a partner who simply has not logged anything for three days is not a
+ * partner whose sync is broken.
+ *
+ * Null (the whole object) means no aggregate has ever been received — the card then says so
+ * rather than rendering zeros, which would be a claim about the partner's state that the
+ * absence of events does not support.
+ */
+data class PartnerActivityUi(
+    val daysFree: Int,
+    val milestonesReached: List<Int>,
+    val relapseCount: Int,
+    /** The peer's own wall-clock of its last shared transition; null = none received yet. */
+    val lastEventOccurredAtEpochMillis: Long?,
+    /** Req 15 arrival surface: the newest message this pair has sent us, if any. */
+    val pinnedMessageText: String? = null,
+    val pinnedMessageAtEpochMillis: Long? = null,
+)
+
 /** Dashboard summary over the decoded received events, newest first. */
 data class AlertSummary(val todayCount: Int, val weekCount: Int, val recent: List<PartnerAlert>)
 

@@ -68,6 +68,7 @@ import com.example.myexodus.ui.RuleRowState
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.formatDuration
 import com.example.myexodus.ui.formatHeaderDate
+import com.example.myexodus.ui.relativeTimeText
 import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.rememberWindowWidth
 import com.example.myexodus.ui.ruleRowState
@@ -129,6 +130,10 @@ fun HomeScreen(
     val countsByTarget = remember(attemptCounts) {
         attemptCounts?.associate { it.target to it.count }.orEmpty()
     }
+    // Req 15: the newest pinned message across pairs, as a Flow — a message delivered by a
+    // background sync pass must reach a card that is already on screen.
+    val pinned by store.partnerActivityDao().observeLatestPinned()
+        .collectAsStateWithLifecycle(initialValue = null)
 
     // §8.7/D1's Home surface: the measured-interruption report, read off Main (the read can
     // open the SQLCipher store — the same rule the shell's own reads follow). One-shot on
@@ -188,6 +193,17 @@ fun HomeScreen(
         }
         if (encryptionPending) {
             item(key = "encryption-pending") { EncryptionPendingNotice() }
+        }
+        // Req 15 arrival surface: the partner's newest pinned message. Absent entirely when
+        // nothing has arrived — an empty card would be noise, not encouragement.
+        pinned?.pinnedMessageText?.let { message ->
+            item(key = "pinned") {
+                PinnedMessageCard(
+                    text = message,
+                    sentAtMillis = pinned?.pinnedMessageAtMs,
+                    nowMillis = nowMillis,
+                )
+            }
         }
         item(key = "streak") {
             StreakHeroCard(
@@ -782,6 +798,38 @@ private fun StatePill(label: String, active: Boolean) {
 
 /** Non-blocking notice: the store is running on the plaintext database while the one-time
  *  encryption conversion retries on a later launch (plan §8 Step 0 — never blocks app use). */
+/**
+ * Req 15: the partner's pinned message, rendered verbatim (partner-authored text is content,
+ * never a template). The age line is the message's own send time — same honesty rule the
+ * dashboard follows, a stale message must not read as if it just arrived.
+ */
+@Composable
+private fun PinnedMessageCard(text: String, sentAtMillis: Long?, nowMillis: Long) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                stringResource(R.string.home_pinned_title),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(text, style = MaterialTheme.typography.bodyLarge)
+            sentAtMillis?.let { sent ->
+                Text(
+                    stringResource(R.string.home_pinned_sent, relativeTimeText(nowMillis, sent)),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun EncryptionPendingNotice() {
     Surface(

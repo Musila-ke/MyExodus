@@ -119,11 +119,11 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
     suspend fun countsByStateSince(fromMs: Long): List<SessionCount> =
         storeFactory.open()?.recoverySessionDao()?.countsByStateSince(fromMs) ?: emptyList()
 
-    /** Mirror queue for the sync pass (W5). */
-    suspend fun pendingMirror(limit: Int): List<RecoverySession> =
-        storeFactory.open()?.recoverySessionDao()?.pendingMirror(limit) ?: emptyList()
+    /** Mirror queue for the sync pass (W5), per pair (ADR #111). */
+    suspend fun pendingMirror(pairId: String, limit: Int): List<RecoverySession> =
+        storeFactory.open()?.recoverySessionDao()?.pendingMirror(pairId, limit) ?: emptyList()
 
-    suspend fun linkEvent(id: String, sequence: Long) {
-        storeFactory.open()?.recoverySessionDao()?.linkEvent(id, sequence)
+    suspend fun linkEvent(id: String, pairId: String, sequence: Long) {
+        storeFactory.open()?.recoverySessionDao()?.linkEvent(id, pairId, sequence)
     }
 }

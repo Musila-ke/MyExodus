@@ -8,8 +8,9 @@ import androidx.room3.PrimaryKey
  * Block/attempt history (blocking-core plan §6): one row per enforced block or forced
  * override. The local source of truth for stats and partner-alert delivery (§14) — the
  * events table in the accountability store is the delivery channel, this table is the
- * record. [eventSequence] links the row to its chain event once created; null until then
- * (unpaired, or waiting on the signing auth window).
+ * record. Per-pair delivery is tracked in [AttemptMirrorLink] (schema v12, ADR #111);
+ * [eventSequence] is the pre-v12 single-link column, kept only as the legacy marker the
+ * pending query excludes on.
  */
 @Entity(tableName = "attempt_log")
 data class AttemptLog(

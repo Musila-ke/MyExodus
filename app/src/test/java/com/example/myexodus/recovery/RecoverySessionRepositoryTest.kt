@@ -34,6 +34,7 @@ class RecoverySessionRepositoryTest {
 
     private lateinit var context: Context
     private lateinit var recovery: RecoveryManager
+    private lateinit var factory: AppRulesStoreFactory
     private lateinit var sessions: RecoverySessionRepository
 
     private val now = 1_700_000_000_000L
@@ -46,7 +47,8 @@ class RecoverySessionRepositoryTest {
             context, FakeKeyManager(), ActivityLogKeyManager(context), RulesStoreKeyManager(context), healthStore,
         )
         recovery.resetAllData()
-        sessions = RecoverySessionRepository(AppRulesStoreFactory(context, recovery, healthStore))
+        factory = AppRulesStoreFactory(context, recovery, healthStore)
+        sessions = RecoverySessionRepository(factory)
     }
 
     @After
@@ -103,7 +105,7 @@ class RecoverySessionRepositoryTest {
         assertEquals(RecoverySession.TECHNIQUE_NONE, logged.technique)
         assertEquals(RecoverySession.STATE_COMPLETED, logged.state)
         assertEquals(0, logged.durationSec)
-        assertTrue("no technique practised — nothing to mirror", sessions.pendingMirror(10).isEmpty())
+        assertTrue("no technique practised — nothing to mirror", sessions.pendingMirror("pair-a", 10).isEmpty())
     }
 
     @Test
@@ -130,7 +132,7 @@ class RecoverySessionRepositoryTest {
     }
 
     @Test
-    fun pendingMirror_queuesTerminalTechniqueRowsOldestFirst_andLinkRemovesThem() = runTest {
+    fun pendingMirror_queuesTerminalTechniqueRowsOldestFirst_andLinkRemovesThemPerPair() = runTest {
         val older = sessions.start("delay_timer", null, RecoverySession.ENTRY_TAB, "UTC", now - 60_000)
         sessions.finish(older, RecoverySession.STATE_ABANDONED, null, now - 30_000)
         val newer = sessions.start("sober", 7, RecoverySession.ENTRY_TAB, "UTC", now)
@@ -138,15 +140,48 @@ class RecoverySessionRepositoryTest {
         sessions.start("values_card", null, RecoverySession.ENTRY_TAB, "UTC", now)
         sessions.logOnly(4, RecoverySession.ENTRY_TAB, "UTC", now)
 
-        val queued = sessions.pendingMirror(10)
+        val queued = sessions.pendingMirror("pair-a", 10)
 
         assertEquals("live and log-only rows stay out of the mirror queue", listOf(older, newer), queued.map { it.id })
 
-        sessions.linkEvent(older, 42L)
+        sessions.linkEvent(older, "pair-a", 42L)
 
-        assertEquals(listOf(newer), sessions.pendingMirror(10).map { it.id })
-        assertEquals(42L, session(older).eventSequence)
-        assertNull("an unlinked row stays unlinked", session(newer).eventSequence)
+        assertEquals(listOf(newer), sessions.pendingMirror("pair-a", 10).map { it.id })
+        assertEquals(
+            "ADR #111: the same row is still pending for another pair",
+            listOf(older, newer),
+            sessions.pendingMirror("pair-b", 10).map { it.id },
+        )
+        assertEquals(
+            42L,
+            factory.open()!!.recoverySessionDao().linkSequence(older, "pair-a"),
+        )
+        assertNull(
+            "the second pair has no link yet",
+            factory.open()!!.recoverySessionDao().linkSequence(older, "pair-b"),
+        )
+    }
+
+    /** The pre-v12 marker, recovery side: `event_sequence` set means the row was delivered once
+     *  before per-pair links existed — excluded for every pair, never duplicated (ADR #111). */
+    @Test
+    fun legacyLinkedSession_isExcludedForEveryPair() = runTest {
+        factory.open()!!.recoverySessionDao().insert(
+            RecoverySession(
+                id = "s-legacy",
+                technique = "urge_surfing",
+                state = RecoverySession.STATE_COMPLETED,
+                startedAtEpochMs = now,
+                endedAtEpochMs = now + 60_000,
+                durationSec = 60,
+                zoneId = "UTC",
+                entry = RecoverySession.ENTRY_TAB,
+                eventSequence = 9L,
+            ),
+        )
+
+        assertTrue(sessions.pendingMirror("pair-a", 10).isEmpty())
+        assertTrue(sessions.pendingMirror("pair-b", 10).isEmpty())
     }
 
     private suspend fun session(id: String): RecoverySession =

@@ -6,6 +6,8 @@ import com.example.myexodus.blocking.BlockDecisionEngine
 import com.example.myexodus.blocking.EVERY_DAY
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.isExpiredAt
+import com.example.myexodus.ui.partner.RelativeTime
+import com.example.myexodus.ui.partner.relativeTime
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalTime
@@ -91,6 +93,19 @@ fun formatDate(epochMillis: Long): String =
 fun formatHeaderDate(epochMillis: Long): String =
     DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault())
         .format(Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()).toLocalDate())
+
+/** "3h ago" / "Sep 19" — the partner surfaces' shared age line (dashboard summary, Home's
+ *  pinned-message card). Older than a week falls back to the date, because "12d ago" stops
+ *  meaning anything a reader can place. */
+fun relativeTimeText(nowMillis: Long, thenMillis: Long?): String =
+    when (val rel = relativeTime(nowMillis, thenMillis ?: nowMillis)) {
+        RelativeTime.JustNow -> "just now"
+        is RelativeTime.Minutes -> "${rel.value}m ago"
+        is RelativeTime.Hours -> "${rel.value}h ago"
+        is RelativeTime.Days -> "${rel.value}d ago"
+        is RelativeTime.Older -> DateTimeFormatter.ofPattern("MMM d", Locale.getDefault())
+            .format(Instant.ofEpochMilli(rel.epochMillis).atZone(ZoneId.systemDefault()).toLocalDate())
+    }
 
 fun formatDuration(ms: Long): String {
     val totalMinutes = ms / 60_000

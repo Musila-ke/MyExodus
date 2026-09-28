@@ -34,6 +34,9 @@ class PartnerDashboardSource(
     /** Step 18 (AD-23): relay rejections the client discovered within the window — the
      *  distinct-from-network-failure state the §9 error table promises the dashboard. */
     private val rejectionsSince: suspend (pairId: String, sinceEpochMillis: Long) -> Int = { _, _ -> 0 },
+    /** §7 Step 11 delta: the received partner-visible aggregate, read from Room (never from
+     *  Firestore on paint) — the dashboard's "how is my partner doing" half. */
+    private val partnerActivity: suspend (pairId: String) -> PartnerActivityUi? = { null },
 ) {
 
     /**
@@ -120,6 +123,7 @@ class PartnerDashboardSource(
             ),
             alerts = summarizeAlerts(alerts, startOfLocalDay(nowMillis, zone)),
             approvals = approvalRows,
+            activity = runCatching { partnerActivity(enrollment.pairId) }.getOrNull(),
             rateLimitedRecently = runCatching {
                 rejectionsSince(enrollment.pairId, nowMillis - REJECTION_WINDOW_MILLIS) > 0
             }.getOrDefault(false),
@@ -165,6 +169,8 @@ sealed interface PartnerDashboardUi {
         val alerts: AlertSummary,
         /** Step 13 approval rows: RESPONDER rows are actionable, REQUESTER rows status-only. */
         val approvals: List<ApprovalUi> = emptyList(),
+        /** §7 Step 11 delta: the partner's shared aggregate; null = nothing received yet. */
+        val activity: PartnerActivityUi? = null,
         /** Step 18: the server rejected a recent send (AD-23 rate limit) — the mailbox write
          *  itself succeeded, so this is explicitly not the network-failure copy. */
         val rateLimitedRecently: Boolean = false,

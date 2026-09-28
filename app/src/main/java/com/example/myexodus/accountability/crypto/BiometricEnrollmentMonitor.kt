@@ -4,15 +4,23 @@ import android.content.Context
 import android.hardware.biometrics.BiometricManager
 import android.os.Build
 import androidx.core.content.edit
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * §8.2 biometric invalidation polling. Android ignores `setInvalidatedByBiometricEnrollment`
- * when a positive auth timeout is set (§5), so enrollment changes are not detected by the
- * Keystore. The app compares the current `BiometricManager.canAuthenticate(BIOMETRIC_STRONG)`
- * state against the cached state at startup and on ON_RESUME; any change triggers Identity
- * Migration (key rotation).
+ * §8.2 biometric invalidation polling. The Keystore cannot see these changes on this key:
+ * `setInvalidatedByBiometricEnrollment` "applies only to keys which require user
+ * authentication ... and if no positive validity duration has been set" (android-36 javadoc,
+ * verified 2026-09-28), and the signing key carries the 900 s timeout (§5). So the app
+ * compares the live `BiometricManager.canAuthenticate(BIOMETRIC_STRONG)` state (plus the
+ * device-secure flag) against the last committed state at startup and on ON_RESUME; a change
+ * runs Identity Migration (key rotation).
+ *
+ * Commit discipline: detection never writes — the caller commits after the migration
+ * succeeded. A failed rotation therefore stays pending and retries on the next check.
+ * The first check (nothing committed yet) is a baseline, never a change: an app upgrade
+ * must not rotate an existing identity.
  *
  * The cache is plain SharedPreferences (Decision 12 — no security-crypto): the cached value
  * is public system state (canAuthenticate status + deviceSecure flag), not a secret; it holds
@@ -22,7 +30,7 @@ import javax.inject.Singleton
  * fingerprint added while others remain enrolled is not distinguishable by any app-level API.
  */
 @Singleton
-class BiometricEnrollmentMonitor @Inject constructor(context: Context) {
+class BiometricEnrollmentMonitor @Inject constructor(@ApplicationContext context: Context) {
 
     // Stored as a property: K2 (built-in Kotlin) fails to resolve Context-typed constructor
     // params inside method bodies (repro 2026-08-28); property receivers work.
@@ -30,13 +38,19 @@ class BiometricEnrollmentMonitor @Inject constructor(context: Context) {
 
     private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    /** Caches the current enrollment state; returns true when it changed since last check. */
-    fun checkAndCacheEnrollmentState(): Boolean {
+    /** True when the live state differs from the last committed one; false on first run. */
+    fun enrollmentStateChanged(): Boolean {
+        val committed = prefs.getString(KEY_ENROLLMENT_STATE, null) ?: return false
+        return committed != currentEnrollmentState()
+    }
+
+    /** Records the live state as committed — after a successful migration, or when nothing
+     *  changed (establishes the baseline). A failed migration must stay uncommitted. */
+    fun commitEnrollmentState() {
         val now = currentEnrollmentState()
-        val before = prefs.getString(KEY_ENROLLMENT_STATE, null)
-        val changed = before != null && before != now
-        prefs.edit { putString(KEY_ENROLLMENT_STATE, now) }
-        return changed
+        if (prefs.getString(KEY_ENROLLMENT_STATE, null) != now) {
+            prefs.edit { putString(KEY_ENROLLMENT_STATE, now) }
+        }
     }
 
     private fun currentEnrollmentState(): String {

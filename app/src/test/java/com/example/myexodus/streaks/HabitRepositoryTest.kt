@@ -3,6 +3,7 @@ package com.example.myexodus.streaks
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.data.db.ActivityLogKeyManager
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
@@ -463,6 +464,83 @@ class HabitRepositoryTest {
         assertEquals(firstAckedAt, store.milestoneEventDao().get(firstStreakId, 7)!!.acknowledgedAt)
     }
 
+    // --- Partner-visible activity hooks (partner-activity plan Appendix A.3) -----------------
+
+    @Test
+    fun evaluate_dayCrossing_journalsOneStreakUpdated_forThatDayOnly() = runBlocking {
+        seedProfile()
+        onboard()
+
+        now = TimeReadings(tWallMillis = T0 + StreakTimer.DAY_MS, rBootMillis = RB0 + StreakTimer.DAY_MS, bootCount = 7)
+        assertEquals(1, repository.evaluate(habitIdOf())!!.currentDay)
+
+        val rows = journalRows()
+        assertEquals(listOf(EventPayload.TYPE_STREAK_UPDATED), rows.map { it.kind })
+        assertEquals(1, rows.single().daysFree)
+
+        // Re-evaluating inside the same day adds nothing — the gate is the day boundary.
+        now = TimeReadings(tWallMillis = T0 + StreakTimer.DAY_MS + 60_000, rBootMillis = RB0 + StreakTimer.DAY_MS + 60_000, bootCount = 7)
+        repository.evaluate(habitIdOf())
+        assertEquals(1, journalRows().size)
+    }
+
+    @Test
+    fun evaluate_milestoneCrossing_journalsMilestoneReached_oncePerCrossedDay() = runBlocking {
+        seedProfile()
+        onboard()
+
+        now = TimeReadings(tWallMillis = T0 + 7 * StreakTimer.DAY_MS, rBootMillis = RB0 + 7 * StreakTimer.DAY_MS, bootCount = 7)
+        repository.evaluate(habitIdOf())
+
+        val kinds = journalRows().map { it.kind }
+        assertEquals(2, kinds.size)
+        assertTrue(kinds.containsAll(listOf(EventPayload.TYPE_MILESTONE_REACHED, EventPayload.TYPE_STREAK_UPDATED)))
+        assertEquals("7", journalRows().single { it.kind == EventPayload.TYPE_MILESTONE_REACHED }.milestonesReached)
+
+        // The stamp is first-crossing only, so the next evaluation announces nothing again.
+        now = TimeReadings(tWallMillis = T0 + 8 * StreakTimer.DAY_MS, rBootMillis = RB0 + 8 * StreakTimer.DAY_MS, bootCount = 7)
+        repository.evaluate(habitIdOf())
+        assertEquals(1, journalRows().count { it.kind == EventPayload.TYPE_MILESTONE_REACHED })
+    }
+
+    @Test
+    fun logRelapse_journalsRelapseRecorded_withAPostRolloverSnapshot_whenConsentShared() = runBlocking {
+        seedProfile()
+        val habitId = (
+            repository.onboard(
+                profileId = PROFILE_ID,
+                targetIdentifier = "Instagram",
+                habitDurationYears = 2,
+                severity = WithdrawalSeverity.MODERATE,
+                recoveryStartAt = T0,
+                shareRelapses = true,
+            ) as HabitRepository.OnboardingResult.Ready
+            ).state.habitId
+
+        now = TimeReadings(tWallMillis = T0 + 5 * StreakTimer.DAY_MS, rBootMillis = RB0 + 5 * StreakTimer.DAY_MS, bootCount = 7)
+        repository.evaluate(habitId)
+        repository.logRelapse(habitId)
+
+        val row = journalRows().single { it.kind == EventPayload.TYPE_RELAPSE_RECORDED }
+        assertEquals("the new streak has no clean days yet", 0, row.daysFree)
+        assertEquals(1, row.relapseCount)
+        assertEquals("a fresh streak has achieved nothing", "", row.milestonesReached)
+    }
+
+    @Test
+    fun logRelapse_withoutRelapseConsent_journalsNothing() = runBlocking {
+        seedProfile()
+        onboard() // shareRelapses defaults to false
+
+        now = TimeReadings(tWallMillis = T0 + 5 * StreakTimer.DAY_MS, rBootMillis = RB0 + 5 * StreakTimer.DAY_MS, bootCount = 7)
+        repository.evaluate(habitIdOf())
+        assertTrue(repository.logRelapse(habitIdOf()) is HabitRepository.RelapseResult.RolledOver)
+
+        assertTrue(journalRows().none { it.kind == EventPayload.TYPE_RELAPSE_RECORDED })
+    }
+
+    private suspend fun journalRows() = store.partnerActivityDao().pendingForPair("pair-1", 100)
+
     private suspend fun habitIdOf(): String =
         checkNotNull(repository.state.value).habitId
 
@@ -476,6 +554,7 @@ class HabitRepositoryTest {
 
     private companion object {
         const val PROFILE_ID = "repo-profile"
+        const val RB0 = 1_000L
         val T0 = StreakTimer.APP_RELEASE_EPOCH_MS + 5 * StreakTimer.DAY_MS
     }
 }

@@ -92,43 +92,56 @@ class BilateralDeletion(
      * shred — still finds a row that resumes the protocol and, above all, cannot skip the
      * local shred (AD-13b's "unconditional"). Re-entering with a row already in place
      * continues that attempt rather than starting a second one.
+     *
+     * A null [authorUid]/[partnerUid] (ADR #114) is §9's "partner unreachable" row: the pair
+     * document is gone or unreadable by this account, so no request can ever be delivered —
+     * no event is created, the row keeps an empty message id and envelope, and the local
+     * shred still runs. The 7-day window lapses to LOCAL_ONLY_TERMINATED, never a claim.
      */
     suspend fun initiate(
         pairId: String,
-        authorUid: String,
-        partnerUid: String,
+        authorUid: String?,
+        partnerUid: String?,
         signature: Signature,
     ): DeletionResult {
-        val existing = journal.get(pairId)
+        // Superseded row: a live enrollment for an already-shredded pair means the row
+        // describes an earlier session (re-pair reuses the pairId — AD-07). Drop it — the
+        // same cleanup [resumePending] applies — so the tap acts on the live pair, not the
+        // old row.
+        val stored = journal.get(pairId)
+        val superseded = stored != null && stored.localShredded &&
+            enrollmentDao.getByPairId(pairId) != null
+        if (superseded) journal.delete(pairId)
+        val existing = if (superseded) null else stored
 
-        // The request already exists on the wire (the journal's envelope is its creation's
-        // record) — this tap just continues the protocol.
-        if (existing != null && existing.role == UnpairState.ROLE_REQUESTER &&
-            existing.requestEnvelope.isNotEmpty()
+        // A row that already represents a finished (or crashed) attempt continues — never
+        // restarts and never dies. Three shapes qualify: the request is already on the wire
+        // (the envelope is its creation's record), the partner's request already arrived
+        // (never clobber a responder row), or the enrollment is already gone (the shred ran;
+        // the row is its only report, so a stray re-tap must not delete it).
+        if (existing != null && (
+                existing.requestEnvelope.isNotEmpty() ||
+                    existing.role == UnpairState.ROLE_RESPONDER ||
+                    enrollmentDao.getByPairId(pairId) == null
+                )
         ) {
             shredIfPending(existing)
-            resumeRequester(pairId)
+            if (existing.role == UnpairState.ROLE_RESPONDER) resumeResponder(pairId)
+            else resumeRequester(pairId)
             return DeletionResult.Deleted
         }
 
-        // The partner's request already arrived (crash mid-shred on the responder path):
-        // never clobber their row — this tap stands in for finishing it.
-        if (existing != null && existing.role == UnpairState.ROLE_RESPONDER) {
-            shredIfPending(existing)
-            resumeResponder(pairId)
-            return DeletionResult.Deleted
-        }
-
-        // Nothing to erase and no partner to notify: the row (and any earlier crash's
-        // remnant) goes with it.
+        // Nothing to erase and nothing to notify: the tap is for a pair this device never
+        // held — fail it cleanly.
         if (enrollmentDao.getByPairId(pairId) == null) {
             journal.delete(pairId)
             return DeletionResult.Failed("not enrolled")
         }
 
+        val reachable = authorUid != null && partnerUid != null
         val messageId = existing?.messageId?.takeIf { it.isNotEmpty() }
-            ?: UUID.randomUUID().toString()
-        if (runCatching { store.outboxSnapshot(messageId) }.getOrNull() == null) {
+            ?: if (reachable) UUID.randomUUID().toString() else ""
+        if (reachable && runCatching { store.outboxSnapshot(messageId) }.getOrNull() == null) {
             journal.upsert(
                 UnpairState(
                     pairId = pairId,
@@ -165,7 +178,8 @@ class BilateralDeletion(
         // A crashed earlier attempt can leave the row without the event, or the event
         // without the row's fill: the outbox row is the arbiter of both. Absent entirely,
         // the empty fill still resumes honestly — no delivery, so the timeout, not a claim.
-        val snapshot = runCatching { store.outboxSnapshot(messageId) }.getOrNull()
+        val snapshot = if (messageId.isEmpty()) null
+        else runCatching { store.outboxSnapshot(messageId) }.getOrNull()
         journal.upsert(
             UnpairState(
                 pairId = pairId,
@@ -182,9 +196,11 @@ class BilateralDeletion(
             ),
         )
 
-        drainAllPending(pairId, authorUid, partnerUid)
-        if (snapshot != null && store.outboxSnapshot(messageId)?.status == Outbox.STATUS_SENT) {
-            journal.markDelivered(pairId)
+        if (authorUid != null && partnerUid != null) {
+            drainAllPending(pairId, authorUid, partnerUid)
+            if (snapshot != null && store.outboxSnapshot(messageId)?.status == Outbox.STATUS_SENT) {
+                journal.markDelivered(pairId)
+            }
         }
 
         // AD-13b: unconditional and immediate — no drain outcome blocks the shred.
@@ -286,24 +302,29 @@ class BilateralDeletion(
 
     /** The initiator's continuation. The ack is polled first: it proves the partner processed
      *  the request no matter what the delivery bookkeeping believes (a crash between the
-     *  mailbox write and the SENT mark is indistinguishable from a denial). */
+     *  mailbox write and the SENT mark is indistinguishable from a denial). A row with no
+     *  partner uid (ADR #114, unreachable) has no poll and no delivery to attempt — it still
+     *  reaches the 7-day timeout, so the revocation attempt rides along and the terminal
+     *  state is reported. */
     private suspend fun resumeRequester(pairId: String) {
         val row = journal.get(pairId) ?: return
-        val partnerUid = row.partnerUid ?: return
-
-        if (row.confirmedAtEpochMillis == null && row.messageId.isNotEmpty() &&
-            runCatching { pollPartnerAck(partnerUid, row.messageId) }.getOrDefault(false)
-        ) {
-            journal.markConfirmed(pairId, now())
-            terminate(pairId)
-            return
-        }
-
         var delivered = row.delivered
-        if (!delivered && row.messageId.isNotEmpty() && row.requestEnvelope.isNotEmpty()) {
-            if (runCatching { deliverRequest(partnerUid, row) }.getOrDefault(false)) {
-                journal.markDelivered(pairId)
-                delivered = true
+        val partnerUid = row.partnerUid
+
+        if (partnerUid != null) {
+            if (row.confirmedAtEpochMillis == null && row.messageId.isNotEmpty() &&
+                runCatching { pollPartnerAck(partnerUid, row.messageId) }.getOrDefault(false)
+            ) {
+                journal.markConfirmed(pairId, now())
+                terminate(pairId)
+                return
+            }
+
+            if (!delivered && row.messageId.isNotEmpty() && row.requestEnvelope.isNotEmpty()) {
+                if (runCatching { deliverRequest(partnerUid, row) }.getOrDefault(false)) {
+                    journal.markDelivered(pairId)
+                    delivered = true
+                }
             }
         }
         if (delivered || now() - row.requestedAtEpochMillis >= UnpairState.CONFIRM_TIMEOUT_MILLIS) {

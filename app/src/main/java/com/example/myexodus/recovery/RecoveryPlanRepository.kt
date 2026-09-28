@@ -1,5 +1,8 @@
 package com.example.myexodus.recovery
 
+import androidx.room3.withWriteTransaction
+import com.example.myexodus.accountability.activity.PartnerActivityJournal
+import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.CoachingStep
 import com.example.myexodus.data.db.entity.RiskWindow
@@ -10,6 +13,11 @@ import java.util.UUID
  * The user-authored recovery plan: willpower windows (FR-7) and the coaching items shown
  * during interception (Req 20 steps + FR-6 If-Then/Values). Local DB only — offline by
  * construction (Req 20 edge case), never mirrored as text (INV-13).
+ *
+ * Coaching edits additionally journal a partner-visible `COACHING_STEP_UPDATED` (partner-activity
+ * plan Appendix A.3) inside the same transaction; the event carries the item *count* only, never
+ * the text. Reorder ([moveItem]) is deliberately not an event — order is invisible in the
+ * partner aggregate, so emitting would be pure notification noise.
  */
 class RecoveryPlanRepository(private val storeFactory: AppRulesStoreFactory) {
 
@@ -68,29 +76,44 @@ class RecoveryPlanRepository(private val storeFactory: AppRulesStoreFactory) {
         val store = storeFactory.open() ?: return false
         val dao = store.coachingStepDao()
         if (dao.countForKind(profileId, kind) >= CoachingStep.MAX_PER_KIND) return false
-        dao.insert(
-            CoachingStep(
-                stepId = UUID.randomUUID().toString(),
-                profileId = profileId,
-                stepOrder = dao.maxOrderForKind(profileId, kind) + 1,
-                actionText = clean,
-                associatedTriggerWindow = windowId,
-                kind = kind,
-            ),
-        )
+        store.withWriteTransaction<Unit> {
+            dao.insert(
+                CoachingStep(
+                    stepId = UUID.randomUUID().toString(),
+                    profileId = profileId,
+                    stepOrder = dao.maxOrderForKind(profileId, kind) + 1,
+                    actionText = clean,
+                    associatedTriggerWindow = windowId,
+                    kind = kind,
+                ),
+            )
+            PartnerActivityJournal.emitForProfile(
+                store, profileId, EventPayload.TYPE_COACHING_STEP_UPDATED, System.currentTimeMillis(),
+            )
+        }
         return true
     }
 
     suspend fun updateItem(step: CoachingStep, text: String, windowId: String) {
         val clean = text.trim().take(CoachingStep.MAX_TEXT_LENGTH)
         if (clean.isEmpty()) return
-        storeFactory.open()?.coachingStepDao()?.update(
-            step.copy(actionText = clean, associatedTriggerWindow = windowId),
-        )
+        val store = storeFactory.open() ?: return
+        store.withWriteTransaction<Unit> {
+            store.coachingStepDao().update(step.copy(actionText = clean, associatedTriggerWindow = windowId))
+            PartnerActivityJournal.emitForProfile(
+                store, step.profileId, EventPayload.TYPE_COACHING_STEP_UPDATED, System.currentTimeMillis(),
+            )
+        }
     }
 
     suspend fun deleteItem(step: CoachingStep) {
-        storeFactory.open()?.coachingStepDao()?.delete(step)
+        val store = storeFactory.open() ?: return
+        store.withWriteTransaction<Unit> {
+            store.coachingStepDao().delete(step)
+            PartnerActivityJournal.emitForProfile(
+                store, step.profileId, EventPayload.TYPE_COACHING_STEP_UPDATED, System.currentTimeMillis(),
+            )
+        }
     }
 
     /** Reorders within the item's own kind ([-1] up, [+1] down); ends are no-ops. */

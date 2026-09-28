@@ -58,7 +58,9 @@ import kotlinx.coroutines.launch
  * and `-a ledger-purge-window --es kind <KIND> --es fromMs <wall> --es toMs <wall>` (task #62:
  * retire journal rows a debug leg fabricated — evidence kinds only, refused for crediting kinds),
  * and `-a protection-reenable` (task #69: clear the user-stop flag `am force-stop` sets on the
- * emulator, which otherwise gates the FGS tick body — poll, oracle, and session feed).
+ * emulator, which otherwise gates the FGS tick body — poll, oracle, and session feed), and
+ * `-a mirror-read` (task #52: the v12 per-pair mirror-link rails — schema version, both link
+ * tables' counts and per-pair rows, and the legacy `event_sequence` marker census).
  */
 class DeviceVerificationReceiver : BroadcastReceiver() {
 
@@ -85,6 +87,7 @@ class DeviceVerificationReceiver : BroadcastReceiver() {
                     ACTION_LEDGER_CORRECT -> ledgerCorrect(context, intent)
                     ACTION_LEDGER_PURGE_WINDOW -> ledgerPurgeWindow(context, intent)
                     ACTION_PROTECTION_REENABLE -> protectionReenable(context)
+                    ACTION_MIRROR_READ -> mirrorRead(context)
                     else -> Log.w(TAG, "unknown action $action")
                 }
             } catch (t: Throwable) {
@@ -647,6 +650,36 @@ class DeviceVerificationReceiver : BroadcastReceiver() {
         )
     }
 
+    /**
+     * #52's device evidence: the store open here runs the real v11→v12 migration first (the
+     * factory's onOpen path), so `user_version` reads 12 only if the migration chain executed on
+     * this device's SQLCipher database; a failed migration throws and the receiver's catch logs
+     * it instead — both outcomes are visible. The per-pair group-by is the fan-out census: after
+     * the migration both link tables are empty by design (no backfill; pre-v12 deliveries stay
+     * excluded via `event_sequence`, whose census prints alongside).
+     */
+    private suspend fun mirrorRead(context: Context) {
+        val store = entryPoint(context).appRulesStoreFactory().open() ?: error("store unavailable")
+        store.useWriterConnection { tx ->
+            suspend fun long(sql: String): Long =
+                tx.usePrepared(sql) { if (it.step()) it.getLong(0) else -1L }
+            Log.i(TAG, "mirror schema user_version=${long("PRAGMA user_version")} (expect 12 — ADR #111)")
+            listOf("attempt_mirror_link", "recovery_mirror_link").forEach { table ->
+                Log.i(TAG, "mirror table $table rows=${long("SELECT count(*) FROM $table")}")
+                tx.usePrepared("SELECT pair_id, count(*) FROM $table GROUP BY pair_id ORDER BY pair_id") { st ->
+                    while (st.step()) Log.i(TAG, "mirror links $table pair=${st.getText(0)} n=${st.getLong(1)}")
+                }
+            }
+            Log.i(
+                TAG,
+                "mirror sources attempts=${long("SELECT count(*) FROM attempt_log")} " +
+                    "attemptsLegacyLinked=${long("SELECT count(*) FROM attempt_log WHERE event_sequence IS NOT NULL")} " +
+                    "sessions=${long("SELECT count(*) FROM recovery_session")} " +
+                    "sessionsLegacyLinked=${long("SELECT count(*) FROM recovery_session WHERE event_sequence IS NOT NULL")}",
+            )
+        }
+    }
+
     private suspend fun benchRun(n: Int, block: suspend (Int) -> Unit): LongArray {
         val out = LongArray(n)
         for (i in 0 until n) {
@@ -683,6 +716,7 @@ class DeviceVerificationReceiver : BroadcastReceiver() {
         const val ACTION_LEDGER_CORRECT = "ledger-correct"
         const val ACTION_LEDGER_PURGE_WINDOW = "ledger-purge-window"
         const val ACTION_PROTECTION_REENABLE = "protection-reenable"
+        const val ACTION_MIRROR_READ = "mirror-read"
         const val SEED_SOURCE = "device-verification-seed"
         const val INTERVAL_LOG_CAP = 120
         const val AGE_EVIDENCE_MAX_ATTEMPTS = 10

@@ -323,6 +323,99 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * ADR #111 / V1 Req 14 multi-pair: the per-pair mirror links (schema v12). The old
+         * single-valued `event_sequence` columns let the first pair's reconcile pass claim
+         * every pending row; the link tables make delivery exactly-once per (row, pair).
+         * Additive only — both source tables are untouched, and rows that already carry the
+         * legacy `event_sequence` stay excluded from every pair's pending set (their one
+         * historical delivery is not duplicated, and the pre-v12 N−1 gap is accepted: no
+         * on-device record says which pair received it). DDL is the exported v12 schema
+         * verbatim, in this file's plain style (the 10→11 AD-11 exception does not apply).
+         */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS attempt_mirror_link (" +
+                        "attempt_id INTEGER NOT NULL, pair_id TEXT NOT NULL, " +
+                        "sequence INTEGER NOT NULL, PRIMARY KEY(attempt_id, pair_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS recovery_mirror_link (" +
+                        "session_id TEXT NOT NULL, pair_id TEXT NOT NULL, " +
+                        "sequence INTEGER NOT NULL, PRIMARY KEY(session_id, pair_id))",
+                ).use { it.step() }
+            }
+        }
+
+        /**
+         * The rollback path, same rationale as [MIGRATION_10_9]: a v11 build reinstalled over
+         * a database that briefly ran at v12 must still open (no destructive downgrade is
+         * configured, deliberately). Drops only these two bookkeeping tables; on a later
+         * re-upgrade every row re-qualifies for mirroring to every pair, whose worst case is
+         * duplicate activity events — never data loss.
+         */
+        val MIGRATION_12_11 = object : Migration(12, 11) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("DROP TABLE IF EXISTS attempt_mirror_link").use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS recovery_mirror_link").use { it.step() }
+            }
+        }
+
+        /**
+         * Partner-visible activity layer (schema v13): the local event journal, the per-pair
+         * fan-out links (ADR #111 shape), and the received-state projection. Additive only —
+         * no existing table is touched, and every leg is safe on a database with no active
+         * partner enrollment (all three tables simply start empty). DDL is the exported v13
+         * schema verbatim, in this file's plain style.
+         */
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_activity_outbox (" +
+                        "event_id TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL, " +
+                        "occurred_at_ms INTEGER NOT NULL, days_free INTEGER NOT NULL, " +
+                        "relapse_count INTEGER NOT NULL, milestones_reached TEXT NOT NULL, " +
+                        "coaching_progress INTEGER NOT NULL, protocol_version INTEGER NOT NULL, " +
+                        "schema_version INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, " +
+                        "PRIMARY KEY(event_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_activity_outbox_created_at_ms " +
+                        "ON partner_activity_outbox (created_at_ms)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_activity_link (" +
+                        "event_id TEXT NOT NULL, pair_id TEXT NOT NULL, " +
+                        "sequence INTEGER NOT NULL, PRIMARY KEY(event_id, pair_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_activity_projection (" +
+                        "pair_id TEXT NOT NULL, days_free INTEGER NOT NULL, " +
+                        "relapse_count INTEGER NOT NULL, milestones_reached TEXT NOT NULL, " +
+                        "coaching_progress INTEGER NOT NULL, " +
+                        "last_event_occurred_at_ms INTEGER NOT NULL, " +
+                        "last_sequence INTEGER NOT NULL, pinned_message_text TEXT, " +
+                        "pinned_message_at_ms INTEGER, PRIMARY KEY(pair_id))",
+                ).use { it.step() }
+            }
+        }
+
+        /**
+         * The v13 rollback path, same rationale as [MIGRATION_12_11]: a v12 build reinstalled
+         * over a database that briefly ran at v13 must still open. Drops only these three
+         * tables; the worst case on a later re-upgrade is un-mirrored activity events being
+         * re-journaled by the live write paths — the projection re-fills from the peer's next
+         * events, never data loss of user-entered state.
+         */
+        val MIGRATION_13_12 = object : Migration(13, 12) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("DROP TABLE IF EXISTS partner_activity_outbox").use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS partner_activity_link").use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS partner_activity_projection").use { it.step() }
+            }
+        }
+
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override suspend fun migrate(connection: SQLiteConnection) {
                 // Recovery resource UI (plan v3 W7): the urge/recovery session log and the
@@ -535,7 +628,7 @@ class AppRulesStoreFactory(
         val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-            MIGRATION_10_9,
+            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_10_9, MIGRATION_12_11, MIGRATION_13_12,
         )
     }
 }

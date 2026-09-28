@@ -23,7 +23,7 @@ sealed interface GateResult {
 }
 
 /**
- * The recovery surfaces' privacy gate (`MainActivity.signWithBiometric`'s prompt plumbing,
+ * The recovery surfaces' privacy gate (`MainActivity.signWithAuthPrompt`'s prompt plumbing,
  * minus the signing): `BIOMETRIC_WEAK or DEVICE_CREDENTIAL`, no CryptoObject — nothing is
  * sealed by this prompt, it is a shoulder-surfing/unauthorized-open lock, not a key gate.
  *

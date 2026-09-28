@@ -88,6 +88,11 @@
     <string name="home_stat_blocks">Blocks</string>
     <string name="home_stat_blocked">Blocked</string>
     <string name="home_blocks_section">Your blocks</string>
+    <!-- Req 15 arrival surface: the partner's newest pinned message, on the user's own Home.
+         The message body is partner-authored text, rendered verbatim; the label names the
+         sender without naming the pair (multi-user pairs each pin independently). -->
+    <string name="home_pinned_title">Your partner sent you this</string>
+    <string name="home_pinned_sent">Sent %1$s</string>
     <string name="home_grid_title">Milestones</string>
     <string name="home_grid_day_of">Day %1$d of %2$d</string>
     <string name="home_grid_all_days">%1$d days and counting</string>
@@ -404,6 +409,33 @@
     <string name="partner_activity_today">Today</string>
     <string name="partner_activity_week">This week</string>
     <string name="partner_activity_empty">No shared activity in the last 7 days.</string>
+    <!-- §7 Step 11 delta: the partner's shared aggregate. Days free is the dominant number;
+         activity time and sync time are ALWAYS separate lines (§8.11) — a quiet partner is not
+         a broken sync. -->
+    <string name="partner_summary_title">How they\'re doing</string>
+    <string name="partner_summary_days">Days free</string>
+    <string name="partner_summary_milestones">Milestones met: %1$s</string>
+    <string name="partner_summary_milestones_none">None yet</string>
+    <string name="partner_summary_relapses">Relapses logged</string>
+    <string name="partner_summary_last_event">Last shared %1$s</string>
+    <string name="partner_summary_no_events">Nothing shared yet. You\'ll see their streak here once they log something.</string>
+    <string name="partner_summary_partial">Some history is missing, so these numbers may be behind.</string>
+    <string name="partner_summary_pinned_label">Their message to you</string>
+    <!-- Req 15 composer: suggestions are deliberately short and non-clinical — the user can
+         always write their own, and the same 280-char bound the wire enforces applies here. -->
+    <string name="partner_compose_title">Send encouragement</string>
+    <string name="partner_compose_body">They\'ll see this on their home screen. Keep it short and kind.</string>
+    <string name="partner_compose_action">Write a message</string>
+    <string name="partner_compose_hint">Your message</string>
+    <string name="partner_compose_send">Send</string>
+    <string name="partner_compose_cancel">Cancel</string>
+    <string name="partner_compose_sending">Sending…</string>
+    <string name="partner_compose_failed">Couldn\'t save your message. Try again.</string>
+    <string name="partner_compose_too_long">Your message is too long. Trim it to %1$d characters or fewer, then send again.</string>
+    <string name="partner_compose_suggestion_1">Thinking of you today.</string>
+    <string name="partner_compose_suggestion_2">Proud of you for keeping going.</string>
+    <string name="partner_compose_suggestion_3">One day at a time — you\'re doing it.</string>
+    <string name="partner_compose_characters">%1$d/%2$d</string>
     <string name="partner_alert_blocked">Blocked</string>
     <string name="partner_alert_override">Override used</string>
     <string name="partner_chain_catching_up_title">Catching up</string>
@@ -445,15 +477,25 @@
     <string name="partner_approval_prompt_approve">Approve request</string>
     <string name="partner_approval_prompt_reject">Reject request</string>
     <string name="partner_approval_prompt_subtitle">Confirm with your device key</string>
-    <!-- §5.20/§12.3 (device test): a phone without a BIOMETRIC_STRONG-class authenticator gets
-         an explicit message and the one real fix (enroll) — never a silent cancel and never a
-         weaker-class fallback; the signing key accepts only the strong class by design. -->
-    <string name="partner_biometric_not_enrolled_title">Set up a fingerprint or face first</string>
-    <string name="partner_biometric_not_enrolled_body">Approving a request or ending a pairing is confirmed with your fingerprint or face, and this phone doesn’t have one set up yet. Add one in Android Settings, then try again.</string>
-    <string name="partner_biometric_unavailable_title">Biometrics unavailable</string>
-    <string name="partner_biometric_unavailable_body">Approving a request or ending a pairing needs a fingerprint or face, and this phone can’t provide one right now. Check that biometrics are set up in Android Settings, or try again in a moment.</string>
+    <!-- §5.20/§12.3 as owner-ruled 2026-09-28 (ADR #112): fingerprint/face or the screen
+         lock (PIN/pattern/password) can confirm signing; the explicit message appears only
+         when neither can, or when a pre-ruling key refuses the screen lock. Never a silent
+         cancel. -->
+    <string name="partner_biometric_not_enrolled_title">Set up a fingerprint, face, or screen lock first</string>
+    <string name="partner_biometric_not_enrolled_body">Approving a request or ending a pairing is confirmed with your fingerprint, face, or screen lock, and this phone has none of them set up. Add one in Android Settings, then try again.</string>
+    <string name="partner_biometric_unavailable_title">No way to confirm right now</string>
+    <string name="partner_biometric_unavailable_body">Approving a request or ending a pairing needs your fingerprint, face, or screen lock, and this phone can’t provide any of them right now. Check Android Settings, or try again in a moment.</string>
+    <!-- ADR #112: the screen lock verified, but the immutable pre-ruling key refuses it. -->
+    <string name="partner_sign_lock_rejected_title">Screen lock can’t confirm this key</string>
+    <string name="partner_sign_lock_rejected_body">Your screen lock verified, but this device’s security key was created before screen-lock confirmation was available, and keys can’t be changed after creation. Add a fingerprint or face in Android Settings and try again.</string>
+    <!-- The confirm-credential prompt's subtitle (ADR #112 fallback path). -->
+    <string name="partner_signing_screen_lock_subtitle">Confirm with your screen lock</string>
     <string name="partner_biometric_open_settings">Open settings</string>
     <string name="partner_biometric_close">Close</string>
+    <!-- §8.2/§9 identity migration (task #68): enrollment change or a permanently invalidated
+         key resets the device identity — the severed partner connections are never silent. -->
+    <string name="identity_reset_title">Security keys reset</string>
+    <string name="identity_reset_body">Your screen lock or biometrics changed, so MyExodus reset this device’s security keys to protect your account. Partner connections using the old keys no longer work — open Partner to pair again.</string>
     <!-- Step 14 unpair (§8 Step 13 copy — AD-13b: local is guaranteed, remote is best-effort
          and only ever claimed from the partner device's own confirmation). -->
     <string name="partner_unpair_title">End partnership</string>

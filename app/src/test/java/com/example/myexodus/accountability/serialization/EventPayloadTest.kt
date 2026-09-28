@@ -80,4 +80,193 @@ class EventPayloadTest {
         assertEquals(null, decodePayload(bytes).expectedPreviousSequence)
         assertEquals(null, decodePayload(bytes).expectedPreviousHash)
     }
+
+    // --- Partner-visible activity layer (plan §8.5, Appendix A.2) ---------------------------
+
+    /**
+     * §8.5 byte stability, the load-bearing contract of this extension: adding the activity
+     * fields must not move a single byte of any pre-existing payload type. These are literal
+     * encodings captured from petero-cbor 4.5.6 canonical output — if the encoding profile or
+     * the absent-when-unset discipline ever regresses, deployed hash chains break silently,
+     * so the vector is pinned rather than computed.
+     */
+    @Test
+    fun goldenVector_activityType_byteStable() {
+        val bytes = encodePayload(EventPayload(type = "activity", text = "override:com.instagram.android"))
+        assertEquals(
+            "a2627478781e6f766572726964653a636f6d2e696e7374616772616d2e616e64726f6964627479686163746976697479",
+            bytes.joinToString("") { "%02x".format(it) },
+        )
+    }
+
+    @Test
+    fun goldenVector_approvalResponse_byteStable() {
+        val bytes = encodePayload(
+            EventPayload(
+                type = "approval_response",
+                text = "please",
+                requestEventId = "evt-1",
+                pairingEpoch = 2,
+                decision = true,
+            ),
+        )
+        assertEquals(
+            "a56270650262747866706c6561736562747971617070726f76616c5f726573706f6e736563646563f563726964656576742d31",
+            bytes.joinToString("") { "%02x".format(it) },
+        )
+    }
+
+    @Test
+    fun activityFields_areOmittedWhenUnset() {
+        // A new type with the activity fields unset still encodes only {ty, tx} — the
+        // absent-when-unset mechanism does not depend on which type string was chosen.
+        val bytes = encodePayload(EventPayload(type = EventPayload.TYPE_MILESTONE_REACHED, text = ""))
+        val keys = CanonicalCbor.decodeMap(bytes).getKeys().map { it.AsString() }.toSet()
+        assertEquals(setOf("ty", "tx"), keys)
+    }
+
+    @Test
+    fun activityStateAfter_roundTripsForEveryType() {
+        val state = ActivityStateAfter(
+            daysFree = 12,
+            relapseCount = 3,
+            milestonesReached = listOf(7),
+            coachingProgress = 4,
+            eventOccurredAtMs = 1_787_000_000_000L,
+        )
+        EventPayload.ACTIVITY_TYPES.forEach { type ->
+            val p = EventPayload(
+                type = type,
+                text = if (type == EventPayload.TYPE_MOTIVATIONAL_MESSAGE) "Stay strong" else "",
+                protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
+                schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,
+                stateAfter = state,
+            )
+            val decoded = decodePayload(encodePayload(p))
+            assertEquals(type, decoded.type)
+            assertEquals(state, decoded.stateAfter)
+            assertEquals(EventPayload.ACTIVITY_PROTOCOL_VERSION, decoded.protocolVersion)
+            assertEquals(EventPayload.ACTIVITY_SCHEMA_VERSION, decoded.schemaVersion)
+            assertEquals(ActivityEvent.Valid(decoded), classifyActivity(decoded))
+        }
+    }
+
+    @Test
+    fun activityStateAfter_emptyMilestones_roundTrip() {
+        val state = ActivityStateAfter(
+            daysFree = 0,
+            relapseCount = 0,
+            milestonesReached = emptyList(),
+            coachingProgress = 0,
+            eventOccurredAtMs = 1L,
+        )
+        val p = EventPayload(
+            type = EventPayload.TYPE_RELAPSE_RECORDED,
+            text = "",
+            protocolVersion = 1,
+            schemaVersion = 1,
+            stateAfter = state,
+        )
+        assertEquals(state, decodePayload(encodePayload(p)).stateAfter)
+    }
+
+    /** FR-17: a future schema must be classified Unsupported — never Malformed, never dropped. */
+    @Test
+    fun classify_futureSchema_isUnsupported_notMalformed() {
+        val p = EventPayload(
+            type = EventPayload.TYPE_STREAK_UPDATED,
+            text = "",
+            protocolVersion = 2,
+            schemaVersion = 1,
+            stateAfter = ActivityStateAfter(1, 0, emptyList(), 0, 1L),
+        )
+        val classified = classifyActivity(p)
+        assertTrue(classified is ActivityEvent.Unsupported)
+        assertEquals(2, (classified as ActivityEvent.Unsupported).protocolVersion)
+    }
+
+    /** A version this build does implement, but an unusable body, is Malformed (§8.5 split). */
+    @Test
+    fun classify_missingStateAfter_isMalformed() {
+        val p = EventPayload(
+            type = EventPayload.TYPE_COACHING_STEP_UPDATED,
+            text = "",
+            protocolVersion = 1,
+            schemaVersion = 1,
+        )
+        assertEquals(
+            ActivityEvent.Malformed(EventPayload.TYPE_COACHING_STEP_UPDATED),
+            classifyActivity(p),
+        )
+    }
+
+    @Test
+    fun classify_shippedTypes_areNotActivity() {
+        listOf(
+            EventPayload.TYPE_ACTIVITY,
+            EventPayload.TYPE_DELETION_REQUEST,
+            EventPayload.TYPE_SYNC_REQUEST,
+            EventPayload.TYPE_APPROVAL_REQUEST,
+            EventPayload.TYPE_APPROVAL_RESPONSE,
+        ).forEach {
+            assertEquals(ActivityEvent.NotActivity, classifyActivity(EventPayload(type = it, text = "")))
+        }
+    }
+
+    /**
+     * FR-17 forward compatibility at the decode layer: an activity-typed payload whose `st`
+     * body is garbage must decode with stateAfter = null and never throw out of decodePayload —
+     * the chain append pipeline must stay able to commit the (cryptographically valid) event.
+     */
+    @Test
+    fun decode_garbageStateAfter_doesNotThrow() {
+        val good = encodePayload(
+            EventPayload(
+                type = EventPayload.TYPE_STREAK_UPDATED,
+                text = "x",
+                protocolVersion = 1,
+                schemaVersion = 1,
+                stateAfter = ActivityStateAfter(1, 0, emptyList(), 0, 1L),
+            ),
+        )
+        val obj = CanonicalCbor.decodeMap(good)
+        obj["st"] = CanonicalCbor.text("not-a-map")
+        val decoded = decodePayload(CanonicalCbor.encode(obj))
+        assertEquals(null, decoded.stateAfter)
+        assertEquals(EventPayload.ACTIVITY_SCHEMA_VERSION, decoded.schemaVersion)
+        assertTrue(classifyActivity(decoded) is ActivityEvent.Malformed)
+    }
+
+    /** §10.6 decode bound: an oversized milestone array is refused, not allocated. */
+    @Test
+    fun decode_oversizeMilestones_refused() {
+        val p = EventPayload(
+            type = EventPayload.TYPE_MILESTONE_REACHED,
+            text = "",
+            protocolVersion = 1,
+            schemaVersion = 1,
+            stateAfter = ActivityStateAfter(1, 0, List(65) { it + 1 }, 0, 1L),
+        )
+        // The encoder writes what it is given; the decoder is the bound.
+        assertEquals(null, decodePayload(encodePayload(p)).stateAfter)
+    }
+
+    /** §8.5 unknown optional fields are ignored — a newer sender's extra key must not break us. */
+    @Test
+    fun decode_unknownOptionalField_isIgnored() {
+        val good = encodePayload(
+            EventPayload(
+                type = EventPayload.TYPE_STREAK_UPDATED,
+                text = "",
+                protocolVersion = 1,
+                schemaVersion = 1,
+                stateAfter = ActivityStateAfter(5, 1, listOf(7), 2, 42L),
+            ),
+        )
+        val obj = CanonicalCbor.decodeMap(good)
+        obj["future_field"] = CanonicalCbor.text("ignore me")
+        val decoded = decodePayload(CanonicalCbor.encode(obj))
+        assertEquals(5, decoded.stateAfter!!.daysFree)
+        assertTrue(classifyActivity(decoded) is ActivityEvent.Valid)
+    }
 }

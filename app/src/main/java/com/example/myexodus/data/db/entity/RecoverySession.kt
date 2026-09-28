@@ -10,9 +10,9 @@ import androidx.room3.PrimaryKey
  * behind the urge log (V1 Req 10), the resource history (FR-9), and the partner mirror
  * (V1 Req 20 partner half, W5). States are the v2 FR-5 machine —
  * STARTED → COMPLETED | ABANDONED | INTERRUPTED — where INTERRUPTED is written by the
- * app-start sweep for rows left STARTED by process death ([eventSequence] mirrors
- * [AttemptLog]'s chain-link pattern: null until the mirror event exists, or forever when
- * unpaired).
+ * app-start sweep for rows left STARTED by process death. Per-pair mirror delivery lives in
+ * [RecoveryMirrorLink] (schema v12, ADR #111); [eventSequence] is the pre-v12 single-link
+ * column, kept only as the legacy marker the pending query excludes on.
  */
 @Entity(
     tableName = "recovery_session",

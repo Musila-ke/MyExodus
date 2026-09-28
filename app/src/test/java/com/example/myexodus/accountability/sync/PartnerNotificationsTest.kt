@@ -2,6 +2,7 @@ package com.example.myexodus.accountability.sync
 
 import android.Manifest
 import android.app.Application
+import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
@@ -63,6 +64,45 @@ class PartnerNotificationsTest {
             manager.getNotificationChannel(PartnerNotifications.CHANNEL_APPROVAL_REQUESTS)!!.importance,
         )
         assertEquals(2, manager.activeNotifications.size)
+    }
+
+    /**
+     * §11.7 burst coalescing: a pull can append several events at once, and one fixed id already
+     * collapses them into a single tray entry — `onlyAlertOnce` keeps that burst to one *alert*
+     * on the partner-alert channel. Approval items must still alert every time (they are
+     * actionable and never burst), so the flag is per-call, not global.
+     */
+    @Test
+    fun partnerEvent_alertOnceDuringABurst_butApprovalAlwaysAlerts() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyPartnerEvent(context)
+        PartnerNotifications.notifyApprovalRequest(context)
+
+        val partnerEvent = manager.activeNotifications.first { it.id == PartnerNotifications.NOTIF_PARTNER_EVENT }
+        assertTrue(
+            "partner-activity bursts alert once",
+            partnerEvent.notification.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0,
+        )
+        val approval = manager.activeNotifications.first { it.id == PartnerNotifications.NOTIF_APPROVAL_REQUEST }
+        assertEquals(
+            "approval requests never suppress the alert",
+            0,
+            approval.notification.flags and Notification.FLAG_ONLY_ALERT_ONCE,
+        )
+    }
+
+    /** FR-13 / NFR2: the lockscreen shows a generic copy rather than the app's own text, and the
+     *  content is private so the system does not fall back to rendering it in full. */
+    @Test
+    fun partnerEvent_isPrivateWithAGenericPublicVersion() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyPartnerEvent(context)
+
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(Notification.VISIBILITY_PRIVATE, notification.visibility)
+        assertTrue("lockscreen renders the generic public copy", notification.publicVersion != null)
     }
 
     @Test

@@ -1,9 +1,14 @@
 package com.example.myexodus.accountability
 
 import android.annotation.SuppressLint
+import android.app.KeyguardManager
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.util.Log
 import android.view.Gravity
@@ -18,6 +23,8 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
+import com.example.myexodus.accountability.crypto.AccountabilityKeyStore
+import com.example.myexodus.accountability.crypto.AccountabilitySigner
 import com.example.myexodus.accountability.enrollment.PairingCode
 import com.example.myexodus.accountability.enrollment.PairingFlow
 import com.example.myexodus.accountability.enrollment.PairingToken
@@ -26,7 +33,11 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import dagger.hilt.android.EntryPointAccessors
 import java.io.File
+import java.security.KeyPair
+import java.security.KeyPairGenerator
+import java.security.KeyStore
 import java.security.Signature
+import java.security.spec.ECGenParameterSpec
 import kotlinx.coroutines.launch
 
 /**
@@ -54,6 +65,8 @@ class PairingTestActivity : FragmentActivity() {
     private var pendingAwait: PairingFlow.InitiatorAwait? = null
     private var pendingToken: PairingToken? = null
     private var pendingSignature: Signature? = null
+    private var screenLockCallback: ((Signature) -> Unit)? = null
+    private var screenLockProbe: KeyPair? = null
     private lateinit var confirmButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -77,6 +90,14 @@ class PairingTestActivity : FragmentActivity() {
                     log("signing window warm — run the sync suite within 900s")
                 }
             }
+        })
+        addView(Button(this@PairingTestActivity).apply {
+            text = "Sign via screen lock (ADR #112 fallback)"
+            setOnClickListener { signWithScreenLock() }
+        })
+        addView(Button(this@PairingTestActivity).apply {
+            text = "ADR #112 Leg B: new post-ruling key → screen lock"
+            setOnClickListener { signWithScreenLockNewKey() }
         })
         addView(Button(this@PairingTestActivity).apply {
             text = "I am the INITIATOR (shows QR)"
@@ -349,6 +370,161 @@ class PairingTestActivity : FragmentActivity() {
         }
     }
 
+    /**
+     * ADR #112 device leg: the platform's confirm-credential flow authorizes the key, then
+     * the signature must verify against the device's own public key. A pre-ruling
+     * biometric-only key (immutable) refuses with UserNotAuthenticatedException — logged as
+     * SCREEN-LOCK REJECTED, the honest answer for that device.
+     */
+    private fun signWithScreenLock() {
+        val confirm = getSystemService(KeyguardManager::class.java)
+            ?.createConfirmDeviceCredentialIntent("Sign via screen lock", "ADR #112 fallback leg")
+        if (confirm == null) {
+            log("no secure lock screen on this device — nothing to confirm with")
+            return
+        }
+        screenLockCallback = { signature ->
+            val data = "screen-lock-fallback-probe".toByteArray()
+            // finishSign (not raw sign()): §10 low-S normalization — the verifier below
+            // rejects high-S, and raw keystore output is high-S ~50% of the time.
+            val der = runCatching { signature.update(data); AccountabilitySigner().finishSign(signature) }
+                .onFailure { log("sign failed: ${it.message}") }
+                .getOrNull()
+            if (der != null) {
+                val verified = AccountabilitySigner()
+                    .verify(entryPoint.keystore().signingPublicKey(), data, der)
+                log(
+                    if (verified) "SCREEN-LOCK SIGN OK — verified against the device public key"
+                    else "SCREEN-LOCK SIGN INVALID — signature did not verify",
+                )
+            }
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(confirm, REQ_SCREEN_LOCK)
+    }
+
+    /**
+     * ADR #112 Leg B (acceptance): proves the post-ruling key spec — biometric ∪ device
+     * credential, 900 s — accepts the confirm-credential flow. Generates a throwaway copy of
+     * the production spec under [PROBE_KEY_ALIAS], runs the same flow, then signs and verifies
+     * against the probe's own public key; the probe is deleted on every terminal path.
+     */
+    private fun signWithScreenLockNewKey() {
+        val probe = runCatching { createPostRulingProbeKey() }
+            .onFailure { log("POST-112 KEY GENERATION FAILED — ${it.message}") }
+            .getOrNull() ?: return
+        val confirm = getSystemService(KeyguardManager::class.java)
+            ?.createConfirmDeviceCredentialIntent("Sign via screen lock", "ADR #112 Leg B (post-ruling key)")
+        if (confirm == null) {
+            log("no secure lock screen on this device — nothing to confirm with")
+            deleteProbeKey()
+            return
+        }
+        screenLockProbe = probe
+        screenLockCallback = { signature ->
+            val data = "post-112-probe".toByteArray()
+            val der = runCatching { signature.update(data); AccountabilitySigner().finishSign(signature) }
+                .onFailure { log("POST-112 KEY: sign failed: ${it.message}") }
+                .getOrNull()
+            if (der != null) {
+                val verified = AccountabilitySigner().verify(probe.public, data, der)
+                log(
+                    if (verified) "POST-112 KEY: SCREEN-LOCK SIGN OK — verified against the probe public key"
+                    else "POST-112 KEY: SCREEN-LOCK SIGN INVALID — signature did not verify",
+                )
+            }
+            deleteProbeKey()
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(confirm, REQ_SCREEN_LOCK)
+    }
+
+    /** Mirrors AccountabilityKeyStore.generateSigningKey's post-#112 parameter set exactly. */
+    private fun createPostRulingProbeKey(): KeyPair {
+        val keyStore = KeyStore.getInstance(PROBE_KEYSTORE)
+        keyStore.load(null)
+        if (keyStore.containsAlias(PROBE_KEY_ALIAS)) keyStore.deleteEntry(PROBE_KEY_ALIAS)
+        val builder = KeyGenParameterSpec.Builder(
+            PROBE_KEY_ALIAS,
+            KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
+        )
+            .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+            .setDigests(KeyProperties.DIGEST_SHA256)
+            .setUserAuthenticationRequired(true)
+            .setInvalidatedByBiometricEnrollment(false)
+        if (Build.VERSION.SDK_INT >= 30) {
+            builder.setUserAuthenticationParameters(
+                AccountabilityKeyStore.AUTH_TIMEOUT_SECONDS,
+                KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            builder.setUserAuthenticationValidityDurationSeconds(AccountabilityKeyStore.AUTH_TIMEOUT_SECONDS)
+        }
+        val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, PROBE_KEYSTORE)
+        generator.initialize(builder.build())
+        return generator.generateKeyPair()
+    }
+
+    private fun deleteProbeKey() {
+        screenLockProbe = null
+        runCatching {
+            val keyStore = KeyStore.getInstance(PROBE_KEYSTORE)
+            keyStore.load(null)
+            if (keyStore.containsAlias(PROBE_KEY_ALIAS)) keyStore.deleteEntry(PROBE_KEY_ALIAS)
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQ_SCREEN_LOCK) return
+        val callback = screenLockCallback ?: return
+        screenLockCallback = null
+        val probe = screenLockProbe
+        if (resultCode != RESULT_OK) {
+            if (probe != null) {
+                deleteProbeKey()
+                log("POST-112 KEY: screen lock cancelled")
+            } else {
+                log("screen lock cancelled")
+            }
+            return
+        }
+        val signature = Signature.getInstance(AccountabilitySigner.SIGNATURE_ALGORITHM)
+        runCatching { signature.initSign(probe?.private ?: entryPoint.keystore().signingPrivateKey()) }
+            .onSuccess {
+                log(
+                    if (probe != null) "POST-112 KEY: screen-lock confirm accepted by the key"
+                    else "screen-lock confirm accepted by the key",
+                )
+                callback(signature)
+            }
+            .onFailure { e ->
+                val signer = AccountabilitySigner()
+                if (probe != null) {
+                    log(
+                        if (signer.isUserNotAuthenticated(e)) {
+                            "POST-112 KEY REJECTED — post-ruling spec refused the confirm-credential flow"
+                        } else {
+                            "POST-112 KEY SIGN FAILED — ${e.message}"
+                        },
+                    )
+                    deleteProbeKey()
+                } else {
+                    log(
+                        if (signer.isUserNotAuthenticated(e)) {
+                            "SCREEN-LOCK REJECTED — key refused the signature " +
+                                "(pre-ADR #112 biometric-only key; immutable — enroll a biometric)"
+                        } else {
+                            "SCREEN-LOCK SIGN FAILED — ${e.message}"
+                        },
+                    )
+                }
+            }
+    }
+
     private fun renderQr(text: String): Bitmap {
         val matrix = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, 512, 512)
         val bitmap = Bitmap.createBitmap(matrix.width, matrix.height, Bitmap.Config.RGB_565)
@@ -368,5 +544,10 @@ class PairingTestActivity : FragmentActivity() {
     private companion object {
         const val TAG = "MyExodusPairing"
         const val QR_CACHE_FILE = "pairing_qr.txt"
+        const val PROBE_KEY_ALIAS = "rig_post112_probe_key"
+        const val PROBE_KEYSTORE = "AndroidKeyStore"
+
+        /** Arbitrary, outside androidx.biometric's own request-code range. */
+        const val REQ_SCREEN_LOCK = 4711
     }
 }

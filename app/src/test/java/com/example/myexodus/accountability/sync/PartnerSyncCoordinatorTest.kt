@@ -11,6 +11,7 @@ import com.example.myexodus.accountability.crypto.EventCipher
 import com.example.myexodus.accountability.crypto.IdentityEpochStore
 import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
+import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.decodePayload
 import com.example.myexodus.accountability.serialization.decodeSigned
 import com.example.myexodus.accountability.serialization.eventHash
@@ -25,6 +26,7 @@ import com.example.myexodus.data.db.DatabaseKeyManager
 import com.example.myexodus.data.db.KeyFailure
 import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.data.db.RulesStoreKeyManager
+import com.example.myexodus.data.db.entity.PartnerActivityOutbox
 import com.example.myexodus.data.db.entity.RecoverySession
 import java.security.KeyPair
 import java.security.KeyPairGenerator
@@ -118,7 +120,7 @@ class PartnerSyncCoordinatorTest {
 
         assertEquals(false, report.enrolled)
         assertEquals(0, report.eventsLinked)
-        assertNull("attempt stays unlinked without a pair", pending().single().eventSequence)
+        assertEquals("attempt stays local without a pair", 1, pending(pairId).size)
         assertTrue(drainCalls.isEmpty())
         assertTrue(pullCalls.isEmpty())
         assertEquals(0, repairCalls)
@@ -133,7 +135,11 @@ class PartnerSyncCoordinatorTest {
 
         assertEquals(true, report.enrolled)
         assertEquals(1, report.eventsLinked)
-        assertEquals("linked attempt carries the chain sequence", 1L, recent().single().eventSequence)
+        assertEquals(
+            "linked attempt carries the chain sequence for this pair",
+            1L,
+            linkSequence(recent().single().id, pairId),
+        )
         assertEquals(true, report.drained)
         assertEquals(2, report.drainedCount)
         assertEquals(3, report.pulledCount)
@@ -174,7 +180,7 @@ class PartnerSyncCoordinatorTest {
         val report = coordinator.syncOnce()
 
         assertEquals(0, report.eventsLinked)
-        assertNull("cold window: attempt stays unlinked, delivered next run", pending().single().eventSequence)
+        assertEquals("cold window: attempt stays pending, delivered next run", 1, pending(pairId).size)
         assertTrue("drain is independent of the signing window", report.drained)
         assertEquals(3, report.pulledCount)
     }
@@ -244,9 +250,9 @@ class PartnerSyncCoordinatorTest {
 
         assertEquals(1, report.eventsLinked)
         assertEquals(
-            "linked session carries the chain sequence",
+            "linked session carries the chain sequence for this pair",
             1L,
-            factory.open()!!.recoverySessionDao().byId("s-1")!!.eventSequence,
+            factory.open()!!.recoverySessionDao().linkSequence("s-1", pairId),
         )
         val signed = decodeSigned(store.chainFor(pairId).single().envelope)
         val payload = decodePayload(cipher.decrypt(cek, signed.unsigned.sequence, signed.unsigned.ciphertext))
@@ -264,7 +270,7 @@ class PartnerSyncCoordinatorTest {
         assertEquals(0, report.eventsLinked)
         assertNull(
             "session stays unlinked without a pair",
-            factory.open()!!.recoverySessionDao().byId("s-1")!!.eventSequence,
+            factory.open()!!.recoverySessionDao().linkSequence("s-1", pairId),
         )
         assertTrue(drainCalls.isEmpty())
     }
@@ -316,6 +322,54 @@ class PartnerSyncCoordinatorTest {
         assertEquals(2 * 2, report.repairRequestsCreated)
     }
 
+    /**
+     * ADR #111 (was defect #52): with N enrollments, ONE recorded attempt and ONE recovery
+     * session must mirror to EVERY pair — the pre-v12 single-valued `event_sequence` let the
+     * first pair's pass claim the row and every later pair found nothing pending. Each pair's
+     * own chain receives its own copy (own sequence, own ciphertext the pair can decrypt), and
+     * the second run links nothing (per-pair exactly-once).
+     */
+    @Test
+    fun multiPair_oneActivityRow_mirrorsToEveryPair_exactlyOnce() = runTest {
+        val secondPair = "pair-second"
+        val secondPartnerSigning = ecKeyPair()
+        val secondPartnerAgreement = ecKeyPair()
+        val secondCek = cekDerivation.deriveCek(secondPair, myAgreement.private, secondPartnerAgreement.public)
+        enroll()
+        enroll(secondPair, partnerSigningKey = secondPartnerSigning.public, partnerAgreementKey = secondPartnerAgreement.public)
+        uids[secondPair] = "me" to "partner-two"
+        recorder.recordBlocked("r-1", "com.instagram.android")
+        insertSession()
+
+        val report = coordinator.syncOnce()
+
+        assertEquals("attempt + session, once per pair", 4, report.eventsLinked)
+        val attemptId = recent().single().id
+        for (pId in listOf(pairId, secondPair)) {
+            assertEquals("chain of $pId holds both events", 2, store.chainFor(pId).size)
+            assertEquals(1L, linkSequence(attemptId, pId))
+            assertEquals(2L, factory.open()!!.recoverySessionDao().linkSequence("s-1", pId))
+            assertTrue("nothing left pending for $pId", pending(pId).isEmpty())
+        }
+        assertEquals(
+            "the second pair decrypts the same activity text",
+            "blocked:com.instagram.android",
+            decodePayload(
+                cipher.decrypt(
+                    secondCek,
+                    1L,
+                    decodeSigned(store.chainFor(secondPair).first().envelope).unsigned.ciphertext,
+                ),
+            ).text,
+        )
+
+        val second = coordinator.syncOnce()
+
+        assertEquals("per-pair exactly-once", 0, second.eventsLinked)
+        assertEquals(2, store.chainFor(pairId).size)
+        assertEquals(2, store.chainFor(secondPair).size)
+    }
+
     /** An unresolvable second pair degrades to "that slice was skipped" — the first pair's
      *  pass still completes, and the report says the resolution was partial. */
     @Test
@@ -332,7 +386,161 @@ class PartnerSyncCoordinatorTest {
         assertEquals(listOf(pairId), drainCalls.map { it.first })
     }
 
+    /**
+     * Appendix A.2/A.3: a journal row becomes one `TYPE_*` activity event per pair — the wire
+     * body carries the kind, the version pair, and the whole `stateAfter` snapshot, and the row
+     * is left pending for a pair whose pass ran under a cold window (the row is per-pair, so a
+     * delivered pair never hides it from an undelivered one).
+     */
+    @Test
+    fun activityJournal_warmWindow_becomesLinkedActivityEvent_perPair() = runTest {
+        val secondPair = "pair-second"
+        val secondPartnerSigning = ecKeyPair()
+        val secondPartnerAgreement = ecKeyPair()
+        val secondCek = cekDerivation.deriveCek(secondPair, myAgreement.private, secondPartnerAgreement.public)
+        enroll()
+        enroll(secondPair, partnerSigningKey = secondPartnerSigning.public, partnerAgreementKey = secondPartnerAgreement.public)
+        uids[secondPair] = "me" to "partner-two"
+        insertActivity(eventId = "ev-1", kind = EventPayload.TYPE_MILESTONE_REACHED, daysFree = 30, milestones = "7,30")
+
+        val report = coordinator.syncOnce()
+
+        assertEquals("one row, one event per pair", 2, report.eventsLinked)
+        val dao = factory.open()!!.partnerActivityDao()
+        for ((pId, cekForPair) in listOf(pairId to cek, secondPair to secondCek)) {
+            assertEquals(1L, dao.linkSequence("ev-1", pId))
+            assertTrue("pending for $pId is drained", dao.pendingForPair(pId, 10).isEmpty())
+            val payload = decodePayload(
+                cipher.decrypt(cekForPair, 1L, decodeSigned(store.chainFor(pId).single().envelope).unsigned.ciphertext),
+            )
+            assertEquals(EventPayload.TYPE_MILESTONE_REACHED, payload.type)
+            assertEquals(EventPayload.ACTIVITY_PROTOCOL_VERSION, payload.protocolVersion)
+            assertEquals(EventPayload.ACTIVITY_SCHEMA_VERSION, payload.schemaVersion)
+            assertEquals(30, payload.stateAfter!!.daysFree)
+            assertEquals(listOf(7, 30), payload.stateAfter!!.milestonesReached)
+        }
+
+        val second = coordinator.syncOnce()
+        assertEquals("per-pair exactly-once", 0, second.eventsLinked)
+    }
+
+    /** §10.6: the motivational body rides `text` verbatim — the receiving projection is what
+     *  bound-checks and pins it (never the emitter's job to trim). */
+    @Test
+    fun motivationalMessage_carriesItsBodyOnTheWire() = runTest {
+        enroll()
+        insertActivity(eventId = "ev-msg", kind = EventPayload.TYPE_MOTIVATIONAL_MESSAGE, text = "Proud of you.")
+
+        coordinator.syncOnce()
+
+        val payload = decodePayload(
+            cipher.decrypt(cek, 1L, decodeSigned(store.chainFor(pairId).single().envelope).unsigned.ciphertext),
+        )
+        assertEquals(EventPayload.TYPE_MOTIVATIONAL_MESSAGE, payload.type)
+        assertEquals("Proud of you.", payload.text)
+    }
+
+    /** Mirrors the attempt/session behaviour: a cold window stops the pass, and the row is still
+     *  pending for the next warm run (never dropped, never double-delivered). */
+    @Test
+    fun activityJournal_coldWindow_leavesTheRowPending() = runTest {
+        enroll()
+        coordinator = coordinator(coldSigner())
+        insertActivity(eventId = "ev-cold", kind = EventPayload.TYPE_STREAK_UPDATED)
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(0, report.eventsLinked)
+        assertEquals(1, factory.open()!!.partnerActivityDao().pendingForPair(pairId, 10).size)
+        assertNull(factory.open()!!.partnerActivityDao().linkSequence("ev-cold", pairId))
+    }
+
+    /** §19.5: with no enrollment there is no partner to carry the row to — it stays local and
+     *  the pass calls no remote step (the unpaired-device contract). */
+    @Test
+    fun activityJournal_unpaired_staysLocal() = runTest {
+        insertActivity(eventId = "ev-solo", kind = EventPayload.TYPE_STREAK_UPDATED)
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(false, report.enrolled)
+        assertEquals(0, report.eventsLinked)
+        assertNull(factory.open()!!.partnerActivityDao().linkSequence("ev-solo", pairId))
+    }
+
+    /**
+     * Appendix A.3 retention: rows past the 30-day mailbox bound are swept (a state snapshot
+     * that old is superseded by any newer event), rows inside it survive, and the sweep runs
+     * even on the unpaired device — after the last unpair there is no enrollment left, which is
+     * exactly when the gone pair's projection/link state must still be pruned.
+     */
+    @Test
+    fun sweep_prunesExpiredRows_andOrphanedPairState_keepingTheLivePair() = runTest {
+        enroll()
+        val dao = factory.open()!!.partnerActivityDao()
+        val now = System.currentTimeMillis()
+        insertActivity(eventId = "ev-old", kind = EventPayload.TYPE_STREAK_UPDATED, createdAtMs = now - 31L * 24 * 60 * 60 * 1000)
+        insertActivity(eventId = "ev-fresh", kind = EventPayload.TYPE_STREAK_UPDATED, createdAtMs = now)
+        dao.linkEvent("ev-old", "pair-gone", 1L)
+        dao.applyStateAfter("pair-gone", 5, 0, "", 0, now, 1L)
+        dao.linkEvent("ev-fresh", pairId, 1L)
+        dao.applyStateAfter(pairId, 7, 0, "7", 0, now, 1L)
+
+        coordinator.syncOnce()
+
+        // Probed from a pair that has no links at all, so the answer is the journal's own state.
+        assertEquals(
+            "expired row swept, fresh row survives",
+            listOf("ev-fresh"),
+            dao.pendingForPair("pair-never", 10).map { it.eventId },
+        )
+        assertEquals("live pair's card kept", 7, dao.projection(pairId)!!.daysFree)
+        assertNull("orphan link pruned", dao.linkSequence("ev-old", "pair-gone"))
+        assertNull("orphan projection pruned", dao.projection("pair-gone"))
+    }
+
+    /** The gone pair's rows are pruned even when the unpair was the *last* one — the sweep
+     *  deliberately runs before the empty-enrollment early return. */
+    @Test
+    fun sweep_runsOnAnUnpairedDevice() = runTest {
+        val dao = factory.open()!!.partnerActivityDao()
+        dao.applyStateAfter("pair-gone", 5, 0, "", 0, 1L, 1L)
+
+        coordinator.syncOnce()
+
+        assertNull(dao.projection("pair-gone"))
+    }
+
     // ---- helpers ----
+
+    // Defaults are "just written": a fixture timestamped years in the past is a row the
+    // 30-day retention sweep deletes before reconcile can emit it (the sweep runs first in
+    // syncOnce), which would make every emission test fail for the wrong reason.
+    private suspend fun insertActivity(
+        eventId: String,
+        kind: String,
+        text: String = "",
+        occurredAtMs: Long = System.currentTimeMillis(),
+        createdAtMs: Long = occurredAtMs,
+        daysFree: Int = 3,
+        relapseCount: Int = 0,
+        milestones: String = "",
+        coachingProgress: Int = 0,
+    ) = factory.open()!!.partnerActivityDao().insertJournal(
+        PartnerActivityOutbox(
+            eventId = eventId,
+            kind = kind,
+            text = text,
+            occurredAtMs = occurredAtMs,
+            daysFree = daysFree,
+            relapseCount = relapseCount,
+            milestonesReached = milestones,
+            coachingProgress = coachingProgress,
+            protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
+            schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,
+            createdAtMs = createdAtMs,
+        ),
+    )
 
     private fun coordinator(
         signer: AccountabilitySigner,
@@ -393,7 +601,11 @@ class PartnerSyncCoordinatorTest {
 
     private val signer = warmSigner()
 
-    private suspend fun pending() = factory.open()!!.attemptLogDao().pendingEventCreation(10)
+    private suspend fun pending(pairId: String) =
+        factory.open()!!.attemptLogDao().pendingEventCreation(pairId, 10)
+
+    private suspend fun linkSequence(attemptId: Long, pairId: String) =
+        factory.open()!!.attemptLogDao().linkSequence(attemptId, pairId)
 
     private suspend fun insertSession(
         id: String = "s-1",

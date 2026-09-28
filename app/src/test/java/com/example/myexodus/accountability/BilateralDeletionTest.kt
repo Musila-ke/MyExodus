@@ -334,6 +334,49 @@ class BilateralDeletionTest {
         assertEquals(UnpairPhase.AWAITING_CONFIRMATION, row.phaseAt(clock))
     }
 
+    @Test
+    fun unresolvablePartner_localShredRuns_neverClaimingThePartner() = runTest {
+        // ADR #114: both uids null (the pair document is gone, or this account is not a
+        // member) — no request can exist, so no delivery and no ack are ever attempted, but
+        // the tap must still erase: §9's "partner unreachable" row is a local-first unpair.
+        assertEquals(BilateralDeletion.DeletionResult.Deleted, deletion.initiate(pairId, null, null, signing()))
+
+        assertEquals("pair key shredded", listOf(pairAlias), destroyedPairAliases)
+        assertNull(db.enrollmentDao().getByPairId(pairId))
+        assertTrue(store.chainFor(pairId).isEmpty())
+        assertNull("approval rows shredded with the pair", db.approvalRequestDao().byId("k:1"))
+        assertTrue("no drain attempted without a delivery target", drained.isEmpty())
+        val row = db.unpairStateDao().get(pairId)!!
+        assertEquals(UnpairState.ROLE_REQUESTER, row.role)
+        assertNull(row.partnerUid)
+        assertTrue("no request exists — nothing to deliver", row.messageId.isEmpty())
+        assertTrue(row.requestEnvelope.isEmpty())
+        assertTrue(row.localShredded)
+
+        // A re-tap continues the same attempt — the row (the only report of the remote leg)
+        // survives, and the 7-day window is never extended.
+        assertEquals(BilateralDeletion.DeletionResult.Deleted, deletion.initiate(pairId, null, null, signing()))
+        val reEntered = db.unpairStateDao().get(pairId)!!
+        assertEquals(row.requestedAtEpochMillis, reEntered.requestedAtEpochMillis)
+        assertEquals("", reEntered.messageId)
+
+        // Nothing is in flight: no delivery, no ack — and no revocation before the window
+        // lapses (a live grid must not be terminated while the wait is still honest).
+        deletion.resumePending()
+        assertTrue(deliveredRequests.isEmpty())
+        assertTrue(terminated.isEmpty())
+        assertEquals(UnpairPhase.AWAITING_CONFIRMATION, db.unpairStateDao().get(pairId)!!.phaseAt(clock))
+
+        // The window lapses: LOCAL_ONLY_TERMINATED, and the revocation attempt rides along
+        // (a denied terminate for a non-member is the documented no-op).
+        clock += UnpairState.CONFIRM_TIMEOUT_MILLIS
+        deletion.resumePending()
+        val ended = db.unpairStateDao().get(pairId)!!
+        assertNull(ended.confirmedAtEpochMillis)
+        assertEquals(UnpairPhase.LOCAL_ONLY_TERMINATED, ended.phaseAt(clock))
+        assertEquals(listOf(pairId), terminated)
+    }
+
     // --- AD-13b crash invariants ---
 
     @Test
@@ -383,6 +426,34 @@ class BilateralDeletionTest {
         assertFalse("live pair never re-shredded", destroyedDeviceKey)
         assertTrue("no key touched at all", destroyedPairAliases.isEmpty())
         assertTrue("enrollment intact", db.enrollmentDao().getByPairId(pairId) != null)
+    }
+
+    @Test
+    fun rePairedPair_tapActsOnTheLivePair_notTheShreddedRow() = runTest {
+        // Same superseded shape as above, but reached through the tap: a stale shredded row
+        // (old envelope, delivered=true) with a LIVE enrollment for the reused pairId (AD-07).
+        // Without the guard, initiate() would see the envelope and "resume" the old request —
+        // terminating the pair's server state while the live pair stays enrolled, unshredded.
+        db.unpairStateDao().upsert(
+            UnpairState(
+                pairId = pairId,
+                role = UnpairState.ROLE_REQUESTER,
+                partnerUid = "uid-old",
+                messageId = "m-old",
+                delivered = true,
+                ackSent = false,
+                localShredded = true,
+                requestedAtEpochMillis = clock,
+                requestEnvelope = byteArrayOf(1, 2, 3),
+            ),
+        )
+        assertEquals(BilateralDeletion.DeletionResult.Deleted, deletion.initiate(pairId, "uid-a", "uid-b", signing()))
+
+        val fresh = db.unpairStateDao().get(pairId)!!
+        assertEquals("a NEW request, not the old row's", "uid-b", fresh.partnerUid)
+        assertTrue("old message id not resumed", fresh.messageId != "m-old" && fresh.messageId.isNotEmpty())
+        assertEquals("shred targeted the live pair's key", listOf(pairAlias), destroyedPairAliases)
+        assertNull("live pair erased, not just the old row dropped", db.enrollmentDao().getByPairId(pairId))
     }
 
     @Test

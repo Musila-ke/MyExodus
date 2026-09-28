@@ -7,6 +7,7 @@ import com.example.myexodus.data.db.dao.CoachingStepDao
 import com.example.myexodus.data.db.dao.DailyUsageTrackerDao
 import com.example.myexodus.data.db.dao.HabitProgressDao
 import com.example.myexodus.data.db.dao.MilestoneEventDao
+import com.example.myexodus.data.db.dao.PartnerActivityDao
 import com.example.myexodus.data.db.dao.PolicyVersionDao
 import com.example.myexodus.data.db.dao.RecoveryPolicyDao
 import com.example.myexodus.data.db.dao.RecoverySessionDao
@@ -17,11 +18,16 @@ import com.example.myexodus.data.db.dao.RestrictionRuleDao
 import com.example.myexodus.data.db.dao.UsageLedgerDao
 import com.example.myexodus.data.db.dao.UserProfileDao
 import com.example.myexodus.data.db.entity.AttemptLog
+import com.example.myexodus.data.db.entity.AttemptMirrorLink
 import com.example.myexodus.data.db.entity.CoachingStep
 import com.example.myexodus.data.db.entity.DailyUsageTracker
 import com.example.myexodus.data.db.entity.HabitProgress
 import com.example.myexodus.data.db.entity.MilestoneEvent
+import com.example.myexodus.data.db.entity.PartnerActivityLink
+import com.example.myexodus.data.db.entity.PartnerActivityOutbox
+import com.example.myexodus.data.db.entity.PartnerActivityProjection
 import com.example.myexodus.data.db.entity.PolicyVersion
+import com.example.myexodus.data.db.entity.RecoveryMirrorLink
 import com.example.myexodus.data.db.entity.RecoveryPolicy
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.data.db.entity.RecoveryState
@@ -34,12 +40,12 @@ import com.example.myexodus.domainusage.RuleUsageDaily
 import com.example.myexodus.domainusage.RuleUsageDao
 
 /**
- * Room database holding the rule and V1 data model plus the habit-streak tables — encrypted
- * with SQLCipher since habit-streaks plan §8 Step 1, opened through [AppRulesStoreFactory]
- * with a Keystore-wrapped DEK. Raw behavioral telemetry lives in [ActivityLogStore]
- * (SQLCipher); block/attempt history (blocking-core plan §6) is the [AttemptLog] table
- * here — Room is its system of record. Schemas are exported to `app/schemas/` for the
- * MigrationTestHelper harness (§12).
+ * Room database holding the rule and V1 data model plus the habit-streak tables and the
+ * partner-activity journal/projection (v13) — encrypted with SQLCipher since habit-streaks
+ * plan §8 Step 1, opened through [AppRulesStoreFactory] with a Keystore-wrapped DEK. Raw
+ * behavioral telemetry lives in [ActivityLogStore] (SQLCipher); block/attempt history
+ * (blocking-core plan §6) is the [AttemptLog] table here — Room is its system of record.
+ * Schemas are exported to `app/schemas/` for the MigrationTestHelper harness (§12).
  */
 @Database(
     entities = [
@@ -58,8 +64,13 @@ import com.example.myexodus.domainusage.RuleUsageDao
         RiskWindow::class,
         RuleUsageDaily::class,
         UsageLedger::class,
+        AttemptMirrorLink::class,
+        RecoveryMirrorLink::class,
+        PartnerActivityOutbox::class,
+        PartnerActivityLink::class,
+        PartnerActivityProjection::class,
     ],
-    version = 11,
+    version = 13,
     exportSchema = true,
 )
 abstract class AppRulesStore : RoomDatabase() {
@@ -78,4 +89,5 @@ abstract class AppRulesStore : RoomDatabase() {
     abstract fun riskWindowDao(): RiskWindowDao
     abstract fun ruleUsageDao(): RuleUsageDao
     abstract fun usageLedgerDao(): UsageLedgerDao
+    abstract fun partnerActivityDao(): PartnerActivityDao
 }

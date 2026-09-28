@@ -171,10 +171,16 @@ open class AccountabilityKeyStore @Inject constructor() {
         return AttestationVerifier.keySecurityLevelOf(chain[0]) == AttestationVerifier.SecurityLevel.STRONG_BOX
     }
 
-    /** Deletes BOTH keys — the irreversible full-wipe path (uninstalls, reset-all). */
+    /** Deletes BOTH keys — the irreversible full-wipe path (uninstalls, reset-all) — plus every
+     *  per-pair agreement key (ADR #113): Identity Migration's rotation IS revocation, so the
+     *  old identity's pair keys must not linger unreferenced in the keystore afterwards. */
     fun destroyAllKeys() {
         keyStore.deleteEntry(SIGNING_ALIAS)
         keyStore.deleteEntry(AGREEMENT_ALIAS)
+        // Collected first — deleting while enumerating the alias set is not safe.
+        keyStore.aliases().toList()
+            .filter { it.startsWith(PAIR_AGREEMENT_ALIAS_PREFIX) }
+            .forEach { keyStore.deleteEntry(it) }
     }
 
     /** §10 bilateral crypto-shredding: destroys only the ECDH key (FR6 — the shredding target). */
@@ -201,8 +207,19 @@ open class AccountabilityKeyStore @Inject constructor() {
             builder.setIsStrongBoxBacked(true)
         }
         if (Build.VERSION.SDK_INT >= 30) {
-            builder.setUserAuthenticationParameters(AUTH_TIMEOUT_SECONDS, KeyProperties.AUTH_BIOMETRIC_STRONG)
+            // Owner ruling 2026-09-28 (ADR #112): device credential joins the strong class so a
+            // phone with a screen lock but no enrolled biometrics can still sign. Time-bound
+            // (positive timeout) keys resolve via the lock screen or the confirm-credential flow
+            // (KeyGenParameterSpec javadoc); the fallback prompt uses exactly that flow. Keys are
+            // immutable once generated — pre-ruling biometric-only keys keep working via the
+            // biometric path and are refused by the fallback with an explicit message.
+            builder.setUserAuthenticationParameters(
+                AUTH_TIMEOUT_SECONDS,
+                KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,
+            )
         } else {
+            // Legacy API maps to (timeout, AUTH_DEVICE_CREDENTIAL or AUTH_BIOMETRIC_STRONG) —
+            // verified in android-36 sources, KeyGenParameterSpec.java:1511.
             @Suppress("DEPRECATION")
             builder.setUserAuthenticationValidityDurationSeconds(AUTH_TIMEOUT_SECONDS)
         }

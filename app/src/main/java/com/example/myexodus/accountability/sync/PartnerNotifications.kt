@@ -47,8 +47,12 @@ object PartnerNotifications {
         )
     }
 
+    /** Partner-activity alert. One fixed ID already collapses a burst into a single tray entry;
+     *  `onlyAlertOnce` additionally keeps that burst to one alert (a partner-activity pull can
+     *  append several events at once) — the trade is that further updates while the user leaves
+     *  the notification untouched are silent, which is the non-spammy side of §11.7. */
     fun notifyPartnerEvent(context: Context) =
-        post(context, CHANNEL_PARTNER_ALERTS, context.getString(R.string.partner_channel_activity_name), NotificationManager.IMPORTANCE_HIGH, NOTIF_PARTNER_EVENT, R.string.partner_event_title, R.string.partner_event_text)
+        post(context, CHANNEL_PARTNER_ALERTS, context.getString(R.string.partner_channel_activity_name), NotificationManager.IMPORTANCE_HIGH, NOTIF_PARTNER_EVENT, R.string.partner_event_title, R.string.partner_event_text, onlyAlertOnce = true)
 
     /** A verified disable-approval request arrived — the responder's actionable item.
      *  Plan Step 16 channel spec: `approval_requests` is HIGH importance. */
@@ -62,7 +66,16 @@ object PartnerNotifications {
     // Suppressed: the gate is NotificationAccess.canPost (the only way in), which lint can't
     // trace through a helper.
     @SuppressLint("MissingPermission")
-    private fun post(context: Context, channelId: String, channelName: String, importance: Int, notificationId: Int, titleRes: Int, textRes: Int) {
+    private fun post(
+        context: Context,
+        channelId: String,
+        channelName: String,
+        importance: Int,
+        notificationId: Int,
+        titleRes: Int,
+        textRes: Int,
+        onlyAlertOnce: Boolean = false,
+    ) {
         if (!NotificationAccess.canPost(context)) return
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(channelId, channelName, importance),
@@ -73,14 +86,28 @@ object PartnerNotifications {
             Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        // FR-13: the tray text is generic by construction (no alias, event type, count, or
+        // coaching/motivational content anywhere in the payload), so the lockscreen redaction
+        // shows the same generic copy rather than hiding the notification entirely.
+        val title = context.getString(titleRes)
+        val text = context.getString(textRes)
         NotificationManagerCompat.from(context).notify(
             notificationId,
             NotificationCompat.Builder(context, channelId)
                 .setSmallIcon(R.mipmap.ic_launcher)
-                .setContentTitle(context.getString(titleRes))
-                .setContentText(context.getString(textRes))
+                .setContentTitle(title)
+                .setContentText(text)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .setAutoCancel(true)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setPublicVersion(
+                    NotificationCompat.Builder(context, channelId)
+                        .setSmallIcon(R.mipmap.ic_launcher)
+                        .setContentTitle(title)
+                        .setContentText(text)
+                        .build(),
+                )
+                .setOnlyAlertOnce(onlyAlertOnce)
                 .setContentIntent(openApp)
                 .build(),
         )

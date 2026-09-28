@@ -122,7 +122,7 @@ val agreeSpec = KeyGenParameterSpec.Builder(
 ```
 
 ### 8.2 Biometric Invalidation Polling
-Because Android ignores `setInvalidatedByBiometricEnrollment` when a positive timeout is set, the app must check for biometric enrollment changes at startup and on `ON_RESUME`.
+Because Android ignores `setInvalidatedByBiometricEnrollment` when a positive timeout is set, the app must check for biometric enrollment changes at startup and on `ON_RESUME`. **[Implemented 2026-09-28, task #68 — ADR #113.** `BiometricEnrollmentMonitor` polls at startup and ON_RESUME; `MainActivity` runs `IdentityMigration` on change and shows the identity-reset dialog. Recorded deviations: the cache is plain `SharedPreferences`, not `EncryptedSharedPreferences` (the cached value is public system state — `canAuthenticate` status + `isDeviceSecure` — and Decision 12 dropped `security-crypto`); the cached value doubles as a baseline (first run is never a change, so an upgrade cannot rotate an existing identity) and detection never writes — the commit happens only after a successful migration, so a failure retries. `BiometricManager.from()` is also adapted to `getSystemService(BIOMETRIC_SERVICE)` (the static factory is trimmed from the android-37 stubs — ADR #17).]**
 ```kotlin
 val biometricManager = BiometricManager.from(context)
 val currentEnrollmentState = biometricManager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
@@ -178,7 +178,7 @@ FirebaseAppCheck.installAppCheckProviderFactory(
 | Condition | Handling |
 | :--- | :--- |
 | `StrongBoxUnavailableException` | Fallback to TEE (`setIsStrongBoxBacked(false)`). Log telemetry. |
-| `KeyPermanentlyInvalidatedException` | Trigger Identity Migration flow immediately. |
+| `KeyPermanentlyInvalidatedException` | Trigger Identity Migration flow immediately. **▶ Shipped 2026-09-28, task #68 — ADR #113: wired at sign time (`initSign` pre-prompt, post-auth, and the screen-lock path) in `MainActivity`; the dead key routes to migration + the identity-reset dialog instead of reading as a cancel. Tier-1 note: this exception is real for the signing key (auth-required keys are irreversibly invalidated when the secure lock screen is removed/reset — android-36 `KeyGenParameterSpec` javadoc), unlike enrolment-change invalidation, which the OS cannot raise for time-bound keys.** |
 | `UserNotAuthenticatedException` | Trigger `BiometricPrompt` with `CryptoObject` wrapping the `Signature` instance. |
 | Sequence Gap | Hold event in `PENDING_GAP` state. Request backfill via reverse Firestore channel. Terminal state: `PERMANENTLY_INCOMPLETE` after 7 days. |
 | Fork Detected | Reject event, flag `senderKeyId` as `FORKED`. Block further chain advancement. |
@@ -211,7 +211,7 @@ FirebaseAppCheck.installAppCheckProviderFactory(
 *   `crypto_key_generation_result` (tagged by `signing` vs `agreement`, `strongbox` vs `tee`).
 *   `qr_reassembly_completion_time_ms` and `qr_frame_loss_rate`.
 *   `hash_chain_validation_failure` (tagged by `fork`, `gap`, `signature_invalid`).
-*   `biometric_enrollment_change_detected` (count).
+*   `biometric_enrollment_change_detected` (count). **[Deliberately not shipped — ADR #113 (task #68): no consumer in the shipped telemetry surface; recorded rather than silently dropped.]**
 *   `bilateral_deletion_executed` (count only).
 
 ## 15. Risk Register

@@ -61,6 +61,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.myexodus.R
+import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.UnpairPhase
 import com.example.myexodus.accountability.state.UnpairState
@@ -70,6 +71,7 @@ import com.example.myexodus.ui.NavTile
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.recovery.outcomeLabel
 import com.example.myexodus.ui.recovery.techniqueTitle
+import com.example.myexodus.ui.relativeTimeText
 import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.rememberWindowWidth
 import kotlinx.coroutines.Dispatchers
@@ -214,6 +216,9 @@ fun PartnerScreen(
      *  to a key-id fragment — useless for telling people apart. The partner captions a row
      *  locally; the label never leaves this phone. */
     onRenameUser: suspend (pairId: String, label: String?) -> Unit = { _, _ -> },
+    /** Req 15: journals a motivational message for this profile. False = nothing was written
+     *  (blank/oversized body, or the store refused) — the dialog stays open and says so. */
+    onSendMessage: suspend (text: String) -> Boolean = { false },
 ) {
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<PartnerDashboardUi?>(null) }
@@ -231,6 +236,9 @@ fun PartnerScreen(
     var unpairFailed by remember { mutableStateOf(false) }
     var dismissing by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<PartnerUserUi?>(null) }
+    var composing by remember { mutableStateOf(false) }
+    var messageSending by remember { mutableStateOf(false) }
+    var messageFailed by remember { mutableStateOf(false) }
 
     suspend fun reload() {
         state = runCatching { source.load(selectedPairId = selectedPairId, nowMillis = System.currentTimeMillis()) }
@@ -447,7 +455,10 @@ fun PartnerScreen(
                         respondFailed = respondFailed,
                         onRespond = ::respondTo,
                     )
-                    VIEW_ACTIVITY -> ActivityCard(current.alerts)
+                    VIEW_ACTIVITY -> {
+                        ComposeMessageCard(onCompose = { composing = true })
+                        ActivityCard(current.alerts)
+                    }
                     else -> PairingView(
                         state = current,
                         checking = checking,
@@ -497,6 +508,10 @@ fun PartnerScreen(
                         onRename = { renaming = it },
                     )
                 }
+                // §7 Step 11 delta: the partner's shared aggregate, directly under who they are
+                // — the tab's own question ("how are they doing?") answered before the
+                // mechanism cards. Absent until something has actually arrived.
+                PartnerSummaryCard(current.activity, current.chainStatus)
                 ChainStatusCard(current.chainStatus)
                 if (pending.isNotEmpty()) {
                     ApprovalRequestCard(
@@ -593,6 +608,31 @@ fun PartnerScreen(
         )
     }
 
+    // Req 15 composer. Hoisted for the same reason as the other dialogs: the send is a suspend
+    // write, and the dashboard reload that follows it must not close the sheet mid-flight.
+    if (composing) {
+        ComposeMessageDialog(
+            sending = messageSending,
+            failed = messageFailed,
+            onSend = { text ->
+                scope.launch(Dispatchers.IO) {
+                    messageSending = true
+                    messageFailed = false
+                    val ok = runCatching { onSendMessage(text) }
+                        .onFailure { Log.w(TAG, "message send threw", it) }
+                        .getOrDefault(false)
+                    messageSending = false
+                    messageFailed = !ok
+                    if (ok) composing = false
+                }
+            },
+            onDismiss = {
+                composing = false
+                messageFailed = false
+            },
+        )
+    }
+
     // Same hoisting reason as the unpair dialog: renaming a row must survive a reload that
     // swaps the user list out from under the open dialog.
     renaming?.let { user ->
@@ -636,6 +676,193 @@ fun PartnerScreen(
                 }
             },
         )
+    }
+}
+
+/**
+ * §7 Step 11 / §8.11 delta: what the partner has chosen to share — days free as the dominant
+ * number, then milestones, relapses and when the last shared event arrived. Read entirely from
+ * the local Room projection, so it paints offline and never waits on Firestore.
+ *
+ * Two honesty rules are structural here, not copy:
+ *  - a null [PartnerActivityUi] renders "nothing shared yet", never zeros — the absence of
+ *    events is not evidence the partner is at day 0;
+ *  - the activity line and the sync line are separate statements, and a degraded chain says so,
+ *    because "no events for three days" and "we haven't synced for three days" are different
+ *    facts (§8.11: never use one as the other).
+ */
+@Composable
+private fun PartnerSummaryCard(activity: PartnerActivityUi?, chainStatus: PartnerChainStatus) {
+    PartnerSurface(spacing = 12.dp) {
+        Text(
+            stringResource(R.string.partner_summary_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        if (activity == null) {
+            Text(
+                stringResource(R.string.partner_summary_no_events),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                // Days free is the one number the tab exists to answer, so it takes the
+                // headline weight the reference cards give their single dominant metric.
+                StatBlock(stringResource(R.string.partner_summary_days), activity.daysFree)
+                StatBlock(stringResource(R.string.partner_summary_relapses), activity.relapseCount)
+            }
+            Text(
+                stringResource(
+                    R.string.partner_summary_milestones,
+                    activity.milestonesReached.joinToString(", ").ifEmpty {
+                        stringResource(R.string.partner_summary_milestones_none)
+                    },
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            activity.lastEventOccurredAtEpochMillis?.let { at ->
+                Text(
+                    stringResource(
+                        R.string.partner_summary_last_event,
+                        relativeTimeText(System.currentTimeMillis(), at),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        activity?.pinnedMessageText?.let { message ->
+            HorizontalDivider()
+            Text(
+                stringResource(R.string.partner_summary_pinned_label),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(message, style = MaterialTheme.typography.bodyMedium)
+        }
+        // §8.11 degraded: a gap means these numbers are not the whole story, and saying so is
+        // cheaper than letting the user believe a stale card.
+        if (activity != null && chainStatus != PartnerChainStatus.HEALTHY) {
+            Text(
+                stringResource(R.string.partner_summary_partial),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Req 15 composer: three suggestions plus free text, one 280-char bound (the same the wire and
+ * the receiving projection enforce). The message is journaled locally and rides the normal
+ * sync rails — this dialog never talks to the network, so "sending" means "written, will be
+ * delivered by the next sync", which is what the copy says.
+ */
+@Composable
+private fun ComposeMessageDialog(
+    sending: Boolean,
+    failed: Boolean,
+    onSend: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by remember { mutableStateOf("") }
+    var tooLong by remember { mutableStateOf(false) }
+    val suggestions = listOf(
+        stringResource(R.string.partner_compose_suggestion_1),
+        stringResource(R.string.partner_compose_suggestion_2),
+        stringResource(R.string.partner_compose_suggestion_3),
+    )
+    val max = EventPayload.MAX_ACTIVITY_TEXT_LENGTH
+    AlertDialog(
+        onDismissRequest = { if (!sending) onDismiss() },
+        title = { Text(stringResource(R.string.partner_compose_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(R.string.partner_compose_body),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                suggestions.forEach { suggestion ->
+                    OutlinedButton(
+                        onClick = { text = suggestion; tooLong = false },
+                        enabled = !sending,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(suggestion, style = MaterialTheme.typography.bodySmall) }
+                }
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = {
+                        text = it
+                        tooLong = it.trim().length > max
+                    },
+                    label = { Text(stringResource(R.string.partner_compose_hint)) },
+                    isError = tooLong,
+                    minLines = 2,
+                    maxLines = 4,
+                    enabled = !sending,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    stringResource(R.string.partner_compose_characters, text.trim().length, max),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (tooLong) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+                if (tooLong) {
+                    Text(
+                        stringResource(R.string.partner_compose_too_long, max),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (failed) {
+                    Text(
+                        stringResource(R.string.partner_compose_failed),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSend(text) },
+                enabled = !sending && text.isNotBlank() && !tooLong,
+            ) {
+                Text(
+                    stringResource(
+                        if (sending) R.string.partner_compose_sending else R.string.partner_compose_send,
+                    ),
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !sending) {
+                Text(stringResource(R.string.partner_compose_cancel))
+            }
+        },
+    )
+}
+
+/** The Activity subpage's leading card: the one action this page owns. */
+@Composable
+private fun ComposeMessageCard(onCompose: () -> Unit) {
+    PartnerSurface(spacing = 4.dp) {
+        Text(
+            stringResource(R.string.partner_compose_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            stringResource(R.string.partner_compose_body),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Button(onClick = onCompose) { Text(stringResource(R.string.partner_compose_action)) }
     }
 }
 
@@ -1353,16 +1580,5 @@ private fun pairedOnText(epochMillis: Long): String =
     Instant.ofEpochMilli(epochMillis)
         .atZone(ZoneId.systemDefault())
         .format(DateTimeFormatter.ofPattern("MMM d, yyyy"))
-
-private fun relativeTimeText(nowMillis: Long, thenMillis: Long?): String =
-    when (val rel = relativeTime(nowMillis, thenMillis ?: nowMillis)) {
-        RelativeTime.JustNow -> "just now"
-        is RelativeTime.Minutes -> "${rel.value}m ago"
-        is RelativeTime.Hours -> "${rel.value}h ago"
-        is RelativeTime.Days -> "${rel.value}d ago"
-        is RelativeTime.Older -> Instant.ofEpochMilli(rel.epochMillis)
-            .atZone(ZoneId.systemDefault())
-            .format(DateTimeFormatter.ofPattern("MMM d"))
-    }
 
 private const val TAG = "MyExodusPartnerTab"

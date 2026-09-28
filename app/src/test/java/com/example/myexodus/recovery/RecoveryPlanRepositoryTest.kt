@@ -3,6 +3,7 @@ package com.example.myexodus.recovery
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.RulesSnapshotPublisher
 import com.example.myexodus.data.db.ActivityLogKeyManager
@@ -37,6 +38,7 @@ class RecoveryPlanRepositoryTest {
 
     private lateinit var context: Context
     private lateinit var recovery: RecoveryManager
+    private lateinit var factory: AppRulesStoreFactory
     private lateinit var repository: RecoveryPlanRepository
     private lateinit var profileId: String
 
@@ -48,7 +50,7 @@ class RecoveryPlanRepositoryTest {
             context, FakeKeyManager(), ActivityLogKeyManager(context), RulesStoreKeyManager(context), healthStore,
         )
         recovery.resetAllData()
-        val factory = AppRulesStoreFactory(context, recovery, healthStore)
+        factory = AppRulesStoreFactory(context, recovery, healthStore)
         repository = RecoveryPlanRepository(factory)
         profileId = RulesRepository(factory, RulesSnapshotPublisher(context, factory))
             .ensureActiveProfile().userId
@@ -133,6 +135,20 @@ class RecoveryPlanRepositoryTest {
         repository.deleteItem(repository.items(profileId).single())
 
         assertTrue(repository.items(profileId).isEmpty())
+    }
+
+    @Test
+    fun coachingEdits_journalTheItemCount_neverTheText() = runTest {
+        repository.addItem(profileId, CoachingStep.KIND_STEP, "call Sam")
+        repository.addItem(profileId, CoachingStep.KIND_STEP, "breathe")
+        repository.deleteItem(checkNotNull(repository.items(profileId).find { it.actionText == "call Sam" }))
+
+        val rows = checkNotNull(factory.open()).partnerActivityDao()
+            .pendingForPair("pair-1", 10)
+            .filter { it.kind == EventPayload.TYPE_COACHING_STEP_UPDATED }
+
+        assertEquals(listOf(1, 1, 2), rows.map { it.coachingProgress }.sorted())
+        assertTrue("the item text never travels (INV-13)", rows.all { it.text.isEmpty() })
     }
 
     @Test

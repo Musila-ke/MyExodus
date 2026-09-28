@@ -5,17 +5,22 @@ import android.content.Context
 import androidx.room3.Room
 import androidx.sqlite.driver.AndroidSQLiteDriver
 import androidx.test.core.app.ApplicationProvider
+import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.data.db.entity.AttemptLog
 import com.example.myexodus.data.db.entity.CoachingStep
+import com.example.myexodus.data.db.entity.PartnerActivityOutbox
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.data.db.entity.RiskWindow
 import com.example.myexodus.data.db.entity.UsageLedgerKind
 import com.example.myexodus.data.db.entity.UsageLedgerSource
+import com.example.myexodus.data.db.entity.decodeMilestoneDays
+import com.example.myexodus.data.db.entity.encodeMilestoneDays
 import com.example.myexodus.domainusage.UsageSnapshot
 import com.example.myexodus.recovery.RecoveryResourceCatalog
 import java.io.RandomAccessFile
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -29,9 +34,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Rules-store migration chain 2→10 (recovery_state, attempt_log, is_enabled, streak tables,
- * daily-usage tracker day-identity reshape, recovery-session + risk-window tables, and the
- * domain-usage `rule_usage_daily` table). The v2 baseline is the exact DDL Room generates
+ * Rules-store migration chain 2→13 (recovery_state, attempt_log, is_enabled, streak tables,
+ * daily-usage tracker day-identity reshape, recovery-session + risk-window tables, the
+ * domain-usage `rule_usage_daily` table, the usage ledger, the per-pair mirror links, and the
+ * partner-activity journal/link/projection tables).
+ * The v2 baseline is the exact DDL Room generates
  * for version 2 (verbatim copies of the SQL emitted by AppRulesStore_Impl), so the test proves
  * the real upgrade path end to end, including Room's post-migration schema validation (the
  * 2026-08-28 migration failure class) and that pre-existing rule rows survive the 4→5 column
@@ -64,7 +71,7 @@ class AppRulesStoreMigrationTest {
     }
 
     @Test
-    fun migration2to10_addsEveryTableAndRoomAcceptsTheSchema() {
+    fun migration2to13_addsEveryTableAndRoomAcceptsTheSchema() {
         val dbPath = context.getDatabasePath(AppRulesStoreFactory.DB_NAME).absolutePath
 
         AndroidSQLiteDriver().open(dbPath).use { conn ->
@@ -153,7 +160,7 @@ class AppRulesStoreMigrationTest {
             assertEquals(
                 "a STARTED row is not mirrorable",
                 0,
-                sessions.pendingMirror(10).size,
+                sessions.pendingMirror("pair-a", 10).size,
             )
 
             val windows = store.riskWindowDao()
@@ -192,6 +199,91 @@ class AppRulesStoreMigrationTest {
                     UsageLedgerKind.CREDITING,
                 ),
             )
+
+            // Per-pair mirror links 11→12 (ADR #111): the attempt inserted above pends for
+            // EVERY pair until each is linked; one pair's delivery never hides it from others.
+            assertEquals(listOf(id), dao.pendingEventCreation("pair-a", 10).map { it.id })
+            assertEquals(listOf(id), dao.pendingEventCreation("pair-b", 10).map { it.id })
+            dao.linkEvent(id, "pair-a", sequence = 11L)
+            assertEquals(11L, dao.linkSequence(id, "pair-a"))
+            assertTrue(dao.pendingEventCreation("pair-a", 10).isEmpty())
+            assertEquals(
+                "the second pair still sees the row pending",
+                listOf(id),
+                dao.pendingEventCreation("pair-b", 10).map { it.id },
+            )
+
+            // Partner-activity layer 12→13: journal + per-pair links + received-state
+            // projection, all usable after the chain (and empty on fresh install — the
+            // pre-existing rows above must not leak into them).
+            val activity = store.partnerActivityDao()
+            assertEquals(0, activity.deleteJournalOlderThan(Long.MAX_VALUE, 10))
+            activity.insertJournal(
+                PartnerActivityOutbox(
+                    eventId = "evt-1",
+                    kind = EventPayload.TYPE_STREAK_UPDATED,
+                    text = "",
+                    occurredAtMs = 1_700_000_000_000L,
+                    daysFree = 3,
+                    relapseCount = 0,
+                    milestonesReached = encodeMilestoneDays(emptyList()),
+                    coachingProgress = 1,
+                    protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
+                    schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,
+                    createdAtMs = 1_700_000_000_000L,
+                ),
+            )
+            assertEquals(listOf("evt-1"), activity.pendingForPair("pair-a", 10).map { it.eventId })
+            assertEquals(listOf("evt-1"), activity.pendingForPair("pair-b", 10).map { it.eventId })
+            activity.linkEvent("evt-1", "pair-a", sequence = 7L)
+            assertEquals(7L, activity.linkSequence("evt-1", "pair-a"))
+            assertTrue(activity.pendingForPair("pair-a", 10).isEmpty())
+            assertEquals(
+                "the second pair still sees the journal row pending",
+                listOf("evt-1"),
+                activity.pendingForPair("pair-b", 10).map { it.eventId },
+            )
+
+            // Projection: wholesale apply, then the monotonic guard rejects a late replay.
+            activity.applyStateAfter(
+                "pair-a",
+                daysFree = 11,
+                relapseCount = 2,
+                milestonesReached = encodeMilestoneDays(listOf(7, 30)),
+                coachingProgress = 3,
+                occurredAtMs = 1L,
+                sequence = 5L,
+            )
+            val projected = activity.projection("pair-a")!!
+            assertEquals(11, projected.daysFree)
+            assertEquals(listOf(7, 30), decodeMilestoneDays(projected.milestonesReached))
+            activity.applyStateAfter(
+                "pair-a",
+                daysFree = 1,
+                relapseCount = 0,
+                milestonesReached = encodeMilestoneDays(emptyList()),
+                coachingProgress = 0,
+                occurredAtMs = 0L,
+                sequence = 4L,
+            )
+            assertEquals(
+                "an older replay must not move the projection backwards",
+                11,
+                activity.projection("pair-a")!!.daysFree,
+            )
+            assertEquals(5L, activity.projection("pair-a")!!.lastSequence)
+
+            // A message-only arrival creates its row; the newest pin wins across pairs.
+            activity.pinMessage("pair-b", "You've got this", atMs = 1_700_000_100_000L)
+            assertEquals("pair-b", activity.observeLatestPinned().first()!!.pairId)
+            activity.pinMessage("pair-a", "Still rooting for you", atMs = 1_700_000_200_000L)
+            assertEquals("pair-a", activity.observeLatestPinned().first()!!.pairId)
+
+            // Retention: nothing older than the cutoff survives it (and the deleted journal
+            // row stops pending for the pair that never got a link).
+            assertEquals(0, activity.deleteJournalOlderThan(1_700_000_000_000L, 10))
+            assertEquals(1, activity.deleteJournalOlderThan(1_700_000_000_001L, 10))
+            assertTrue(activity.pendingForPair("pair-b", 10).isEmpty())
         }
     }
 

@@ -25,7 +25,7 @@ import org.robolectric.annotation.Config
 /**
  * Attempt-log semantics (blocking-core plan §6): every enforced block and forced override is
  * recorded durably (the local source of truth, §14); pendingEventCreation surfaces only
- * attempts not yet linked to a chain event, oldest first.
+ * attempts not yet mirrored to the queried pair (ADR #111), oldest first.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
@@ -73,21 +73,55 @@ class AttemptLogTest {
         recorder.recordBlocked("r-2", "com.b")
 
         val dao = factory.open()!!.attemptLogDao()
-        dao.linkEvent(dao.recent(10)[1].id, sequence = 7L)
+        dao.linkEvent(dao.recent(10)[1].id, pairId = "pair-a", sequence = 7L)
 
-        val pending = dao.pendingEventCreation(10)
+        val pending = dao.pendingEventCreation("pair-a", 10)
         assertEquals(1, pending.size)
         assertEquals("com.b", pending[0].blockedTarget)
     }
 
+    /** ADR #111: a row delivered to one pair still pends for every other, and the link records
+     *  the chain sequence per pair. Re-linking the same pair is a no-op (exactly-once). */
     @Test
-    fun linkEvent_writesTheChainSequence() = runTest {
+    fun linkEvent_recordsPerPairSequence_withoutHidingTheRowFromOtherPairs() = runTest {
         recorder.recordBlocked("r-1", "com.a")
         val dao = factory.open()!!.attemptLogDao()
         val row = dao.recent(10).single()
-        dao.linkEvent(row.id, sequence = 3L)
-        assertEquals(3L, dao.recent(10).single().eventSequence)
-        assertTrue(dao.pendingEventCreation(10).isEmpty())
+
+        dao.linkEvent(row.id, pairId = "pair-a", sequence = 3L)
+
+        assertEquals(3L, dao.linkSequence(row.id, "pair-a"))
+        assertTrue(dao.pendingEventCreation("pair-a", 10).isEmpty())
+        assertEquals(
+            "pair-b must still see the row pending",
+            listOf(row.id),
+            dao.pendingEventCreation("pair-b", 10).map { it.id },
+        )
+        assertNull(dao.linkSequence(row.id, "pair-b"))
+
+        val relink = runCatching { dao.linkEvent(row.id, pairId = "pair-a", sequence = 9L) }
+        assertTrue("re-linking the same pair must not throw", relink.isSuccess)
+        assertEquals("the first delivery's sequence stands", 3L, dao.linkSequence(row.id, "pair-a"))
+    }
+
+    /** The pre-v12 marker: `event_sequence` set means the row was delivered once before
+     *  per-pair links existed. It is excluded for EVERY pair — the old delivery is never
+     *  duplicated, and the historical N−1 gap is accepted (ADR #111). */
+    @Test
+    fun legacyLinkedRow_isExcludedForEveryPair() = runTest {
+        val dao = factory.open()!!.attemptLogDao()
+        dao.insert(
+            AttemptLog(
+                occurredAtEpochMillis = 1_700_000_000_000L,
+                ruleId = "r-1",
+                blockedTarget = "com.a",
+                outcome = AttemptLog.OUTCOME_BLOCKED,
+                eventSequence = 7L,
+            ),
+        )
+
+        assertTrue(dao.pendingEventCreation("pair-a", 10).isEmpty())
+        assertTrue(dao.pendingEventCreation("pair-b", 10).isEmpty())
     }
 
     private class FakeKeyManager : DatabaseKeyManager {

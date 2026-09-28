@@ -1,6 +1,7 @@
 package com.example.myexodus
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
@@ -55,13 +56,20 @@ import com.example.myexodus.blocking.ProtectionStatusMonitor
 import com.example.myexodus.blocking.ProtectionStatusStore
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.accountability.BilateralDeletion
+import com.example.myexodus.accountability.activity.PartnerActivityJournal
 import com.example.myexodus.accountability.approval.ApprovalFlow
 import com.example.myexodus.accountability.crypto.AccountabilityKeyStore
 import com.example.myexodus.accountability.crypto.AccountabilitySigner
+import com.example.myexodus.accountability.crypto.BiometricEnrollmentMonitor
+import com.example.myexodus.accountability.crypto.IdentityMigration
+import com.example.myexodus.accountability.crypto.NoSignatureReason
+import com.example.myexodus.accountability.crypto.SigningPath
+import com.example.myexodus.accountability.crypto.chooseSigningPath
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.PairingCeremonyTelemetry
 import com.example.myexodus.accountability.enrollment.PairingFlow
 import com.example.myexodus.accountability.enrollment.PartnerLabel
+import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.sync.PairUidResolver
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
 import com.example.myexodus.accountability.sync.PartnerRolloutGate
@@ -105,6 +113,7 @@ import com.example.myexodus.ui.theme.MyExodusTheme
 import dagger.hilt.android.AndroidEntryPoint
 import java.security.Signature
 import kotlin.coroutines.resume
+import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -126,10 +135,31 @@ class MainActivity : FragmentActivity() {
      *  session rows the visit creates (v3 W7 `RecoverySession.entry`). */
     private var requestedRecoveryEntry by mutableStateOf<String?>(null)
 
-    /** §5.20/§12.3: set when a signing prompt cannot be raised at all (no enrolled
-     *  BIOMETRIC_STRONG authenticator, or no usable sensor). Drives the explicit-message
-     *  dialog — a promptless device must never read as a silent cancel. */
-    private var biometricUnavailable by mutableStateOf<BiometricUnavailableReason?>(null)
+    /** §5.20/§12.3 (ADR #112): set when no signing prompt could produce a signature —
+     *  biometrics unusable with no screen-lock fallback, or the fallback key refusing.
+     *  Drives the explicit-message dialog — a promptless device must never read as a
+     *  silent cancel. */
+    private var biometricUnavailable by mutableStateOf<NoSignatureReason?>(null)
+
+    /** §8.2/§9: an enrollment change or a dead-key signature attempt reset the device
+     *  identity; without this dialog the severed partner connections would read as a silent
+     *  disappearance. */
+    private var identityResetNotice by mutableStateOf(false)
+
+    /** Single-flight guard: the resume check and a sign-time detection can race. */
+    @Volatile private var identityMigrationInFlight = false
+
+    /** Bridges the screen-lock confirm flow's RESULT_OK back into the signing coroutine. */
+    private var credentialContinuation: CancellableContinuation<Boolean>? = null
+
+    /** Registered at construction — ComponentActivity rejects registration after STARTED. */
+    private val credentialLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            credentialContinuation?.let { cont ->
+                credentialContinuation = null
+                if (cont.isActive) cont.resume(result.resultCode == RESULT_OK)
+            }
+        }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -178,6 +208,12 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var bilateralDeletion: BilateralDeletion
     @Inject lateinit var pairUidResolver: PairUidResolver
     @Inject lateinit var accountabilityKeyStore: AccountabilityKeyStore
+    // §8.2: enrollment-change polling the Keystore cannot provide for a time-bound key, and
+    // the §7.6 migration it triggers (rotation is revocation). The signer instance gates the
+    // §9 permanent-invalidation seam at both signing paths.
+    @Inject lateinit var biometricEnrollmentMonitor: BiometricEnrollmentMonitor
+    @Inject lateinit var identityMigration: IdentityMigration
+    @Inject lateinit var accountabilitySigner: AccountabilitySigner
     // The dashboard's "Check now" runs the production sync pass in-process — WorkManager
     // dispatch is never performed on XOS (ADR #27), so a WM-based button would be dead there.
     @Inject lateinit var partnerSyncCoordinator: PartnerSyncCoordinator
@@ -200,6 +236,10 @@ class MainActivity : FragmentActivity() {
     override fun onResume() {
         super.onResume()
         streaksViewModel.refresh()
+        // §8.2: enrollment changes cannot invalidate the key itself (time-bound keys sit
+        // outside setInvalidatedByBiometricEnrollment's scope — android-36 javadoc), so the
+        // poll runs here: startup and every ON_RESUME.
+        lifecycleScope.launch { checkIdentityEnrollment() }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -327,7 +367,7 @@ class MainActivity : FragmentActivity() {
                                 PartnerLabel.sanitize(raw) ?: RulesRepository.DEFAULT_PROFILE_NAME,
                             )
                         },
-                        sign = { title -> signWithBiometric(title) },
+                        sign = { title -> signWithAuthPrompt(title) },
                         // §14 bullet 1 (task #37): one outcome event per ceremony terminal,
                         // on the same Crashlytics rail as every other §14 client metric.
                         telemetry = PairingCeremonyTelemetry { event -> crashReporting.nonFatal(event) },
@@ -397,6 +437,20 @@ class MainActivity : FragmentActivity() {
                         onRenameUser = { pairId, label ->
                             enrollmentDao.updatePartnerLabel(pairId, PartnerLabel.sanitize(label))
                         },
+                        // Req 15: journal-first, same as every other shared event — the message
+                        // is written locally now and leaves on the next sync pass, so this call
+                        // touches no network and needs no signing window.
+                        onSendMessage = { text ->
+                            val store = rulesStoreFactory.open()
+                            val profileId = store?.userProfileDao()?.getActive()?.userId
+                            profileId != null && PartnerActivityJournal.emitForProfile(
+                                store,
+                                profileId,
+                                EventPayload.TYPE_MOTIVATIONAL_MESSAGE,
+                                occurredAtMs = System.currentTimeMillis(),
+                                text = text,
+                            )
+                        },
                         requestedTab = requestedTab,
                         onTabConsumed = { requestedTab = null },
                         requestedHabit = requestedHabit,
@@ -446,10 +500,11 @@ class MainActivity : FragmentActivity() {
                         )
                     }
                 }
-                // §5.20/§12.3: the explicit message when signing biometrics cannot be raised —
-                // the enroll case gets the one real fix; nothing here offers a weaker gate.
-                // The signing call already returned null, so the underlying action reads as
-                // "nothing happened" and the screen stays exactly where it was.
+                // §5.20/§12.3 (ADR #112): the explicit message when no signing prompt could
+                // produce a signature — biometrics unusable with no screen-lock fallback, or
+                // the fallback refused by a pre-ruling key. The enrollable cases get the one
+                // real fix. The signing call already returned null, so the underlying action
+                // reads as "nothing happened" and the screen stays exactly where it was.
                 biometricUnavailable?.let { reason ->
                     BiometricUnavailableDialog(
                         reason = reason,
@@ -459,6 +514,11 @@ class MainActivity : FragmentActivity() {
                         },
                         onDismiss = { biometricUnavailable = null },
                     )
+                }
+                // §8.2/§9: the identity reset explanation — why the partner connections
+                // vanished (or why the tapped approval did nothing).
+                if (identityResetNotice) {
+                    IdentityResetDialog(onDismiss = { identityResetNotice = false })
                 }
             }
         }
@@ -473,7 +533,7 @@ class MainActivity : FragmentActivity() {
         val title = getString(
             if (approve) R.string.partner_approval_prompt_approve else R.string.partner_approval_prompt_reject,
         )
-        val signature = signWithBiometric(title) ?: return false
+        val signature = signWithAuthPrompt(title) ?: return false
         return when (approvalFlow.respond(requestEventId, approve, signature)) {
             is ApprovalFlow.RespondResult.Decided -> true
             is ApprovalFlow.RespondResult.Refused -> false
@@ -485,35 +545,81 @@ class MainActivity : FragmentActivity() {
      * then run [BilateralDeletion.initiate] — journal, deliver, shred. A cancelled prompt or
      * refused signature aborts before anything is journaled, so the pair stays fully intact
      * and the screen reports the cancel as nothing having happened, not as a failure.
+     *
+     * An unresolvable identity (ADR #114, §9 "partner unreachable": the pair document is gone
+     * or unreadable by this account) no longer traps the user in the pair: the request can
+     * never be delivered without a partner uid, but the local shred is unconditional — the
+     * attempt proceeds with both uids null and rides the 7-day timeout to an honest
+     * LOCAL_ONLY_TERMINATED report.
      */
     private suspend fun endPartnership(pairId: String): UnpairOutcome {
-        val (myUid, partnerUid) = pairUidResolver.resolve(pairId)
-            ?: return UnpairOutcome.FAILED
-        val signature = signWithBiometric(getString(R.string.partner_unpair_action))
+        val identities = pairUidResolver.resolve(pairId)
+        if (identities == null) {
+            Log.w(TAG, "pair $pairId: partner identity unresolved — local-only unpair")
+        }
+        val signature = signWithAuthPrompt(getString(R.string.partner_unpair_action))
             ?: return UnpairOutcome.CANCELLED
-        return when (bilateralDeletion.initiate(pairId, myUid, partnerUid, signature)) {
+        return when (
+            bilateralDeletion.initiate(
+                pairId,
+                identities?.first,
+                identities?.second,
+                signature,
+            )
+        ) {
             is BilateralDeletion.DeletionResult.Deleted -> UnpairOutcome.UNPAIRED
             is BilateralDeletion.DeletionResult.Failed -> UnpairOutcome.FAILED
         }
     }
 
     /**
-     * §5.20: null when the prompt can proceed. The signing key accepts only BIOMETRIC_STRONG
-     * (AccountabilityKeyStore PURPOSE_SIGN), so any other answer from canAuthenticate means
-     * approval/ceremony/unpair cannot proceed at all — the plan forbids a weaker-class
-     * fallback and requires the explicit message instead (§12.3). NONE_ENROLLED is the
-     * user-fixable case and gets the enroll route; no-sensor/busy/unsupported share the
-     * unavailable copy.
+     * Signing gate with the owner ruling 2026-09-28 (ADR #112): a working strong-biometric
+     * prompt is used whenever it can run; otherwise a secure screen lock
+     * (PIN/pattern/password) authorizes the key through the platform's confirm-credential
+     * flow. The explicit-message dialog shows only when neither can produce a signature.
      */
-    private fun biometricBlockReason(): BiometricUnavailableReason? =
-        when (
-            BiometricManager.from(this)
-                .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-        ) {
-            BiometricManager.BIOMETRIC_SUCCESS -> null
-            BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> BiometricUnavailableReason.NOT_ENROLLED
-            else -> BiometricUnavailableReason.UNAVAILABLE
+    private suspend fun signWithAuthPrompt(title: String): Signature? {
+        val status = BiometricManager.from(this)
+            .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+        val deviceCredentialPossible =
+            getSystemService(KeyguardManager::class.java)?.isDeviceSecure() == true
+        return when (val path = chooseSigningPath(
+            biometricsAvailable = status == BiometricManager.BIOMETRIC_SUCCESS,
+            biometricsNoneEnrolled = status == BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED,
+            deviceCredentialPossible = deviceCredentialPossible,
+        )) {
+            is SigningPath.Blocked -> {
+                Log.w(TAG, "no signing prompt possible (${path.reason}) — explicit message")
+                withContext(Dispatchers.Main.immediate) { biometricUnavailable = path.reason }
+                null
+            }
+
+            is SigningPath.DeviceCredential -> signWithDeviceCredential(title)
+
+            is SigningPath.Biometric -> when (val outcome = biometricSign(title)) {
+                is BiometricOutcome.Signed -> outcome.signature
+                // Lockout is what "fall back to whatever you have" is for; a plain cancel
+                // stays a cancel — the underlying action reads as nothing having happened.
+                BiometricOutcome.LockedOut ->
+                    if (deviceCredentialPossible) signWithDeviceCredential(title) else null
+
+                // §9: not a cancel — the key is permanently dead and migration is the fix.
+                BiometricOutcome.PermanentlyInvalidated -> {
+                    onKeyPermanentlyInvalidated()
+                    null
+                }
+
+                BiometricOutcome.Cancelled -> null
+            }
         }
+    }
+
+    private sealed interface BiometricOutcome {
+        data class Signed(val signature: Signature) : BiometricOutcome
+        data object Cancelled : BiometricOutcome
+        data object LockedOut : BiometricOutcome
+        data object PermanentlyInvalidated : BiometricOutcome
+    }
 
     /**
      * BiometricPrompt signing, same two-path contract the pairing harness proved on the
@@ -526,17 +632,19 @@ class MainActivity : FragmentActivity() {
      * thread of fragment host" if constructed or authenticated off-main. Keystore work stays on
      * the caller's dispatcher (NFR3).
      */
-    private suspend fun signWithBiometric(title: String): Signature? {
-        val blocked = biometricBlockReason()
-        if (blocked != null) {
-            Log.w(TAG, "signing biometrics unavailable ($blocked) — explicit message, no prompt")
-            withContext(Dispatchers.Main.immediate) { biometricUnavailable = blocked }
-            return null
-        }
+    private suspend fun biometricSign(title: String): BiometricOutcome {
         val signature = Signature.getInstance(AccountabilitySigner.SIGNATURE_ALGORITHM)
-        val cryptoReady = runCatching { signature.initSign(accountabilityKeyStore.signingPrivateKey()) }
-            .onFailure { Log.w(TAG, "initSign before the prompt failed — asserting without CryptoObject", it) }
-            .isSuccess
+        val beforePrompt = runCatching { signature.initSign(accountabilityKeyStore.signingPrivateKey()) }
+        val failure = beforePrompt.exceptionOrNull()
+        if (failure != null) {
+            // §9: a permanently dead key cannot be revived by any prompt — no point raising one.
+            if (accountabilitySigner.isPermanentlyInvalidated(failure)) {
+                Log.w(TAG, "signing key permanently invalidated before the prompt", failure)
+                return BiometricOutcome.PermanentlyInvalidated
+            }
+            Log.w(TAG, "initSign before the prompt failed — asserting without CryptoObject", failure)
+        }
+        val cryptoReady = beforePrompt.isSuccess
         return withContext(Dispatchers.Main.immediate) {
             suspendCancellableCoroutine { cont ->
                 val prompt = BiometricPrompt(
@@ -544,23 +652,45 @@ class MainActivity : FragmentActivity() {
                     ContextCompat.getMainExecutor(this@MainActivity),
                     object : BiometricPrompt.AuthenticationCallback() {
                         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                            val signed = if (cryptoReady) {
-                                result.cryptoObject?.signature
+                            if (cryptoReady) {
+                                val signed = result.cryptoObject?.signature
+                                cont.resume(
+                                    if (signed != null) BiometricOutcome.Signed(signed)
+                                    else BiometricOutcome.Cancelled,
+                                )
                             } else {
-                                // The null this returns is read as "cancelled" upstream; keep the
+                                // A failure here is read as "cancelled" upstream; keep the
                                 // real reason in logcat (diagnosed blind on the missing-key rig,
-                                // 2026-09-28).
-                                runCatching { signature.initSign(accountabilityKeyStore.signingPrivateKey()) }
-                                    .onFailure { Log.w(TAG, "biometric sign after authentication failed", it) }
-                                    .map { signature }
-                                    .getOrNull()
+                                // 2026-09-28). A permanent invalidation is the exception — it
+                                // cannot be a cancel, the caller must migrate (§9).
+                                val signed = runCatching {
+                                    signature.initSign(accountabilityKeyStore.signingPrivateKey())
+                                }
+                                    .fold(
+                                        onSuccess = { BiometricOutcome.Signed(signature) as BiometricOutcome },
+                                        onFailure = { e ->
+                                            Log.w(TAG, "biometric sign after authentication failed", e)
+                                            if (accountabilitySigner.isPermanentlyInvalidated(e)) {
+                                                BiometricOutcome.PermanentlyInvalidated
+                                            } else {
+                                                BiometricOutcome.Cancelled
+                                            }
+                                        },
+                                    )
+                                cont.resume(signed)
                             }
-                            cont.resume(signed)
                         }
 
                         override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                             Log.w(TAG, "approval biometric prompt: $errString")
-                            cont.resume(null)
+                            val outcome = when (errorCode) {
+                                BiometricPrompt.ERROR_LOCKOUT,
+                                BiometricPrompt.ERROR_LOCKOUT_PERMANENT,
+                                -> BiometricOutcome.LockedOut
+
+                                else -> BiometricOutcome.Cancelled
+                            }
+                            cont.resume(outcome)
                         }
 
                         override fun onAuthenticationFailed() = Unit
@@ -579,6 +709,122 @@ class MainActivity : FragmentActivity() {
                     prompt.authenticate(promptInfo)
                 }
             }
+        }
+    }
+
+    /**
+     * The owner-ruled fallback (ADR #112): raise the platform's confirm-credential flow —
+     * the resolver the Keystore documentation names for time-bound keys — then initialize
+     * the signature. A successful confirm deposits the auth token that authorizes the key
+     * for the 900s window, so initSign is the real gate: a pre-ruling key (biometric-only,
+     * immutable) refuses it, and that refusal gets the explicit message rather than a
+     * silent cancel. A cancelled lock screen is a plain cancel, like a dismissed prompt.
+     */
+    private suspend fun signWithDeviceCredential(title: String): Signature? {
+        val confirm = getSystemService(KeyguardManager::class.java)
+            ?.createConfirmDeviceCredentialIntent(
+                title,
+                getString(R.string.partner_signing_screen_lock_subtitle),
+            )
+        if (confirm == null) {
+            Log.w(TAG, "no screen-lock confirm flow available")
+            withContext(Dispatchers.Main.immediate) { biometricUnavailable = NoSignatureReason.UNAVAILABLE }
+            return null
+        }
+        val confirmed = withContext(Dispatchers.Main.immediate) {
+            suspendCancellableCoroutine { cont ->
+                credentialContinuation = cont
+                cont.invokeOnCancellation { credentialContinuation = null }
+                runCatching { credentialLauncher.launch(confirm) }
+                    .onFailure { e ->
+                        Log.w(TAG, "screen-lock confirm could not be raised", e)
+                        credentialContinuation = null
+                        if (cont.isActive) cont.resume(false)
+                    }
+            }
+        }
+        if (!confirmed) return null
+        val signature = Signature.getInstance(AccountabilitySigner.SIGNATURE_ALGORITHM)
+        return runCatching { signature.initSign(accountabilityKeyStore.signingPrivateKey()) }
+            .fold(
+                onSuccess = {
+                    Log.i(TAG, "screen lock authorized the signing key")
+                    signature
+                },
+                onFailure = { e ->
+                    if (accountabilitySigner.isPermanentlyInvalidated(e)) {
+                        // §9: not a pre-ruling-key refusal — the key is permanently gone.
+                        onKeyPermanentlyInvalidated()
+                        null
+                    } else {
+                        Log.w(TAG, "screen lock verified but the signing key refused the signature", e)
+                        withContext(Dispatchers.Main.immediate) {
+                            biometricUnavailable = NoSignatureReason.SCREEN_LOCK_REJECTED
+                        }
+                        null
+                    }
+                },
+            )
+    }
+
+    /**
+     * §8.2/NFR4: compare the live enrollment state against the last committed one and run the
+     * §7.6 migration on any change. A failed rotation stays uncommitted and retries next
+     * resume; with nothing severed (reEnrollmentRequired == 0) the rotation is invisible, so
+     * the notice dialog is owed only when connections were actually cut.
+     */
+    private suspend fun checkIdentityEnrollment() {
+        if (!biometricEnrollmentMonitor.enrollmentStateChanged()) {
+            biometricEnrollmentMonitor.commitEnrollmentState() // baseline, or refresh
+            return
+        }
+        Log.i(TAG, "enrollment change detected — running identity migration")
+        val result = runIdentityMigration()
+        if (result is IdentityMigration.MigrationResult.Migrated && result.reEnrollmentRequired > 0) {
+            identityResetNotice = true
+        }
+    }
+
+    /**
+     * §9: a signature attempt proved the key permanently invalidated (the OS does this when
+     * the secure lock screen is removed or forcibly reset). No prompt can revive it, and the
+     * attempted action can never complete on this identity — run the migration the plan names
+     * ("immediately") and say so.
+     */
+    private suspend fun onKeyPermanentlyInvalidated() {
+        Log.w(TAG, "signing key permanently invalidated — running identity migration")
+        runIdentityMigration()
+        identityResetNotice = true
+    }
+
+    /**
+     * §7.6/§8.2/§9 single-flight identity migration (rotation + epoch bump + enrollment
+     * clear — [IdentityMigration]'s contract; Keystore and DB work off the main thread per
+     * NFR3). Returns null when another migration is already running.
+     */
+    private suspend fun runIdentityMigration(): IdentityMigration.MigrationResult? {
+        if (identityMigrationInFlight) return null
+        identityMigrationInFlight = true
+        return try {
+            val result = withContext(Dispatchers.IO) {
+                identityMigration.migrate { accountabilityKeyStore.rotateKeys() }
+            }
+            when (result) {
+                is IdentityMigration.MigrationResult.Migrated -> {
+                    biometricEnrollmentMonitor.commitEnrollmentState()
+                    Log.i(
+                        TAG,
+                        "identity migration done: epoch=${result.epoch} " +
+                            "reEnrollment=${result.reEnrollmentRequired}",
+                    )
+                }
+
+                is IdentityMigration.MigrationResult.Failed ->
+                    Log.w(TAG, "identity migration failed — retries next resume (${result.reason})")
+            }
+            result
+        } finally {
+            identityMigrationInFlight = false
         }
     }
 
@@ -633,33 +879,46 @@ class MainActivity : FragmentActivity() {
     }
 }
 
-/** §5.20: why a signing prompt cannot be raised. NOT_ENROLLED is user-fixable in settings. */
-private enum class BiometricUnavailableReason { NOT_ENROLLED, UNAVAILABLE }
+/** §8.2/§9: enrollment change or dead key — the identity reset is never silent. */
+@Composable
+private fun IdentityResetDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.identity_reset_title)) },
+        text = { Text(stringResource(R.string.identity_reset_body)) },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.partner_biometric_close))
+            }
+        },
+    )
+}
 
-/** Plan §5.20/§12.3: the explicit message — never a silent cancel, never a weaker fallback. */
+/** Plan §5.20/§12.3 (ADR #112): the explicit message — never a silent cancel. */
 @Composable
 private fun BiometricUnavailableDialog(
-    reason: BiometricUnavailableReason,
+    reason: NoSignatureReason,
     onOpenSettings: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val enrollable = reason == BiometricUnavailableReason.NOT_ENROLLED
+    val title = when (reason) {
+        NoSignatureReason.NOT_ENROLLED -> R.string.partner_biometric_not_enrolled_title
+        NoSignatureReason.UNAVAILABLE -> R.string.partner_biometric_unavailable_title
+        NoSignatureReason.SCREEN_LOCK_REJECTED -> R.string.partner_sign_lock_rejected_title
+    }
+    val body = when (reason) {
+        NoSignatureReason.NOT_ENROLLED -> R.string.partner_biometric_not_enrolled_body
+        NoSignatureReason.UNAVAILABLE -> R.string.partner_biometric_unavailable_body
+        NoSignatureReason.SCREEN_LOCK_REJECTED -> R.string.partner_sign_lock_rejected_body
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = {
-            Text(stringResource(
-                if (enrollable) R.string.partner_biometric_not_enrolled_title
-                else R.string.partner_biometric_unavailable_title,
-            ))
-        },
-        text = {
-            Text(stringResource(
-                if (enrollable) R.string.partner_biometric_not_enrolled_body
-                else R.string.partner_biometric_unavailable_body,
-            ))
-        },
+        title = { Text(stringResource(title)) },
+        text = { Text(stringResource(body)) },
         confirmButton = {
-            if (enrollable) {
+            // NOT_ENROLLED and SCREEN_LOCK_REJECTED are both fixed by the same Settings
+            // trip (enroll a biometric); UNAVAILABLE has nothing actionable to offer.
+            if (reason != NoSignatureReason.UNAVAILABLE) {
                 TextButton(onClick = onOpenSettings) {
                     Text(stringResource(R.string.partner_biometric_open_settings))
                 }

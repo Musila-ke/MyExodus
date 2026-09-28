@@ -7,9 +7,12 @@ import com.example.myexodus.accountability.EventCreator
 import com.example.myexodus.accountability.crypto.AccountabilitySigner
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
+import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.AttemptLog
+import com.example.myexodus.data.db.entity.PartnerActivityOutbox
+import com.example.myexodus.data.db.entity.decodeMilestoneDays
 import com.example.myexodus.recovery.RecoveryMirror
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -83,6 +86,10 @@ class PartnerSyncCoordinator(
     suspend fun syncOnce(wakeMessageId: String? = null): SyncReport {
         runCatching { resumeUnpairs() }.onFailure { Log.w(TAG, "unpair resume failed", it) }
         val enrollments = enrollmentDao.all()
+        // Before the early return: after the last unpair there is no enrollment left, which is
+        // exactly when the orphaned activity rows for the gone pairs must still be pruned.
+        runCatching { sweepActivity(enrollments.map { it.pairId }.toSet()) }
+            .onFailure { Log.w(TAG, "activity sweep failed", it) }
         if (enrollments.isEmpty()) {
             return SyncReport() // Unpaired: attempts stay local (§6 attempt log is the record).
         }
@@ -165,24 +172,35 @@ class PartnerSyncCoordinator(
     }
 
     /** Unlinked rows get a chain event now — but only while the auth window is warm; a cold
-     *  window stops the pass (every remaining row would fail the same way). Two queues share the
-     *  pass: block/override attempts (existing) and recovery sessions (W5), each linked in its
-     *  own table. */
+     *  window stops the pass (every remaining row would fail the same way). Three queues share
+     *  the pass: block/override attempts (existing), recovery sessions (W5), and partner-visible
+     *  activity journal rows (partner-activity plan §7 Step 6), each linked in its own table.
+     *  §19.5 multi-pair: pending is per pair (ADR #111) — own activity fans out to every
+     *  enrollment, one delivery per pair, and one pair's delivery never hides the row from the
+     *  rest. */
     private suspend fun reconcileEvents(pairId: String): Int {
         val store = storeFactory.open() ?: return 0
         val attempts = store.attemptLogDao()
         var linked = 0
-        for (attempt in attempts.pendingEventCreation(RECONCILE_BATCH)) {
+        for (attempt in attempts.pendingEventCreation(pairId, RECONCILE_BATCH)) {
             when (val emit = emitActivity(pairId, "attempt ${attempt.id}", eventText(attempt))) {
-                is Emit.Created -> { attempts.linkEvent(attempt.id, emit.sequence); linked++ }
+                is Emit.Created -> { attempts.linkEvent(attempt.id, pairId, emit.sequence); linked++ }
                 Emit.Skip -> Unit
                 Emit.Stop -> return linked
             }
         }
         val sessions = store.recoverySessionDao()
-        for (session in sessions.pendingMirror(RECONCILE_BATCH)) {
+        for (session in sessions.pendingMirror(pairId, RECONCILE_BATCH)) {
             when (val emit = emitActivity(pairId, "session ${session.id}", RecoveryMirror.text(session.technique, session.state))) {
-                is Emit.Created -> { sessions.linkEvent(session.id, emit.sequence); linked++ }
+                is Emit.Created -> { sessions.linkEvent(session.id, pairId, emit.sequence); linked++ }
+                Emit.Skip -> Unit
+                Emit.Stop -> return linked
+            }
+        }
+        val activity = store.partnerActivityDao()
+        for (row in activity.pendingForPair(pairId, RECONCILE_BATCH)) {
+            when (val emit = emitPayload(pairId, "activity ${row.eventId}", row.toActivityPayload())) {
+                is Emit.Created -> { activity.linkEvent(row.eventId, pairId, emit.sequence); linked++ }
                 Emit.Skip -> Unit
                 Emit.Stop -> return linked
             }
@@ -190,9 +208,53 @@ class PartnerSyncCoordinator(
         return linked
     }
 
-    /** Signs and creates one `TYPE_ACTIVITY` event. [Stop] is the cold-auth-window signal the
-     *  caller ends the pass on; the row stays unlinked for the next run either way. */
-    private suspend fun emitActivity(pairId: String, label: String, text: String): Emit {
+    /**
+     * Partner-activity retention and unpair cleanup (plan §8.17 delta, Appendix A.3):
+     *  - journal rows past the mailbox-TTL window are dropped in bounded batches — a state
+     *    snapshot that old is superseded by any newer event, and an undelivered one has long
+     *    since missed its moment;
+     *  - projections/links for pair ids no longer enrolled are deleted, self-healing after an
+     *    unpair that never touched this store (no BilateralDeletion coupling).
+     */
+    private suspend fun sweepActivity(enrolledPairIds: Set<String>) {
+        val store = storeFactory.open() ?: return
+        val dao = store.partnerActivityDao()
+        val cutoff = System.currentTimeMillis() - ACTIVITY_RETENTION_MS
+        repeat(SWEEP_BATCH_LIMIT) {
+            if (dao.deleteJournalOlderThan(cutoff, RECONCILE_BATCH) == 0) return@repeat
+        }
+        val orphans = (dao.projectedPairIds() + dao.linkedPairIds())
+            .distinct()
+            .filterNot { it in enrolledPairIds }
+        if (orphans.isNotEmpty()) {
+            Log.i(TAG, "pruning activity state for ${orphans.size} unpaired pair(s)")
+            dao.deleteLinksFor(orphans)
+            dao.deleteProjectionsFor(orphans)
+        }
+    }
+
+    /** The journal row's uniform wire shape (Appendix A.2): kind + version pair + snapshot. */
+    private fun PartnerActivityOutbox.toActivityPayload() = EventPayload(
+        type = kind,
+        text = text,
+        protocolVersion = protocolVersion,
+        schemaVersion = schemaVersion,
+        stateAfter = ActivityStateAfter(
+            daysFree = daysFree,
+            relapseCount = relapseCount,
+            milestonesReached = decodeMilestoneDays(milestonesReached),
+            coachingProgress = coachingProgress,
+            eventOccurredAtMs = occurredAtMs,
+        ),
+    )
+
+    /** Signs and creates one `TYPE_ACTIVITY` event (attempts/sessions — the shipped shape). */
+    private suspend fun emitActivity(pairId: String, label: String, text: String): Emit =
+        emitPayload(pairId, label, EventPayload(type = EventPayload.TYPE_ACTIVITY, text = text))
+
+    /** Signs and creates one event carrying [payload]. [Stop] is the cold-auth-window signal
+     *  the caller ends the pass on; the row stays unlinked for the next run either way. */
+    private suspend fun emitPayload(pairId: String, label: String, payload: EventPayload): Emit {
         val signature = try {
             signer.beginSign()
         } catch (e: Exception) {
@@ -201,7 +263,7 @@ class PartnerSyncCoordinator(
             return Emit.Skip
         }
         return try {
-            when (val result = creator.create(pairId, EventPayload(type = EventPayload.TYPE_ACTIVITY, text = text), signature)) {
+            when (val result = creator.create(pairId, payload, signature)) {
                 is EventCreator.CreateResult.Created -> Emit.Created(result.sequence)
                 is EventCreator.CreateResult.Duplicate -> {
                     Log.w(TAG, "event duplicate for $label — left unlinked")
@@ -231,6 +293,9 @@ class PartnerSyncCoordinator(
     private companion object {
         const val TAG = "MyExodusPartnerSync"
         const val RECONCILE_BATCH = 100
+        /** Journal retention (FR-15 delta, Appendix A.3): same 30-day bound as the mailbox TTL. */
+        const val ACTIVITY_RETENTION_MS = 30L * 24 * 60 * 60 * 1000
+        const val SWEEP_BATCH_LIMIT = 10
     }
 }
 

@@ -128,6 +128,8 @@ fun AppShell(
     onUnpair: suspend (pairId: String) -> UnpairOutcome = { UnpairOutcome.FAILED },
     onDismissUnpair: suspend (pairId: String) -> Unit = {},
     onRenameUser: suspend (pairId: String, label: String?) -> Unit = { _, _ -> },
+    /** Req 15: journals a motivational message; false = nothing was written. */
+    onSendMessage: suspend (text: String) -> Boolean = { false },
     encryptionPending: Boolean = false,
     requestedTab: String? = null,
     onTabConsumed: () -> Unit = {},
@@ -286,6 +288,7 @@ fun AppShell(
                         onUnpair = onUnpair,
                         onDismissUnpair = onDismissUnpair,
                         onRenameUser = onRenameUser,
+                        onSendMessage = onSendMessage,
                         modifier = contentModifier,
                     )
                     contentTab == 5 -> SettingsScreen(

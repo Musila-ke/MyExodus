@@ -37,6 +37,7 @@ import com.example.myexodus.accountability.sync.PartnerRolloutGate
 import com.example.myexodus.accountability.sync.PairingRegistration
 import com.example.myexodus.accountability.sync.PairUidResolver
 import com.example.myexodus.accountability.sync.PartnerNotifications
+import com.example.myexodus.accountability.activity.PartnerActivityReceiver
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
 import com.example.myexodus.accountability.sync.PartnerSyncTelemetry
 import com.example.myexodus.accountability.sync.PushInstallationRegistrar
@@ -44,7 +45,9 @@ import com.example.myexodus.accountability.sync.decodePublicKey
 import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.entity.decodeMilestoneDays
 import com.example.myexodus.secrets.SecretsRepository
+import com.example.myexodus.ui.partner.PartnerActivityUi
 import com.example.myexodus.ui.partner.PartnerDashboardSource
 import com.example.myexodus.BuildConfig
 import com.google.firebase.auth.FirebaseAuth
@@ -447,6 +450,7 @@ object AccountabilityModule {
     fun providePartnerDashboardSource(
         db: AccountabilityDatabase,
         store: ChainStateStore,
+        storeFactory: AppRulesStoreFactory,
         keystore: AccountabilityKeyStore,
         cekDerivation: CekDerivation,
         processor: MailboxEventProcessor,
@@ -462,6 +466,21 @@ object AccountabilityModule {
             unpairRows = db.unpairStateDao()::all,
             hasPriorPairingKeys = keystore::hasAgreementKey,
             rejectionsSince = db.outboxDao()::rejectionCountSince,
+            // §7 Step 11: a local Room read of the partner's shared aggregate — the dashboard
+            // never waits on Firestore for a number the mailbox already delivered (plan §1).
+            partnerActivity = { pairId ->
+                storeFactory.open()?.partnerActivityDao()?.projection(pairId)?.let { row ->
+                    PartnerActivityUi(
+                        daysFree = row.daysFree,
+                        milestonesReached = decodeMilestoneDays(row.milestonesReached),
+                        relapseCount = row.relapseCount,
+                        lastEventOccurredAtEpochMillis =
+                            row.lastEventOccurredAtMs.takeIf { row.lastSequence > 0 },
+                        pinnedMessageText = row.pinnedMessageText,
+                        pinnedMessageAtEpochMillis = row.pinnedMessageAtMs,
+                    )
+                }
+            },
             decoderFor = { enrollment ->
                 val cek = cekDerivation.deriveCek(
                     enrollment.pairId,
@@ -536,6 +555,11 @@ object AccountabilityModule {
      * device reporting none simply never acks — the 30-day cap still bounds retention.
      */
     @Provides @Singleton
+    fun providePartnerActivityReceiver(
+        storeFactory: AppRulesStoreFactory,
+    ): PartnerActivityReceiver = PartnerActivityReceiver(storeFactory)
+
+    @Provides @Singleton
     fun provideMailboxMessageHandler(
         @ApplicationContext context: Context,
         db: AccountabilityDatabase,
@@ -545,6 +569,7 @@ object AccountabilityModule {
         repair: ChainRepairCoordinator,
         approval: ApprovalFlow,
         deletion: BilateralDeletion,
+        activityReceiver: PartnerActivityReceiver,
     ): MailboxMessageHandler {
         val processedDao = db.processedEventDao()
         val installationId = PushInstallationRegistrar.androidIdOf(context)
@@ -582,7 +607,8 @@ object AccountabilityModule {
                         approval.onRequestAppended(pairId, senderKeyId, sequence, payload, serverTs)
                     EventPayload.TYPE_APPROVAL_RESPONSE ->
                         approval.applyResponse(pairId, payload, serverTs)
-                    else -> Unit
+                    // Non-activity types classify to NotActivity inside and are left untouched.
+                    else -> activityReceiver.applyAppended(pairId, payload, sequence)
                 }
             },
         )

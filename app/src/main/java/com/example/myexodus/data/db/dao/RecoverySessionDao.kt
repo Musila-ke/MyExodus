@@ -52,17 +52,27 @@ interface RecoverySessionDao {
     )
     suspend fun interruptStale(cutoffEpochMs: Long, staleMs: Long, staleSec: Int): Int
 
-    /** Mirror queue (W5): terminal rows with no chain event yet, oldest first. STARTED rows and
-     *  technique-less logs are excluded by construction — never mirrored. */
+    /** Mirror queue (W5): terminal rows with no chain event for THIS pair yet, oldest first
+     *  (ADR #111). STARTED rows and technique-less logs are excluded by construction — never
+     *  mirrored. `event_sequence` is the pre-v12 single-link marker (see [AttemptLogDao]). */
     @Query(
         "SELECT * FROM recovery_session " +
             "WHERE event_sequence IS NULL AND state != 'STARTED' AND technique != 'none' " +
+            "AND NOT EXISTS (SELECT 1 FROM recovery_mirror_link l " +
+            "WHERE l.session_id = recovery_session.id AND l.pair_id = :pairId) " +
             "ORDER BY started_at_epoch_ms ASC LIMIT :limit",
     )
-    suspend fun pendingMirror(limit: Int): List<RecoverySession>
+    suspend fun pendingMirror(pairId: String, limit: Int): List<RecoverySession>
 
-    @Query("UPDATE recovery_session SET event_sequence = :sequence WHERE id = :id")
-    suspend fun linkEvent(id: String, sequence: Long)
+    /** Exactly-once per (session, pair): re-linking the same pair is a no-op (ADR #111). */
+    @Query(
+        "INSERT OR IGNORE INTO recovery_mirror_link (session_id, pair_id, sequence) " +
+            "VALUES (:id, :pairId, :sequence)",
+    )
+    suspend fun linkEvent(id: String, pairId: String, sequence: Long)
+
+    @Query("SELECT sequence FROM recovery_mirror_link WHERE session_id = :id AND pair_id = :pairId")
+    suspend fun linkSequence(id: String, pairId: String): Long?
 }
 
 /** One `GROUP BY state, technique` bucket from [RecoverySessionDao.countsByStateSince]. The

@@ -49,6 +49,13 @@ open class AccountabilitySigner @Inject constructor() {
     fun isUserNotAuthenticated(e: Throwable): Boolean = e is UserNotAuthenticatedException
 
     /**
+     * §9: the key is irreversibly dead (the OS permanently invalidates auth-required keys
+     * when the secure lock screen is removed or forcibly reset — android-36 javadoc). No
+     * prompt can revive it; the caller runs Identity Migration instead of retrying.
+     */
+    fun isPermanentlyInvalidated(e: Throwable): Boolean = e is KeyPermanentlyInvalidatedException
+
+    /**
      * §10 domain separation + Low-S: verifies [data] against the partner's public key,
      * rejecting high-S signatures. Domain string is part of the signed input (§6.2.6),
      * applied by the caller before this is invoked.

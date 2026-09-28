@@ -1,6 +1,7 @@
 package com.example.myexodus.accountability.serialization
 
 import com.upokecenter.cbor.CBORObject
+import com.upokecenter.cbor.CBORType
 
 /**
  * The event payload carried inside the encrypted envelope (§6.2.1): NFC-normalized and
@@ -23,6 +24,13 @@ import com.upokecenter.cbor.CBORObject
  * [decision]. The request's own event id is deliberately NOT self-reported — the responder
  * derives it canonically from the envelope's (senderKeyId, sequence), which the sender
  * cannot spoof.
+ *
+ * Partner-visible activity layer (plan §4.6/§8.5, Appendix A.2): the five [`ACTIVITY_TYPES`]
+ * add [protocolVersion], [schemaVersion], and the [stateAfter] aggregate. All three are
+ * encoded only when non-null — every pre-existing type keeps byte-identical encoding, and
+ * the five new types carry a fixed version pair the receiver dispatches on (FR-17).
+ * [text] doubles as the motivational message body for [`TYPE_MOTIVATIONAL_MESSAGE`]
+ * (compose-time bound: [MAX_ACTIVITY_TEXT_LENGTH]).
  */
 data class EventPayload(
     val type: String = TYPE_ACTIVITY,
@@ -33,6 +41,12 @@ data class EventPayload(
     val expectedPreviousHash: ByteArray? = null,
     /** Approval response only: true = approved, false = rejected. */
     val decision: Boolean? = null,
+    /** Activity types only: wire protocol version (FR-17). Absent for every shipped type. */
+    val protocolVersion: Int? = null,
+    /** Activity types only: body schema version (FR-17). Absent for every shipped type. */
+    val schemaVersion: Int? = null,
+    /** Activity types only: partner-visible aggregate after the local state transition (§4.6). */
+    val stateAfter: ActivityStateAfter? = null,
 ) {
     companion object {
         const val TYPE_ACTIVITY = "activity"
@@ -44,8 +58,81 @@ data class EventPayload(
         /** §8 Step 12: the disable-approval request/response pair (AD-07). */
         const val TYPE_APPROVAL_REQUEST = "approval_request"
         const val TYPE_APPROVAL_RESPONSE = "approval_response"
+
+        /** §2.1 FR-01, Appendix A.2: the five partner-visible activity event types. */
+        const val TYPE_STREAK_UPDATED = "streak_updated"
+        const val TYPE_RELAPSE_RECORDED = "relapse_recorded"
+        const val TYPE_MILESTONE_REACHED = "milestone_reached"
+        const val TYPE_COACHING_STEP_UPDATED = "coaching_step_updated"
+        const val TYPE_MOTIVATIONAL_MESSAGE = "motivational_message"
+
+        val ACTIVITY_TYPES: Set<String> = setOf(
+            TYPE_STREAK_UPDATED,
+            TYPE_RELAPSE_RECORDED,
+            TYPE_MILESTONE_REACHED,
+            TYPE_COACHING_STEP_UPDATED,
+            TYPE_MOTIVATIONAL_MESSAGE,
+        )
+
+        const val ACTIVITY_PROTOCOL_VERSION = 1
+        const val ACTIVITY_SCHEMA_VERSION = 1
+
+        /** Req 15 composer bound (§10.6 bounded strings; the encoder does not enforce it —
+         *  compose-time does, and decode-side projection refuses anything over it). */
+        const val MAX_ACTIVITY_TEXT_LENGTH = 280
     }
 }
+
+/** §8.5 receive-side dispatch over the [ActivityEvent] states. */
+fun classifyActivity(payload: EventPayload): ActivityEvent = when {
+    payload.type !in EventPayload.ACTIVITY_TYPES -> ActivityEvent.NotActivity
+    payload.protocolVersion == null || payload.schemaVersion == null ->
+        ActivityEvent.Malformed(payload.type)
+    payload.protocolVersion != EventPayload.ACTIVITY_PROTOCOL_VERSION ||
+        payload.schemaVersion != EventPayload.ACTIVITY_SCHEMA_VERSION ->
+        ActivityEvent.Unsupported(payload.type, payload.protocolVersion, payload.schemaVersion)
+    payload.stateAfter == null -> ActivityEvent.Malformed(payload.type)
+    else -> ActivityEvent.Valid(payload)
+}
+
+/**
+ * §8.5 decode-side outcome: MALFORMED and UNSUPPORTED_VERSION are separate states (FR-17)
+ * and neither is ever silently discarded — the chain still appends the event (it is
+ * cryptographically valid); only the partner projection declines to apply it.
+ */
+sealed interface ActivityEvent {
+    data class Valid(val payload: EventPayload) : ActivityEvent
+
+    /** One of the five types carrying a version pair this build does not implement. */
+    data class Unsupported(
+        val type: String,
+        val protocolVersion: Int?,
+        val schemaVersion: Int?,
+    ) : ActivityEvent
+
+    /** One of the five types but the body is missing or uninterpretable. */
+    data class Malformed(val type: String) : ActivityEvent
+
+    /** A shipped non-activity type — travels this codec untouched. */
+    data object NotActivity : ActivityEvent
+}
+
+/**
+ * §4.6 `stateAfter`: the partner-visible aggregate after the sender's local transition.
+ * Applied wholesale to the receiver projection (§8.10 — no delta arithmetic), so duplicate
+ * delivery cannot double-count.
+ */
+data class ActivityStateAfter(
+    /** Completed clean days of the sender's current streak (elapsed / day). */
+    val daysFree: Int,
+    val relapseCount: Int,
+    /** Achieved milestone days of the *current* streak, ascending (e.g. [7, 30]). */
+    val milestonesReached: List<Int>,
+    /** Count of the sender's active coaching items (summary only — never the text). */
+    val coachingProgress: Int,
+    /** Sender wall-clock; display chronology only, never a sync cursor (§9.6). */
+    val eventOccurredAtMs: Long,
+)
 
 private const val K_TYPE = "ty"
 private const val K_TEXT = "tx"
@@ -54,6 +141,18 @@ private const val K_PAIRING_EPOCH = "pe"
 private const val K_EXPECTED_PREV_SEQUENCE = "ps"
 private const val K_EXPECTED_PREV_HASH = "ph"
 private const val K_DECISION = "dec"
+private const val K_PROTOCOL_VERSION = "pv"
+private const val K_SCHEMA_VERSION = "sv"
+private const val K_STATE_AFTER = "st"
+private const val K_DAYS_FREE = "df"
+private const val K_RELAPSE_COUNT = "rc"
+private const val K_MILESTONES = "ms"
+private const val K_COACHING_PROGRESS = "cp"
+private const val K_EVENT_OCCURRED_AT = "eo"
+
+/** Defensive decode bounds (§8.5/§10.6): a malicious peer must not be able to make the
+ *  receiver allocate unbounded state through a well-signed envelope. */
+private const val MAX_MILESTONE_ENTRIES = 64
 
 fun encodePayload(p: EventPayload): ByteArray = CanonicalCbor.encodeMap(
     buildList {
@@ -64,6 +163,9 @@ fun encodePayload(p: EventPayload): ByteArray = CanonicalCbor.encodeMap(
         p.expectedPreviousSequence?.let { add(K_EXPECTED_PREV_SEQUENCE to CanonicalCbor.int(it)) }
         p.expectedPreviousHash?.let { add(K_EXPECTED_PREV_HASH to CanonicalCbor.bytes(it)) }
         p.decision?.let { add(K_DECISION to CanonicalCbor.bool(it)) }
+        p.protocolVersion?.let { add(K_PROTOCOL_VERSION to CanonicalCbor.int(it.toLong())) }
+        p.schemaVersion?.let { add(K_SCHEMA_VERSION to CanonicalCbor.int(it.toLong())) }
+        p.stateAfter?.let { add(K_STATE_AFTER to encodeStateAfter(it)) }
     },
 )
 
@@ -77,5 +179,53 @@ fun decodePayload(bytes: ByteArray): EventPayload {
         expectedPreviousSequence = obj.get(K_EXPECTED_PREV_SEQUENCE)?.takeIf { !it.isNull }?.AsInt64(),
         expectedPreviousHash = obj.get(K_EXPECTED_PREV_HASH)?.takeIf { !it.isNull }?.GetByteString(),
         decision = obj.get(K_DECISION)?.takeIf { !it.isNull }?.AsBoolean(),
+        protocolVersion = obj.get(K_PROTOCOL_VERSION)?.takeIf { !it.isNull }?.let(::intOrNull),
+        schemaVersion = obj.get(K_SCHEMA_VERSION)?.takeIf { !it.isNull }?.let(::intOrNull),
+        // Activity bodies never fail the whole decode (§8.5/FR-17): an uninterpretable or
+        // future-schema body leaves stateAfter null and classifyActivity() separates
+        // Malformed from Unsupported without rejecting the chain event that carries it.
+        stateAfter = obj.get(K_STATE_AFTER)?.takeIf { !it.isNull }?.let(::decodeStateAfterOrNull),
     )
+}
+
+private fun encodeStateAfter(s: ActivityStateAfter): CBORObject = CBORObject.NewMap().also { m ->
+    // Insertion order is irrelevant: the deterministic encoder sorts keys canonically.
+    m.set(K_DAYS_FREE, CanonicalCbor.int(s.daysFree.toLong()))
+    m.set(K_RELAPSE_COUNT, CanonicalCbor.int(s.relapseCount.toLong()))
+    m.set(
+        K_MILESTONES,
+        CBORObject.NewArray().also { arr ->
+            s.milestonesReached.forEach { arr.Add(CanonicalCbor.int(it.toLong())) }
+        },
+    )
+    m.set(K_COACHING_PROGRESS, CanonicalCbor.int(s.coachingProgress.toLong()))
+    m.set(K_EVENT_OCCURRED_AT, CanonicalCbor.int(s.eventOccurredAtMs))
+}
+
+private fun decodeStateAfterOrNull(obj: CBORObject): ActivityStateAfter? = try {
+    val milestones = obj.get(K_MILESTONES)
+    if (obj.type != CBORType.Map ||
+        milestones == null || milestones.isNull ||
+        milestones.type != CBORType.Array || milestones.size() > MAX_MILESTONE_ENTRIES
+    ) {
+        null
+    } else {
+        ActivityStateAfter(
+            daysFree = obj[K_DAYS_FREE].AsInt32(),
+            relapseCount = obj[K_RELAPSE_COUNT].AsInt32(),
+            milestonesReached = milestones.getValues().map { it.AsInt32() },
+            coachingProgress = obj[K_COACHING_PROGRESS].AsInt32(),
+            eventOccurredAtMs = obj[K_EVENT_OCCURRED_AT].AsInt64(),
+        )
+    }
+} catch (e: RuntimeException) {
+    null
+}
+
+/** `AsInt32` throws when the wire value does not fit — a null-safe narrowing for version
+ *  fields, whose only meaningful values are small. */
+private fun intOrNull(obj: CBORObject): Int? = try {
+    obj.AsInt32()
+} catch (e: RuntimeException) {
+    null
 }

@@ -344,6 +344,174 @@ class AppRulesStoreMigrationInstrumentedTest {
         }
     }
 
+    /**
+     * ADR #111: the v11 → v12 per-pair mirror links. Purely additive — both tables are created
+     * empty and usable, the composite key makes each (row, pair) link exactly-once, and every
+     * earlier table and row survives.
+     */
+    @Test
+    fun migrate11To12_addsThePerPairMirrorLinkTables() = runTest {
+        val v11 = helper.createDatabase(11)
+        seedProfileAndHabit(v11)
+        seedCoachingStep(v11)
+        exec(
+            v11,
+            "INSERT INTO attempt_log (occurred_at_epoch_millis, rule_id, blocked_target, " +
+                "outcome, event_sequence) VALUES (1, 'r-1', 'com.instagram.android', 'BLOCKED', NULL)",
+        )
+
+        val v12 = helper.runMigrationsAndValidate(12, listOf(AppRulesStoreFactory.MIGRATION_11_12))
+
+        assertEquals(0L, count(v12, "attempt_mirror_link"))
+        assertEquals(0L, count(v12, "recovery_mirror_link"))
+        exec(v12, "INSERT INTO attempt_mirror_link (attempt_id, pair_id, sequence) VALUES (1, 'pair-a', 1)")
+        exec(v12, "INSERT INTO recovery_mirror_link (session_id, pair_id, sequence) VALUES ('s-1', 'pair-b', 2)")
+        assertEquals(1L, count(v12, "attempt_mirror_link"))
+        assertEquals(1L, count(v12, "recovery_mirror_link"))
+
+        // The composite key rejects a duplicate (row, pair) link — exactly-once per pair.
+        val duplicateRejected = runCatching {
+            exec(v12, "INSERT INTO attempt_mirror_link (attempt_id, pair_id, sequence) VALUES (1, 'pair-a', 9)")
+        }.isFailure
+        assertTrue("the (attempt_id, pair_id) key must hold", duplicateRejected)
+
+        // Additive only: the source row and every earlier table survived.
+        assertEquals("the attempt row survives the upgrade", 1L, count(v12, "attempt_log"))
+        assertPreExistingDataSurvives(v12, "after the mirror-link upgrade")
+    }
+
+    /**
+     * ADR #111 rollback, same rationale as the 10→9 leg: a v11 build reinstalled over a database
+     * that briefly ran at v12 drops only the mirror-link tables (every other table and row
+     * survives), and the re-upgrade rebuilds them empty.
+     */
+    @Test
+    fun migrate11To12To11_dropsOnlyTheMirrorLinks_andReupgradesEmpty() = runTest {
+        val v11 = helper.createDatabase(11)
+        seedProfileAndHabit(v11)
+        seedCoachingStep(v11)
+
+        val v12 = helper.runMigrationsAndValidate(12, listOf(AppRulesStoreFactory.MIGRATION_11_12))
+        exec(v12, "INSERT INTO attempt_mirror_link (attempt_id, pair_id, sequence) VALUES (1, 'pair-a', 1)")
+
+        val down = helper.runMigrationsAndValidate(11, listOf(AppRulesStoreFactory.MIGRATION_12_11))
+        assertTrue(
+            "the downgrade must drop the attempt link table",
+            runCatching { count(down, "attempt_mirror_link") }.isFailure,
+        )
+        assertTrue(
+            "the downgrade must drop the recovery link table",
+            runCatching { count(down, "recovery_mirror_link") }.isFailure,
+        )
+        assertPreExistingDataSurvives(down, "after the mirror-link downgrade")
+
+        val up = helper.runMigrationsAndValidate(12, listOf(AppRulesStoreFactory.MIGRATION_11_12))
+        assertEquals(
+            "the re-upgrade rebuilds the tables empty",
+            0L,
+            count(up, "attempt_mirror_link"),
+        )
+        assertEquals(0L, count(up, "recovery_mirror_link"))
+        assertPreExistingDataSurvives(up, "after the re-upgrade")
+    }
+
+    /**
+     * Partner-visible activity layer: the v12 → v13 journal, per-pair links, and received-state
+     * projection. Purely additive — all three tables are created empty and usable, the journal
+     * row pends per pair until that pair is linked, the projection's monotonic guard holds, and
+     * every earlier table and row survives.
+     */
+    @Test
+    fun migrate12To13_addsThePartnerActivityTables() = runTest {
+        val v12 = helper.createDatabase(12)
+        seedProfileAndHabit(v12)
+        seedCoachingStep(v12)
+        exec(
+            v12,
+            "INSERT INTO attempt_mirror_link (attempt_id, pair_id, sequence) VALUES (1, 'pair-a', 1)",
+        )
+
+        val v13 = helper.runMigrationsAndValidate(13, listOf(AppRulesStoreFactory.MIGRATION_12_13))
+
+        assertEquals(0L, count(v13, "partner_activity_outbox"))
+        assertEquals(0L, count(v13, "partner_activity_link"))
+        assertEquals(0L, count(v13, "partner_activity_projection"))
+
+        exec(
+            v13,
+            "INSERT INTO partner_activity_outbox (event_id, kind, text, occurred_at_ms, days_free, " +
+                "relapse_count, milestones_reached, coaching_progress, protocol_version, " +
+                "schema_version, created_at_ms) VALUES " +
+                "('evt-1', 'streak_updated', '', 100, 4, 1, '7,30', 2, 1, 1, 100)",
+        )
+        exec(
+            v13,
+            "INSERT INTO partner_activity_link (event_id, pair_id, sequence) VALUES ('evt-1', 'pair-a', 9)",
+        )
+        exec(
+            v13,
+            "INSERT INTO partner_activity_projection (pair_id, days_free, relapse_count, " +
+                "milestones_reached, coaching_progress, last_event_occurred_at_ms, last_sequence, " +
+                "pinned_message_text, pinned_message_at_ms) VALUES ('pair-a', 4, 1, '7,30', 2, 100, 9, NULL, NULL)",
+        )
+        assertEquals(1L, count(v13, "partner_activity_outbox"))
+        assertEquals(1L, count(v13, "partner_activity_link"))
+        assertEquals(1L, count(v13, "partner_activity_projection"))
+
+        // Composite key rejects a duplicate (event, pair) link — exactly-once per pair.
+        val duplicateRejected = runCatching {
+            exec(
+                v13,
+                "INSERT INTO partner_activity_link (event_id, pair_id, sequence) VALUES ('evt-1', 'pair-a', 99)",
+            )
+        }.isFailure
+        assertTrue("the (event_id, pair_id) key must hold", duplicateRejected)
+
+        // Additive only: the mirror link and every earlier table survived.
+        assertEquals("the mirror link survives the upgrade", 1L, count(v13, "attempt_mirror_link"))
+        assertPreExistingDataSurvives(v13, "after the activity-layer upgrade")
+    }
+
+    /**
+     * The v13 rollback, same rationale as the other downgrade legs: a v12 build reinstalled over
+     * a database that briefly ran at v13 drops only the three activity tables (every other table
+     * and row survives), and the re-upgrade rebuilds them empty.
+     */
+    @Test
+    fun migrate13To12_dropsOnlyThePartnerActivityTables_andReupgradesEmpty() = runTest {
+        val v12 = helper.createDatabase(12)
+        seedProfileAndHabit(v12)
+        seedCoachingStep(v12)
+
+        val v13 = helper.runMigrationsAndValidate(13, listOf(AppRulesStoreFactory.MIGRATION_12_13))
+        exec(
+            v13,
+            "INSERT INTO partner_activity_outbox (event_id, kind, text, occurred_at_ms, days_free, " +
+                "relapse_count, milestones_reached, coaching_progress, protocol_version, " +
+                "schema_version, created_at_ms) VALUES " +
+                "('evt-1', 'relapse_recorded', '', 100, 0, 1, '', 0, 1, 1, 100)",
+        )
+
+        val down = helper.runMigrationsAndValidate(12, listOf(AppRulesStoreFactory.MIGRATION_13_12))
+        listOf(
+            "partner_activity_outbox",
+            "partner_activity_link",
+            "partner_activity_projection",
+        ).forEach { table ->
+            assertTrue(
+                "the downgrade must drop $table",
+                runCatching { count(down, table) }.isFailure,
+            )
+        }
+        assertPreExistingDataSurvives(down, "after the activity-layer downgrade")
+
+        val up = helper.runMigrationsAndValidate(13, listOf(AppRulesStoreFactory.MIGRATION_12_13))
+        assertEquals("the re-upgrade rebuilds the journal empty", 0L, count(up, "partner_activity_outbox"))
+        assertEquals(0L, count(up, "partner_activity_link"))
+        assertEquals(0L, count(up, "partner_activity_projection"))
+        assertPreExistingDataSurvives(up, "after the re-upgrade")
+    }
+
     @Test
     fun migrate10To9_dropsOnlyTheUsageTable_leavingAValidV9Database() = runTest {
         val v10 = helper.createDatabase(10)
@@ -494,6 +662,16 @@ class AppRulesStoreMigrationInstrumentedTest {
     )
 
     /** Valid for any schema ≥5: the columns it names are not changed by 5→6 or 6→7. */
+    /** The `coaching_step` row [assertPreExistingDataSurvives] checks — callers that assert
+     *  legacy-data survival must seed it first (the v9+ shape: `kind` defaults to STEP). */
+    private fun seedCoachingStep(conn: SQLiteConnection) {
+        exec(
+            conn,
+            "INSERT INTO coaching_step (step_id, profile_id, step_order, action_text, " +
+                "associated_trigger_window) VALUES ('c-1', 'profile-1', 1, 'Call my brother', '')",
+        )
+    }
+
     private fun seedProfileAndHabit(conn: SQLiteConnection) {
         exec(
             conn,

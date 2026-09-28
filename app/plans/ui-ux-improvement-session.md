@@ -687,9 +687,10 @@ closed. **Review + adaptive passes (#9/#10) applied 2026-09-28 — ADR #110**: t
 both themes (only real brand icons flagged), a11y scan clean on all six tabs (two uiautomator
 clipped-row artifacts ruled out), adaptive type now device-verified on all three window classes
 (EXPANDED ×1.25 within 1px rounding + the ≥840dp rail switch), JVM **1295/0/0/0**. Remaining per
-the task list: the close-out pass (#8), the commit (#15, user-authorized), the V1 feature review
-(#16) — plus the Partner test-residue cleanup flagged in #110, queued with #66's production
-unpair verification.
+the task list: the V1 feature review (#16) — the close-out pass (#8) and the commit (#15,
+user-authorized) **landed 2026-09-28: `913b858`, 340 files, `.tmp-auth-*` credential stores
+gitignored** — plus the Partner test-residue cleanup flagged in #110, queued with #66's
+production unpair verification.
 
 ## Device pass (2026-09-22 — the gate was wrong, and screencap had a reason)
 
