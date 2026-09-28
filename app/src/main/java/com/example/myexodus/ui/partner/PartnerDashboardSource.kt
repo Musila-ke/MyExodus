@@ -36,14 +36,22 @@ class PartnerDashboardSource(
     private val rejectionsSince: suspend (pairId: String, sinceEpochMillis: Long) -> Int = { _, _ -> 0 },
 ) {
 
+    /**
+     * [selectedPairId] (§19.5) selects which supported user's dashboard to build: null, or an
+     * id no longer in the roster, falls back to the most recently activated pairing. Every
+     * stream below is scoped to the resolved enrollment's pairId — never an implicit "the"
+     * enrollment.
+     */
     suspend fun load(
         nowMillis: Long = System.currentTimeMillis(),
         zone: ZoneId = ZoneId.systemDefault(),
+        selectedPairId: String? = null,
     ): PartnerDashboardUi {
         // A failed read is the plan's "fails to open/decrypt" branch, not a plain no-pairing:
         // it folds into the same key check below rather than stranding the screen on Loading.
-        val enrollment = runCatching { enrollments() }.getOrNull()
-            ?.maxByOrNull { it.createdAtEpochMillis }
+        val all = runCatching { enrollments() }.getOrNull().orEmpty()
+        val enrollment = all.firstOrNull { it.pairId == selectedPairId }
+            ?: all.maxByOrNull { it.createdAtEpochMillis }
         if (enrollment == null) {
             // Step 17 (AD-22): the agreement key is destroyed before the enrollment on every
             // legitimate unpair, so key-present + enrollment-absent cannot be a normal ending —
@@ -93,6 +101,16 @@ class PartnerDashboardSource(
         return PartnerDashboardUi.Paired(
             pairId = enrollment.pairId,
             partnerKeyId = enrollment.partnerSigningKeyId,
+            partnerLabel = enrollment.partnerLabel,
+            users = all.sortedByDescending { it.createdAtEpochMillis }
+                .map {
+                    PartnerUserUi(
+                        pairId = it.pairId,
+                        label = it.partnerLabel,
+                        keyId = it.partnerSigningKeyId,
+                        partneredAtEpochMillis = it.createdAtEpochMillis,
+                    )
+                },
             pairedAtEpochMillis = enrollment.createdAtEpochMillis,
             lastSyncedAtEpochMillis = enrollment.mailboxWatermarkTsEpochMillis,
             freshness = syncFreshness(enrollment.mailboxWatermarkTsEpochMillis, nowMillis),
@@ -134,6 +152,12 @@ sealed interface PartnerDashboardUi {
         /** The pairing's id — the unpair flow's address (journal key, pair-doc). */
         val pairId: String,
         val partnerKeyId: String,
+        /** §19.5: the partner's self-chosen name; null = never exchange one — the surface
+         *  falls back to the key-id fragment rather than inventing a name. */
+        val partnerLabel: String? = null,
+        /** §19.5 requirement 1: every active enrollment, newest first — the switcher's roster.
+         *  Always contains this pairing; [users].size > 1 is when the switcher renders. */
+        val users: List<PartnerUserUi> = emptyList(),
         val pairedAtEpochMillis: Long,
         val lastSyncedAtEpochMillis: Long?,
         val freshness: SyncFreshness,
@@ -163,3 +187,12 @@ sealed interface PartnerDashboardUi {
         val canDismiss: Boolean,
     ) : PartnerDashboardUi
 }
+
+/** One row of the §19.5 switcher: an active pairing the owner can bring to the dashboard. */
+data class PartnerUserUi(
+    val pairId: String,
+    /** The partner's self-chosen name; null = the row shows the key-id fragment instead. */
+    val label: String?,
+    val keyId: String,
+    val partneredAtEpochMillis: Long,
+)

@@ -1,7 +1,10 @@
 package com.example.myexodus.blocking
 
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
+import com.example.myexodus.blocking.usage.AccountingOutageSource
+import com.example.myexodus.blocking.usage.LedgerMaintenanceState
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
+import com.example.myexodus.blocking.usage.UsageLedgerRepository
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -24,4 +27,9 @@ interface EnhancedModeTestEntryPoint {
     fun appRulesStoreFactory(): AppRulesStoreFactory
     fun partnerSyncCoordinator(): PartnerSyncCoordinator
     fun usageEngine(): UsageAccountingEngine
+    fun usageLedgerRepository(): UsageLedgerRepository
+    fun ledgerMaintenanceState(): LedgerMaintenanceState
+    fun dailyMaintenancePass(): DailyMaintenancePass
+    fun accountingOutageSource(): AccountingOutageSource
+    fun protectionStatus(): ProtectionStatusStore
 }

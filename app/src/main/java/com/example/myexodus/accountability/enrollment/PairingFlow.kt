@@ -1,14 +1,20 @@
 package com.example.myexodus.accountability.enrollment
 
 import android.util.Log
+import com.example.myexodus.accountability.crypto.AccountabilityKeyStore
 import com.example.myexodus.accountability.crypto.AttestationVerifier
 import com.example.myexodus.accountability.sync.PairingExchange
 import com.example.myexodus.accountability.sync.PairingRegistration
 import com.example.myexodus.secrets.SecretsRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.security.PrivateKey
 import java.security.PublicKey
 import java.security.Signature
 import java.security.cert.X509Certificate
+import java.util.UUID
 
 /**
  * §10 pairing orchestration, v2 model (§8 Step 3). The BiometricPrompt, SAS display, and
@@ -35,19 +41,33 @@ class PairingFlow(
     private val registration: PairingRegistration,
     private val secretsRepository: SecretsRepository,
     private val nowEpochMillis: () -> Long,
+    // §8.1 device identity: the signing + agreement keys must exist before any key material
+    // is produced. Fixed 2026-09-28 — production had no mint caller at all, so a fresh
+    // install could neither invite (ownPayload threw into the screen's catch-all, shown as
+    // "Couldn't reach the server") nor join (the biometric sign returned null and the screen
+    // stayed silent). Idempotent: an existing keypair is left alone.
+    private val ensureIdentityKeys: () -> AccountabilityKeyStore.GenerationResult,
     // Keystore accessors as seams (EventCreator pattern): AndroidKeyStore does not exist
     // in Robolectric, so the protocol must be testable with plain JCA key material.
     private val signingCertificateChain: () -> Array<X509Certificate>,
     private val signingPublicKey: () -> PublicKey,
-    private val agreementPublicKey: () -> PublicKey,
-    private val agreementPrivateKey: () -> PrivateKey,
+    // §19.5 (ADR #106): every leg below works on THIS attempt's own agreement keypair, named
+    // by the pairing session id — the initiator's key must exist before the partner (and so
+    // the durable pairId) is known, so the session id is what scopes the alias. The alias is
+    // recorded on the enrollment; unpair shreds exactly this key.
+    private val generateAgreementKey: (alias: String) -> Unit,
+    private val agreementPublicKey: (alias: String) -> PublicKey,
+    private val agreementPrivateKey: (alias: String) -> PrivateKey,
+    private val destroyAgreementKey: (alias: String) -> Unit,
 ) {
 
     sealed interface Outcome {
         /** [pairId] is the durable AD-02 id both devices and the relay now use. */
         data class Paired(val pairId: String, val sas: String) : Outcome
-        data class TokenExpired(val sessionId: String) : Outcome
-        data class TokenAlreadyUsed(val sessionId: String) : Outcome
+
+        /** Null session id when the failure precedes the token read (typed-code entry). */
+        data class TokenExpired(val sessionId: String?) : Outcome
+        data class TokenAlreadyUsed(val sessionId: String?) : Outcome
         data class Rejected(val reason: String) : Outcome
     }
 
@@ -66,12 +86,52 @@ class PairingFlow(
         val transcriptBytes: ByteArray,
         val partnerSigningPublicKey: PublicKey,
         val partnerAgreementPublicKey: PublicKey,
+        /** §19.5: the partner's self-chosen label; null when they sent none. */
+        val partnerLabel: String? = null,
     )
 
-    suspend fun initiate(myUid: String): Initiation {
+    /**
+     * §7 step 14 (both roles): what the SAS comparison needs, verified, before ANY signature.
+     * The shipped one-shot [complete] signs first and shows the SAS after — the production
+     * ceremony needs the human check to gate the proof, exactly as the initiator half already
+     * does, so the partner half is split into [prepareJoin] (verify + derive SAS) and
+     * [finishJoin] (sign + register). [complete] is now literally the two composed.
+     */
+    data class JoinPreparation(
+        val token: PairingToken,
+        val initiatorUid: String,
+        val initiatorSigningPublicKey: PublicKey,
+        val initiatorAgreementKey: PublicKey,
+        val initiatorLabel: String?,
+        val transcriptBytes: ByteArray,
+        val sas: String,
+    )
+
+    sealed interface JoinPreparationResult {
+        data class Ready(val preparation: JoinPreparation) : JoinPreparationResult
+
+        /** Terminal for this attempt — the only [Outcome] subtypes produced are
+         *  TokenExpired/TokenAlreadyUsed/Rejected. */
+        data class Failed(val outcome: Outcome) : JoinPreparationResult
+    }
+
+    /** Idempotent device-identity mint; a failed generation is logged here and surfaces at the
+     *  first key read ("signing key missing"), the same failure shape as before this existed. */
+    private fun ensureDeviceIdentity() {
+        val result = ensureIdentityKeys()
+        if (result is AccountabilityKeyStore.GenerationResult.Failed) {
+            Log.w(TAG, "device identity key generation failed: ${result.error}")
+        }
+    }
+
+    suspend fun initiate(myUid: String, myLabel: String? = null): Initiation {
         val token = PairingToken.generate(nowEpochMillis())
-        val payload = ownPayload(token.sessionId)
-        exchange.registerToken(token, myUid, payload)
+        ensureDeviceIdentity()
+        generateAgreementKey(aliasOf(token.sessionId))
+        val payload = ownPayload(token.sessionId, myLabel)
+        runCatching { exchange.registerToken(token, myUid, payload) }
+            .onFailure { discardAttemptKey(token.sessionId) }
+            .getOrThrow()
         // QR carries the token only: real attestation chains overflow QR capacity (2953 B
         // ceiling), so the payload rides in the token document and is read by the partner.
         return Initiation(token, payload, PairingCodec.encode(token))
@@ -97,6 +157,7 @@ class PairingFlow(
             // Rejected is the only other PartnerVerification subtype.
             Log.w(TAG, "initiator rejected partner material: ${(verification as EnrollmentFlow.PartnerVerification.Rejected).reason}")
             exchange.deleteToken(token)
+            discardAttemptKey(token.sessionId)
             return null
         }
         val partnerAgreementKey = try {
@@ -104,15 +165,17 @@ class PairingFlow(
         } catch (e: Exception) {
             Log.w(TAG, "initiator rejected partner material: agreement key unparseable — ${e.message}")
             exchange.deleteToken(token)
+            discardAttemptKey(token.sessionId)
             return null
         }
         return InitiatorAwait(
             sessionId = token.sessionId,
             partnerUid = response.partnerUid,
-            sas = enrollmentFlow.deriveSas(token.sessionId, agreementPublicKey(), partnerAgreementKey),
+            sas = enrollmentFlow.deriveSas(token.sessionId, agreementPublicKey(aliasOf(token.sessionId)), partnerAgreementKey),
             transcriptBytes = transcript,
             partnerSigningPublicKey = verification.signingPublicKey,
             partnerAgreementPublicKey = partnerAgreementKey,
+            partnerLabel = response.partnerPayload.label,
         )
     }
 
@@ -123,6 +186,19 @@ class PairingFlow(
      * it. On success the pair is registered and finalized locally.
      */
     suspend fun submitInitiatorSignature(
+        await: InitiatorAwait,
+        token: PairingToken,
+        myUid: String,
+        signature: Signature,
+    ): Outcome {
+        // Any terminal outcome that is not Paired means this attempt is over: its per-pair
+        // key would never be reachable from an enrollment again (§19.5 / ADR #106).
+        val outcome = submitInitiatorSignatureInternal(await, token, myUid, signature)
+        if (outcome !is Outcome.Paired) discardAttemptKey(await.sessionId)
+        return outcome
+    }
+
+    private suspend fun submitInitiatorSignatureInternal(
         await: InitiatorAwait,
         token: PairingToken,
         myUid: String,
@@ -142,6 +218,7 @@ class PairingFlow(
                     await.partnerSigningPublicKey,
                     await.partnerAgreementPublicKey,
                     submitted.pairingEpoch,
+                    await.partnerLabel,
                 )
                 exchange.deleteToken(token)
                 Outcome.Paired(durablePairId, sas)
@@ -165,6 +242,7 @@ class PairingFlow(
                             await.partnerSigningPublicKey,
                             await.partnerAgreementPublicKey,
                             status.pairingEpoch,
+                            await.partnerLabel,
                         )
                         exchange.deleteToken(token)
                         Outcome.Paired(durablePairId, sas)
@@ -182,47 +260,137 @@ class PairingFlow(
     }
 
     /**
-     * Partner half (§10 step 2): decode the QR, read the initiator's material from the
-     * token document, verify its hardware identity, respond with own material + transcript
-     * signature (single-use, rules-enforced), submit the signed proof, and finalize once
-     * the pairing document is active. [signature] comes from the caller's BiometricPrompt.
+     * Partner half (§10 step 2), one-shot form: [prepareJoin] then [finishJoin] with the
+     * caller's signature. Kept as the protocol's atomic entry (and the debug harness's
+     * path); the production ceremony uses the two phases so the human SAS check gates the
+     * signature.
      */
-    suspend fun complete(qrBytes: ByteArray, myUid: String, signature: Signature): Outcome {
+    suspend fun complete(
+        qrBytes: ByteArray,
+        myUid: String,
+        signature: Signature,
+        myLabel: String? = null,
+    ): Outcome =
+        when (val prepared = prepareJoin(qrBytes, myUid)) {
+            is JoinPreparationResult.Ready -> finishJoin(prepared.preparation, myUid, signature, myLabel)
+            is JoinPreparationResult.Failed -> prepared.outcome
+        }
+
+    /**
+     * User-initiated cancellation of an in-flight ceremony: the token is deleted, so the code
+     * and QR both die with it — a cancelled invitation is never joinable, and the partner's
+     * next read reports it as no-longer-active instead of waiting out the TTL. Used by the
+     * ceremony UI on cancel and on a failed SAS comparison; a leftover token (process death)
+     * is still bounded by the 10-minute TTL and the scheduled cleanup.
+     */
+    suspend fun cancel(token: PairingToken) {
+        exchange.deleteToken(token)
+        // The token is gone, so this attempt can never finalize: its key is unreachable now.
+        discardAttemptKey(token.sessionId)
+    }
+
+    /**
+     * The ceremony's back-out path: the screen leaves composition the moment it exits, taking
+     * its remembered scope with it, so a cancel launched there dies before the network call
+     * (observed on the X6532, 2026-09-28). The flow outlives every screen, so the deletion
+     * runs here — the token must not stay joinable.
+     */
+    fun cancelInBackground(token: PairingToken) {
+        cancelScope.launch {
+            runCatching { cancel(token) }.onFailure { Log.w(TAG, "background cancel failed", it) }
+        }
+    }
+
+    private val cancelScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** One-shot typed-code form of [complete] (§19.4 item 1). */
+    suspend fun completeWithCode(
+        code: String,
+        myUid: String,
+        signature: Signature,
+        myLabel: String? = null,
+    ): Outcome =
+        when (val prepared = prepareJoinWithCode(code, myUid)) {
+            is JoinPreparationResult.Ready -> finishJoin(prepared.preparation, myUid, signature, myLabel)
+            is JoinPreparationResult.Failed -> prepared.outcome
+        }
+
+    /**
+     * Partner half, phase 1: decode the QR, read the initiator's material from the token
+     * document, verify its hardware identity, and derive the SAS — no signature, no write.
+     * Everything this returns was verified; a rejection deletes the dead token, as before.
+     */
+    suspend fun prepareJoin(qrBytes: ByteArray, myUid: String): JoinPreparationResult {
         val content = try {
             PairingCodec.decode(qrBytes)
         } catch (e: Exception) {
-            return Outcome.Rejected("malformed pairing QR: ${e.message}")
+            return JoinPreparationResult.Failed(Outcome.Rejected("malformed pairing QR: ${e.message}"))
         }
         val token = content.token
-        if (token.isExpired(nowEpochMillis())) return Outcome.TokenExpired(token.sessionId)
+        if (token.isExpired(nowEpochMillis())) {
+            return JoinPreparationResult.Failed(Outcome.TokenExpired(token.sessionId))
+        }
         return when (val read = exchange.readToken(token)) {
             is PairingExchange.TokenReadResult.Found -> {
                 if (read.partnerResponse != null) {
                     // Another device (or our own earlier attempt) already responded; the
                     // response write would be denied anyway — fail before signing.
-                    return Outcome.TokenAlreadyUsed(token.sessionId)
+                    return JoinPreparationResult.Failed(Outcome.TokenAlreadyUsed(token.sessionId))
                 }
-                completeFound(token, read.creatorUid, read.initiatorPayload, myUid, signature)
+                verifyInitiatorMaterial(token, read.creatorUid, read.initiatorPayload)
             }
-            PairingExchange.TokenReadResult.NotFound -> Outcome.TokenAlreadyUsed(token.sessionId)
-            PairingExchange.TokenReadResult.Denied -> Outcome.TokenExpired(token.sessionId)
-            is PairingExchange.TokenReadResult.Failed -> Outcome.Rejected(read.reason)
+            PairingExchange.TokenReadResult.NotFound ->
+                JoinPreparationResult.Failed(Outcome.TokenAlreadyUsed(token.sessionId))
+            PairingExchange.TokenReadResult.Denied ->
+                JoinPreparationResult.Failed(Outcome.TokenExpired(token.sessionId))
+            is PairingExchange.TokenReadResult.Failed ->
+                JoinPreparationResult.Failed(Outcome.Rejected(read.reason))
         }
     }
 
-    private suspend fun completeFound(
+    /**
+     * Typed-code phase 1 (§19.4 item 1 — the V1 entry point, alongside the QR): the code
+     * decodes to the same token value the QR would carry, so from the first read onward the
+     * path is [prepareJoin]'s. The token is hydrated from the document (the code cannot
+     * carry a session id or expiry).
+     */
+    suspend fun prepareJoinWithCode(code: String, myUid: String): JoinPreparationResult {
+        val tokenBytes = when (val parsed = PairingCode.parse(code)) {
+            is PairingCode.ParseResult.Invalid ->
+                return JoinPreparationResult.Failed(Outcome.Rejected("invalid invitation code: ${parsed.reason}"))
+            is PairingCode.ParseResult.Valid -> parsed.tokenBytes
+        }
+        return when (val read = exchange.readTokenByValue(tokenBytes)) {
+            is PairingExchange.TokenReadResult.Found -> {
+                if (read.partnerResponse != null) {
+                    return JoinPreparationResult.Failed(Outcome.TokenAlreadyUsed(null))
+                }
+                val token = PairingToken(tokenBytes, read.initiatorPayload.sessionId, read.expiresAtEpochMillis)
+                if (token.isExpired(nowEpochMillis())) {
+                    return JoinPreparationResult.Failed(Outcome.TokenExpired(token.sessionId))
+                }
+                verifyInitiatorMaterial(token, read.creatorUid, read.initiatorPayload)
+            }
+            PairingExchange.TokenReadResult.NotFound ->
+                JoinPreparationResult.Failed(Outcome.TokenAlreadyUsed(null))
+            PairingExchange.TokenReadResult.Denied ->
+                JoinPreparationResult.Failed(Outcome.TokenExpired(null))
+            is PairingExchange.TokenReadResult.Failed ->
+                JoinPreparationResult.Failed(Outcome.Rejected(read.reason))
+        }
+    }
+
+    private suspend fun verifyInitiatorMaterial(
         token: PairingToken,
         initiatorUid: String,
         initiatorPayload: EnrollmentPayload,
-        myUid: String,
-        signature: Signature,
-    ): Outcome {
+    ): JoinPreparationResult {
         // The initiator's enrollment payload returns from the token document — the QR
         // cannot carry it (attestation chains overflow QR capacity, 2953 B ceiling).
         val initiatorSigningPublicKey = when (val identity = enrollmentFlow.verifyHardwareIdentity(initiatorPayload)) {
             is EnrollmentFlow.PartnerVerification.Rejected -> {
                 exchange.deleteToken(token)
-                return Outcome.Rejected(identity.reason)
+                return JoinPreparationResult.Failed(Outcome.Rejected(identity.reason))
             }
             is EnrollmentFlow.PartnerVerification.Verified -> identity.signingPublicKey
         }
@@ -230,19 +398,71 @@ class PairingFlow(
             EnrollmentTranscript.parsePublicKey(initiatorPayload.agreementPublicKey)
         } catch (e: Exception) {
             exchange.deleteToken(token)
-            return Outcome.Rejected("initiator agreement key unparseable")
+            return JoinPreparationResult.Failed(Outcome.Rejected("initiator agreement key unparseable"))
         }
-        val transcript = transcriptBytes(token.sessionId, initiatorPayload.agreementPublicKey)
-        // Sign both messages now, before any network write: one biometric warm window
-        // (§NFR4, 900s) covers every signature, and neither depends on the write outcome.
-        val partnerTranscriptSignature = enrollmentFlow.signMessage(signature, transcript)
-        val proof = buildProof(myUid, initiatorUid, transcript, signature)
-        when (val responded = exchange.respondOnToken(token, myUid, ownPayload(token.sessionId), partnerTranscriptSignature)) {
+        // The joiner's device identity must exist before the ceremony's biometric sign and
+        // [finishJoin]'s key reads; minted past every rejection return above, so an aborted
+        // join writes no device state it does not need yet.
+        ensureDeviceIdentity()
+        // The attempt's own key is minted only now — every rejection above returns before
+        // this point, so an aborted join leaves no orphan key behind.
+        generateAgreementKey(aliasOf(token.sessionId))
+        return JoinPreparationResult.Ready(
+            JoinPreparation(
+                token = token,
+                initiatorUid = initiatorUid,
+                initiatorSigningPublicKey = initiatorSigningPublicKey,
+                initiatorAgreementKey = initiatorAgreementKey,
+                initiatorLabel = initiatorPayload.label,
+                transcriptBytes = transcriptBytes(token.sessionId, initiatorPayload.agreementPublicKey),
+                sas = enrollmentFlow.deriveSas(token.sessionId, agreementPublicKey(aliasOf(token.sessionId)), initiatorAgreementKey),
+            ),
+        )
+    }
+
+    /**
+     * Partner half, phase 2: sign the transcript + proof with the caller's biometric
+     * [Signature], respond on the token (single-use, rules-enforced), submit the proof, and
+     * finalize once the pairing document is active. Both messages are signed inside one
+     * warm window — with the SAS check already done by the caller, which is why this half
+     * must only run after [JoinPreparationResult.Ready].
+     */
+    suspend fun finishJoin(
+        preparation: JoinPreparation,
+        myUid: String,
+        signature: Signature,
+        myLabel: String? = null,
+    ): Outcome {
+        val outcome = finishJoinInternal(preparation, myUid, signature, myLabel)
+        if (outcome !is Outcome.Paired) discardAttemptKey(preparation.token.sessionId)
+        return outcome
+    }
+
+    private suspend fun finishJoinInternal(
+        preparation: JoinPreparation,
+        myUid: String,
+        signature: Signature,
+        myLabel: String? = null,
+    ): Outcome {
+        val token = preparation.token
+        // Re-check expiry: the SAS conversation takes human time, and the rules enforce the
+        // document TTL server-side — surface it as the typed outcome rather than a denial.
+        if (token.isExpired(nowEpochMillis())) return Outcome.TokenExpired(token.sessionId)
+        val partnerTranscriptSignature = enrollmentFlow.signMessage(signature, preparation.transcriptBytes)
+        val proof = buildProof(myUid, preparation.initiatorUid, preparation.transcriptBytes, signature)
+        when (
+            val responded = exchange.respondOnToken(
+                token,
+                myUid,
+                ownPayload(token.sessionId, myLabel),
+                partnerTranscriptSignature,
+            )
+        ) {
             PairingExchange.RespondResult.AlreadyUsed -> return Outcome.TokenAlreadyUsed(token.sessionId)
             is PairingExchange.RespondResult.Failed -> return Outcome.Rejected(responded.reason)
             PairingExchange.RespondResult.Written -> Unit
         }
-        val durablePairId = EnrollmentTranscript.durablePairIdOf(myUid, initiatorUid)
+        val durablePairId = EnrollmentTranscript.durablePairIdOf(myUid, preparation.initiatorUid)
         return when (val submitted = registration.submit(proof)) {
             is PairingRegistration.SubmitResult.Registered -> {
                 if (submitted.pairId != durablePairId) {
@@ -252,9 +472,10 @@ class PairingFlow(
                 val sas = finalizePairing(
                     token.sessionId,
                     durablePairId,
-                    initiatorSigningPublicKey,
-                    initiatorAgreementKey,
+                    preparation.initiatorSigningPublicKey,
+                    preparation.initiatorAgreementKey,
                     submitted.pairingEpoch,
+                    preparation.initiatorLabel,
                 )
                 Outcome.Paired(durablePairId, sas)
             }
@@ -276,9 +497,10 @@ class PairingFlow(
                         val sas = finalizePairing(
                             token.sessionId,
                             durablePairId,
-                            initiatorSigningPublicKey,
-                            initiatorAgreementKey,
+                            preparation.initiatorSigningPublicKey,
+                            preparation.initiatorAgreementKey,
                             status.pairingEpoch,
+                            preparation.initiatorLabel,
                         )
                         Outcome.Paired(durablePairId, sas)
                     }
@@ -294,7 +516,7 @@ class PairingFlow(
         }
     }
 
-    private fun ownPayload(sessionId: String): EnrollmentPayload {
+    private fun ownPayload(sessionId: String, label: String?): EnrollmentPayload {
         val chain = signingCertificateChain()
         val challenge = AttestationVerifier.embeddedChallengeOf(chain[0])
             ?: error("signing key certificate lacks the attestation challenge")
@@ -302,16 +524,27 @@ class PairingFlow(
             sessionId = sessionId,
             signingChain = chain.map { it.encoded },
             attestationChallenge = challenge,
-            agreementPublicKey = EnrollmentTranscript.pubKeyBytes(agreementPublicKey()),
+            agreementPublicKey = EnrollmentTranscript.pubKeyBytes(agreementPublicKey(aliasOf(sessionId))),
+            // Sanitized here, once, for every path that builds our payload.
+            label = PartnerLabel.sanitize(label),
         )
     }
 
     private fun transcriptBytes(sessionId: String, partnerAgreementPubKeyBytes: ByteArray): ByteArray =
         EnrollmentTranscript.transcript(
             sessionId,
-            EnrollmentTranscript.pubKeyBytes(agreementPublicKey()),
+            EnrollmentTranscript.pubKeyBytes(agreementPublicKey(aliasOf(sessionId))),
             partnerAgreementPubKeyBytes,
         )
+
+    private fun aliasOf(sessionId: String): String =
+        AccountabilityKeyStore.pairAgreementAliasOf(sessionId)
+
+    /** Best-effort cleanup — a Keystore hiccup must never mask the pairing outcome itself. */
+    private fun discardAttemptKey(sessionId: String) {
+        runCatching { destroyAgreementKey(aliasOf(sessionId)) }
+            .onFailure { Log.w(TAG, "attempt key cleanup failed for session $sessionId", it) }
+    }
 
     /** §8 Step 3: the signed registration statement for this device's side of the pairing. */
     private fun buildProof(
@@ -330,6 +563,11 @@ class PairingFlow(
             transcriptHash = transcriptHash,
             protocolVersion = PairingProof.PROTOCOL_VERSION,
         )
+        // Same chain the enrollment payload carries — the server re-verifies it against
+        // the pinned roots (owner directive 2026-09-27) and demands challenge equality.
+        val chain = signingCertificateChain()
+        val challenge = AttestationVerifier.embeddedChallengeOf(chain[0])
+            ?: error("signing key certificate lacks the attestation challenge")
         return PairingProof(
             ownUid = ownUid,
             partnerUid = partnerUid,
@@ -338,6 +576,11 @@ class PairingFlow(
             protocolVersion = PairingProof.PROTOCOL_VERSION,
             signingPublicKey = mySigningPubKeyBytes,
             signature = enrollmentFlow.signMessage(signature, message),
+            attestationChain = chain.map { it.encoded },
+            attestationChallenge = challenge,
+            // §9: one id per built proof; the submit path retries with this same proof,
+            // so the server-side replay cache sees the identical requestId.
+            requestId = UUID.randomUUID().toString(),
         )
     }
 
@@ -348,8 +591,12 @@ class PairingFlow(
         partnerSigningPublicKey: PublicKey,
         partnerAgreementPublicKey: PublicKey,
         pairingEpoch: Int,
+        partnerLabel: String?,
     ): String {
-        val cek = enrollmentFlow.deriveCek(sessionId, agreementPrivateKey(), partnerAgreementPublicKey)
+        // ADR #106: the CEK is derived over the DURABLE pair id, exactly as EventCreator and
+        // the mailbox receiver re-derive it — the vault's pairing key is HKDF of the same CEK
+        // the runtime encrypts under, not of a session-scoped variant.
+        val cek = enrollmentFlow.deriveCek(durablePairId, agreementPrivateKey(aliasOf(sessionId)), partnerAgreementPublicKey)
         val mySigningPubKeyBytes = EnrollmentTranscript.pubKeyBytes(signingPublicKey())
         enrollmentDao.upsert(
             EnrollmentRecord(
@@ -360,10 +607,12 @@ class PairingFlow(
                 partnerAgreementPubKey = partnerAgreementPublicKey.encoded,
                 createdAtEpochMillis = nowEpochMillis(),
                 pairingEpoch = pairingEpoch,
+                partnerLabel = partnerLabel,
+                myAgreementKeyAlias = aliasOf(sessionId),
             ),
         )
         secretsRepository.storePairingKey(enrollmentFlow.derivePairingKey(cek))
-        return enrollmentFlow.deriveSas(sessionId, agreementPublicKey(), partnerAgreementPublicKey)
+        return enrollmentFlow.deriveSas(sessionId, agreementPublicKey(aliasOf(sessionId)), partnerAgreementPublicKey)
     }
 
     private companion object {

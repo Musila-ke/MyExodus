@@ -1,8 +1,11 @@
 package com.example.myexodus.widget
 
 import com.example.myexodus.blocking.ProtectionAuthority
+import com.example.myexodus.streaks.HabitState
+import com.example.myexodus.streaks.WithdrawalSeverity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -21,6 +24,7 @@ class ProtectionSnapshotWriterTest {
         enforcement: EnforcementStatus = EnforcementStatus.ACTIVE,
         streakDays: Int? = 12,
         habitLabel: String? = "No smoking",
+        streakSample: StreakSample? = null,
         discreet: Boolean = true,
         evalUtc: Long = nowUtc - MINUTE,
         evalBootCount: Int = 42,
@@ -28,11 +32,164 @@ class ProtectionSnapshotWriterTest {
         enforcement = enforcement,
         streakDays = streakDays,
         habitLabel = habitLabel,
+        streakSample = streakSample,
         discreet = discreet,
         evalUtc = evalUtc,
         evalElapsed = 500_000L,
         evalBootCount = evalBootCount,
     )
+
+    // --- the cache proof: when the stored day count can no longer be trusted ---
+
+    @Test
+    fun freshInstall_needsRefresh() {
+        // Never read: the first publish owes the store a read.
+        assertTrue(needsStreakRefresh(existing = null, nowElapsed = 100_000L, nowBootCount = 42))
+    }
+
+    @Test
+    fun recordWithoutAVerificationPair_needsRefresh() {
+        // Written before the pair existed: it cannot prove anything, so it is re-read once.
+        assertTrue(
+            needsStreakRefresh(
+                existing = snapshot(streakSample = null),
+                nowElapsed = 100_000L,
+                nowBootCount = 42,
+            ),
+        )
+    }
+
+    @Test
+    fun noStreak_needsNoRefresh() {
+        // No habit set up: nothing to keep current. One arriving later comes through the state
+        // flow, which only exists in-process.
+        assertFalse(
+            needsStreakRefresh(
+                existing = snapshot(streakDays = null),
+                nowElapsed = 10 * DAY,
+                nowBootCount = 42,
+            ),
+        )
+    }
+
+    @Test
+    fun sampleInsideTheSameDay_needsNoRefresh() {
+        // Read 3h into day 3, asked 2h later: the accumulator cannot have crossed day 4 yet —
+        // that is the whole point of caching the pair instead of re-reading every heartbeat.
+        assertFalse(
+            needsStreakRefresh(
+                existing = snapshot(streakSample = sample(elapsedMs = 3 * DAY + 3 * HOUR)),
+                nowElapsed = 100_000L + 2 * HOUR,
+                nowBootCount = 42,
+            ),
+        )
+    }
+
+    @Test
+    fun samplePastTheNextDayBoundary_needsRefresh() {
+        assertTrue(
+            needsStreakRefresh(
+                existing = snapshot(streakSample = sample(elapsedMs = 3 * DAY + 3 * HOUR)),
+                nowElapsed = 100_000L + (DAY - 3 * HOUR) + 1,
+                nowBootCount = 42,
+            ),
+        )
+    }
+
+    @Test
+    fun sampleExactlyAtTheBoundary_needsRefresh() {
+        // At the boundary the day count may already be the next one, so it is re-read, not assumed.
+        assertTrue(
+            needsStreakRefresh(
+                existing = snapshot(streakSample = sample(elapsedMs = 3 * DAY + 3 * HOUR)),
+                nowElapsed = 100_000L + (DAY - 3 * HOUR),
+                nowBootCount = 42,
+            ),
+        )
+    }
+
+    @Test
+    fun rebootSinceTheReading_needsRefresh() {
+        // Even a reading from a minute ago proves nothing across a reboot (spec Decision 6′).
+        assertTrue(
+            needsStreakRefresh(
+                existing = snapshot(streakSample = sample(verifiedBoot = 42)),
+                nowElapsed = 100_000L + MINUTE,
+                nowBootCount = 43,
+            ),
+        )
+    }
+
+    @Test
+    fun unreadableBootCountThatDiffers_needsRefresh() {
+        // One side readable and the other not is still a mismatch: fail closed, read again.
+        assertTrue(
+            needsStreakRefresh(
+                existing = snapshot(streakSample = sample(verifiedBoot = UNSET_BOOT_COUNT)),
+                nowElapsed = 100_000L + MINUTE,
+                nowBootCount = 43,
+            ),
+        )
+    }
+
+    @Test
+    fun elapsedRegression_needsRefresh() {
+        // A reboot the boot count could not see (both unreadable): elapsed going backwards is the
+        // remaining signal, and it must not be read as "not due yet".
+        assertTrue(
+            needsStreakRefresh(
+                existing = snapshot(
+                    streakSample = sample(verifiedBoot = UNSET_BOOT_COUNT, verifiedElapsed = 900_000L),
+                ),
+                nowElapsed = 5_000L,
+                nowBootCount = UNSET_BOOT_COUNT,
+            ),
+        )
+    }
+
+    // --- the "No streak yet" flicker: a null that is not an answer ---
+
+    @Test
+    fun unresolvedState_carriesTheStoredStreak() {
+        // Process start: `state` is null until the first read lands. Publishing that null is what
+        // flashed "No streak yet" over a real streak — it must carry the stored record instead.
+        val stored = snapshot(streakDays = 12, streakSample = sample())
+        val fields = streakFieldsFor(state = null, resolved = false, existing = stored, sample = null)
+        assertEquals(12, fields?.days)
+        assertEquals("No smoking", fields?.label)
+        assertEquals(stored.streakSample, fields?.sample)
+    }
+
+    @Test
+    fun unresolvedFirstRun_publishesNothing() {
+        val fields = streakFieldsFor(state = null, resolved = false, existing = null, sample = null)
+        assertNull(fields)
+    }
+
+    @Test
+    fun resolvedWithoutAHabit_clearsTheStreak() {
+        // A read that came back "no habit is set up" IS an answer, and must reach the widget.
+        val fields = streakFieldsFor(
+            state = null,
+            resolved = true,
+            existing = snapshot(streakDays = 12),
+            sample = null,
+        )
+        assertNull(fields)
+    }
+
+    @Test
+    fun liveState_publishesTheReadWithItsSample() {
+        val read = sample(elapsedMs = 5 * DAY)
+        val fields = streakFieldsFor(
+            state = habitState(currentDay = 5),
+            resolved = true,
+            existing = snapshot(streakDays = 4),
+            sample = read,
+        )
+        assertEquals(5, fields?.days)
+        assertEquals(read, fields?.sample)
+    }
 
     // --- churn gate ---
 
@@ -156,7 +313,34 @@ class ProtectionSnapshotWriterTest {
         )
     }
 
+    private fun sample(
+        elapsedMs: Long = 3 * DAY,
+        verifiedElapsed: Long = 100_000L,
+        verifiedBoot: Int = 42,
+    ) = StreakSample(
+        elapsedMs = elapsedMs,
+        verifiedUtc = nowUtc,
+        verifiedElapsed = verifiedElapsed,
+        verifiedBoot = verifiedBoot,
+    )
+
+    private fun habitState(currentDay: Int) = HabitState(
+        habitId = "habit-1",
+        streakId = "streak-1",
+        targetLabel = "No smoking",
+        recoveryStartAt = nowUtc - currentDay * DAY,
+        currentStreakElapsedMs = currentDay * DAY,
+        allTimeMaxElapsedMs = currentDay * DAY,
+        currentDay = currentDay,
+        habitDurationYears = 1,
+        severity = WithdrawalSeverity.MILD,
+        withdrawalWeeks = emptyList(),
+        milestones = emptyList(),
+    )
+
     private companion object {
         const val MINUTE = 60_000L
+        const val HOUR = 60 * MINUTE
+        const val DAY = 24 * HOUR
     }
 }

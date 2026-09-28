@@ -102,6 +102,8 @@ All state is encrypted at rest. All streak/timeline computation happens on expli
 1. `BOOT_COMPLETED` receiver fires (requires `RECEIVE_BOOT_COMPLETED`; handle the case where this broadcast is delayed or restricted on some OEMs by also reconciling on next app foreground as a backstop).
 2. For every habit with an active (non-relapsed) streak, re-read persisted milestone state and reschedule any alarms for milestones not yet achieved and not yet passed.
 
+**Catch-up addendum (2026-09-28, ADR #104):** reconciliation alone left crossings that landed in the reboot window lost forever — the milestone's alarm died with the previous boot, and step 2 deliberately never reschedules a projected-time-passed milestone, so nothing would ever post it (owner-reported on the day-7 crossing, task #14). The boot receiver now also runs Decision 9's listed `BOOT_COMPLETED` evaluation for every active habit and delivers any achieved-but-unclaimed milestone through the same atomic claim as the alarm path (`MilestoneAlerter.catchUpAfterBoot()`); the app-foreground evaluation boundary does the same (`deliverUnclaimed`), so an alarm the platform suppressed or dropped is delivered at next open instead of never. Delivery remains best-effort (REQ-12) — the splash card stays the guaranteed path.
+
 ## 7. Implementation Sequence
 
 1. **Plaintext→encrypted migration routine** — designed and tested in isolation before any other step touches the database, since it operates on real existing user data.

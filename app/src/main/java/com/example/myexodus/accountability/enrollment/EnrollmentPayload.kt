@@ -19,24 +19,29 @@ data class EnrollmentPayload(
     val signingChain: List<ByteArray>,
     val attestationChallenge: ByteArray,
     val agreementPublicKey: ByteArray,
+    /** §19.5 item 3 self-chosen label, already sanitized via [PartnerLabel]; null = none. */
+    val label: String? = null,
 )
 
 private const val K_SESSION = "s"
 private const val K_CHAIN = "c"
 private const val K_CHALLENGE = "h"
 private const val K_AGREEMENT = "a"
+private const val K_LABEL = "l"
 
 fun encodeEnrollmentPayload(p: EnrollmentPayload): ByteArray {
     val chain = CBORObject.NewArray()
     for (cert in p.signingChain) chain.Add(CanonicalCbor.bytes(cert))
-    return CanonicalCbor.encodeMap(
-        listOf(
-            K_SESSION to CanonicalCbor.text(p.sessionId),
-            K_CHAIN to chain,
-            K_CHALLENGE to CanonicalCbor.bytes(p.attestationChallenge),
-            K_AGREEMENT to CanonicalCbor.bytes(p.agreementPublicKey),
-        ),
+    val entries = mutableListOf(
+        K_SESSION to CanonicalCbor.text(p.sessionId),
+        K_CHAIN to chain,
+        K_CHALLENGE to CanonicalCbor.bytes(p.attestationChallenge),
+        K_AGREEMENT to CanonicalCbor.bytes(p.agreementPublicKey),
     )
+    // Omitted when absent, so a label-less payload encodes byte-identically to the pre-label
+    // format (older builds' fixture vectors stay valid bit-for-bit).
+    p.label?.let { entries += K_LABEL to CanonicalCbor.text(it) }
+    return CanonicalCbor.encodeMap(entries)
 }
 
 fun decodeEnrollmentPayload(bytes: ByteArray): EnrollmentPayload {
@@ -44,10 +49,14 @@ fun decodeEnrollmentPayload(bytes: ByteArray): EnrollmentPayload {
     val chainObj = obj[K_CHAIN]
     require(chainObj.type == CBORType.Array) { "enrollment chain is not an array" }
     val chain = (0 until chainObj.size()).map { chainObj[it].GetByteString() }
+    // Missing key = a pre-label sender's payload; a non-text value is malformed and dropped
+    // the same way (the label is presentation only — it must never fail an enrollment).
+    val label = obj[K_LABEL]?.takeIf { it.type == CBORType.TextString }?.AsString()?.let(PartnerLabel::sanitize)
     return EnrollmentPayload(
         sessionId = obj[K_SESSION].AsString(),
         signingChain = chain,
         attestationChallenge = obj[K_CHALLENGE].GetByteString(),
         agreementPublicKey = obj[K_AGREEMENT].GetByteString(),
+        label = label,
     )
 }

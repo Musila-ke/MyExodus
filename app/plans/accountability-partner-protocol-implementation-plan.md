@@ -1,5 +1,7 @@
 # accountability-partner-protocol-implementation-plan.md
 
+**Status:** ✅ **BUILT — this is the spec of record for ADR #18 (phases 1–6, implemented 2026-08; see `app/docs/MyExodus Build & Dependencies.md`). Do not build from this document.** It covers the **crypto foundation only** — identity/agreement keys, ECDH + CEK derivation, `EventCipher`, the hash chain, and the pairing ceremony. The **transport/sync/UI layer built on top of it** (Firestore mailbox relay, Cloud Functions, push, approval and unpair protocols, partner dashboard) is specified separately in `partner-pillar-implementation-plan-v2.md`, which is also BUILT. §17.1 carries the device-verification record (X6532 pairings 2026-09-16; ADR #66 emulator boundary 2026-09-20). §16's two open questions are live product questions, not build gaps — attestation policy (StrongBox vs TEE fallback, ADR #66 §4) and legal deletion semantics.
+
 ## 1. Feature Overview
 The Accountability-Partner Protocol enables two paired Android users to exchange cryptographically authenticated, hash-chained, and end-to-end encrypted (E2EE) activity log entries. Entries are signed by hardware-backed keys and delivered via an untrusted cloud relay (Firestore) or an offline animated QR channel. The protocol guarantees authenticity, continuity (fork/rollback detection), and confidentiality against the relay and forensic storage extraction.
 

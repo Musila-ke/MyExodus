@@ -27,6 +27,21 @@ interface RecoverySessionDao {
     @Query("SELECT count(*) FROM recovery_session")
     suspend fun count(): Long
 
+    /**
+     * Rows per (state, technique) at or after [fromMs] (`0` = all time). Counted in SQL rather
+     * than by loading rows: the summary sits above a paged list, and reading the whole table to
+     * show one number is the unbounded-query shape the page otherwise avoids.
+     *
+     * `technique` is part of the key because a log-only row is born COMPLETED
+     * (`RecoverySessionRepository.logOnly`), so a state-only count reads "logged an urge and
+     * went home" as a finished technique session.
+     */
+    @Query(
+        "SELECT state AS state, technique AS technique, COUNT(*) AS count FROM recovery_session " +
+            "WHERE started_at_epoch_ms >= :fromMs GROUP BY state, technique",
+    )
+    suspend fun countsByStateSince(fromMs: Long): List<SessionCount>
+
     /** One statement = one transaction: every row a process death left STARTED past the cutoff
      *  closes as INTERRUPTED with the v2 M2.4 bound (`endedAt = startedAt + 15 min`). Rows are
      *  NOT selected first — a session cannot be interrupted by this if it ended in between. */
@@ -49,3 +64,8 @@ interface RecoverySessionDao {
     @Query("UPDATE recovery_session SET event_sequence = :sequence WHERE id = :id")
     suspend fun linkEvent(id: String, sequence: Long)
 }
+
+/** One `GROUP BY state, technique` bucket from [RecoverySessionDao.countsByStateSince]. The
+ *  split only matters for [RecoverySession.TECHNIQUE_NONE] rows — every other technique buckets
+ *  the same way and is folded back together by the caller. */
+data class SessionCount(val state: String, val technique: String, val count: Long)

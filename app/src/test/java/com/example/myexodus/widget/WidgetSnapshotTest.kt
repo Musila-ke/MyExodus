@@ -1,6 +1,8 @@
 package com.example.myexodus.widget
 
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.mutablePreferencesOf
 import androidx.datastore.preferences.core.preferencesOf
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -15,10 +17,18 @@ import org.junit.Test
  */
 class WidgetSnapshotTest {
 
+    private val streakSample = StreakSample(
+        elapsedMs = 12 * 86_400_000L + 3_600_000L,
+        verifiedUtc = 1_800_000_000_000L,
+        verifiedElapsed = 500_000L,
+        verifiedBoot = 42,
+    )
+
     private val sample = ProtectionSnapshot(
         enforcement = EnforcementStatus.ACTIVE,
         streakDays = 12,
         habitLabel = "No smoking",
+        streakSample = streakSample,
         discreet = false,
         evalUtc = 1_800_000_000_000L,
         evalElapsed = 500_000L,
@@ -45,6 +55,32 @@ class WidgetSnapshotTest {
         val prefs = mutablePreferencesOf()
         prefs.putSnapshot(sample.copy(streakDays = null, habitLabel = null))
         assertNull(snapshotFrom(prefs)?.habitLabel)
+    }
+
+    @Test
+    fun verificationPair_roundTripsAndClears() {
+        // The pair is what lets the day count stay cached honestly; losing it on a write would
+        // silently turn every later publish into a store read.
+        val prefs = mutablePreferencesOf()
+        prefs.putSnapshot(sample)
+        assertEquals(streakSample, snapshotFrom(prefs)?.streakSample)
+        prefs.putSnapshot(sample.copy(streakDays = null, streakSample = null))
+        assertNull(snapshotFrom(prefs)?.streakSample)
+    }
+
+    @Test
+    fun partialVerificationRecord_decodesWithFailsafeDefaults() {
+        // A record damaged mid-block (accumulator present, stamps gone) must still decode — the
+        // writer re-reads on the missing smoke, and the verified boot sentinel mismatches rather
+        // than accidentally matching a real boot count.
+        val prefs = mutablePreferencesOf()
+        prefs.putSnapshot(sample)
+        prefs.remove(longPreferencesKey("streak_verified_utc"))
+        prefs.remove(intPreferencesKey("streak_verified_boot"))
+        val decoded = snapshotFrom(prefs)?.streakSample
+        assertEquals(streakSample.elapsedMs, decoded?.elapsedMs)
+        assertEquals(0L, decoded?.verifiedUtc)
+        assertEquals(UNSET_BOOT_COUNT, decoded?.verifiedBoot)
     }
 
     @Test

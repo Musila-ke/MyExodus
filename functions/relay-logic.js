@@ -4,6 +4,10 @@
 // handler's ordering (rate limit BEFORE any installation lookup/dispatch, plan §12/§17) are
 // directly testable (`npm test`). The SDK wiring lives in relay.js.
 
+// Fixed-window math now lives in ./rate-window (shared with the pairing-path limits);
+// re-exported below so this module's test suite keeps its import surface.
+const { windowState } = require('./rate-window');
+
 // AD-19: the payload is base64 envelope bytes; the byte limit is on the DECODED length
 // (rules cannot express byte size — their size() counts map fields).
 const MAX_PAYLOAD_BYTES = 4096;
@@ -32,19 +36,6 @@ function validatePayload(payload) {
   if (!isValidBase64(payload)) return 'INVALID_FORMAT';
   if (Buffer.from(payload, 'base64').length > MAX_PAYLOAD_BYTES) return 'OVERSIZED';
   return null;
-}
-
-/**
- * Fixed-window counter step. A missing window, an elapsed window, or a `start` in the
- * future (rollback/skew guard, AD-16 spirit) starts a fresh window; otherwise the window
- * is kept. Returns the new state — callers check the CURRENT count before incrementing.
- */
-function windowState(prev, now, windowMs) {
-  if (!prev || typeof prev.start !== 'number' || typeof prev.count !== 'number' ||
-      now - prev.start >= windowMs || now < prev.start) {
-    return { start: now, count: 0 };
-  }
-  return { start: prev.start, count: prev.count };
 }
 
 /**

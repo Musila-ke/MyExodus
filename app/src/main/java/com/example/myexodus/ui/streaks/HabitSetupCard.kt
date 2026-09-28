@@ -26,7 +26,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.example.myexodus.R
 import com.example.myexodus.streaks.WithdrawalSeverity
 import java.time.Instant
 import java.time.ZoneId
@@ -87,46 +89,48 @@ internal fun HabitSetupCard(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Text(
-                        if (onCancel != null) "Add another habit" else "Set up your habit",
+                        stringResource(
+                            if (onCancel != null) R.string.streaks_setup_title_add
+                            else R.string.streaks_setup_title,
+                        ),
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(
-                        "MyExodus counts your days free and builds your expectation timeline from " +
-                            "a few answers. Everything stays on this device.",
+                        stringResource(R.string.streaks_setup_body),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 if (onCancel != null) {
-                    TextButton(onClick = onCancel) { Text("Cancel") }
+                    TextButton(onClick = onCancel) { Text(stringResource(R.string.streaks_cancel)) }
                 }
             }
 
             OutlinedTextField(
                 value = label,
                 onValueChange = { label = it },
-                label = { Text("What are you quitting?") },
-                placeholder = { Text("Instagram, betting apps…") },
+                label = { Text(stringResource(R.string.streaks_setup_label)) },
+                placeholder = { Text(stringResource(R.string.streaks_setup_label_hint)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            SetupSection("How long has this habit been part of your life?") {
+            SetupSection(stringResource(R.string.streaks_setup_duration)) {
                 DURATION_OPTIONS.forEachIndexed { index, (optionLabel, _) ->
                     FilterChip(
                         selected = durationIndex == index,
                         onClick = { durationIndex = index },
-                        label = { Text(optionLabel) },
+                        label = { Text(stringResource(optionLabel)) },
                     )
                 }
             }
 
-            SetupSection("How hard was it to go without it?") {
+            SetupSection(stringResource(R.string.streaks_setup_severity)) {
                 SEVERITY_OPTIONS.forEach { (optionLabel, optionSeverity) ->
                     FilterChip(
                         selected = severity == optionSeverity,
                         onClick = { severity = optionSeverity },
-                        label = { Text(optionLabel) },
+                        label = { Text(stringResource(optionLabel)) },
                     )
                 }
             }
@@ -137,18 +141,22 @@ internal fun HabitSetupCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Column {
-                    Text("Counting from", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        stringResource(R.string.streaks_setup_counting_from),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
                     Text(
                         DATE_FORMAT.format(Instant.ofEpochMilli(startAt).atZone(ZoneId.systemDefault())),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                TextButton(onClick = { pickingDate = true }) { Text("Change") }
+                TextButton(onClick = { pickingDate = true }) {
+                    Text(stringResource(R.string.streaks_setup_change))
+                }
             }
             Text(
-                "The count starts when you set this up and runs forward from this moment. " +
-                    "The date is a label for when you stopped.",
+                stringResource(R.string.streaks_setup_date_note),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -168,7 +176,7 @@ internal fun HabitSetupCard(
                 enabled = label.isNotBlank() && durationIndex != null && severity != null,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Start my streak")
+                Text(stringResource(R.string.streaks_setup_start))
             }
         }
     }
@@ -197,27 +205,28 @@ private fun StartDatePickerDialog(
             TextButton(
                 enabled = state.selectedDateMillis != null,
                 onClick = { state.selectedDateMillis?.let { onConfirm(it.toLocalStartOfDayMillis()) } },
-            ) { Text("OK") }
+            ) { Text(stringResource(R.string.streaks_picker_confirm)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.streaks_cancel)) }
         },
     ) { DatePicker(state = state) }
 }
 
-/** Upper bound of each range; 10 is the formula's cap, so "over 10" and "5–10" coincide. */
+/** Upper bound of each range; 10 is the formula's cap, so "over 10" and "5–10" coincide.
+ *  Labels are string ids, not literals — the value the chip maps to is the pair's second half. */
 private val DURATION_OPTIONS = listOf(
-    "Under a year" to 0,
-    "1–2 years" to 2,
-    "2–5 years" to 5,
-    "5–10 years" to 10,
-    "Over 10 years" to 10,
+    R.string.streaks_setup_duration_under_year to 0,
+    R.string.streaks_setup_duration_1_2 to 2,
+    R.string.streaks_setup_duration_2_5 to 5,
+    R.string.streaks_setup_duration_5_10 to 10,
+    R.string.streaks_setup_duration_over_10 to 10,
 )
 
 private val SEVERITY_OPTIONS = listOf(
-    "Mild — occasionally" to WithdrawalSeverity.MILD,
-    "Moderate — most days" to WithdrawalSeverity.MODERATE,
-    "Severe — constantly, hard to control" to WithdrawalSeverity.SEVERE,
+    R.string.streaks_setup_severity_mild to WithdrawalSeverity.MILD,
+    R.string.streaks_setup_severity_moderate to WithdrawalSeverity.MODERATE,
+    R.string.streaks_setup_severity_severe to WithdrawalSeverity.SEVERE,
 )
 
 private val DATE_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM d, yyyy")

@@ -9,9 +9,13 @@ import com.example.myexodus.data.db.entity.AttemptLog
 import com.example.myexodus.data.db.entity.CoachingStep
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.data.db.entity.RiskWindow
+import com.example.myexodus.data.db.entity.UsageLedgerKind
+import com.example.myexodus.data.db.entity.UsageLedgerSource
+import com.example.myexodus.domainusage.UsageSnapshot
 import com.example.myexodus.recovery.RecoveryResourceCatalog
 import java.io.RandomAccessFile
 import java.time.LocalDate
+import java.time.ZoneId
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -25,8 +29,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Rules-store migration chain 2→9 (recovery_state, attempt_log, is_enabled, streak tables,
- * daily-usage tracker day-identity reshape, recovery-session + risk-window tables). The v2 baseline is the exact DDL Room generates
+ * Rules-store migration chain 2→10 (recovery_state, attempt_log, is_enabled, streak tables,
+ * daily-usage tracker day-identity reshape, recovery-session + risk-window tables, and the
+ * domain-usage `rule_usage_daily` table). The v2 baseline is the exact DDL Room generates
  * for version 2 (verbatim copies of the SQL emitted by AppRulesStore_Impl), so the test proves
  * the real upgrade path end to end, including Room's post-migration schema validation (the
  * 2026-08-28 migration failure class) and that pre-existing rule rows survive the 4→5 column
@@ -59,7 +64,7 @@ class AppRulesStoreMigrationTest {
     }
 
     @Test
-    fun migration2to9_addsEveryTableAndRoomAcceptsTheSchema() {
+    fun migration2to10_addsEveryTableAndRoomAcceptsTheSchema() {
         val dbPath = context.getDatabasePath(AppRulesStoreFactory.DB_NAME).absolutePath
 
         AndroidSQLiteDriver().open(dbPath).use { conn ->
@@ -159,6 +164,117 @@ class AppRulesStoreMigrationTest {
             // The legacy coaching_step row (inserted above with the v2 DDL) reads back as STEP.
             val step = store.coachingStepDao().getForProfile("p-1").single()
             assertEquals(CoachingStep.KIND_STEP, step.kind)
+
+            // Domain-usage metering 9→10: the usage table is created, empty, and fully usable.
+            val usage = store.ruleUsageDao()
+            assertEquals(0, usage.loadDay("2026-09-20").size)
+            usage.upsertMax(listOf(UsageSnapshot("r-1", 0L, "2026-09-20", 5_000L, generation = 1L)))
+            assertEquals(5_000L, usage.loadDay("2026-09-20").single().activeMs)
+            assertEquals("r-1", usage.maxRevisions().single().ruleId)
+
+            // Usage ledger 10→11 (§8.10): the legacy tracker row was anchored to *today* by
+            // MIGRATION_7_8, so the day-aware seeding carries its 1000 ms forward as one
+            // deterministic MIGRATION_CARRYOVER row — and the projection (the tracker row
+            // itself) is untouched, so tracker == Σ ledger still holds after the migration.
+            val seeded = store.usageLedgerDao().findByEventId("migration_seed:com.instagram.android")
+            assertNotNull("the current-day legacy scalar must seed a carryover row", seeded)
+            assertEquals(UsageLedgerKind.MIGRATION_CARRYOVER, seeded!!.kind)
+            assertEquals(1_000L, seeded.creditedMs)
+            assertEquals(LocalDate.now().toString(), seeded.dayKey)
+            assertEquals(UsageLedgerSource.MAINTENANCE, seeded.source)
+            assertEquals(0L, seeded.elapsedStartMs)
+            assertEquals(0L, seeded.elapsedEndMs)
+            assertEquals(
+                1_000L,
+                store.usageLedgerDao().sumCredited(
+                    "com.instagram.android",
+                    LocalDate.now().toString(),
+                    UsageLedgerKind.CREDITING,
+                ),
+            )
+        }
+    }
+
+    /**
+     * §8.10's day-aware seeding, branch by branch, against a hand-built v10 database — the
+     * three cases the plan's migration acceptance names (dated-and-current, dated-and-stale,
+     * undated → the v10 schema always carries an anchor, so the stale case is represented by
+     * both a previous-day anchor and a timezone mismatch), plus the zero-usage case and AD-11's
+     * loud failure on unexpected pre-existing schema state.
+     *
+     * Direct migration invocation is deliberate: routing through `factory.open()` would let
+     * MIGRATION_7_8 re-anchor every row to today, making a stale row impossible to construct
+     * through the chain at all.
+     */
+    @Test
+    fun migration10to11_seedsOnlyTheCurrentDayScalar_andFailsLoudlyOnPreExistingLedger() {
+        val today = LocalDate.now().toString()
+        val zone = ZoneId.systemDefault().id
+        val scratchPath = context.getDatabasePath("ledger-seed-test.db").absolutePath
+
+        AndroidSQLiteDriver().open(scratchPath).use { conn ->
+            conn.prepare(V10_MINIMAL_DDL_TRACKER).use { it.step() }
+            conn.prepare(V10_MINIMAL_DDL_PROFILE).use { it.step() }
+            conn.prepare("INSERT INTO user_profile (user_id, is_active) VALUES ('p-1', 1)").use { it.step() }
+            // (a) current day + current zone → carried.
+            insertLegacyTracker(conn, "t-current", "com.today", today, zone, 5_000L, "p-1")
+            // (b) previous day → dropped, not treated as today's usage.
+            insertLegacyTracker(conn, "t-stale", "com.yesterday", "2020-01-01", zone, 90_000L, "p-1")
+            // (c) same day, different zone → dropped (the anchor pair is the day identity).
+            insertLegacyTracker(conn, "t-zone", "com.zonemoved", today, "Pacific/Kiritimati", 7_000L, "p-1")
+            // (d) zero usage → nothing to carry.
+            insertLegacyTracker(conn, "t-zero", "com.none", today, zone, 0L, "p-1")
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_10_11.migrate(conn) }
+
+            val rows = mutableListOf<Triple<String, String, Long>>()
+            conn.prepare(
+                "SELECT event_id, day_key, credited_ms FROM usage_ledger ORDER BY event_id",
+            ).use { stmt ->
+                while (stmt.step()) {
+                    rows.add(Triple(stmt.getText(0), stmt.getText(1), stmt.getLong(2)))
+                }
+            }
+            assertEquals(
+                "only the current-day, current-zone scalar seeds",
+                listOf(Triple("migration_seed:com.today", today, 5_000L)),
+                rows,
+            )
+
+            // AD-11: plain DDL, so a pre-existing usage_ledger fails the migration loudly
+            // rather than being silently masked by IF NOT EXISTS.
+            var threw = false
+            try {
+                runBlocking { AppRulesStoreFactory.MIGRATION_10_11.migrate(conn) }
+            } catch (e: Exception) {
+                threw = true
+            }
+            assertTrue("re-running must fail on the existing table (AD-11 plain DDL)", threw)
+        }
+        context.deleteDatabase("ledger-seed-test.db")
+    }
+
+    private fun insertLegacyTracker(
+        conn: androidx.sqlite.SQLiteConnection,
+        trackerId: String,
+        packageName: String,
+        anchor: String,
+        zone: String,
+        msUsed: Long,
+        profileId: String,
+    ) {
+        conn.prepare(
+            "INSERT INTO daily_usage_tracker (tracker_id, profile_id, package_name, " +
+                "local_date_anchor, timezone_id_at_anchor, ms_used_today) " +
+                "VALUES (?, ?, ?, ?, ?, ?)",
+        ).use { stmt ->
+            stmt.bindText(1, trackerId)
+            stmt.bindText(2, profileId)
+            stmt.bindText(3, packageName)
+            stmt.bindText(4, anchor)
+            stmt.bindText(5, zone)
+            stmt.bindLong(6, msUsed)
+            stmt.step()
         }
     }
 
@@ -199,6 +315,19 @@ class AppRulesStoreMigrationTest {
     }
 
     companion object {
+        /** Only the columns MIGRATION_10_11 reads: the tracker's day identity + scalar, and
+         *  the active-profile lookup. Kept deliberately minimal so the test fails if the
+         *  migration ever starts depending on a column not listed here. */
+        private const val V10_MINIMAL_DDL_TRACKER =
+            "CREATE TABLE `daily_usage_tracker` (" +
+                "`tracker_id` TEXT NOT NULL, `profile_id` TEXT NOT NULL, " +
+                "`package_name` TEXT NOT NULL, `local_date_anchor` TEXT NOT NULL, " +
+                "`timezone_id_at_anchor` TEXT NOT NULL, `ms_used_today` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`tracker_id`))"
+        private const val V10_MINIMAL_DDL_PROFILE =
+            "CREATE TABLE `user_profile` (`user_id` TEXT NOT NULL, `is_active` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`user_id`))"
+
         /** Verbatim v2 schema DDL from Room's generated AppRulesStore_Impl (v3 minus recovery_state). */
         private val V2_DDL = listOf(
             "CREATE TABLE IF NOT EXISTS `user_profile` (`user_id` TEXT NOT NULL, `name` TEXT NOT NULL, `email` TEXT NOT NULL, `phone_number` TEXT, `date_of_birth` INTEGER NOT NULL, `has_accessibility_permission` INTEGER NOT NULL, `has_usage_stats_permission` INTEGER NOT NULL, `has_vpn_permission` INTEGER NOT NULL, `has_notification_permission` INTEGER NOT NULL, `has_device_admin_permission` INTEGER NOT NULL, `device_public_key` TEXT, `recovery_escrow_key` TEXT, `is_active` INTEGER NOT NULL, PRIMARY KEY(`user_id`))",

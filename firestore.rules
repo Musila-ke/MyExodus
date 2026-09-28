@@ -136,8 +136,10 @@ service cloud.firestore {
         && (resource == null || resource.data.expiresAt > request.time);
     }
 
-    // Relay bookkeeping + rate counters: function-only (AD-10, AD-23).
+    // Relay bookkeeping + rate counters + pairing idempotency records: function-only
+    // (AD-10, AD-23, §9 corrected ordering).
     match /relay-dispatch/{document=**} { allow read, write: if false; }
     match /rate-limits/{document=**} { allow read, write: if false; }
+    match /idempotency/{document=**} { allow read, write: if false; }
   }
 }

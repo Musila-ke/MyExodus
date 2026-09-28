@@ -33,6 +33,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -162,8 +164,15 @@ fun BreathingPacer(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(stringResource(R.string.recovery_pacer_haptics), style = MaterialTheme.typography.bodyMedium)
-            Switch(checked = hapticEnabled, onCheckedChange = onHapticChange)
+            val hapticsLabel = stringResource(R.string.recovery_pacer_haptics)
+            Text(hapticsLabel, style = MaterialTheme.typography.bodyMedium)
+            Switch(
+                checked = hapticEnabled,
+                onCheckedChange = onHapticChange,
+                // The switch is a sibling of its label, not its child: without this its
+                // accessible name is a bare "On/Off" (findings #25/#26's class).
+                modifier = Modifier.semantics { contentDescription = hapticsLabel },
+            )
         }
     }
 }

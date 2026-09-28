@@ -5,7 +5,12 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.R
 import com.example.myexodus.data.db.entity.RestrictionRule
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.TextStyle
 import java.util.Calendar
+import java.util.Locale
 import java.util.TimeZone
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -86,6 +91,17 @@ class ScheduleSummaryTest {
     fun malformedDayString_isOmitted_ratherThanClaimingADay() {
         val summary = scheduleSummary(rule(alwaysOn = true, days = "11"), res)
         assertEquals(res.getString(R.string.schedule_always_on), summary)
+    }
+
+    @Test
+    fun headerDate_namesTheWeekday_andNeverTheYear() {
+        val millis = LocalDate.of(2026, 9, 22).atTime(12, 0)
+            .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val text = formatHeaderDate(millis)
+        val tuesday = DayOfWeek.TUESDAY.getDisplayName(TextStyle.FULL, Locale.getDefault())
+        assertTrue(text, text.contains(tuesday))
+        assertTrue(text, text.contains("22"))
+        assertFalse("the Home eyebrow carries no year: $text", text.contains("2026"))
     }
 
     @Test

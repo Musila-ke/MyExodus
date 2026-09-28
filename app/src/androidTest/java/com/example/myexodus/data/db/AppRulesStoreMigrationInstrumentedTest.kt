@@ -7,6 +7,8 @@ import androidx.sqlite.SQLiteConnection
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.example.myexodus.data.db.entity.UsageLedgerKind
+import com.example.myexodus.data.db.entity.UsageLedgerSource
 import java.io.File
 import java.time.LocalDate
 import java.time.ZoneId
@@ -219,6 +221,220 @@ class AppRulesStoreMigrationInstrumentedTest {
     }
 
     @Test
+    fun migrate9To10_addsTheUsageTable_andPreservesEveryEarlierTable() = runTest {
+        val v9 = helper.createDatabase(9)
+        seedProfileAndHabit(v9)
+
+        val v10 = helper.runMigrationsAndValidate(10, listOf(AppRulesStoreFactory.MIGRATION_9_10))
+
+        // The new table is empty and usable; the DDL is what Room validates on open.
+        assertEquals(0L, count(v10, "rule_usage_daily"))
+        exec(
+            v10,
+            "INSERT INTO rule_usage_daily (rule_id, revision, day_key, active_ms) " +
+                "VALUES ('r-1', 0, '2026-09-20', 5000)",
+        )
+        assertEquals(1L, count(v10, "rule_usage_daily"))
+
+        // The composite key rejects a duplicate (rule_id, revision, day_key).
+        val duplicateRejected = runCatching {
+            exec(
+                v10,
+                "INSERT INTO rule_usage_daily (rule_id, revision, day_key, active_ms) " +
+                    "VALUES ('r-1', 0, '2026-09-20', 9000)",
+            )
+        }.isFailure
+        assertTrue("the (rule_id, revision, day_key) key must hold", duplicateRejected)
+
+        // Additive only: every earlier table and its rows survived.
+        assertEquals(1L, count(v10, "user_profile"))
+        assertEquals(1L, count(v10, "habit_progress"))
+        assertEquals(
+            3L,
+            v10.prepare("SELECT current_clean_days_streak FROM habit_progress WHERE progress_id = 'h-1'")
+                .use { it.step(); it.getLong(0) },
+        )
+    }
+
+    /**
+     * Usage-ledger plan §12: the v10 → v11 upgrade against a production-shaped v10 database,
+     * exercising §8.10's day-aware seeding for the current-day and stale scalars (the zero case
+     * is the fourth tracker row, which must simply produce nothing).
+     */
+    @Test
+    fun migrate10To11_carriesOnlyTodaysScalar_intoTheLedger() = runTest {
+        val v10 = helper.createDatabase(10)
+        seedProfileAndHabit(v10)
+        exec(
+            v10,
+            "INSERT INTO coaching_step (step_id, profile_id, step_order, action_text, " +
+                "associated_trigger_window) VALUES ('c-1', 'profile-1', 1, 'Call my brother', '')",
+        )
+        val today = LocalDate.now().toString()
+        val yesterday = LocalDate.now().minusDays(1).toString()
+        val zone = ZoneId.systemDefault().id
+        // Today with usage: carried. Yesterday with usage: stale, dropped. Today at zero: nothing.
+        insertTracker(v10, "t-1", "com.instagram.android", 7_200_000L, today, zone)
+        insertTracker(v10, "t-2", "com.google.android.youtube", 3_600_000L, yesterday, zone)
+        insertTracker(v10, "t-3", "com.whatsapp", 0L, today, zone)
+
+        val v11 = helper.runMigrationsAndValidate(11, listOf(AppRulesStoreFactory.MIGRATION_10_11))
+
+        // One carryover row, for the current-day scalar only, shaped as an aggregate with no
+        // reconstructable interval; the carried value is the scalar itself.
+        assertEquals(1L, count(v11, "usage_ledger"))
+        v11.prepare(
+            "SELECT event_id, kind, package_name, day_key, credited_ms, elapsed_start_ms, " +
+                "elapsed_end_ms, source FROM usage_ledger",
+        ).use { stmt ->
+            assertTrue(stmt.step())
+            assertEquals("migration_seed:com.instagram.android", stmt.getText(0))
+            assertEquals(UsageLedgerKind.MIGRATION_CARRYOVER.toLong(), stmt.getLong(1))
+            assertEquals("com.instagram.android", stmt.getText(2))
+            assertEquals("the carried scalar must land on the day the v10 anchor named", today, stmt.getText(3))
+            assertEquals(7_200_000L, stmt.getLong(4))
+            assertEquals("a carryover has no sub-timeline", 0L, stmt.getLong(5))
+            assertEquals(0L, stmt.getLong(6))
+            assertEquals(UsageLedgerSource.MAINTENANCE, stmt.getText(7))
+        }
+
+        // The unique event_id index is live: the same identity cannot be seeded twice.
+        val duplicateRejected = runCatching {
+            exec(
+                v11,
+                "INSERT INTO usage_ledger (event_id, kind, wall_clock_ts_ms, elapsed_start_ms, " +
+                    "elapsed_end_ms, boot_count, package_name, day_key, credited_ms, source, " +
+                    "source_version, references_event_id) VALUES " +
+                    "('migration_seed:com.instagram.android', 5, 1, 0, 0, 0, " +
+                    "'com.instagram.android', '$today', 1, 'maintenance', 'test', NULL)",
+            )
+        }.isFailure
+        assertTrue("the unique event_id key must hold", duplicateRejected)
+
+        // Additive only: the tracker rows the seed read from are untouched, and every earlier
+        // table survived the upgrade.
+        assertEquals(3L, count(v11, "daily_usage_tracker"))
+        assertPreExistingDataSurvives(v11, "after the ledger upgrade")
+    }
+
+    /**
+     * R10: the migration's DDL is plain (no `IF NOT EXISTS`), so an unexpected pre-existing
+     * ledger table fails the upgrade loudly instead of being silently masked — and the failure
+     * rolls back to a v10 database with everything intact.
+     */
+    @Test
+    fun migrate10To11_failsLoudly_whenALedgerTableAlreadyExists() = runTest {
+        val v10 = helper.createDatabase(10)
+        seedProfileAndHabit(v10)
+        exec(v10, "CREATE TABLE usage_ledger (id INTEGER)")
+
+        val threw = runCatching {
+            helper.runMigrationsAndValidate(11, listOf(AppRulesStoreFactory.MIGRATION_10_11))
+        }.isFailure
+        assertTrue("a pre-existing ledger table must fail the migration, not be masked", threw)
+
+        SQLCipherDriver(TEST_KEY, null, null).open(dbFile.path).use { conn ->
+            assertEquals(
+                "the failed upgrade rolls back to the pre-migration version",
+                10L,
+                conn.prepare("PRAGMA user_version").use { it.step(); it.getLong(0) },
+            )
+            assertEquals("every earlier table survives the rollback", 1L, count(conn, "user_profile"))
+            assertEquals(1L, count(conn, "habit_progress"))
+        }
+    }
+
+    @Test
+    fun migrate10To9_dropsOnlyTheUsageTable_leavingAValidV9Database() = runTest {
+        val v10 = helper.createDatabase(10)
+        seedProfileAndHabit(v10)
+        exec(
+            v10,
+            "INSERT INTO rule_usage_daily (rule_id, revision, day_key, active_ms) " +
+                "VALUES ('r-1', 0, '2026-09-20', 5000)",
+        )
+
+        // D-33's rollback: a v9 APK (mode OFF) reopening a database that briefly ran at v10.
+        val v9 = helper.runMigrationsAndValidate(9, listOf(AppRulesStoreFactory.MIGRATION_10_9))
+
+        val usageGone = runCatching { count(v9, "rule_usage_daily") }.isFailure
+        assertTrue("the rollback must drop the usage table", usageGone)
+        assertEquals("every other table survives the downgrade", 1L, count(v9, "user_profile"))
+        assertEquals(1L, count(v9, "habit_progress"))
+        assertEquals(
+            3L,
+            v9.prepare("SELECT current_clean_days_streak FROM habit_progress WHERE progress_id = 'h-1'")
+                .use { it.step(); it.getLong(0) },
+        )
+    }
+
+    /**
+     * §12.2 I-21b / AC-15: the D-33 rollback is not a one-shot. A user who installs the metering
+     * build, rolls back, then reinstalls runs this cycle for real — the downgrade must leave a
+     * database the *old* APK can open, and the re-upgrade must rebuild the new table from the
+     * schema JSON without a destructive recreate of everything else.
+     */
+    @Test
+    fun migrate9To10To9To10_survivesRepeatedRollbackCycles() = runTest {
+        val v9 = helper.createDatabase(9)
+        seedProfileAndHabit(v9)
+        exec(
+            v9,
+            "INSERT INTO coaching_step (step_id, profile_id, step_order, action_text, " +
+                "associated_trigger_window) VALUES ('c-1', 'profile-1', 1, 'Call my brother', '')",
+        )
+
+        val up1 = helper.runMigrationsAndValidate(10, listOf(AppRulesStoreFactory.MIGRATION_9_10))
+        assertEquals(0L, count(up1, "rule_usage_daily"))
+        exec(
+            up1,
+            "INSERT INTO rule_usage_daily (rule_id, revision, day_key, active_ms) " +
+                "VALUES ('r-1', 0, '2026-09-20', 5000)",
+        )
+
+        val down1 = helper.runMigrationsAndValidate(9, listOf(AppRulesStoreFactory.MIGRATION_10_9))
+        assertTrue(
+            "the first rollback must drop the usage table",
+            runCatching { count(down1, "rule_usage_daily") }.isFailure,
+        )
+        assertPreExistingDataSurvives(down1, "after the first downgrade")
+
+        val up2 = helper.runMigrationsAndValidate(10, listOf(AppRulesStoreFactory.MIGRATION_9_10))
+        assertEquals(
+            "the re-upgrade rebuilds the table empty, not half-restored",
+            0L,
+            count(up2, "rule_usage_daily"),
+        )
+        exec(
+            up2,
+            "INSERT INTO rule_usage_daily (rule_id, revision, day_key, active_ms) " +
+                "VALUES ('r-1', 0, '2026-09-21', 7000)",
+        )
+        assertEquals(1L, count(up2, "rule_usage_daily"))
+        assertPreExistingDataSurvives(up2, "after the second upgrade")
+    }
+
+    /** The pre-v10 tables and their rows — [seedProfileAndHabit] plus a `coaching_step` row the
+     *  caller must insert itself. (A missing row surfaces as SQLCipher's misleading
+     *  "step() must be called before reading column values", not as a clean assertion.) */
+    private fun assertPreExistingDataSurvives(conn: SQLiteConnection, step: String) {
+        assertEquals("user_profile row lost $step", 1L, count(conn, "user_profile"))
+        assertEquals("habit_progress row lost $step", 1L, count(conn, "habit_progress"))
+        assertEquals(
+            "habit_progress data changed $step",
+            3L,
+            conn.prepare("SELECT current_clean_days_streak FROM habit_progress WHERE progress_id = 'h-1'")
+                .use { it.step(); it.getLong(0) },
+        )
+        assertEquals(
+            "coaching_step data changed $step",
+            "Call my brother",
+            conn.prepare("SELECT action_text FROM coaching_step WHERE step_id = 'c-1'")
+                .use { it.step(); it.getText(0) },
+        )
+    }
+
+    @Test
     fun interruptedMigration_rollsBackAtomically_leavingTheOldSchemaAndData() = runTest {
         val v7 = helper.createDatabase(7)
         seedProfileAndHabit(v7)
@@ -261,6 +477,21 @@ class AppRulesStoreMigrationInstrumentedTest {
             assertTrue("the half-created table must not survive the rollback", !halfTable)
         }
     }
+
+    private fun insertTracker(
+        conn: SQLiteConnection,
+        trackerId: String,
+        pkg: String,
+        msUsedToday: Long,
+        localDate: String,
+        zoneId: String,
+    ) = exec(
+        conn,
+        "INSERT INTO daily_usage_tracker (tracker_id, profile_id, package_name, " +
+            "local_date_anchor, timezone_id_at_anchor, ms_used_today, warning1_state, " +
+            "warning2_state, blocked_today) VALUES ('$trackerId', 'profile-1', '$pkg', " +
+            "'$localDate', '$zoneId', $msUsedToday, 'NOT_DUE', 'NOT_DUE', 0)",
+    )
 
     /** Valid for any schema ≥5: the columns it names are not changed by 5→6 or 6→7. */
     private fun seedProfileAndHabit(conn: SQLiteConnection) {

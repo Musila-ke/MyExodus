@@ -41,6 +41,9 @@ open class PairingExchange(
             val creatorUid: String,
             val initiatorPayload: EnrollmentPayload,
             val partnerResponse: PartnerResponse?,
+            /** The document's own expiry — the typed-code path (§19.4 item 1) hydrates a
+             *  [PairingToken] from it, since the code itself cannot carry one. */
+            val expiresAtEpochMillis: Long,
         ) : TokenReadResult
 
         /** Token never registered or already deleted. */
@@ -87,10 +90,21 @@ open class PairingExchange(
      * returns from here; the QR cannot carry it) and the initiator's poll target for the
      * partner's response.
      */
-    open suspend fun readToken(token: PairingToken): TokenReadResult {
+    open suspend fun readToken(token: PairingToken): TokenReadResult =
+        readDocument(FirestoreSchema.pairingTokenDocumentId(token))
+
+    /**
+     * Typed-code entry (§19.4 item 1): the identical read, addressed by the raw token
+     * value. The code carries neither session id nor expiry — [TokenReadResult.Found]
+     * supplies both (session id from the initiator payload, expiry from the document).
+     */
+    open suspend fun readTokenByValue(tokenBytes: ByteArray): TokenReadResult =
+        readDocument(FirestoreSchema.pairingTokenDocumentId(tokenBytes))
+
+    private suspend fun readDocument(documentId: String): TokenReadResult {
         AppCheckInstaller.install(appContext)
         val ref = firestore.collection(FirestoreSchema.PAIRING_TOKENS_COLLECTION)
-            .document(FirestoreSchema.pairingTokenDocumentId(token))
+            .document(documentId)
         val doc = try {
             ref.get().await()
         } catch (e: FirebaseFirestoreException) {
@@ -110,6 +124,9 @@ open class PairingExchange(
         } catch (e: Exception) {
             return TokenReadResult.Failed("token payload unparseable")
         }
+        // Rules require expiresAt on create; its absence means a corrupt or foreign doc.
+        val expiresAt = doc.getTimestamp("expiresAt")?.toDate()?.time
+            ?: return TokenReadResult.Failed("token document missing expiresAt")
         val partnerUid = doc.getString("partnerUid")
         val partner = if (partnerUid == null) {
             null
@@ -126,7 +143,7 @@ open class PairingExchange(
             }
             PartnerResponse(partnerUid, partnerPayload, partnerSignature)
         }
-        return TokenReadResult.Found(creatorUid, initiatorPayload, partner)
+        return TokenReadResult.Found(creatorUid, initiatorPayload, partner, expiresAt)
     }
 
     /**

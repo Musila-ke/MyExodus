@@ -15,13 +15,19 @@ import kotlinx.coroutines.withTimeout
 /**
  * §8 Step 4 boot reconciliation (Decision 11): alarms do not survive reboot — unconditional
  * platform behavior, not an exact/inexact-alarm consequence — so every reboot re-derives the
- * pending milestone alarms from durable state. OEMs that delay or suppress this broadcast are
- * covered by the app-foreground reconciliation backstop in [HabitRepository].
+ * pending milestone alarms from durable state. The same broadcast is an evaluation trigger
+ * (Decision 9): after reconciling alarms, [MilestoneAlerter.catchUpAfterBoot] evaluates every
+ * active habit and delivers any milestone whose alarm could not fire (e.g. the crossing fell
+ * inside the device-off window). OEMs that delay or suppress this broadcast are covered by the
+ * app-foreground reconciliation backstop in [HabitRepository] plus the ViewModel's foreground
+ * catch-up delivery.
  */
 @AndroidEntryPoint
 class MilestoneBootReceiver : BroadcastReceiver() {
 
     @Inject lateinit var scheduler: MilestoneScheduler
+
+    @Inject lateinit var alerter: MilestoneAlerter
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
@@ -29,7 +35,10 @@ class MilestoneBootReceiver : BroadcastReceiver() {
         val pending = goAsync()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                withTimeout(GO_ASYNC_TIMEOUT_MS) { scheduler.reconcileAll() }
+                withTimeout(GO_ASYNC_TIMEOUT_MS) {
+                    scheduler.reconcileAll()
+                    alerter.catchUpAfterBoot()
+                }
             } catch (t: Throwable) {
                 Log.w(TAG, "Milestone boot reconciliation failed", t)
             } finally {

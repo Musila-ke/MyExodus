@@ -93,37 +93,78 @@ class BlockOverlayViewTest {
     // --- daily-limit content (enforcement plan v2 §8 Step 10) ---
 
     @Test
-    fun dailyLimitBlock_namesApp_statesTheReset_hasNoActions_showsHomeHintOnly() {
+    fun dailyLimitBlock_withoutAnEvictingHost_hasNoActions_showsTheHintOnly() {
         val v = view()
         // Uninstalled package: appLabel falls back to the package string.
         v.bind(OverlayContent.DailyLimitBlocked("com.instagram.android"))
 
         assertTrue(texts(v).any { it.contains("com.instagram.android") })
         assertTrue(texts(v).contains(context.getString(R.string.limit_blocked_message)))
+        // No Close here: this host cannot evict, so an in-place dismiss would hand the
+        // blocked app straight back (OverlayController.dismissWall).
         assertTrue(buttons(v).all { it.visibility == View.GONE })
-        // v1 pause-screen parity (user-directed 2026-09-15): the block screen's own hint —
-        // Home guidance for the wall's only escape. Never the cover's transient variant.
+        // v1 pause-screen parity (user-directed 2026-09-15): the block screen's own hint.
+        // Never the cover's transient variant.
         assertTrue(texts(v).contains(context.getString(R.string.block_screen_hint)))
         assertTrue(texts(v).none { it == context.getString(R.string.overlay_hint) })
+    }
+
+    @Test
+    fun dailyWall_closeAction_dismissesAndNeverSurvivesARebind() {
+        var dismissed = 0
+        val wall = BlockOverlayView(
+            context, {}, recovered::add, differentSite::add, onWallDismiss = { dismissed++ },
+        )
+        wall.bind(OverlayContent.DailyLimitBlocked("com.instagram.android"))
+        val close = buttons(wall).first { it.text == context.getString(R.string.overlay_wall_dismiss) }
+        assertEquals(View.VISIBLE, close.visibility)
+        close.performClick()
+        assertEquals(1, dismissed)
+
+        // Other cards must not keep a live Close around (a stray tap would dismiss a cover
+        // the user has no way to bring back).
+        wall.bind(OverlayContent.AppBlocked("AnkiDroid", "rule-2"))
+        assertEquals(View.GONE, close.visibility)
     }
 
     @Test
     fun warning_showsCeilingOfRemainingMinutes_perLevel() {
         val v = view()
         // 4m05s left reads "about 5 min", never "4 min".
-        v.bind(OverlayContent.Warning(level = 1, remainingMs = 4 * 60_000L + 5_000L))
+        v.bind(OverlayContent.Warning("com.instagram.android", level = 1, remainingMs = 4 * 60_000L + 5_000L))
         assertTrue(texts(v).contains(context.getString(R.string.limit_warning_title, 5)))
         assertTrue(buttons(v).all { it.visibility == View.GONE })
 
-        v.bind(OverlayContent.Warning(level = 2, remainingMs = 60_000L))
+        v.bind(OverlayContent.Warning("com.instagram.android", level = 2, remainingMs = 60_000L))
         assertTrue(texts(v).contains(context.getString(R.string.limit_warning_title_final, 1)))
+    }
+
+    @Test
+    fun warning_usesTheInsetCard_notTheWallColumn() {
+        val v = view()
+        v.bind(OverlayContent.Warning("com.instagram.android", level = 1, remainingMs = 60_000L))
+        val column = v.getChildAt(0) as ViewGroup
+        val card = v.getChildAt(1) as ViewGroup
+        assertEquals(View.GONE, column.visibility)
+        assertEquals(View.VISIBLE, card.visibility)
+
+        v.bind(OverlayContent.DailyLimitBlocked("com.instagram.android"))
+        assertEquals("the wall column must come back", View.VISIBLE, column.visibility)
+        assertEquals("the warning card must not survive into a block", View.GONE, card.visibility)
+        // The title must come back too: a one-way GONE on the banner path left the reused
+        // view's wall title hidden through the rebind (device-caught 2026-09-27 — the wall
+        // rendered without "… is done for today" after any banner).
+        assertEquals(
+            View.VISIBLE,
+            (column.getChildAt(1) as TextView).visibility,
+        )
     }
 
     @Test
     fun tapDismissesBannersOnly() {
         var dismissed = 0
         val banner = BlockOverlayView(context, {}, recovered::add, differentSite::add) { dismissed++ }
-        banner.bind(OverlayContent.Warning(level = 1, remainingMs = 60_000L))
+        banner.bind(OverlayContent.Warning("com.instagram.android", level = 1, remainingMs = 60_000L))
         banner.performClick()
         assertEquals(1, dismissed)
 

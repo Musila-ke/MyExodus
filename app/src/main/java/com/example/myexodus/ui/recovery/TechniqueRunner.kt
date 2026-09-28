@@ -1,16 +1,27 @@
 package com.example.myexodus.ui.recovery
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -29,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
@@ -236,37 +248,44 @@ private fun SoberWalkthrough(
     modifier: Modifier = Modifier,
 ) {
     val phases = technique.phases
+    if (phases.isEmpty()) return
     var index by remember { mutableIntStateOf(0) }
-    val phase = phases.getOrNull(index) ?: return
 
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        // The reference's "TRACKING" eyebrow: the rail shows where the user is, this says it —
+        // for a glance, for TalkBack, and for the window where the rail runs below the fold.
         Text(
             stringResource(R.string.recovery_sober_progress, index + 1, phases.size),
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    stringResource(soberPhaseTitle(phase)),
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    stringResource(soberPhaseBody(phase)),
-                    style = MaterialTheme.typography.bodyLarge,
-                )
+        Column(Modifier.fillMaxWidth()) {
+            phases.forEachIndexed { i, p ->
+                val state = when {
+                    i < index -> StepState.Done
+                    i == index -> StepState.Current
+                    else -> StepState.Upcoming
+                }
+                StepNode(
+                    number = i + 1,
+                    titleRes = soberPhaseTitle(p),
+                    state = state,
+                    isLast = i == phases.lastIndex,
+                ) {
+                    if (state == StepState.Current) {
+                        Text(
+                            stringResource(soberPhaseBody(p)),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        if (p == RecoveryResourceCatalog.SOBER_RESPOND) {
+                            CoachingItems(items = ifThen, emptyRes = R.string.recovery_sober_no_ifthen)
+                        }
+                    }
+                }
             }
-        }
-        if (phase == RecoveryResourceCatalog.SOBER_RESPOND) {
-            CoachingItems(items = ifThen, emptyRes = R.string.recovery_sober_no_ifthen)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
@@ -308,6 +327,114 @@ private fun soberPhaseBody(phase: String): Int = when (phase) {
     RecoveryResourceCatalog.SOBER_BREATHE -> R.string.recovery_sober_breathe_body
     RecoveryResourceCatalog.SOBER_EXPAND -> R.string.recovery_sober_expand_body
     else -> R.string.recovery_sober_respond_body
+}
+
+private enum class StepState { Done, Current, Upcoming }
+
+/**
+ * One node of the walkthrough rail (reference `12.01.19`): numbered circle, the connector to
+ * the next node, then the phase title — with the current phase's body expanded under its own
+ * title instead of in a separate card below. Only the last node is connector-less; the card
+ * the body used to sit in is gone because the rail's expanded node already says "you are here".
+ */
+@Composable
+private fun StepNode(
+    number: Int,
+    titleRes: Int,
+    state: StepState,
+    isLast: Boolean,
+    content: @Composable () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(
+            modifier = Modifier.width(26.dp).fillMaxHeight(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            StepCircle(number = number, state = state)
+            if (!isLast) {
+                // The segment leaving a finished node is teal; everything below the current
+                // node is toneless — the rail fills in behind the user, it does not preview.
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .width(2.dp)
+                        .background(
+                            if (state == StepState.Done) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outlineVariant,
+                        ),
+                )
+            }
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(bottom = if (isLast) 0.dp else 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                stringResource(titleRes),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = if (state == StepState.Current) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (state == StepState.Upcoming) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+            )
+            content()
+        }
+    }
+}
+
+/** Decorative to the accessible tree: position is spoken by the eyebrow, and only the current
+ *  node carries body text — a screen reader hears the walkthrough without five bare numerals. */
+@Composable
+private fun StepCircle(number: Int, state: StepState) {
+    when (state) {
+        StepState.Done -> Box(
+            modifier = Modifier
+                .size(26.dp)
+                .background(MaterialTheme.colorScheme.primary, CircleShape)
+                .clearAndSetSemantics {},
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Filled.Check,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        StepState.Current -> Box(
+            modifier = Modifier
+                .size(26.dp)
+                .background(MaterialTheme.colorScheme.primary, CircleShape)
+                .clearAndSetSemantics {},
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                number.toString(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onPrimary,
+            )
+        }
+        StepState.Upcoming -> Box(
+            modifier = Modifier
+                .size(26.dp)
+                .border(1.5.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                .clearAndSetSemantics {},
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                number.toString(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 @Composable
@@ -375,9 +502,9 @@ private fun CoachingItems(items: List<CoachingStep>, emptyRes: Int) {
         )
         return
     }
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items.forEach { item ->
-            Text("• ${item.actionText}", style = MaterialTheme.typography.bodyLarge)
+            BulletLine(item.actionText)
         }
     }
 }

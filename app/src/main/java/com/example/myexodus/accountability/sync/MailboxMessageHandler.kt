@@ -223,4 +223,7 @@ data class MailboxDocument(
     val senderId: String?,
     val payloadBase64: String?,
     val timestampEpochMillis: Long?,
+    /** The pair this message was sent under (§19.5 multi-pair mailboxes). Null only for a
+     *  hand-written or pre-schema document — the expedited wake path treats null as foreign. */
+    val pairId: String? = null,
 )

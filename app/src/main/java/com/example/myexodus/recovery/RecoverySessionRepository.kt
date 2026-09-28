@@ -1,6 +1,7 @@
 package com.example.myexodus.recovery
 
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.dao.SessionCount
 import com.example.myexodus.data.db.entity.RecoverySession
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -113,6 +114,10 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
         storeFactory.open()?.recoverySessionDao()?.page(limit, offset) ?: emptyList()
 
     suspend fun count(): Long = storeFactory.open()?.recoverySessionDao()?.count() ?: 0
+
+    /** Per-(state, technique) counts at or after [fromMs] (`0` = all time), for the history summary. */
+    suspend fun countsByStateSince(fromMs: Long): List<SessionCount> =
+        storeFactory.open()?.recoverySessionDao()?.countsByStateSince(fromMs) ?: emptyList()
 
     /** Mirror queue for the sync pass (W5). */
     suspend fun pendingMirror(limit: Int): List<RecoverySession> =

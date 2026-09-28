@@ -23,4 +23,10 @@ interface EnrollmentDao {
 
     @Query("UPDATE enrollments SET mailbox_watermark_ts = :ts WHERE pair_id = :pairId")
     suspend fun updateMailboxWatermark(pairId: String, ts: Long)
+
+    /** Owner report 2026-09-28: legacy pairs (made before labels shipped, or by harness flows)
+     *  render as key-id fragments in the multi-user roster — indistinguishable when one identity
+     *  key backs several pairs. The partner can caption each row locally. */
+    @Query("UPDATE enrollments SET partner_label = :label WHERE pair_id = :pairId")
+    suspend fun updatePartnerLabel(pairId: String, label: String?)
 }

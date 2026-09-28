@@ -14,6 +14,7 @@ import com.example.myexodus.data.db.dao.RecoveryStateDao
 import com.example.myexodus.data.db.dao.RecoveryStreakDao
 import com.example.myexodus.data.db.dao.RiskWindowDao
 import com.example.myexodus.data.db.dao.RestrictionRuleDao
+import com.example.myexodus.data.db.dao.UsageLedgerDao
 import com.example.myexodus.data.db.dao.UserProfileDao
 import com.example.myexodus.data.db.entity.AttemptLog
 import com.example.myexodus.data.db.entity.CoachingStep
@@ -27,7 +28,10 @@ import com.example.myexodus.data.db.entity.RecoveryState
 import com.example.myexodus.data.db.entity.RecoveryStreak
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.RiskWindow
+import com.example.myexodus.data.db.entity.UsageLedger
 import com.example.myexodus.data.db.entity.UserProfile
+import com.example.myexodus.domainusage.RuleUsageDaily
+import com.example.myexodus.domainusage.RuleUsageDao
 
 /**
  * Room database holding the rule and V1 data model plus the habit-streak tables — encrypted
@@ -52,8 +56,10 @@ import com.example.myexodus.data.db.entity.UserProfile
         MilestoneEvent::class,
         RecoverySession::class,
         RiskWindow::class,
+        RuleUsageDaily::class,
+        UsageLedger::class,
     ],
-    version = 9,
+    version = 11,
     exportSchema = true,
 )
 abstract class AppRulesStore : RoomDatabase() {
@@ -70,4 +76,6 @@ abstract class AppRulesStore : RoomDatabase() {
     abstract fun milestoneEventDao(): MilestoneEventDao
     abstract fun recoverySessionDao(): RecoverySessionDao
     abstract fun riskWindowDao(): RiskWindowDao
+    abstract fun ruleUsageDao(): RuleUsageDao
+    abstract fun usageLedgerDao(): UsageLedgerDao
 }

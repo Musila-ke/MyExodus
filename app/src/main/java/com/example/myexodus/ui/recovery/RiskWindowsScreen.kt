@@ -11,12 +11,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -36,17 +36,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
 import com.example.myexodus.data.db.entity.RiskWindow
 import com.example.myexodus.recovery.RecoveryPlanRepository
+import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.DayChips
 import com.example.myexodus.ui.TimeField
 import com.example.myexodus.ui.daysLabel
 import com.example.myexodus.ui.daysMaskToString
 import com.example.myexodus.ui.daysStringToMask
 import com.example.myexodus.ui.formatTime
+import com.example.myexodus.ui.SecureSurface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -64,6 +67,7 @@ fun RiskWindowsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    SecureSurface()
     GatedContent(prefs = prefs, titleRes = R.string.recovery_gate_title_windows) {
         RiskWindowsBody(planRepository = planRepository, onBack = onBack, modifier = modifier)
     }
@@ -87,29 +91,18 @@ private fun RiskWindowsBody(
     LaunchedEffect(Unit) { reload() }
 
     Column(modifier = modifier.fillMaxSize()) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(R.string.recovery_back),
-                )
-            }
-            Text(
-                stringResource(R.string.recovery_windows_title),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f),
-            )
-            IconButton(
-                onClick = { adding = true },
-                enabled = (windows?.size ?: 0) < RiskWindow.MAX_WINDOWS,
-            ) {
-                Icon(Icons.Default.Add, contentDescription = stringResource(R.string.recovery_windows_add))
-            }
-        }
+        BackRow(
+            label = stringResource(R.string.recovery_windows_title),
+            onBack = onBack,
+            trailing = {
+                IconButton(
+                    onClick = { adding = true },
+                    enabled = (windows?.size ?: 0) < RiskWindow.MAX_WINDOWS,
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = stringResource(R.string.recovery_windows_add))
+                }
+            },
+        )
         val rows = windows
         if (rows == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -173,31 +166,58 @@ private fun WindowRow(
     onDelete: () -> Unit,
 ) {
     val res = LocalResources.current
+    val schedule = windowScheduleText(window, res)
+    val toggleLabel = stringResource(R.string.recovery_windows_toggle)
+    var menuOpen by remember { mutableStateOf(false) }
     Surface(
+        onClick = onEdit,
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(start = 16.dp, top = 8.dp, end = 4.dp, bottom = 8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(windowScheduleText(window, res), style = MaterialTheme.typography.bodyLarge)
-                    if (!window.enabled) {
-                        Text(
-                            stringResource(R.string.recovery_windows_off),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+        Row(
+            Modifier.padding(start = 16.dp, top = 8.dp, end = 4.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Column(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(schedule, style = MaterialTheme.typography.bodyLarge)
+                if (!window.enabled) {
+                    Text(
+                        stringResource(R.string.recovery_windows_off),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                Switch(checked = window.enabled, onCheckedChange = onToggle)
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onEdit) {
-                    Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.recovery_plan_edit))
+            Switch(
+                checked = window.enabled,
+                onCheckedChange = onToggle,
+                // The switch is a sibling of the schedule text, so without this its accessible
+                // name is a bare "On/Off" with no window attached (findings #25/#26's class).
+                modifier = Modifier.semantics { contentDescription = "$toggleLabel — $schedule" },
+            )
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = stringResource(R.string.recovery_plan_item_actions, schedule),
+                    )
                 }
-                IconButton(onClick = onDelete, enabled = canDelete) {
-                    Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.rules_delete))
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                stringResource(R.string.rules_delete),
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        },
+                        enabled = canDelete,
+                        onClick = { menuOpen = false; onDelete() },
+                    )
                 }
             }
         }

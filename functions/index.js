@@ -8,11 +8,19 @@
 // separating the two.
 
 const { initializeApp } = require('firebase-admin/app');
-const { getFirestore, FieldValue } = require('firebase-admin/firestore');
+const { getFirestore, FieldValue, Timestamp } = require('firebase-admin/firestore');
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { logger } = require('firebase-functions');
 
 const { verifyProof } = require('./proof');
+const { verifyAttestation } = require('./attestation');
+const {
+  IDEMPOTENCY_RETENTION_MS,
+  isValidRequestId,
+  isWithinRequestSizeLimit,
+  requestHashOf,
+  advancePairingWindow,
+} = require('./pairing-guards');
 
 initializeApp();
 const db = getFirestore();
@@ -36,12 +44,16 @@ function pairIdOf(uidA, uidB) {
  * window and their transcriptHash values match (the transcript binds the session id and
  * both agreement keys, so a matching transcriptHash means both devices saw the same SAS
  * transcript). Signature verification proves key possession; hardware attestation is
- * verified device-to-device at enrollment (unchanged, §3).
+ * verified here as well (owner directive 2026-09-27, overrides AD#7) — see ./attestation.js
+ * — in addition to the device-to-device enrollment check (§3).
  *
- * Idempotent: re-submitting the same proof while active returns the current state, so a
- * client retry after a dropped response is safe.
+ * Idempotent, two layers (§9 corrected ordering): a requestId cached in `/idempotency`
+ * replays its committed result before anything re-processes (retry-safe even after the
+ * pairing terminates), and independently, re-submitting the same proof while active returns
+ * the current state inside the transaction (heals a failed cache write).
  */
-exports.registerPairing = onCall(
+function createRegisterPairing({ attestationVerifier = verifyAttestation } = {}) {
+  return onCall(
   {
     region: REGION,
     // Task #21 / AD-03: callable-level App Check enforcement. This is the money/abuse path
@@ -53,93 +65,195 @@ exports.registerPairing = onCall(
     // AD-20a: replaced with the load-derived value once OQ-1 (peak events/second) is
     // answered; until then this cap bounds cost and acts as the backpressure boundary.
     maxInstances: 10,
+    // §13: explicit per-function ceiling (platform default is 60s).
+    timeoutSeconds: 30,
   },
   async (request) => {
-    const auth = request.auth;
-    if (!auth) throw new HttpsError('unauthenticated', 'anonymous sign-in required');
+      const auth = request.auth;
+      if (!auth) throw new HttpsError('unauthenticated', 'anonymous sign-in required');
 
-    const proof = request.data;
-    const check = verifyProof(proof);
-    if (!check.ok) {
-      logger.warn('registerPairing rejected', { reason: check.reason });
-      throw new HttpsError('invalid-argument', check.reason);
-    }
-    if (proof.ownUid !== auth.uid) {
-      throw new HttpsError('permission-denied', 'ownUid must be the authenticated user');
-    }
-
-    const pairId = pairIdOf(proof.ownUid, proof.partnerUid);
-    const ref = db.doc(`pairings/${pairId}`);
-    const now = Date.now();
-    const entry = {
-      publicKeyHash: proof.publicKeyHash,
-      transcriptHash: proof.transcriptHash,
-      protocolVersion: proof.protocolVersion,
-      at: now,
-    };
-
-    return db.runTransaction(async (tx) => {
-      const snap = await tx.get(ref);
-      const existing = snap.exists ? snap.data() : null;
-
-      if (existing && existing.status === 'active') {
-        const sameProof = existing.proofs && existing.proofs[auth.uid] &&
-          existing.proofs[auth.uid].transcriptHash === proof.transcriptHash;
-        if (!sameProof) throw new HttpsError('failed-precondition', 'PAIRING_ACTIVE');
-        return { pairId, status: 'active', pairingEpoch: existing.pairingEpoch };
+      const proof = request.data;
+      // §10.11/§13: bounded request payload — before the idempotency read, the rate-limit
+      // transaction, or any crypto, so an oversized request costs neither.
+      if (!isWithinRequestSizeLimit(proof)) {
+        logger.warn('registerPairing rejected', { reason: 'REQUEST_TOO_LARGE' });
+        throw new HttpsError('invalid-argument', 'REQUEST_TOO_LARGE');
+      }
+      // §9: requestId is both the idempotency key and a Firestore document id — its shape is
+      // validated before anything touches it (a '/' would otherwise redirect the path).
+      if (proof === null || typeof proof !== 'object' || !isValidRequestId(proof.requestId)) {
+        throw new HttpsError('invalid-argument', 'REQUEST_ID_INVALID');
       }
 
-      // A terminated record means a re-pair: pairingEpoch increments (AD-07 replay bound).
-      const priorEpoch = existing && typeof existing.pairingEpoch === 'number' ? existing.pairingEpoch : 0;
-
-      // A pending record only survives its 5-minute window; past it the attempt restarts.
-      const pendingFresh = existing && existing.status === 'pending' &&
-        now - (existing.pendingSince || 0) <= PAIRING_WINDOW_MS;
-      const proofs = pendingFresh ? { ...(existing.proofs || {}) } : {};
-      proofs[auth.uid] = entry;
-
-      const other = proofs[proof.partnerUid];
-      let status = 'pending';
-      if (other) {
-        if (now - other.at > PAIRING_WINDOW_MS) {
-          delete proofs[proof.partnerUid]; // stale half of a previous attempt
-        } else if (other.transcriptHash !== proof.transcriptHash) {
-          throw new HttpsError('failed-precondition', 'TRANSCRIPT_MISMATCH');
-        } else if (other.publicKeyHash === proof.publicKeyHash) {
-          throw new HttpsError('failed-precondition', 'SAME_KEY');
-        } else {
-          status = 'active';
+      // §9 corrected ordering: the idempotency lookup precedes every other check. A replay of
+      // an already-committed request returns its committed result — no re-processing, no
+      // window/expiry logic — so a lost-response retry can never re-execute a state
+      // transition (notably: it cannot resurrect a since-terminated pairing).
+      const idempotencyRef = db.doc(`idempotency/${proof.requestId}`);
+      const cached = await idempotencyRef.get();
+      if (cached.exists) {
+        if (cached.get('requestHash') !== requestHashOf(proof)) {
+          logger.warn('registerPairing rejected', { reason: 'REQUEST_ID_REUSED' });
+          throw new HttpsError('invalid-argument', 'REQUEST_ID_REUSED');
         }
+        // §14 bullet 4: the idempotency cache-hit rail. Native metrics count invocations
+        // (run.googleapis.com/request_count); this line is the replay numerator.
+        logger.info('registerPairing idempotent replay');
+        return cached.get('result');
       }
 
-      const [uidA, uidB] = proof.ownUid < proof.partnerUid
-        ? [proof.ownUid, proof.partnerUid]
-        : [proof.partnerUid, proof.ownUid];
+      // §10.5 pairing-path rate limit: only genuine new executions consume the per-UID
+      // budget (replays returned above, so a retry storm is never locked out by its own
+      // replays). Before the crypto checks so a flood costs reads, not verifications. The
+      // doc id cannot collide with the relay's `/rate-limits/{pairId}` docs: a pairId is a
+      // single '_' joining two Firebase uids, which never contain '_' themselves.
+      const limitRef = db.doc(`rate-limits/pairing_${auth.uid}`);
+      const withinLimit = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(limitRef);
+        const decision = advancePairingWindow(snap.exists ? snap.data() : null, Date.now());
+        if (!decision.allowed) return false;
+        tx.set(limitRef, { window: decision.window }, { merge: false });
+        return true;
+      });
+      if (!withinLimit) {
+        logger.warn('registerPairing rejected', { reason: 'RATE_LIMITED' });
+        throw new HttpsError('resource-exhausted', 'RATE_LIMITED');
+      }
 
-      // A retrying device refreshes the window (its proof's `at` is refreshed too), so
-      // a submission counts as "arriving" on every retry — the 5-minute rule then
-      // measures from each device's last attempt. Terminated records keep the old
-      // pendingSince for reference; it is inert once status is active.
-      const pendingSince = status === 'pending' ? now : (existing && existing.pendingSince) || now;
+      const check = verifyProof(proof);
+      if (!check.ok) {
+        logger.warn('registerPairing rejected', { reason: check.reason });
+        throw new HttpsError('invalid-argument', check.reason);
+      }
+      // Server-side hardware attestation (owner directive 2026-09-27, overrides AD#7): the
+      // proof carries the device's attestation chain, verified here to the pinned Google
+      // roots. verifyProof above proves possession of signingPublicKey; this proves that key
+      // came out of a TEE/StrongBox.
+      const attestation = attestationVerifier(proof);
+      if (!attestation.ok) {
+        logger.warn('registerPairing rejected', { reason: attestation.reason });
+        throw new HttpsError('invalid-argument', attestation.reason);
+      }
+      if (proof.ownUid !== auth.uid) {
+        throw new HttpsError('permission-denied', 'ownUid must be the authenticated user');
+      }
 
-      const doc = {
-        uidA,
-        uidB,
-        members: [uidA, uidB],
-        status,
-        pairingEpoch: priorEpoch + 1,
-        proofs,
-        pendingSince,
+      const pairId = pairIdOf(proof.ownUid, proof.partnerUid);
+      const ref = db.doc(`pairings/${pairId}`);
+      const now = Date.now();
+      const entry = {
+        publicKeyHash: proof.publicKeyHash,
+        transcriptHash: proof.transcriptHash,
+        protocolVersion: proof.protocolVersion,
+        at: now,
       };
-      if (!existing) doc.createdAt = FieldValue.serverTimestamp();
-      if (status === 'active') doc.activatedAt = FieldValue.serverTimestamp();
 
-      tx.set(ref, doc, { merge: false });
-      logger.info('registerPairing', { pairId, status });
-      return { pairId, status, pairingEpoch: doc.pairingEpoch };
-    });
+      const result = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const existing = snap.exists ? snap.data() : null;
+
+        if (existing && existing.status === 'active') {
+          const sameProof = existing.proofs && existing.proofs[auth.uid] &&
+            existing.proofs[auth.uid].transcriptHash === proof.transcriptHash;
+          if (!sameProof) throw new HttpsError('failed-precondition', 'PAIRING_ACTIVE');
+          return { pairId, status: 'active', pairingEpoch: existing.pairingEpoch };
+        }
+
+        // A terminated record means a re-pair: pairingEpoch increments (AD-07 replay bound).
+        const priorEpoch = existing && typeof existing.pairingEpoch === 'number' ? existing.pairingEpoch : 0;
+
+        // A pending record only survives its 5-minute window; past it the attempt restarts.
+        const pendingFresh = existing && existing.status === 'pending' &&
+          now - (existing.pendingSince || 0) <= PAIRING_WINDOW_MS;
+        const proofs = pendingFresh ? { ...(existing.proofs || {}) } : {};
+        proofs[auth.uid] = entry;
+
+        const other = proofs[proof.partnerUid];
+        let status = 'pending';
+        if (other) {
+          if (now - other.at > PAIRING_WINDOW_MS) {
+            delete proofs[proof.partnerUid]; // stale half of a previous attempt
+          } else if (other.transcriptHash !== proof.transcriptHash) {
+            // §14's cross-session mismatch counter is a log-based metric on this line,
+            // label-extracted per submitting uid (surfaced for manual review, never an
+            // auto-lock). The uid is the reporter whose proof disagrees with the stored
+            // half — the pairId already implies both members, so this adds no new exposure.
+            logger.warn('registerPairing rejected', { reason: 'TRANSCRIPT_MISMATCH', pairId, uid: auth.uid });
+            throw new HttpsError('failed-precondition', 'TRANSCRIPT_MISMATCH');
+          } else if (other.publicKeyHash === proof.publicKeyHash) {
+            throw new HttpsError('failed-precondition', 'SAME_KEY');
+          } else {
+            status = 'active';
+          }
+        }
+
+        const [uidA, uidB] = proof.ownUid < proof.partnerUid
+          ? [proof.ownUid, proof.partnerUid]
+          : [proof.partnerUid, proof.ownUid];
+
+        // A retrying device refreshes the window (its proof's `at` is refreshed too), so
+        // a submission counts as "arriving" on every retry — the 5-minute rule then
+        // measures from each device's last attempt. Terminated records keep the old
+        // pendingSince for reference; it is inert once status is active.
+        const pendingSince = status === 'pending' ? now : (existing && existing.pendingSince) || now;
+
+        const doc = {
+          uidA,
+          uidB,
+          members: [uidA, uidB],
+          status,
+          pairingEpoch: priorEpoch + 1,
+          proofs,
+          pendingSince,
+          // Every write replaces the document (`merge: false`), so the field must be
+          // re-sent or it is destroyed by the write that activates the pairing — caught by
+          // the emulator suite 2026-09-28. It belongs to the record, not the epoch: a
+          // re-pair keeps the original creation time, `activatedAt` marks the current one.
+          createdAt: (existing && existing.createdAt) || FieldValue.serverTimestamp(),
+        };
+        if (status === 'active') doc.activatedAt = FieldValue.serverTimestamp();
+
+        tx.set(ref, doc, { merge: false });
+        logger.info('registerPairing', { pairId, status });
+        return { pairId, status, pairingEpoch: doc.pairingEpoch };
+      });
+
+      // §9 step 7: cache the committed result for replay. Best-effort by design — if this
+      // write fails, a retry re-executes and the transaction's own proof-equality path still
+      // returns the committed state (and a racing second write lands the same result), so a
+      // failed cache write must not fail a registration that already committed.
+      try {
+        await idempotencyRef.set({
+          functionName: 'registerPairing',
+          requestHash: requestHashOf(proof),
+          result,
+          createdAt: Timestamp.now(),
+          expiresAt: Timestamp.fromMillis(Date.now() + IDEMPOTENCY_RETENTION_MS),
+        });
+      } catch (e) {
+        logger.warn('idempotency record write failed', { reason: e && e.message ? e.message : 'unknown' });
+      }
+      return result;
   },
+  );
+}
+
+// Local-suite rig (2026-09-28): the two-device pairing test points both phones at the local
+// Functions emulator, where a Google-rooted hardware chain cannot exist (an emulator's key is
+// SOFTWARE). The stub is opt-in (ATTESTATION_STUB=1) AND requires the emulator runtime, so a
+// deployed instance never takes this branch; the verifier keeps its own unit suite + real
+// device leg, and what runs against the emulator here is the handler, not the verifier.
+const attestationStub = process.env.FUNCTIONS_EMULATOR && process.env.ATTESTATION_STUB === '1';
+exports.registerPairing = createRegisterPairing(
+  attestationStub ? { attestationVerifier: () => ({ ok: true, securityLevel: 2 }) } : {},
 );
+
+// House function-seam pattern (cf. createRelayHandler/createAttemptDispatch): the emulator
+// suite builds its own instance with a stubbed attestation verifier — the emulator cannot
+// produce Google-rooted device chains (ADR #96), and the verifier itself has its own unit
+// suite plus the real-device leg, so what stays under test here is this handler's ordering,
+// transactions and idempotency against a real Firestore.
+exports._createRegisterPairing = createRegisterPairing;
 
 // Exported for the function test suite once Step 20 wires the Functions emulator.
 exports._pairIdOf = pairIdOf;
@@ -154,5 +268,7 @@ const { retryDispatchSweep } = require('./sweep');
 exports.retryDispatchSweep = retryDispatchSweep;
 
 // AD-18b: daily mailbox retention job — the only deleter of mailbox documents.
-const { cleanupMailboxes } = require('./cleanup');
+// §9 corrected ordering / ADR #98: daily pairing idempotency-record retention (24h).
+const { cleanupMailboxes, cleanupIdempotencyRecords } = require('./cleanup');
 exports.cleanupMailboxes = cleanupMailboxes;
+exports.cleanupIdempotencyRecords = cleanupIdempotencyRecords;

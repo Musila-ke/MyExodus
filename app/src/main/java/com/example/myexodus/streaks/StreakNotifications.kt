@@ -36,7 +36,7 @@ object StreakNotifications {
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(
                 CHANNEL_MILESTONES,
-                "MyExodus milestones",
+                context.getString(R.string.streaks_milestone_channel_name),
                 NotificationManager.IMPORTANCE_DEFAULT,
             ),
         )
@@ -58,8 +58,12 @@ object StreakNotifications {
             notificationIdFor(streakId, milestoneDay),
             NotificationCompat.Builder(context, CHANNEL_MILESTONES)
                 .setSmallIcon(R.mipmap.ic_launcher)
-                .setContentTitle("Day $milestoneDay free from $habitLabel")
-                .setContentText("Your streak hit $milestoneDay days. Open MyExodus to keep it going.")
+                .setContentTitle(
+                    context.getString(R.string.streaks_milestone_notification_title, milestoneDay, habitLabel),
+                )
+                .setContentText(
+                    context.getString(R.string.streaks_milestone_notification_text, milestoneDay),
+                )
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .setAutoCancel(true)
                 .setContentIntent(openHome)

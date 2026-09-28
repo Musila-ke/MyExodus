@@ -6,12 +6,18 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -27,7 +33,9 @@ import com.example.myexodus.MainActivity
 import com.example.myexodus.R
 import com.example.myexodus.blocking.recovery.RecoveryStateStore
 import com.example.myexodus.data.db.entity.RecoverySession
+import com.example.myexodus.ui.AppMark
 import com.example.myexodus.ui.rememberAppLabel
+import com.example.myexodus.ui.rememberTypeScaleFactor
 import com.example.myexodus.ui.theme.MyExodusTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -78,6 +86,7 @@ class BlockerActivity : ComponentActivity() {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     BlockScreen(
                         appLabel = rememberAppLabel(targetPackage),
+                        packageName = targetPackage,
                         // IO: the session write opens the store — a synchronous SQLCipher call
                         // that must never run on Main while a wall is up (ADR #63).
                         onOpenRecovery = { lifecycleScope.launch(Dispatchers.IO) { openRecovery() } },
@@ -130,14 +139,34 @@ class BlockerActivity : ComponentActivity() {
 @Composable
 private fun BlockScreen(
     appLabel: String,
+    packageName: String,
     onOpenRecovery: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // The same adaptive ramp the View overlay reads (Adaptive.kt) — disc and glyph step up
+    // with the window class alongside the themed type.
+    val scale = rememberTypeScaleFactor()
     Column(
         modifier = modifier.fillMaxSize().padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
+        // The wall's anchor (UI sweep 2026-09-27): the blocked app's real icon on a soft-teal
+        // disc — the same composition the View overlay paints for its walls, one language.
+        Box(
+            modifier = Modifier
+                .size((88 * scale).dp)
+                .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            AppMark(
+                packageName = packageName,
+                fallback = Icons.Filled.Block,
+                size = (48 * scale).dp,
+                fallbackTint = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        }
+        Spacer(Modifier.height(24.dp))
         Text(
             stringResource(R.string.blocked_target_title, appLabel),
             style = MaterialTheme.typography.titleLarge,

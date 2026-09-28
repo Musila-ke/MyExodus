@@ -9,8 +9,21 @@ import android.os.ParcelFileDescriptor
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.example.myexodus.BuildConfig
+import com.example.myexodus.R
 import com.example.myexodus.blocking.RulesSnapshotPublisher
 import com.example.myexodus.blocking.SnapshotState
+import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.domainusage.ClientDataResult
+import com.example.myexodus.domainusage.DnsQueryResult
+import com.example.myexodus.domainusage.DomainRuleProvider
+import com.example.myexodus.domainusage.DomainUsageEngine
+import com.example.myexodus.domainusage.DomainUsageHost
+import com.example.myexodus.domainusage.FlowControl
+import com.example.myexodus.domainusage.FlowTap
+import com.example.myexodus.domainusage.OwnedBytes
+import com.example.myexodus.domainusage.PassThroughTap
+import com.example.myexodus.domainusage.UdpAdmission
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -23,12 +36,16 @@ import java.net.NetworkInterface
 import java.net.Socket
 import java.util.Random
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import kotlin.concurrent.thread
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
@@ -70,6 +87,10 @@ enum class VpnEngineState { STOPPED, STARTING, ACTIVE, DEGRADED, FAILED, REVOKED
 class DnsSinkholeVpnService : VpnService() {
 
     @Inject lateinit var publisher: RulesSnapshotPublisher
+    @Inject lateinit var engine: DomainUsageEngine
+    @Inject lateinit var ruleProvider: DomainRuleProvider
+    @Inject lateinit var usageHost: DomainUsageHost
+    @Inject lateinit var storeFactory: AppRulesStoreFactory
 
     companion object {
         const val TAG = "MyExodusVpn"
@@ -99,6 +120,18 @@ class DnsSinkholeVpnService : VpnService() {
     private val pendingDns = ConcurrentHashMap<String, PendingDns>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    /**
+     * §4.3's two single-thread executors: `domainusage-tick` owns the ledger pass, `domainusage-db`
+     * every Room touch of the feature. The executor spawns its thread on the first task, so an
+     * `OFF`-mode session starts neither; both are shut down in [stopAll].
+     */
+    private val tickExecutor: ExecutorService =
+        Executors.newSingleThreadExecutor { Thread(it, "domainusage-tick") }
+    private val dbExecutor: ExecutorService =
+        Executors.newSingleThreadExecutor { Thread(it, "domainusage-db") }
+    private val tickDispatcher: CoroutineDispatcher = tickExecutor.asCoroutineDispatcher()
+    private val dbDispatcher: CoroutineDispatcher = dbExecutor.asCoroutineDispatcher()
+
     @Volatile private var blocklist: DomainBlocklist = DomainBlocklist.EMPTY
     @Volatile private var dnsLoop4Alive = false
     @Volatile private var dnsLoop6Alive = false
@@ -127,6 +160,9 @@ class DnsSinkholeVpnService : VpnService() {
             rebuildBlocklist()
             scope.launch { publisher.loadFromDb() }
             val fd = Builder().apply {
+                // INV-9: the app's own traffic must never enter the TUN — it would be metered
+                // against its own rules and could deadlock the upstream DNS sockets.
+                addDisallowedApplication(BuildConfig.APPLICATION_ID)
                 addAddress(TUN_V4, 32)
                 addAddress(TUN_V6, 128)
                 addRoute("0.0.0.0", 0)
@@ -152,6 +188,7 @@ class DnsSinkholeVpnService : VpnService() {
             thread(name = "vpn-dns4") { dnsReceiveLoop(dnsSocket4!!, isV6 = false) }
             thread(name = "vpn-dns6") { dnsReceiveLoop(dnsSocket6!!, isV6 = true) }
             thread(name = "vpn-sweep") { sweepLoop() }
+            launchDomainUsage()
             observePolicy()
             evaluateHealth()
             runCatching {
@@ -161,6 +198,26 @@ class DnsSinkholeVpnService : VpnService() {
         } catch (e: Exception) {
             Log.e(TAG, "start failed", e)
             fail("exception: ${e.javaClass.simpleName}")
+        }
+    }
+
+    /**
+     * §8 S7.3: the Engine's startup, once the TUN is established so no rule can enforce against a
+     * day whose totals were never loaded. The load itself runs on `domainusage-db` and retries
+     * there; until it succeeds every hook stays pass-through (fail open), so this never delays
+     * the relay. Cancelled with [scope] when the service stops.
+     */
+    private fun launchDomainUsage() {
+        scope.launch {
+            engine.start(
+                rules = ruleProvider.rules,
+                seedRevisions = ruleProvider::seedRevisions,
+                // §6.8: re-attempts the open too — the rules store can fail into recovery.
+                dao = { storeFactory.open()?.ruleUsageDao() },
+                host = usageHost,
+                tickDispatcher = tickDispatcher,
+                dbDispatcher = dbDispatcher,
+            )
         }
     }
 
@@ -274,10 +331,21 @@ class DnsSinkholeVpnService : VpnService() {
     /** TUN-traversing DNS (queries addressed to a non-TUN resolver, e.g. hardcoded DNS apps). */
     private fun handleDns(ip: VpnPacket.IpHeader, udp: VpnPacket.UdpHeader, packet: ByteArray) {
         val query = DnsMessages.parseQuery(packet, udp.payloadOffset) ?: return
+        // Two decision sites compose here (S0 hazard 1): the policy blocklist stays authoritative
+        // and answers first; the usage shaper only sees queries the blocklist did not answer, so a
+        // query is never answered twice.
         if (blocklist.isBlocked(query.qname)) {
             val reply = DnsMessages.buildNxDomain(query, packet, udp.payloadOffset)
             val out = VpnPacket.buildUdpPacket(ip.dst, ip.src, udp.dstPort, udp.srcPort, reply)
             Log.i(TAG, "nxdomain ${query.qname} v${ip.version} rule=policy written=${writeTun(out)}")
+            return
+        }
+        val payload = packet.copyOfRange(udp.payloadOffset, udp.payloadOffset + udp.payloadLength)
+        val decision = engine.onDnsQuery(payload, payload.size)
+        if (decision is DnsQueryResult.Respond) {
+            val out = VpnPacket.buildUdpPacket(ip.dst, ip.src, udp.dstPort, udp.srcPort, decision.bytes, 0, decision.length)
+            // INV-7: no qname/IP in this feature's logs — only sizes and outcomes.
+            Log.i(TAG, "dns shaped v${ip.version} len=${decision.length} written=${writeTun(out)}")
             return
         }
         pendingDns["${ip.version}:${query.id}"] = PendingDns(ip.src, udp.srcPort, ip.dst)
@@ -306,6 +374,7 @@ class DnsSinkholeVpnService : VpnService() {
                 val id = VpnPacket.readShort(buf, 0) and 0xFFFF
                 val pending = pendingDns.remove("${if (isV6) 6 else 4}:$id") ?: continue
                 val payload = buf.copyOf(dp.length)
+                engine.onDnsResponse(payload, payload.size) // §6.2: observe the real answer first
                 writeTun(VpnPacket.buildUdpPacket(pending.dnsIp, pending.deviceIp, 53, pending.devicePort, payload))
             }
         } finally {
@@ -314,29 +383,85 @@ class DnsSinkholeVpnService : VpnService() {
         }
     }
 
-    /** One protect()-ed upstream socket per destination; replies go to the first requester (ponytail: single requester per dst:port). */
+    /** One protect()-ed upstream socket per 5-tuple (ADR #70): two apps sharing a server and port
+     *  get their replies back to the right requester. The Engine decides admission once per tuple. */
     private fun forwardUdp(ip: VpnPacket.IpHeader, udp: VpnPacket.UdpHeader, packet: ByteArray) {
-        val key = "${InetAddress.getByAddress(ip.dst).hostAddress}(${ip.version}):${udp.dstPort}"
+        val key = udpKey(ip, udp)
         var flow = udpFlows[key]
         if (flow == null) {
-            val s = DatagramSocket().also { protect(it) }
-            flow = UdpFlow(s, ip.src, udp.srcPort, ip.dst, udp.dstPort)
-            udpFlows[key] = flow
-            thread(name = "vpn-udp-$key") { udpReceiveLoop(flow) }
+            val candidate = UdpFlow(ip.src, udp.srcPort, ip.dst, udp.dstPort)
+            when (val admission = engine.udpFlowOpened(ip.dst, udp.dstPort, candidate)) {
+                // §6.4/§6.10: attributed to an exhausted rule under ENFORCE. No socket is opened
+                // for it; the datagram is refused with an ICMP Port-Unreachable instead of a
+                // silent drop, so QUIC clients fall back to TCP within a second, not a timeout.
+                UdpAdmission.Drop -> {
+                    nudgePortUnreachable(ip, packet)
+                    return
+                }
+                is UdpAdmission.Allow -> {
+                    val s = DatagramSocket().also { protect(it) }
+                    candidate.socket = s
+                    candidate.tap = admission.tap
+                    udpFlows[key] = candidate
+                    thread(name = "vpn-udp-$key") { udpReceiveLoop(candidate) }
+                    flow = candidate
+                }
+            }
+        }
+        val result = flow.tap.onClientData(packet, udp.payloadOffset, udp.payloadLength)
+        val bytes: ByteArray
+        val offset: Int
+        val length: Int
+        var owned: OwnedBytes? = null
+        when (result) {
+            // §8 S6.3: a mid-tuple Reset is the moment the rule exhausted — drop after the nudge.
+            ClientDataResult.Reset -> {
+                nudgePortUnreachable(ip, packet)
+                return
+            }
+            ClientDataResult.Hold -> return // consumed (TLS inspection holds it)
+            is ClientDataResult.Forward -> {
+                owned = result.data
+                bytes = result.data.bytes
+                offset = 0
+                length = result.data.length
+            }
+            ClientDataResult.PassThrough -> {
+                bytes = packet
+                offset = udp.payloadOffset
+                length = udp.payloadLength
+            }
         }
         try {
-            flow.socket.send(DatagramPacket(packet, udp.payloadOffset, udp.payloadLength, InetAddress.getByAddress(ip.dst), udp.dstPort))
+            flow.socket!!.send(DatagramPacket(bytes, offset, length, InetAddress.getByAddress(ip.dst), udp.dstPort))
             flow.lastActivity = System.currentTimeMillis()
         } catch (e: IOException) {
             // upstream unreachable — drop; the device retries
+        } finally {
+            owned?.release() // INV-13: released only after the datagram was written out
         }
     }
+
+    /**
+     * §6.10: refuse one datagram that an exhausted rule owns. Part of the TUN/relay thread's
+     * normal drop path, so it may never throw or block — a construction failure is counted
+     * (`icmp_build_fail`, INV-14) and falls back to the silent drop it replaced.
+     */
+    private fun nudgePortUnreachable(ip: VpnPacket.IpHeader, packet: ByteArray) {
+        val icmp = VpnPacket.buildIcmpPortUnreachable(ip, packet)
+        engine.onIcmpNudge(icmp != null && writeTun(icmp))
+    }
+
+    private fun udpKey(ip: VpnPacket.IpHeader, udp: VpnPacket.UdpHeader): String =
+        "${ip.version}:${InetAddress.getByAddress(ip.src).hostAddress}:${udp.srcPort}->" +
+            "${InetAddress.getByAddress(ip.dst).hostAddress}:${udp.dstPort}"
 
     private fun udpReceiveLoop(flow: UdpFlow) {
         val buf = ByteArray(VpnPacket.MTU)
         while (running) {
             val dp = DatagramPacket(buf, buf.size)
-            try { flow.socket.receive(dp) } catch (e: IOException) { break }
+            try { flow.socket!!.receive(dp) } catch (e: IOException) { break }
+            flow.tap.onServerData(dp.length)
             writeTun(VpnPacket.buildUdpPacket(flow.dstIp, flow.deviceIp, flow.dstPort, flow.devicePort, buf.copyOf(dp.length)))
         }
     }
@@ -363,6 +488,9 @@ class DnsSinkholeVpnService : VpnService() {
             // challenge every re-sent SYN-ACK (out-of-window SYN -> TCPSYNChallenge storm).
             f.seqToDevice = isnRandom.nextInt() + 1
             flows[key] = f
+            // After the map insert: an exhausted-rule admission resets the flow, and that reset
+            // must find (and remove) the flow it decided against.
+            f.tap = engine.tcpFlowOpened(ip.dst, tcp.dstPort, f)
             Log.i(TAG, "tcp syn flow $key seq=${tcp.seq} payload=${tcp.payloadLength} win=${tcp.window} hex=${packet.take(64).joinToString("") { "%02x".format(it) }}")
             thread(name = "vpn-connect-$key") { connectUpstream(f) }
             return
@@ -380,9 +508,35 @@ class DnsSinkholeVpnService : VpnService() {
                 Integer.compareUnsigned(tcp.seq, flow.ackToDevice) > 0 ->
                     Unit // gap: drop; the device retransmits from the lost byte
                 else -> try {
-                    flow.socket!!.outputStream.write(packet, tcp.payloadOffset, tcp.payloadLength)
-                    flow.ackToDevice = tcp.seq + tcp.payloadLength
-                    flow.lastActivity = System.currentTimeMillis()
+                    // The Engine may hold these bytes (TLS SNI inspection) or hand back a copy to
+                    // forward instead; either way the device is acked as if forwarded, so a
+                    // retransmit is re-acked (never re-inspected) rather than replayed.
+                    // Each forwarded segment is ACKed immediately. Nothing else acks the device on
+                    // this path when the upstream stays silent (a plain upload): the piggyback in
+                    // relayLoop only exists while data flows back, and the retransmit re-ACK only
+                    // fires after the device's RTO. Without this the device's window advances one
+                    // RTO at a time — uploads crawled at ~1.5 KB/s (PF-1, 2026-09-21).
+                    when (val r = flow.tap.onClientData(packet, tcp.payloadOffset, tcp.payloadLength)) {
+                        ClientDataResult.Hold -> {
+                            flow.ackToDevice = tcp.seq + tcp.payloadLength
+                            flow.lastActivity = System.currentTimeMillis()
+                            sendAck(flow, tcp.window)
+                        }
+                        is ClientDataResult.Forward -> {
+                            flow.socket!!.outputStream.write(r.data.bytes, 0, r.data.length)
+                            r.data.release() // INV-13: the Baseline releases once the bytes are out
+                            flow.ackToDevice = tcp.seq + tcp.payloadLength
+                            flow.lastActivity = System.currentTimeMillis()
+                            sendAck(flow, tcp.window)
+                        }
+                        ClientDataResult.PassThrough -> {
+                            flow.socket!!.outputStream.write(packet, tcp.payloadOffset, tcp.payloadLength)
+                            flow.ackToDevice = tcp.seq + tcp.payloadLength
+                            flow.lastActivity = System.currentTimeMillis()
+                            sendAck(flow, tcp.window)
+                        }
+                        ClientDataResult.Reset -> Unit // the Engine already RST the device
+                    }
                     Log.i(TAG, "tcp fwd dev->up key=$key ${tcp.payloadLength}B seq=${tcp.seq} ack=${tcp.ack}")
                 } catch (e: IOException) { teardown(flow) }
             }
@@ -414,6 +568,12 @@ class DnsSinkholeVpnService : VpnService() {
             teardown(flow)
             return
         }
+        if (flow.closed.get()) {
+            // Reset while we were connecting (an exhausted-rule admission): the RST is already on
+            // its way to the device, so answer nothing and leave no socket behind.
+            try { socket.close() } catch (e: IOException) {}
+            return
+        }
         flow.socket = socket
         flow.connected.set(true)
         sendSynAck(flow)
@@ -422,14 +582,13 @@ class DnsSinkholeVpnService : VpnService() {
 
     /** Abort the device-side connect when the upstream address family is unreachable. */
     private fun sendRst(flow: TcpFlow) {
-        writeTun(
-            VpnPacket.buildTcpSegment(
-                src = flow.dstIp, dst = flow.deviceIp,
-                srcPort = flow.dstPort, dstPort = flow.devicePort,
-                seq = flow.seqToDevice, ack = flow.ackToDevice,
-                rst = true, ackFlag = true,
-            ),
+        val rst = VpnPacket.buildTcpSegment(
+            src = flow.dstIp, dst = flow.deviceIp,
+            srcPort = flow.dstPort, dstPort = flow.devicePort,
+            seq = flow.seqToDevice, ack = flow.ackToDevice,
+            rst = true, ackFlag = true,
         )
+        engine.onRstNudge(writeTun(rst))
     }
 
     private fun sendSynAck(flow: TcpFlow) {
@@ -465,6 +624,7 @@ class DnsSinkholeVpnService : VpnService() {
             while (running && !flow.closed.get()) {
                 val n = flow.socket!!.inputStream.read(buf)
                 if (n <= 0) break // upstream closed -> inject FIN
+                flow.tap.onServerData(n)
                 val seq = flow.seqToDevice
                 flow.seqToDevice = seq + n
                 val seg = VpnPacket.buildTcpSegment(
@@ -500,8 +660,9 @@ class DnsSinkholeVpnService : VpnService() {
 
     private fun teardown(flow: TcpFlow) {
         if (flow.closed.getAndSet(true)) return
+        flow.tap.onClosed() // exactly once: releases a held inspection buffer, leaves FlowRegistry
         try { flow.socket?.close() } catch (e: IOException) {}
-        flows.remove(flow.key)
+        flows.remove(flow.key, flow) // identity-checked: a reset must not evict a same-key retry
     }
 
     private fun tcpKey(ip: VpnPacket.IpHeader, tcp: VpnPacket.TcpHeader): String =
@@ -517,7 +678,8 @@ class DnsSinkholeVpnService : VpnService() {
             }
             udpFlows.entries.removeIf { (key, flow) ->
                 if (now - flow.lastActivity > FLOW_IDLE_SWEEP_MS) {
-                    try { flow.socket.close() } catch (e: IOException) {}
+                    flow.tap.onClosed()
+                    try { flow.socket?.close() } catch (e: IOException) {}
                     Log.d(TAG, "swept udp flow $key")
                     true
                 } else false
@@ -531,6 +693,7 @@ class DnsSinkholeVpnService : VpnService() {
         Log.w(TAG, "MARKER: vpn-state REVOKED")
         state = VpnEngineState.REVOKED
         reason = "onRevoke"
+        engine.onVpnRevoked() // §14 tamper counter, before the engine's shutdown
         postRevokeNotification()
         stopAll()
     }
@@ -558,15 +721,28 @@ class DnsSinkholeVpnService : VpnService() {
     private fun stopAll() {
         running = false
         scope.cancel()
+        // §6.9: the Engine's single shutdown — bounded final flush, monitor unregister and the
+        // "Website limits paused" notification. Reached from onDestroy, onRevoke, STOP, fail and
+        // the pump's EOF path; the Engine's lifecycle guard makes every repeat a no-op.
+        engine.stop()
         try { tunFd?.close() } catch (e: IOException) {}
         try { dnsSocket4?.close() } catch (e: IOException) {}
         try { dnsSocket6?.close() } catch (e: IOException) {}
-        for (flow in flows.values) { try { flow.socket?.close() } catch (e: IOException) {} }
+        for (flow in flows.values) {
+            flow.tap.onClosed() // returns any held inspection buffer to the pool
+            try { flow.socket?.close() } catch (e: IOException) {}
+        }
         flows.clear()
-        for (flow in udpFlows.values) { try { flow.socket?.close() } catch (e: IOException) {} }
+        for (flow in udpFlows.values) {
+            flow.tap.onClosed()
+            try { flow.socket?.close() } catch (e: IOException) {}
+        }
         udpFlows.clear()
         pendingDns.clear()
         tunFd = null; tunOut = null; dnsSocket4 = null; dnsSocket6 = null
+        // After engine.stop()'s flush has run: releases the two threads.
+        tickExecutor.shutdown()
+        dbExecutor.shutdown()
         stopSelf()
     }
 
@@ -575,14 +751,18 @@ class DnsSinkholeVpnService : VpnService() {
         try {
             val nm = getSystemService(NotificationManager::class.java)
             nm.createNotificationChannel(
-                NotificationChannel("vpn_spike", "MyExodus VPN", NotificationManager.IMPORTANCE_HIGH),
+                NotificationChannel(
+                    "vpn_spike",
+                    getString(R.string.vpn_revoked_channel_name),
+                    NotificationManager.IMPORTANCE_HIGH,
+                ),
             )
             nm.notify(
                 1,
                 NotificationCompat.Builder(this, "vpn_spike")
                     .setSmallIcon(android.R.drawable.stat_sys_warning)
-                    .setContentTitle("MyExodus protection revoked")
-                    .setContentText("The VPN connection was taken back. Re-enable protection from the app.")
+                    .setContentTitle(getString(R.string.vpn_revoked_title))
+                    .setContentText(getString(R.string.vpn_revoked_text))
                     .setAutoCancel(true)
                     .build(),
             )
@@ -591,7 +771,7 @@ class DnsSinkholeVpnService : VpnService() {
         }
     }
 
-    private class TcpFlow(
+    private inner class TcpFlow(
         val key: String,
         val deviceIp: ByteArray,
         val devicePort: Int,
@@ -599,7 +779,7 @@ class DnsSinkholeVpnService : VpnService() {
         val dstPort: Int,
         val isV6: Boolean,
         initialAckToDevice: Int,
-    ) {
+    ) : FlowControl {
         val connected = AtomicBoolean(false)
         val closed = AtomicBoolean(false)
         @Volatile var ackToDevice: Int = initialAckToDevice
@@ -607,15 +787,41 @@ class DnsSinkholeVpnService : VpnService() {
         @Volatile var socket: Socket? = null
         @Volatile var finSeen: Boolean = false
         @Volatile var lastActivity: Long = System.currentTimeMillis()
+
+        /** Set by [handleTcp] on the packet thread, before the device can send payload. */
+        @Volatile var tap: FlowTap = PassThroughTap
+
+        /**
+         * Baseline Contract P2(c), added by S0: RST|ACK the device at the current sequence
+         * numbers, then drop the flow. Safe from any thread — the single-syscall TUN write
+         * and the atomic [closed] guard are the synchronization (the baseline has no
+         * per-flow owner queue to post to; direct calls are equivalent here).
+         */
+        override fun reset() {
+            if (closed.get()) return
+            sendRst(this)
+            teardown(this)
+        }
     }
 
-    private class UdpFlow(
-        val socket: DatagramSocket,
+    /**
+     * Created before the socket: the Engine decides admission (and may drop the tuple outright,
+     * in which case no socket is ever opened). [reset] is a no-op for UDP — a datagram path has no
+     * per-flow thread to signal, so the Engine's per-datagram exhaustion check is the enforcement
+     * point (see `UdpActivityTap`); the registry sweep still reaches it for symmetry.
+     */
+    private inner class UdpFlow(
         val deviceIp: ByteArray,
         val devicePort: Int,
         val dstIp: ByteArray,
         val dstPort: Int,
-    ) { @Volatile var lastActivity: Long = System.currentTimeMillis() }
+    ) : FlowControl {
+        @Volatile var socket: DatagramSocket? = null
+        @Volatile var tap: FlowTap = PassThroughTap
+        @Volatile var lastActivity: Long = System.currentTimeMillis()
+
+        override fun reset() = Unit
+    }
 
     private class PendingDns(val deviceIp: ByteArray, val devicePort: Int, val dnsIp: ByteArray)
 }

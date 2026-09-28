@@ -2,6 +2,7 @@ package com.example.myexodus.ui.home
 
 import android.content.Intent
 import android.provider.Settings
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,7 +14,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -21,8 +21,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.EmojiEvents
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -33,12 +35,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -49,22 +58,32 @@ import com.example.myexodus.R
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.ProtectionAuthority
 import com.example.myexodus.blocking.ProtectionDegradation
+import com.example.myexodus.blocking.usage.AccountingOutage
+import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.data.db.AppRulesStore
+import com.example.myexodus.data.db.entity.MilestoneEvent
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.streaks.HabitState
 import com.example.myexodus.ui.RuleRowState
 import com.example.myexodus.ui.WindowWidth
+import com.example.myexodus.ui.formatDuration
+import com.example.myexodus.ui.formatHeaderDate
 import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.rememberWindowWidth
 import com.example.myexodus.ui.ruleRowState
 import com.example.myexodus.ui.scheduleSummary
+import com.example.myexodus.ui.streaks.HabitLabelRow
 import com.example.myexodus.ui.streaks.MilestoneSplashCard
 import com.example.myexodus.ui.streaks.daysUntil
 import com.example.myexodus.ui.streaks.habitDays
 import com.example.myexodus.ui.streaks.nextMilestone
 import com.example.myexodus.ui.streaks.splashMilestones
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.withContext
+import java.time.Instant
+import java.time.ZoneId
 
 /**
  * V1 home dashboard — the restricted user's view (Req 9/11/12/15): protection status at a
@@ -80,8 +99,10 @@ fun HomeScreen(
     monitor: EnhancedModeHealthMonitor,
     degradation: ProtectionDegradation?,
     authority: ProtectionAuthority?,
+    outageSource: AccountingOutageSource,
     onReenable: () -> Unit,
     onOpenSettings: () -> Unit,
+    onFixOutage: () -> Unit = onOpenSettings,
     onOpenStreaks: () -> Unit,
     onOpenRules: () -> Unit,
     onOpenRule: (String) -> Unit,
@@ -101,9 +122,22 @@ fun HomeScreen(
     val rules by remember(profileId) {
         profileId?.let { store.restrictionRuleDao().observeByProfile(it) } ?: emptyFlow()
     }.collectAsStateWithLifecycle(initialValue = null)
+    // null until the first emission, like [rules]: the stat tiles show their skeleton rather
+    // than a "0 blocked" that a moment later jumps to the real count.
     val attemptCounts by store.attemptLogDao().observeBlockedCounts()
-        .collectAsStateWithLifecycle(initialValue = emptyList())
-    val countsByTarget = remember(attemptCounts) { attemptCounts.associate { it.target to it.count } }
+        .collectAsStateWithLifecycle(initialValue = null)
+    val countsByTarget = remember(attemptCounts) {
+        attemptCounts?.associate { it.target to it.count }.orEmpty()
+    }
+
+    // §8.7/D1's Home surface: the measured-interruption report, read off Main (the read can
+    // open the SQLCipher store — the same rule the shell's own reads follow). One-shot on
+    // entry: an interruption is always followed by a foreground entry, so nothing needs to
+    // poll for it.
+    var outage by remember { mutableStateOf<AccountingOutage?>(null) }
+    LaunchedEffect(Unit) {
+        outage = withContext(Dispatchers.IO) { outageSource.current() }
+    }
 
     // Live block state flips at schedule boundaries; a slow tick keeps the labels honest
     // while the screen stays open. Nothing else on this screen is time-derived.
@@ -140,11 +174,17 @@ fun HomeScreen(
                 serviceEnabled = serviceEnabled,
                 degradation = degradation,
                 authority = authority,
+                nowMillis = nowMillis,
                 onOpenSettings = onOpenSettings,
             )
         }
         degradation?.let { current ->
             item(key = "degradation") { DegradationBanner(current, onReenable, onOpenSettings) }
+        }
+        // D1: the outage report sits beside the degradation banner — both are statements about
+        // protection, and the outage is the one the user can act on from here.
+        outage?.let { current ->
+            item(key = "outage") { OutageBanner(current, onFixOutage) }
         }
         if (encryptionPending) {
             item(key = "encryption-pending") { EncryptionPendingNotice() }
@@ -160,9 +200,32 @@ fun HomeScreen(
                 onOpenStreaks = onOpenStreaks,
             )
         }
+        item(key = "stats") {
+            StatTrio(
+                bestStreakDays = habit?.let { habitDays(it.allTimeMaxElapsedMs) },
+                streakResolved = streakResolved,
+                blocks = rules?.size,
+                blocked = attemptCounts?.sumOf { it.count },
+            )
+        }
+        // Nothing to plot without a habit: the hero above already carries the fix, so the
+        // grid is absent rather than empty.
+        if (streakDays != null) {
+            item(key = "milestones") {
+                MilestoneGridCard(
+                    days = streakDays,
+                    achieved = habit?.milestones
+                        ?.mapNotNull { it.achievedAt?.let { _ -> it.milestoneDay } }
+                        .orEmpty(),
+                )
+            }
+        }
         item(key = "blocks") {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                BlocksHeader(count = rules?.size ?: 0, attempts = countsByTarget.values.sum())
+                Text(
+                    stringResource(R.string.home_blocks_section),
+                    style = MaterialTheme.typography.titleMedium,
+                )
                 BlocksCard(
                     rules = rules,
                     countsByTarget = countsByTarget,
@@ -186,6 +249,7 @@ private fun StatusHeader(
     serviceEnabled: Boolean,
     degradation: ProtectionDegradation?,
     authority: ProtectionAuthority?,
+    nowMillis: Long,
     onOpenSettings: () -> Unit,
 ) {
     // One signal authority with the banner below (finding #13): whenever a degradation banner
@@ -200,60 +264,84 @@ private fun StatusHeader(
     }
     val style = when (chip) {
         ChipState.PROTECTING -> ChipStyle(
-            "Protecting",
+            stringResource(R.string.protection_state_protecting),
             MaterialTheme.colorScheme.primaryContainer,
             MaterialTheme.colorScheme.onPrimaryContainer,
             MaterialTheme.colorScheme.primary,
         )
         ChipState.LIMITED -> ChipStyle(
-            "Limited",
+            stringResource(R.string.protection_state_limited),
             MaterialTheme.colorScheme.secondaryContainer,
             MaterialTheme.colorScheme.onSecondaryContainer,
             MaterialTheme.colorScheme.onSecondaryContainer,
         )
         ChipState.OFF -> ChipStyle(
-            "Blocker off",
+            stringResource(R.string.protection_state_off),
             MaterialTheme.colorScheme.errorContainer,
             MaterialTheme.colorScheme.onErrorContainer,
             MaterialTheme.colorScheme.error,
         )
     }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text("MyExodus", style = MaterialTheme.typography.headlineSmall)
-            Text(
-                "Your protection dashboard",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Surface(
-            color = style.container,
-            contentColor = style.content,
-            shape = CircleShape,
-            // The chip is the entry point to the fix: every degraded state has its own row
-            // and remedy on Settings.
-            modifier = Modifier.clickable(role = Role.Button, onClick = onOpenSettings),
+    // The header from the reference: date line + state pill on one row, then a large greeting
+    // as the page's anchor. Only the pill claims anything about protection, so a degradation
+    // banner below can never contradict the title.
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            Text(
+                remember(nowMillis) { formatHeaderDate(nowMillis) },
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                // The pill is the entry point to the fix, so it never loses the row to a long
+                // date (localized month names run well past "September").
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            Surface(
+                color = style.container,
+                contentColor = style.content,
+                shape = CircleShape,
+                // The chip is the entry point to the fix: every degraded state has its own row
+                // and remedy on Settings.
+                modifier = Modifier.clickable(role = Role.Button, onClick = onOpenSettings),
             ) {
-                Box(Modifier.size(8.dp).background(style.dot, CircleShape))
-                Text(
-                    style.label,
-                    style = MaterialTheme.typography.labelMedium,
-                    maxLines = 1,
-                    softWrap = false,
-                )
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Box(Modifier.size(8.dp).background(style.dot, CircleShape))
+                    Text(
+                        style.label,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
             }
         }
+        Text(
+            stringResource(greetingResId(hourOfDay(nowMillis))),
+            style = MaterialTheme.typography.headlineMedium,
+        )
     }
 }
+
+/** Time-of-day only — a greeting is the one header element that can never be wrong about
+ *  protection. Late hours read "Good evening" rather than "Good night": the latter is a
+ *  farewell in English, not a greeting. */
+internal fun greetingResId(hourOfDay: Int): Int = when (hourOfDay) {
+    in 5..11 -> R.string.home_greeting_morning
+    in 12..17 -> R.string.home_greeting_afternoon
+    else -> R.string.home_greeting_evening
+}
+
+internal fun hourOfDay(epochMillis: Long): Int =
+    Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()).hour
 
 private data class ChipStyle(
     val label: String,
@@ -290,38 +378,17 @@ private fun StreakHeroCard(
     ) {
         Column(Modifier.padding(20.dp)) {
             // Multi-habit: the label row opens the shared picker sheet (same affordance as the
-            // Streaks summary card). No habit yet → nothing to switch to, plain label.
-            if (habitLabel != null) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 48.dp)
-                        .clickable(role = Role.Button, onClick = onSwitchHabit),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Days free from $habitLabel",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Icon(
-                        Icons.Filled.ExpandMore,
-                        contentDescription = "Switch habit",
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            } else {
-                Text(
-                    "Days free",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            // Streaks summary card). No habit yet → nothing to switch to, plain label. The row
+            // itself is shared with Streaks (ADR #85) — these two cards render the same habit,
+            // and when each owned its own copy only this one capped the label.
+            HabitLabelRow(
+                text = if (habitLabel != null) {
+                    stringResource(R.string.streaks_days_free_from, habitLabel)
+                } else {
+                    stringResource(R.string.streaks_days_free)
+                },
+                onSwitch = if (habitLabel != null) onSwitchHabit else null,
+            )
             // The numeral slot reserves its exact height in every state (no layout jump):
             // loading shows a skeleton bar, no-habit leaves the slot empty — never a stray
             // em-dash glyph that reads as glitched content.
@@ -358,37 +425,217 @@ private fun StreakHeroCard(
             Text(caption, style = MaterialTheme.typography.bodyMedium)
             if (days == null && !loading) {
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onOpenStreaks) { Text("Set up a habit") }
+                Button(onClick = onOpenStreaks) { Text(stringResource(R.string.home_streak_cta)) }
             }
         }
     }
 }
 
+/**
+ * Three real counts, no invented deltas: the reference's percentage chips need history this app
+ * does not keep, so the tiles carry values only. Each waits for its own source's first emission
+ * (skeleton in the value slot, the same treatment the blocks card uses) instead of flashing a
+ * zero. Best streak is absent — not zeroed — while no habit exists to have a best.
+ */
 @Composable
-private fun BlocksHeader(count: Int, attempts: Int) {
-    val meta = buildString {
-        append(count)
-        append(if (count == 1) " block" else " blocks")
-        if (attempts > 0) {
-            append(" · ")
-            append(attempts)
-            append(if (attempts == 1) " attempt" else " attempts")
-        }
-    }
+private fun StatTrio(
+    bestStreakDays: Int?,
+    streakResolved: Boolean,
+    blocks: Int?,
+    blocked: Int?,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("Your blocks", style = MaterialTheme.typography.titleMedium)
-        if (count > 0) {
+        // Rendered while unresolved (skeleton) and once resolved with a real best; absent only
+        // when the streak is resolved and there is no habit to have a best.
+        if (bestStreakDays != null || !streakResolved) {
+            StatTile(
+                label = stringResource(R.string.home_stat_best_streak),
+                value = bestStreakDays,
+                icon = Icons.Outlined.EmojiEvents,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        StatTile(
+            label = stringResource(R.string.home_stat_blocks),
+            value = blocks,
+            icon = Icons.Outlined.Shield,
+            modifier = Modifier.weight(1f),
+        )
+        StatTile(
+            label = stringResource(R.string.home_stat_blocked),
+            value = blocked,
+            icon = Icons.Outlined.Block,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun StatTile(
+    label: String,
+    value: Int?,
+    icon: ImageVector,
+    modifier: Modifier = Modifier,
+) {
+    // A null value IS the loading state: no source has emitted yet. Callers only pass null
+    // while waiting, so a tile can never show a skeleton over a value it already holds.
+    val loading = value == null
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.large,
+        modifier = modifier,
+    ) {
+        Column(
+            Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+            // Fixed slot: the skeleton and the value occupy the same height, so resolving
+            // never reflows the row.
+            Box(Modifier.height(30.dp), contentAlignment = Alignment.BottomStart) {
+                if (loading) {
+                    Box(
+                        Modifier
+                            .width(44.dp)
+                            .height(18.dp)
+                            .background(
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                                MaterialTheme.shapes.small,
+                            ),
+                    )
+                } else if (value != null) {
+                    Text(
+                        value.toString(),
+                        style = MaterialTheme.typography.titleLarge,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
+            }
             Text(
-                meta,
-                style = MaterialTheme.typography.labelMedium,
+                label,
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 softWrap = false,
             )
+        }
+    }
+}
+
+/**
+ * The milestone ladder as a grid: one cell per day of the top rung's window (7/30/90 in
+ * [MilestoneEvent.MILESTONE_DAYS]), filled to the current day, with each rung ringed and gold
+ * once the milestone row says it was actually reached. The reference's 30-day workout grid is
+ * the same shape; its data was per-day history this app does not keep — every value here is
+ * the same state the hero renders, so the two can never disagree.
+ */
+@Composable
+private fun MilestoneGridCard(days: Int, achieved: List<Int>) {
+    val window = MilestoneEvent.MILESTONE_DAYS.last()
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(R.string.home_grid_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    if (days > window) {
+                        stringResource(R.string.home_grid_all_days, window)
+                    } else {
+                        stringResource(R.string.home_grid_day_of, days, window)
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+            MilestoneGrid(
+                days = days,
+                achieved = achieved,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(GridCellHeight * GridRows + GridGap * (GridRows - 1)),
+            )
+            Text(
+                stringResource(
+                    R.string.home_grid_legend,
+                    MilestoneEvent.MILESTONE_DAYS.joinToString(", "),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** Reading order is day order: day 1 is the first cell of the top row, day 31 opens the second.
+ *  Declared before [GridRows] — top-level properties initialise in file order. */
+private val GridColumns = 30
+private val GridRows = MilestoneEvent.MILESTONE_DAYS.last() / GridColumns
+private val GridCellHeight = 12.dp
+private val GridGap = 2.dp
+
+@Composable
+private fun MilestoneGrid(days: Int, achieved: List<Int>, modifier: Modifier = Modifier) {
+    val filled = MaterialTheme.colorScheme.primary
+    val gold = MaterialTheme.colorScheme.tertiary
+    val track = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+    val ring = MaterialTheme.colorScheme.outline
+    val achievedDays = remember(achieved) { achieved.toSet() }
+    val total = GridRows * GridColumns
+
+    Canvas(modifier) {
+        val gap = GridGap.toPx()
+        val cellHeight = GridCellHeight.toPx()
+        val cellWidth = (size.width - gap * (GridColumns - 1)) / GridColumns
+        val corner = CornerRadius(cellHeight / 2f)
+        repeat(total) { index ->
+            val day = index + 1
+            val topLeft = Offset(
+                x = (index % GridColumns) * (cellWidth + gap),
+                y = (index / GridColumns) * (cellHeight + gap),
+            )
+            val cellSize = Size(cellWidth, cellHeight)
+            val done = day <= days
+            when {
+                done && day in achievedDays -> drawRoundRect(gold, topLeft, cellSize, corner)
+                done -> drawRoundRect(filled, topLeft, cellSize, corner)
+                // A rung still ahead keeps its own mark, so the ladder is readable before
+                // the days are filled in.
+                MilestoneEvent.MILESTONE_DAYS.contains(day) -> {
+                    drawRoundRect(track, topLeft, cellSize, corner)
+                    drawRoundRect(
+                        color = ring,
+                        topLeft = topLeft,
+                        size = cellSize,
+                        cornerRadius = corner,
+                        style = Stroke(width = 1.dp.toPx()),
+                    )
+                }
+                else -> drawRoundRect(track, topLeft, cellSize, corner)
+            }
         }
     }
 }
@@ -420,13 +667,16 @@ private fun BlocksCard(
                 Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("No blocks yet", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "Blocks you create under Rules show up here with their live status.",
+                    stringResource(R.string.home_blocks_empty_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    stringResource(R.string.home_blocks_empty_body),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Button(onClick = onOpenRules) { Text("Add a block") }
+                Button(onClick = onOpenRules) { Text(stringResource(R.string.home_blocks_add)) }
             }
         } else {
             Column {
@@ -543,13 +793,53 @@ private fun EncryptionPendingNotice() {
             Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text("Data protection upgrade pending", style = MaterialTheme.typography.titleMedium)
             Text(
-                "MyExodus is applying an extra layer of encryption to your local data. " +
-                    "Everything works normally — this finishes automatically on a future launch.",
+                stringResource(R.string.encryption_pending_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                stringResource(R.string.encryption_pending_home_body),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/**
+ * D1's Home surface (§8.7): what was measured — how long tracking went unobserved — and never
+ * a cause (AD-13). The Fix action exists only while the exemption offer is live
+ * ([AccountingOutage.promptRoute] non-null); a report with no offer is still worth showing,
+ * because the user's limits really are missing that time.
+ */
+@Composable
+private fun OutageBanner(outage: AccountingOutage, onFix: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                stringResource(R.string.home_outage_title),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                pluralStringResource(
+                    R.plurals.home_outage_body,
+                    outage.summary.count,
+                    outage.summary.count,
+                    formatDuration(outage.summary.largestWindowMs),
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            if (outage.promptRoute != null) {
+                Button(onClick = onFix) { Text(stringResource(R.string.outage_action_fix)) }
+            }
         }
     }
 }

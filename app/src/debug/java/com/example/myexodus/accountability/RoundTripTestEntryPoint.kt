@@ -1,6 +1,7 @@
 package com.example.myexodus.accountability
 
 import com.example.myexodus.accountability.approval.ApprovalFlow
+import com.example.myexodus.accountability.crypto.AccountabilityKeyStore
 import com.example.myexodus.accountability.crypto.AccountabilitySigner
 import com.example.myexodus.accountability.crypto.EventCipher
 import com.example.myexodus.accountability.crypto.IdentityEpochStore
@@ -37,4 +38,10 @@ interface RoundTripTestEntryPoint {
 
     /** Step 13 (ADR #48) responder half, the exact DI-wired instance the approval UI calls. */
     fun approvalFlow(): ApprovalFlow
+
+    /** §10/§19.5 (ADR #106) the unpair protocol — the exact DI-wired instance the Partner tab calls. */
+    fun bilateralDeletion(): BilateralDeletion
+
+    /** The real AndroidKeystore, for asserting what a shred did and did not destroy. */
+    fun keyStore(): AccountabilityKeyStore
 }

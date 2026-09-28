@@ -1,0 +1,38 @@
+# U-8 ClientHello fixtures — where each byte came from.
+# Reference-device captures are the plan's §12.1 requirement (fixture B/C "Chrome-stable
+# capture"); A is generated, D is still synthetic pending the Android 17 capture.
+
+fixture_a_example_com.bin
+source=python3 ssl.MemoryBIO wrap_bio(server_hostname="example.com"); do_handshake(); read outgoing BIO
+retrieved_at=2026-09-20
+client=CPython 3.x (host)
+notes=no ECH extension; parser verdict Sni("example.com")
+sha256=1aa6af76ae958fe200f6e9bb82ab12c7c3a6c619ce93cfae209d6a6ccf0942ce
+
+fixture_b_chrome_pq.bin
+source=scripts/domainusage-tls-hello-capture.py 9445 /tmp/hello-capture (host listener), Chrome to https://du-b.192.0.2.99.nip.io:9445
+retrieved_at=2026-09-21
+device=Infinix X6532 (reference low-end, Android 14 / API 34)
+client=Chrome 153.0.8010.47 (Android)
+notes=hello-01.bin of 20; arrived as two TCP segments, 1448 B + 546 B (pcap /tmp/du-fixture-b.pcap);
+      carries X25519MLKEM768 key share and 0xFE0D (GREASE ECH, 250 B payload — the target
+      publishes no HTTPS RR with an ECH config), so the parser verdict is Ech and the plaintext
+      SNI (du-b.192.0.2.99.nip.io, a spec-mandated public name) is ignored.
+sha256=e7924e69e8ee72d3fda5f54b4f635ff40cb4e4442c631f7c04ed572beb3c06fe
+
+fixture_c_chrome_ech.bin
+source=scripts/domainusage-tls-hello-capture.py (same session as fixture B)
+retrieved_at=2026-09-21
+device=Infinix X6532 (reference low-end, Android 14 / API 34)
+client=Chrome 153.0.8010.47 (Android)
+notes=hello-06.bin of 20; smallest ECH extension in the session (186 B, plausible-config shape);
+      all 20 captures carried 0xFE0D, so no real Chrome hello without ECH existed to capture.
+      RFC 9849 §6.2 makes GREASE indistinguishable from a real config by design.
+sha256=80ca19987a3689bf7fe3c9f55a26ae83d8f5d32a472104b5dc65a5a14249d4bc
+
+fixture_d_android17_ech.bin
+source=synthetic (hand-built Chrome-shaped ClientHello)
+retrieved_at=2026-09-20
+notes=NOT a capture. Pending a Chrome capture on the API 37 (Android 17) reference emulator —
+      platform-default ECH. Replace with the real capture and update this record before release.
+sha256=33b8bbd3db2b2c4c8ad4f8a460ce72f6e24f6a975bce9f049ddb0ebcfc7f014b

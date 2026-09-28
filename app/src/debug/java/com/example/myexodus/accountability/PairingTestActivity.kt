@@ -18,6 +18,7 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
+import com.example.myexodus.accountability.enrollment.PairingCode
 import com.example.myexodus.accountability.enrollment.PairingFlow
 import com.example.myexodus.accountability.enrollment.PairingToken
 import com.google.firebase.auth.FirebaseAuth
@@ -32,8 +33,9 @@ import kotlinx.coroutines.launch
  * §10 pairing on-device harness (no instrumentation — same XOS constraint as
  * DeviceVerificationActivity). Two devices run this activity, one per role: the initiator
  * shows a QR of the single-use token + enrollment payload; the partner pastes the base64 QR
- * and signs the transcript with its hardware-bound biometric key; both devices display the
- * SAS for the out-of-band comparison before the initiator signs. Covers §7 step 8 and §10
+ * (or types the §19.4 item 1 invitation code — the same token, Crockford rendering) and
+ * signs the transcript with its hardware-bound biometric key; both devices display the SAS
+ * for the out-of-band comparison before the initiator signs. Covers §7 step 8 and §10
  * steps 1-5, plus the §10 step 4 revocation seam (Delete pair button).
  *
  * Usage: am start -n <app>/.accountability.PairingTestActivity
@@ -104,7 +106,7 @@ class PairingTestActivity : FragmentActivity() {
         addView(confirmButton)
 
         val qrInput = EditText(this@PairingTestActivity).apply {
-            hint = "PARTNER: paste base64 QR here"
+            hint = "PARTNER: paste base64 QR, or type the invitation code"
             // The 124-char base64 wraps to 4+ lines and pushes every row below off-screen
             // on a 720x1600 device (caught 2026-09-16); 2 lines cap the growth.
             maxLines = 2
@@ -123,9 +125,18 @@ class PairingTestActivity : FragmentActivity() {
         addView(Button(this@PairingTestActivity).apply {
             text = "PARTNER: biometric-sign & redeem"
             setOnClickListener {
-                val bytes = runCatching { Base64.decode(qrInput.text.toString().trim(), Base64.NO_WRAP) }.getOrNull()
+                val text = qrInput.text.toString().trim()
+                // Typed invitation code (§19.4 item 1): parse is exact-length (13 chars
+                // normalized), so a base64 QR payload can never be mistaken for one.
+                if (PairingCode.parse(text) is PairingCode.ParseResult.Valid) {
+                    signWithBiometric("Sign transcript as partner") { signature ->
+                        completeAsPartnerCode(text, signature)
+                    }
+                    return@setOnClickListener
+                }
+                val bytes = runCatching { Base64.decode(text, Base64.NO_WRAP) }.getOrNull()
                 if (bytes == null) {
-                    log("QR base64 decode failed")
+                    log("input is neither a typed invitation code nor QR base64")
                     return@setOnClickListener
                 }
                 signWithBiometric("Sign transcript as partner") { signature ->
@@ -196,6 +207,11 @@ class PairingTestActivity : FragmentActivity() {
             val text = Base64.encodeToString(qr.qrBytes, Base64.NO_WRAP)
             log("QR ready — session ${qr.token.sessionId} (also logged as QR_TEXT for capture)")
             Log.i(TAG, "QR_TEXT: $text")
+            // §19.4 item 1: the same token as a 19-char typed code — short enough to type
+            // into the partner's input field directly (single-device runs) or read aloud.
+            val code = PairingCode.encode(qr.token)
+            log("typed invitation code: $code")
+            Log.i(TAG, "CODE_TEXT: $code")
             // Single-device run: the base64 is too long for adb input text, so cache it for
             // the "load last QR" button instead of shell-injecting it.
             runCatching { File(cacheDir, QR_CACHE_FILE).writeText(text) }
@@ -238,6 +254,18 @@ class PairingTestActivity : FragmentActivity() {
             log("verifying initiator identity, signing transcript + proof, responding on token...")
             val outcome = runCatching { entryPoint.pairingFlow().complete(qrBytes, myUid, signature) }
             log("partner outcome: ${outcome.getOrNull() ?: outcome.exceptionOrNull()}")
+            (outcome.getOrNull() as? PairingFlow.Outcome.Paired)?.let {
+                log("SAS (compare with initiator): ${it.sas}")
+            }
+        }
+    }
+
+    private fun completeAsPartnerCode(code: String, signature: Signature) {
+        val myUid = requireUid() ?: return
+        lifecycleScope.launch {
+            log("typed code passed the local check — looking up the token document...")
+            val outcome = runCatching { entryPoint.pairingFlow().completeWithCode(code, myUid, signature) }
+            log("partner outcome (typed code): ${outcome.getOrNull() ?: outcome.exceptionOrNull()}")
             (outcome.getOrNull() as? PairingFlow.Outcome.Paired)?.let {
                 log("SAS (compare with initiator): ${it.sas}")
             }

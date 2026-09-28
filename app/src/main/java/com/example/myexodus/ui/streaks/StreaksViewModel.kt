@@ -6,6 +6,7 @@ import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.streaks.HabitState
 import com.example.myexodus.streaks.HabitSummary
+import com.example.myexodus.streaks.MilestoneAlerter
 import com.example.myexodus.streaks.WithdrawalSeverity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -20,11 +21,15 @@ import kotlinx.coroutines.launch
  * consume [state] via `collectAsStateWithLifecycle` — and owns the two evaluation triggers,
  * [refresh] from `init` and from `MainActivity.onResume`. Nothing here runs because Compose
  * recomposed (Decision 9); this is the ViewModel boundary the plan names for exactly that.
+ * [refresh] also rides the §14 catch-up delivery ([MilestoneAlerter.deliverUnclaimed]) at the
+ * same boundary: an alarm the platform suppressed or dropped is delivered at the next open
+ * instead of never.
  */
 @HiltViewModel
 class StreaksViewModel @Inject constructor(
     private val repository: HabitRepository,
     private val rulesRepository: RulesRepository,
+    private val milestoneAlerter: MilestoneAlerter,
 ) : ViewModel() {
 
     /** Read-only snapshot flow from the repository; null until a habit is set up. */
@@ -71,7 +76,7 @@ class StreaksViewModel @Inject constructor(
         // seconds behind another opener's lock — on Dispatchers.Main that is an ANR from a
         // plain app resume (device-caught 2026-09-19, whole-class fix: every launch below).
         viewModelScope.launch(Dispatchers.IO) {
-            repository.refreshActive()
+            repository.refreshActive()?.let { milestoneAlerter.deliverUnclaimed(it.habitId) }
             _habits.value = repository.habits()
             _resolved.value = true
         }

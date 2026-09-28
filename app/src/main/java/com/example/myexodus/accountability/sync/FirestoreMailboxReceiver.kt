@@ -65,7 +65,7 @@ class FirestoreMailboxReceiver(
             ?: return PullResult(isNotEnrolled = true)
         val cek = cekDerivation.deriveCek(
             pairId,
-            keystore.agreementPrivateKey(),
+            keystore.agreementPrivateKeyFor(enrollment.myAgreementKeyAlias),
             decodePublicKey(enrollment.partnerAgreementPubKey),
         )
         val partnerSigningKey = decodePublicKey(enrollment.partnerSigningPubKey)
@@ -123,8 +123,14 @@ class FirestoreMailboxReceiver(
         }
 
         // §6 step 3 expedited path: the wake's own id, before the watermark query can miss it.
+        // §19.5 multi-pair: the wake carries no pair id, so every pair's pass sees the same id.
+        // Only the message's own pair may read it here — under another pair's keys it would
+        // fail verification and pollute that pair's tamper counters. (Every message doc is
+        // written with a pairId; null means a non-conforming writer, which is not ours.)
         if (messageId != null) {
-            handle(messageId) { fetchDocument(myUid, messageId) }
+            handle(messageId) {
+                fetchDocument(myUid, messageId)?.takeIf { it.pairId == pairId }
+            }
             if (deletionRequested) return result
         }
 
@@ -162,6 +168,7 @@ class FirestoreMailboxReceiver(
         senderId = getString("senderId"),
         payloadBase64 = getString("payload"),
         timestampEpochMillis = getTimestamp("timestamp")?.toDate()?.time,
+        pairId = getString("pairId"),
     )
 
     /** Watermark is persisted as epoch millis (server timestamps have microsecond precision —

@@ -43,14 +43,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.UrlPattern
+import com.example.myexodus.blocking.usage.PlatformUsageReader
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.data.db.entity.RestrictionRule
+import com.example.myexodus.domainusage.HostNormalizer
+import com.example.myexodus.domainusage.MeteringConfig
+import com.example.myexodus.domainusage.PublicSuffixList
+import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.formatDate
 import com.example.myexodus.ui.DayChips
 import com.example.myexodus.ui.TimeField
@@ -97,6 +105,8 @@ fun RuleEditorScreen(
     existingRules: List<RestrictionRule>,
     repository: RulesRepository,
     usageAccountingEngine: UsageAccountingEngine,
+    platformUsage: PlatformUsageReader,
+    psl: PublicSuffixList,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -126,7 +136,7 @@ fun RuleEditorScreen(
     var timezone by rememberSaveable { mutableStateOf(initial?.timezone ?: deviceZone) }
     var expiresAt by rememberSaveable { mutableLongStateOf(initial?.blockExpiresAt ?: 0L) }
     var saving by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<EditorError?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
@@ -146,16 +156,51 @@ fun RuleEditorScreen(
     val limitInvalidMessage = stringResource(R.string.editor_daily_limit_invalid)
     val limitTooLargeMessage = stringResource(R.string.editor_daily_limit_too_large)
     val noModeMessage = stringResource(R.string.editor_mode_missing)
+    val siteLimitInvalidMessage = stringResource(R.string.editor_site_limit_invalid)
+    val siteLimitIpMessage = stringResource(R.string.editor_site_limit_ip)
+    val siteLimitTooBroadMessage = stringResource(R.string.editor_site_limit_too_broad)
+    val siteLimitNeverBlockMessage = stringResource(R.string.editor_site_limit_never_block)
+    val siteLimitResolverMessage = stringResource(R.string.editor_site_limit_resolver)
+    val siteLimitDuplicateMessage = stringResource(R.string.editor_site_limit_duplicate)
+    val siteLimitUseItLabel = stringResource(R.string.editor_site_limit_use_it)
+    val siteLimitHasPathTemplate = stringResource(R.string.editor_site_limit_has_path)
 
     fun save() {
         error = null
         val value = targetValue.trim()
-        // The limit is app-only (the engine tracks packages); a website rule always stores 0.
+        // A limit is stored only while no other mechanism overrides it — the same condition
+        // `composeRuleFields` applies.
+        val limitOn = !alwaysOn && limitEnabled
         val limitTotalMinutes = parseLimitTotalMinutes(limitHours, limitMinutes)
+        // §8 S9.1/FR-10: a website save that enables a daily limit runs the full chain —
+        // normalize → FR-2 uniqueness (S2.8) → clamp — and its error table replaces the generic
+        // website check. Without a limit, a website keeps V1 semantics (a path-scoped block is
+        // a legitimate blocklist target, and the metering engine never sees the rule).
+        var storedTarget = value
+        if (!isApp && limitOn) {
+            when (val check = siteLimitTarget(value, psl, siteLimitPatternsOf(existingRules, psl, initial?.ruleId))) {
+                is SiteLimitCheck.Ok -> storedTarget = check.host
+                is SiteLimitCheck.HasPath -> {
+                    error = EditorError(
+                        message = siteLimitHasPathTemplate.format(check.suggestedHost),
+                        useInstead = check.suggestedHost,
+                    )
+                    return
+                }
+                SiteLimitCheck.Invalid -> { error = EditorError(siteLimitInvalidMessage); return }
+                SiteLimitCheck.IpLiteral -> { error = EditorError(siteLimitIpMessage); return }
+                SiteLimitCheck.TooBroad -> { error = EditorError(siteLimitTooBroadMessage); return }
+                SiteLimitCheck.NeverBlock -> { error = EditorError(siteLimitNeverBlockMessage); return }
+                SiteLimitCheck.EncryptedDnsResolver ->
+                    { error = EditorError(siteLimitResolverMessage); return }
+                SiteLimitCheck.DuplicatePattern ->
+                    { error = EditorError(siteLimitDuplicateMessage); return }
+            }
+        }
         val modeError = validateBlockMode(
             alwaysOn = alwaysOn,
             windowEnabled = windowEnabled,
-            limitEnabled = isApp && limitEnabled,
+            limitEnabled = limitEnabled,
             startMinutes = startMinutes,
             endMinutes = endMinutes,
             limitTotalMinutes = limitTotalMinutes,
@@ -170,22 +215,22 @@ fun RuleEditorScreen(
             else -> null
         }
         if (invalid != null) {
-            error = invalid
+            error = EditorError(invalid)
             return
         }
         val duplicate = existingRules.any { rule ->
             rule.ruleId != initial?.ruleId &&
                 rule.targetType == targetType &&
-                targetKey(rule.blockedPackage, targetType) == targetKey(value, targetType)
+                targetKey(rule.blockedPackage, targetType) == targetKey(storedTarget, targetType)
         }
         if (duplicate) {
-            error = duplicateMessage
+            error = EditorError(duplicateMessage)
             return
         }
         val fields = composeRuleFields(
             alwaysOn = alwaysOn,
             windowEnabled = windowEnabled,
-            limitEnabled = isApp && limitEnabled,
+            limitEnabled = limitEnabled,
             startMinutes = startMinutes,
             endMinutes = endMinutes,
             days = days,
@@ -197,7 +242,7 @@ fun RuleEditorScreen(
                 val base = initial ?: RestrictionRule(
                     ruleId = UUID.randomUUID().toString(),
                     profileId = repository.ensureActiveProfile().userId,
-                    blockedPackage = value,
+                    blockedPackage = storedTarget,
                     targetType = targetType,
                     isAlwaysOn = false,
                     dailyLimitMs = 0L,
@@ -209,8 +254,8 @@ fun RuleEditorScreen(
                     severityLevel = "HIGH",
                 )
                 val rule = base.copy(
-                    blockedPackage = value,
-                    dailyLimitMs = fields.dailyLimitMs,
+                    blockedPackage = storedTarget,
+                    dailyLimitMs = clampStoredLimitMs(fields.dailyLimitMs),
                     isAlwaysOn = fields.isAlwaysOn,
                     timeRangeStart = fields.timeRangeStart,
                     timeRangeEnd = fields.timeRangeEnd,
@@ -220,18 +265,28 @@ fun RuleEditorScreen(
                 )
                 if (initial == null) repository.insertRule(rule) else repository.updateRule(rule)
             }.onSuccess {
-                // Decision 15: a mid-day limit change must recompute the tracker AFTER the
-                // new value is committed (warnings back to NOT_DUE, blockedToday re-derived
-                // in both directions). Only edits can have a tracker row; a failure here
-                // leaves state the next observation re-derives, so it never blocks the save.
-                if (isApp && initial != null && initial.dailyLimitMs != fields.dailyLimitMs &&
-                    fields.dailyLimitMs > 0L
-                ) {
-                    runCatching { usageAccountingEngine.onDailyLimitChanged(value) }
-                        .onFailure { Log.w(TAG, "Daily-limit recompute failed after save", it) }
+                // OPD #28(a) / user ruling 2026-09-27: a limit starts covering the app NOW, so
+                // seed the tracker from the platform's own foreground number — usage from
+                // before the rule existed or was enabled is invisible to the engine otherwise
+                // (device-caught 2026-09-27: Instagram at DW 5h21m, tracker 0ms).
+                // Decision 15 ordering: seed first, then the limit-change recompute (warnings
+                // back to NOT_DUE, blockedToday re-derived both ways); a new rule has no row
+                // for the recompute, which is a no-op there. A failure here leaves state the
+                // next observation re-derives, so it never blocks the save. App-only: that
+                // tracker (UsageAccountingEngine) accounts packages, not hosts.
+                if (isApp && fields.dailyLimitMs > 0L) {
+                    runCatching {
+                        usageAccountingEngine.reconcileWithPlatform(
+                            storedTarget,
+                            platformUsage.todayForegroundMs(storedTarget),
+                        )
+                        if (initial != null && initial.dailyLimitMs != fields.dailyLimitMs) {
+                            usageAccountingEngine.onDailyLimitChanged(storedTarget)
+                        }
+                    }.onFailure { Log.w(TAG, "Platform usage reconcile failed after save", it) }
                 }
                 onDone()
-            }.onFailure { error = notSavedMessage(it, context) }
+            }.onFailure { error = EditorError(notSavedMessage(it, context)) }
             saving = false
         }
     }
@@ -243,22 +298,33 @@ fun RuleEditorScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = onDone) { Text(stringResource(R.string.editor_back)) }
-            Text(
-                stringResource(
-                    when {
-                        initial != null -> R.string.editor_edit
-                        isApp -> R.string.editor_new_app
-                        else -> R.string.editor_new_website
-                    },
-                ),
-                style = MaterialTheme.typography.titleLarge,
-            )
-        }
+        // The shared subpage header, not a one-off: "the way out is the same shape on every
+        // screen" is BackRow's own contract, and this was the only screen breaking it.
+        BackRow(
+            label = stringResource(
+                when {
+                    initial != null -> R.string.editor_edit
+                    isApp -> R.string.editor_new_app
+                    else -> R.string.editor_new_website
+                },
+            ),
+            onBack = onDone,
+        )
 
-        error?.let { message ->
-            ErrorBanner(message = message, onDismiss = { error = null })
+        error?.let { failure ->
+            ErrorBanner(
+                message = failure.message,
+                onDismiss = { error = null },
+                // The HasPath suggestion is one tap away from being the right value: fill the
+                // field rather than telling the user to retype it.
+                actionLabel = failure.useInstead?.let { siteLimitUseItLabel },
+                onAction = failure.useInstead?.let { host ->
+                    {
+                        targetValue = host
+                        error = null
+                    }
+                },
+            )
         }
 
         SectionCard {
@@ -275,13 +341,18 @@ fun RuleEditorScreen(
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     Text(
                         label,
                         style = MaterialTheme.typography.bodyLarge,
                         color = if (targetValue.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant
                         else MaterialTheme.colorScheme.onSurface,
+                        // A long app label or domain otherwise runs into "Change" and can push
+                        // it off the row.
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
                     )
                     TextButton(onClick = { showPicker = true }) {
                         Text(stringResource(if (targetValue.isBlank()) R.string.editor_choose_app else R.string.editor_change_app))
@@ -359,48 +430,61 @@ fun RuleEditorScreen(
                 )
             }
 
-            // Rule 2 (daily quota) is an app-only mechanism — the engine tracks packages, so a
-            // website rule is never offered a limit that could not be enforced.
-            if (isApp) {
-                ModeRow(
-                    title = stringResource(R.string.editor_daily_limit_title),
-                    hint = stringResource(R.string.editor_daily_limit_hint),
-                    checked = limitEnabled,
-                    enabled = !alwaysOn,
-                    onCheckedChange = { limitEnabled = it },
-                )
-                if (limitEnabled && !alwaysOn) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        LimitNumberField(
-                            label = stringResource(R.string.editor_limit_hours),
-                            value = limitHours,
-                            onChange = { limitHours = it },
-                            modifier = Modifier.weight(1f),
-                        )
-                        LimitNumberField(
-                            label = stringResource(R.string.editor_limit_minutes),
-                            value = limitMinutes,
-                            onChange = { limitMinutes = it },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    // The whole point of h+m fields: no mental math. Show the total — and past a
-                    // full day say why it is refused, rather than echoing an inert limit.
-                    parseLimitTotalMinutes(limitHours, limitMinutes)?.let { totalMinutes ->
-                        val tooLarge = totalMinutes >= MINUTES_PER_DAY
-                        Text(
-                            if (tooLarge) {
-                                stringResource(R.string.editor_daily_limit_too_large)
-                            } else {
-                                stringResource(R.string.editor_limit_preview, formatDuration(totalMinutes * MINUTE_MS))
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (tooLarge) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                        )
-                    }
+            // Rule 2 (daily quota). S9: open to website rules too — the metering engine clocks
+            // time on the site's connections, so the mechanism it always had is now reachable
+            // (before S9 the switch was app-only and a website rule stored 0).
+            ModeRow(
+                title = stringResource(R.string.editor_daily_limit_title),
+                hint = stringResource(R.string.editor_daily_limit_hint),
+                checked = limitEnabled,
+                enabled = !alwaysOn,
+                onCheckedChange = { limitEnabled = it },
+            )
+            if (limitEnabled && !alwaysOn) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    LimitNumberField(
+                        label = stringResource(R.string.editor_limit_hours),
+                        value = limitHours,
+                        onChange = { limitHours = it },
+                        modifier = Modifier.weight(1f),
+                    )
+                    LimitNumberField(
+                        label = stringResource(R.string.editor_limit_minutes),
+                        value = limitMinutes,
+                        onChange = { limitMinutes = it },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                // The whole point of h+m fields: no mental math. Show the total — and past a
+                // full day say why it is refused, rather than echoing an inert limit.
+                parseLimitTotalMinutes(limitHours, limitMinutes)?.let { totalMinutes ->
+                    val tooLarge = totalMinutes >= MINUTES_PER_DAY
+                    Text(
+                        if (tooLarge) {
+                            stringResource(R.string.editor_daily_limit_too_large)
+                        } else {
+                            stringResource(R.string.editor_limit_preview, formatDuration(totalMinutes * MINUTE_MS))
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (tooLarge) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    )
+                }
+                if (!isApp) {
+                    // S9.2: scope and connection-level attribution, stated where the limit is
+                    // configured (R-SNI-SCOPE — the disclosure the plan resolves item 24 with).
+                    Text(
+                        stringResource(R.string.editor_limit_scope_notice),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        stringResource(R.string.editor_limit_connection_notice),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 
@@ -477,7 +561,7 @@ fun RuleEditorScreen(
                         saving = true
                         runCatching { repository.deleteRule(initial) }
                             .onSuccess { onDone() }
-                            .onFailure { error = notSavedMessage(it, context) }
+                            .onFailure { error = EditorError(notSavedMessage(it, context)) }
                         saving = false
                     }
                 }) {
@@ -509,7 +593,9 @@ private fun ModeRow(
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+        // A gap, not just SpaceBetween: the hint wraps to the column's full width, so its last
+        // word otherwise ends flush against the switch.
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.titleMedium)
@@ -519,7 +605,14 @@ private fun ModeRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+            // The switch is a sibling of its title, not its child: without this its accessible
+            // name is a bare "On/Off" with no mechanism attached (findings #25/#26's class).
+            modifier = Modifier.semantics { contentDescription = title },
+        )
     }
 }
 
@@ -628,6 +721,70 @@ private fun Long.toPickerDayMillis(): Long? = takeIf { it > 0 }?.let {
 private fun Long.toLocalEndOfDayMillis(): Long =
     Instant.ofEpochMilli(this).atZone(ZoneOffset.UTC).toLocalDate()
         .atTime(23, 59, 59).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+/** A save-time failure shown in the editor banner. [useInstead] is the HasPath suggestion the
+ *  "Use it" action fills into the target field (S9.1). */
+private data class EditorError(val message: String, val useInstead: String? = null)
+
+/** The S9.1 error table for a website save that enables a daily limit, one case per row. */
+internal sealed interface SiteLimitCheck {
+    data class Ok(val host: String) : SiteLimitCheck
+    data class HasPath(val suggestedHost: String) : SiteLimitCheck
+    data object Invalid : SiteLimitCheck
+    data object IpLiteral : SiteLimitCheck
+    data object TooBroad : SiteLimitCheck
+    data object NeverBlock : SiteLimitCheck
+    data object EncryptedDnsResolver : SiteLimitCheck
+    data object DuplicatePattern : SiteLimitCheck
+}
+
+/**
+ * §8 S9.1/S2.8: the website-limit save chain — normalize, then the FR-2 uniqueness check
+ * against [otherLimitPatterns] (exact match; a subdomain of a limited site is a legal,
+ * independently limited rule, resolved by longest-pattern-wins at match time).
+ */
+internal fun siteLimitTarget(
+    raw: String,
+    psl: PublicSuffixList,
+    otherLimitPatterns: Set<String>,
+): SiteLimitCheck = when (val result = HostNormalizer.normalize(raw, psl)) {
+    is HostNormalizer.Result.Ok ->
+        if (result.host in otherLimitPatterns) SiteLimitCheck.DuplicatePattern
+        else SiteLimitCheck.Ok(result.host)
+    is HostNormalizer.Result.HasPath -> SiteLimitCheck.HasPath(result.suggestedHost)
+    HostNormalizer.Result.Invalid -> SiteLimitCheck.Invalid
+    HostNormalizer.Result.IpLiteral -> SiteLimitCheck.IpLiteral
+    HostNormalizer.Result.TooBroad -> SiteLimitCheck.TooBroad
+    HostNormalizer.Result.NeverBlock -> SiteLimitCheck.NeverBlock
+    HostNormalizer.Result.EncryptedDnsResolver -> SiteLimitCheck.EncryptedDnsResolver
+}
+
+/**
+ * §8 S9.1/S2.8: the collision set for the uniqueness check — the normalizeLegacy form of every
+ * *other* website rule with a daily limit. Paused rules are kept in on purpose: a rule
+ * re-enabled later would collide in `RuleIndex`, whose dedup silently drops one side (S9 log
+ * entry records this reading of "another enabled rule").
+ */
+internal fun siteLimitPatternsOf(
+    rules: List<RestrictionRule>,
+    psl: PublicSuffixList,
+    excludeRuleId: String?,
+): Set<String> = rules.asSequence()
+    .filter { it.ruleId != excludeRuleId && it.targetType == "WEBSITE" && it.dailyLimitMs > 0L }
+    .mapNotNull { (HostNormalizer.normalizeLegacy(it.blockedPackage, psl) as? HostNormalizer.Result.Ok)?.host }
+    .toSet()
+
+/**
+ * §8 S9.1's clamp before storing (R-LIMIT-BOUNDS). The editor's own validation already keeps
+ * the form inside the range, so this never fires from the UI — it exists so the stored value
+ * satisfies the invariant on its own. Zero stays zero: clamping must not switch a limit on.
+ */
+internal fun clampStoredLimitMs(dailyLimitMs: Long): Long =
+    if (dailyLimitMs > 0L) {
+        dailyLimitMs.coerceIn(MeteringConfig.MIN_DAILY_LIMIT_MS, MeteringConfig.MAX_DAILY_LIMIT_MS)
+    } else {
+        0L
+    }
 
 /** Validation outcome of the block-mode form; the caller maps it to copy. */
 internal enum class ModeError { NoneSelected, SameTime, LimitInvalid, LimitTooLarge }

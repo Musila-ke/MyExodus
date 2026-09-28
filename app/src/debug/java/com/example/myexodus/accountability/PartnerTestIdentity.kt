@@ -62,6 +62,10 @@ class PartnerTestIdentity(
     private val cekDerivation: CekDerivation,
     private val eventCipher: EventCipher,
     private val epochStore: IdentityEpochStore,
+    /** Distinct for a second concurrent virtual partner (its own FirebaseApp, auth, uid and
+     *  DB file); the defaults are the single-partner rig every other test uses. */
+    private val appName: String = APP_NAME,
+    private val dbName: String = PARTNER_DB_NAME,
 ) {
 
     /**
@@ -72,15 +76,15 @@ class PartnerTestIdentity(
      * would read as Duplicate.
      */
     val db: AccountabilityDatabase = run {
-        context.deleteDatabase(PARTNER_DB_NAME)
-        Room.databaseBuilder(context.applicationContext, AccountabilityDatabase::class.java, PARTNER_DB_NAME)
+        context.deleteDatabase(dbName)
+        Room.databaseBuilder(context.applicationContext, AccountabilityDatabase::class.java, dbName)
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
             .build()
     }
     val store: ChainStateStore = ChainStateStore(db)
 
-    val app: FirebaseApp = (FirebaseApp.getApps(context).firstOrNull { it.name == APP_NAME }
-        ?: FirebaseApp.initializeApp(context, FirebaseApp.getInstance().options, APP_NAME))
+    val app: FirebaseApp = (FirebaseApp.getApps(context).firstOrNull { it.name == appName }
+        ?: FirebaseApp.initializeApp(context, FirebaseApp.getInstance().options, appName))
         .also {
             FirebaseAppCheck.getInstance(it)
                 .installAppCheckProviderFactory(PlayIntegrityAppCheckProviderFactory.getInstance())
@@ -122,16 +126,25 @@ class PartnerTestIdentity(
         registration = PairingRegistration(context, functions),
         secretsRepository = secretsRepository,
         nowEpochMillis = System::currentTimeMillis,
+        // The virtual partner's keys live in PartnerTestKeys, not the device keystore; the
+        // device-identity mint is a no-op here (nothing to provision for the harness).
+        ensureIdentityKeys = { AccountabilityKeyStore.GenerationResult.Success(strongBox = false) },
         signingCertificateChain = { PartnerTestKeys.signingChain() },
         signingPublicKey = { PartnerTestKeys.signingPublicKey() },
+        // §19.5 per-pair keys (ADR #106) land on the one attested test keypair regardless of
+        // alias — the harness must not write per-attempt keys into the device keystore.
+        generateAgreementKey = { },
         agreementPublicKey = { PartnerTestKeys.agreementPublicKey() },
         agreementPrivateKey = { PartnerTestKeys.agreementPrivateKey() },
+        destroyAgreementKey = { },
     )
 
     /** B's CEK view: ECDH over the virtual partner's agreement key (the [AccountabilityKeyStore]
-     *  seam, mirroring [signer]'s beginSign override). */
+     *  seam, mirroring [signer]'s beginSign override). The alias-scoped lookup must resolve to
+     *  the same test key — the harness's records carry real per-attempt aliases. */
     private val partnerKeystore: AccountabilityKeyStore = object : AccountabilityKeyStore() {
         override fun agreementPrivateKey(): PrivateKey = PartnerTestKeys.agreementPrivateKey()
+        override fun agreementPrivateKeyFor(alias: String?): PrivateKey = PartnerTestKeys.agreementPrivateKey()
     }
 
     fun eventCreator(): EventCreator = EventCreator(
@@ -141,7 +154,7 @@ class PartnerTestIdentity(
         eventCipher = eventCipher,
         signer = signer,
         epochStore = epochStore,
-        agreementPrivateKey = { PartnerTestKeys.agreementPrivateKey() },
+        agreementPrivateKey = { _ -> PartnerTestKeys.agreementPrivateKey() },
         sessionKeyManager = SessionKeyManager(store),
     )
 
@@ -238,6 +251,10 @@ class InMemoryEnrollmentDao : EnrollmentDao {
 
     override suspend fun updateMailboxWatermark(pairId: String, ts: Long) {
         records[pairId]?.let { records[pairId] = it.copy(mailboxWatermarkTsEpochMillis = ts) }
+    }
+
+    override suspend fun updatePartnerLabel(pairId: String, label: String?) {
+        records[pairId]?.let { records[pairId] = it.copy(partnerLabel = label) }
     }
 }
 

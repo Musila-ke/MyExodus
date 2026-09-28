@@ -126,8 +126,11 @@ object FirestoreSchema {
      * is unaddressable without the token itself, so read/delete rules can gate purely on
      * possession + expiry (no uid knowledge needed at exchange time).
      */
-    fun pairingTokenDocumentId(token: PairingToken): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest(token.token)
+    fun pairingTokenDocumentId(token: PairingToken): String = pairingTokenDocumentId(token.token)
+
+    /** Typed-code entry (§19.4 item 1): the same id, addressed by the raw token value. */
+    fun pairingTokenDocumentId(tokenBytes: ByteArray): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(tokenBytes)
         return digest.joinToString("") { "%02x".format(it) }
     }
 

@@ -217,6 +217,100 @@ class VpnPacketTest {
         assertNull(VpnPacket.parseTcp(ip, packet))
     }
 
+    // --- §6.10 ICMP Port-Unreachable ---
+
+    /**
+     * Vector computed with an independent Python implementation of the same byte layout
+     * (2026-09-20): inner = buildUdpPacket(203.0.113.7:54321 -> 198.51.100.9:443,
+     * "hello-world!"), quoted = its 20-byte header + the 8-byte UDP header.
+     */
+    @Test
+    fun icmpPortUnreachableV4_swapsAddresses_quotesHeaderAndPorts_checksumsMatchVector() {
+        val inner = VpnPacket.buildUdpPacket(
+            src = byteArrayOf(203.toByte(), 0, 113, 7), dst = byteArrayOf(198.toByte(), 51, 100, 9),
+            srcPort = 54321, dstPort = 443, payload = "hello-world!".toByteArray(),
+        )
+        val ip = VpnPacket.parseIp(inner)!!
+
+        val icmp = VpnPacket.buildIcmpPortUnreachable(ip, inner)!!
+
+        assertEquals("20-byte IP header + ICMP header + 20 + 8 quoted", 56, icmp.size)
+        assertEquals("the reply's version/ttl/protocol", 0x45, icmp[0].toInt() and 0xFF)
+        assertEquals(1, icmp[9].toInt() and 0xFF)
+        // RFC 792: from the datagram's destination, back to its source.
+        assertArrayEquals(byteArrayOf(198.toByte(), 51, 100, 9), icmp.copyOfRange(12, 16))
+        assertArrayEquals(byteArrayOf(203.toByte(), 0, 113, 7), icmp.copyOfRange(16, 20))
+        assertEquals(VpnPacket.ICMP_TYPE_PORT_UNREACHABLE, icmp[20].toInt() and 0xFF)
+        assertEquals(VpnPacket.ICMP_CODE_PORT_UNREACHABLE, icmp[21].toInt() and 0xFF)
+        assertEquals("quoted bytes are the inner packet verbatim, ports included", inner.copyOfRange(0, 28).toList(), icmp.copyOfRange(28, 56).toList())
+        assertEquals(0xD480, VpnPacket.readShort(icmp, 10)) // python-verified header checksum
+        assertEquals(0xF563, VpnPacket.readShort(icmp, 22)) // python-verified ICMP checksum
+        assertEquals(0xFFFF, VpnPacket.fold16(VpnPacket.sum16(icmp, 0, 20)))
+    }
+
+    /** Same codec over IPv6 — RFC 4443 type 1 code 4, checksum over the pseudo-header. */
+    @Test
+    fun icmpv6PortUnreachable_checksumsMatchVector() {
+        val src = ipv6("20010db8000000000000000000000001")
+        val dst = ipv6("fd001414000000000000000000000009")
+        val inner = VpnPacket.buildUdpPacket(
+            src = src, dst = dst, srcPort = 54321, dstPort = 443, payload = "hello-world!".toByteArray(),
+        )
+        val ip = VpnPacket.parseIp(inner)!!
+
+        val icmp = VpnPacket.buildIcmpPortUnreachable(ip, inner)!!
+
+        assertEquals("40-byte IP header + ICMP header + 40 + 8 quoted", 96, icmp.size)
+        assertEquals(0x60, icmp[0].toInt() and 0xFF)
+        assertEquals(58, icmp[6].toInt() and 0xFF)
+        assertArrayEquals(dst, icmp.copyOfRange(8, 24))
+        assertArrayEquals(src, icmp.copyOfRange(24, 40))
+        assertEquals(VpnPacket.ICMPV6_TYPE_PORT_UNREACHABLE, icmp[40].toInt() and 0xFF)
+        assertEquals(VpnPacket.ICMPV6_CODE_PORT_UNREACHABLE, icmp[41].toInt() and 0xFF)
+        assertEquals(0xE07E, VpnPacket.readShort(icmp, 42)) // python-verified, pseudo-header included
+        assertEquals(inner.copyOfRange(0, 48).toList(), icmp.copyOfRange(48, 96).toList())
+    }
+
+    /** RFC 792's 8 bytes are a *maximum*: a shorter IP payload is quoted only as far as it goes. */
+    @Test
+    fun aShortIpPayload_isQuotedOnlyAsFarAsItGoes() {
+        val packet = ByteArray(25).also { for (i in it.indices) it[i] = (i + 1).toByte() }
+        val ip = VpnPacket.IpHeader(4, 17, byteArrayOf(10, 0, 0, 1), byteArrayOf(10, 0, 0, 2), 20, 5)
+
+        val icmp = VpnPacket.buildIcmpPortUnreachable(ip, packet)!!
+
+        assertEquals("20 + 8 ICMP + (20 + 5 quoted)", 53, icmp.size)
+        assertEquals(packet.toList(), icmp.copyOfRange(28, 53).toList())
+        assertEquals(0xFFFF, VpnPacket.fold16(VpnPacket.sum16(icmp, 0, 20)))
+        assertEquals("odd-length ICMP message still folds with its checksum to zero", 0xFFFF, VpnPacket.fold16(VpnPacket.sum16(icmp, 20, 33)))
+    }
+
+    /** INV-14: an inconsistent header aborts construction — never a packet built from bad lengths. */
+    @Test
+    fun inconsistentHeaders_abortConstruction() {
+        val packet = VpnPacket.buildUdpPacket(
+            src = byteArrayOf(1, 2, 3, 4), dst = byteArrayOf(5, 6, 7, 8), srcPort = 1, dstPort = 2,
+        )
+        val good = VpnPacket.parseIp(packet)!!
+
+        assertNull(
+            "payload claims more bytes than the buffer holds",
+            VpnPacket.buildIcmpPortUnreachable(good.copy(payloadLength = packet.size), packet),
+        )
+        assertNull(
+            "header offset past the buffer",
+            VpnPacket.buildIcmpPortUnreachable(good.copy(payloadOffset = packet.size + 1), packet),
+        )
+        assertNull(
+            "v4 header below the RFC 791 minimum",
+            VpnPacket.buildIcmpPortUnreachable(good.copy(payloadOffset = 4, payloadLength = 12), packet),
+        )
+        assertNull(
+            "address sizes contradict the version",
+            VpnPacket.buildIcmpPortUnreachable(good.copy(src = ByteArray(16), dst = ByteArray(16)), packet),
+        )
+    }
+
     private fun ipv6(hex: String): ByteArray {
         val result = ByteArray(16)
         for (i in 0 until 16) result[i] = hex.substring(i * 2, i * 2 + 2).toInt(16).toByte()

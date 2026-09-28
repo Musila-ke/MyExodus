@@ -35,13 +35,20 @@ data class ProtectionChecks(
  */
 enum class IntegrityStatus { VERIFIED, UNVERIFIED, UNAVAILABLE, FAILED }
 
+/**
+ * The platform's own answer to "is this app exempt from battery optimization", best-effort:
+ * an unreadable state reads as not exempt (needing attention), never as granted. Shared by the
+ * Settings row and the §8.7 battery-prompt gate so the two can never disagree.
+ */
+fun isBatteryExempt(context: Context): Boolean = runCatching {
+    context.getSystemService(PowerManager::class.java)
+        ?.isIgnoringBatteryOptimizations(context.packageName)
+}.getOrNull() ?: false
+
 fun readProtectionChecks(context: Context): ProtectionChecks {
     return ProtectionChecks(
         usageAccess = runCatching { context.hasUsageAccess() }.getOrDefault(false),
-        batteryExempt = runCatching {
-            context.getSystemService(PowerManager::class.java)
-                ?.isIgnoringBatteryOptimizations(context.packageName)
-        }.getOrNull() ?: false,
+        batteryExempt = isBatteryExempt(context),
         // Required on every device since the 2026-09-15 fold: Path B always runs and its wall
         // and warning banner are TYPE_APPLICATION_OVERLAY (enforcement plan v2 §8 Steps 5/7),
         // so stock Android needs the "display over other apps" grant too.
@@ -81,6 +88,22 @@ fun usageAccessSettingsIntent(): Intent = Intent(Settings.ACTION_USAGE_ACCESS_SE
  *  still makes the change there. */
 fun batteryOptimizationSettingsIntent(): Intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
 
+/**
+ * §8.7/D1's direct exemption request — the one place in the app that asks for it, reachable
+ * only from the outage prompt's Fix row after a corroborated interruption (never at first
+ * launch, never from the plain status row). Falls back to the exemption list when the intent
+ * does not resolve on a given build: that is the plan's settings-guidance path, and a dead
+ * intent must not be a dead end.
+ */
+fun requestBatteryExemption(context: Context) {
+    val direct = Intent(
+        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+        packageUri(context),
+    )
+    runCatching { context.startActivity(direct) }
+        .onFailure { context.startActivity(batteryOptimizationSettingsIntent()) }
+}
+
 fun overlaySettingsIntent(context: Context): Intent =
     Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, packageUri(context))
 
@@ -90,6 +113,22 @@ fun appInfoSettingsIntent(context: Context): Intent =
 fun notificationSettingsIntent(context: Context): Intent =
     Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
         .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+
+/**
+ * Plan §5.20: a device with no BIOMETRIC_STRONG-class authenticator cannot approve or unpair —
+ * the one honest fix is enrolling one, so the explicit message routes here. API 30+ has the
+ * dedicated enroll screen; below it, and on OEM builds that skip the enroll screen, the
+ * security settings page hosts the same setting, so a dead intent is not a dead end.
+ */
+fun biometricEnrollSettingsIntent(context: Context) {
+    val direct = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        Intent(Settings.ACTION_BIOMETRIC_ENROLL)
+    } else {
+        Intent(Settings.ACTION_SECURITY_SETTINGS)
+    }
+    runCatching { context.startActivity(direct) }
+        .onFailure { context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) }
+}
 
 /**
  * OEM background-restriction screen. No API reports OEM restriction state, so this is a

@@ -5,6 +5,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 import com.example.myexodus.R
 
@@ -106,3 +107,37 @@ val Typography = Typography(
         letterSpacing = 0.5.sp,
     ),
 )
+
+/**
+ * The same scale stepped up for larger windows — every role at once, so every screen and dialog
+ * inherits it without per-screen sizes. This is a step, not a proportion: a 360dp phone gets the
+ * sizes above verbatim, 600dp+ one step, 840dp+ two. Lengths stay `sp`, so the user's own
+ * accessibility font scale still multiplies on top — converting to dp would freeze text at the
+ * current density and silently disable that setting.
+ */
+internal fun scaledTypography(base: Typography, factor: Float): Typography = Typography(
+    displayLarge = base.displayLarge.scaled(factor),
+    displayMedium = base.displayMedium.scaled(factor),
+    displaySmall = base.displaySmall.scaled(factor),
+    headlineLarge = base.headlineLarge.scaled(factor),
+    headlineMedium = base.headlineMedium.scaled(factor),
+    headlineSmall = base.headlineSmall.scaled(factor),
+    titleLarge = base.titleLarge.scaled(factor),
+    titleMedium = base.titleMedium.scaled(factor),
+    titleSmall = base.titleSmall.scaled(factor),
+    bodyLarge = base.bodyLarge.scaled(factor),
+    bodyMedium = base.bodyMedium.scaled(factor),
+    bodySmall = base.bodySmall.scaled(factor),
+    labelLarge = base.labelLarge.scaled(factor),
+    labelMedium = base.labelMedium.scaled(factor),
+    labelSmall = base.labelSmall.scaled(factor),
+)
+
+private fun TextStyle.scaled(factor: Float): TextStyle = copy(
+    fontSize = fontSize.scaled(factor),
+    lineHeight = lineHeight.scaled(factor),
+    letterSpacing = letterSpacing.scaled(factor),
+)
+
+/** Unspecified and non-sp units pass through: an em-based style must not become sp. */
+private fun TextUnit.scaled(factor: Float): TextUnit = if (isSp) (value * factor).sp else this

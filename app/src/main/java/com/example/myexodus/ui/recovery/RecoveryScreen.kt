@@ -1,6 +1,7 @@
 package com.example.myexodus.ui.recovery
 
 import android.os.SystemClock
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -13,13 +14,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.SelfImprovement
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -57,6 +57,8 @@ import com.example.myexodus.recovery.RecoveryPlanRepository
 import com.example.myexodus.recovery.RecoveryResourceCatalog
 import com.example.myexodus.recovery.RecoverySessionRepository
 import com.example.myexodus.recovery.RecoveryTechnique
+import com.example.myexodus.ui.BackRow
+import com.example.myexodus.ui.NavTile
 import com.example.myexodus.ui.SecureSurface
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.rememberAppLabel
@@ -71,6 +73,8 @@ import kotlinx.coroutines.withContext
 
 private const val VIEW_HISTORY = "history"
 private const val VIEW_CRISIS = "crisis"
+private const val VIEW_TECHNIQUES = "techniques"
+private const val VIEW_PLAN = "plan"
 
 /**
  * Recovery tab — the app-side surface of the shipped friction session (V1 Req 13) plus the
@@ -102,6 +106,9 @@ fun RecoveryScreen(
 ) {
     val scope = rememberCoroutineScope()
     var view by rememberSaveable { mutableStateOf<String?>(null) }
+    // System back leaves a spoke the way its BackRow does — including a live technique
+    // session, whose dispose path records the abandonment. At the hub the shell takes over.
+    BackHandler(enabled = view != null) { view = null }
     var liveSession by remember { mutableStateOf<Pair<RecoveryState, RestrictionRule>?>(null) }
     var remainingSeconds by remember { mutableLongStateOf(0L) }
     var frozenAtSeconds by remember { mutableStateOf<Long?>(null) }
@@ -205,6 +212,18 @@ fun RecoveryScreen(
             BackRow(label = stringResource(R.string.recovery_crisis_back), onBack = { view = null })
             CrisisScreen()
         }
+        view == VIEW_TECHNIQUES -> TechniquesView(
+            inRiskWindow = inRiskWindow,
+            onOpenTechnique = { view = it.id },
+            onBack = { view = null },
+            modifier = modifier,
+        )
+        view == VIEW_PLAN -> PlanView(
+            items = planItems,
+            activeWindowId = activeWindowId,
+            onBack = { view = null },
+            modifier = modifier,
+        )
         technique != null -> {
             // The intervention flow itself is never gated or timed (v2 INV-1; W6 exceptions).
             TechniqueSession(
@@ -224,8 +243,6 @@ fun RecoveryScreen(
             frozenAtSeconds = frozenAtSeconds,
             overrideAvailable = overrideAvailable,
             inRiskWindow = inRiskWindow,
-            planItems = planItems,
-            activeWindowId = activeWindowId,
             onOverride = {
                 val rule = liveSession?.second
                 if (rule != null) {
@@ -240,6 +257,8 @@ fun RecoveryScreen(
                 }
             },
             onOpenTechnique = { view = it.id },
+            onOpenTechniques = { view = VIEW_TECHNIQUES },
+            onOpenPlan = { view = VIEW_PLAN },
             onOpenHistory = { view = VIEW_HISTORY },
             onOpenCrisis = { view = VIEW_CRISIS },
             logOnly = { intensity ->
@@ -351,22 +370,12 @@ private fun TechniqueSession(
     }
 }
 
-@Composable
-private fun BackRow(label: String, onBack: () -> Unit) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-    ) {
-        IconButton(onClick = onBack) {
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = stringResource(R.string.recovery_back),
-            )
-        }
-        Text(label, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-    }
-}
-
+/**
+ * The Recovery hub. The dense page was split (owner ruling 2026-09-22): reference material
+ * (the full catalog, the coaching plan, history) moved behind icon+label tiles, while the
+ * three things an urge needs immediately stayed — the live state, the log action, and the
+ * crisis path, which is never gated behind a tap.
+ */
 @Composable
 private fun HomeView(
     liveSession: Pair<RecoveryState, RestrictionRule>?,
@@ -374,16 +383,17 @@ private fun HomeView(
     frozenAtSeconds: Long?,
     overrideAvailable: Boolean,
     inRiskWindow: Boolean,
-    planItems: List<CoachingStep>,
-    activeWindowId: String?,
     onOverride: () -> Unit,
     onOpenTechnique: (RecoveryTechnique) -> Unit,
+    onOpenTechniques: () -> Unit,
+    onOpenPlan: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenCrisis: () -> Unit,
     logOnly: (Int?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var logging by remember { mutableStateOf(false) }
+    val suggested = RecoveryResourceCatalog.recommended(rating = null, inRiskWindow = inRiskWindow)
     val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
     Column(
         modifier = modifier
@@ -431,19 +441,32 @@ private fun HomeView(
                 )
             }
         }
-        RecoveryResourceCatalog.ordered(inRiskWindow).forEach { technique ->
-            TechniqueCard(technique = technique, onOpen = { onOpenTechnique(technique) })
+        // One suggestion leads (v2 M1.3); the rest of the catalog is one tile away.
+        TechniqueCard(technique = suggested, onOpen = { onOpenTechnique(suggested) })
+
+        Button(onClick = { logging = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.recovery_log_action))
         }
 
-        PlanSection(items = planItems, activeWindowId = activeWindowId)
-
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { logging = true }, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.recovery_log_action))
-            }
-            OutlinedButton(onClick = onOpenHistory, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.recovery_history_title))
-            }
+            NavTile(
+                icon = Icons.Outlined.SelfImprovement,
+                label = stringResource(R.string.recovery_tile_techniques),
+                onClick = onOpenTechniques,
+                modifier = Modifier.weight(1f),
+            )
+            NavTile(
+                icon = Icons.Outlined.Checklist,
+                label = stringResource(R.string.recovery_plan_title),
+                onClick = onOpenPlan,
+                modifier = Modifier.weight(1f),
+            )
+            NavTile(
+                icon = Icons.Outlined.History,
+                label = stringResource(R.string.recovery_history_title),
+                onClick = onOpenHistory,
+                modifier = Modifier.weight(1f),
+            )
         }
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -504,11 +527,59 @@ private fun TechniqueCard(technique: RecoveryTechnique, onOpen: () -> Unit) {
     }
 }
 
-/** The user's coaching plan, inline (W1/W3): steps, if-then plans, and value statements. */
+/** All four techniques — the "choose another" path the hub's single suggestion promises. */
 @Composable
-private fun PlanSection(items: List<CoachingStep>, activeWindowId: String?) {
+private fun TechniquesView(
+    inRiskWindow: Boolean,
+    onOpenTechnique: (RecoveryTechnique) -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
+    Column(
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+    ) {
+        BackRow(label = stringResource(R.string.recovery_tile_techniques), onBack = onBack)
+        Column(
+            modifier = Modifier.padding(horizontal = sidePadding, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            if (inRiskWindow) {
+                Text(
+                    stringResource(R.string.recovery_risk_window_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            RecoveryResourceCatalog.ordered(inRiskWindow).forEach { technique ->
+                TechniqueCard(technique = technique, onOpen = { onOpenTechnique(technique) })
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlanView(
+    items: List<CoachingStep>,
+    activeWindowId: String?,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
+    Column(
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+    ) {
+        BackRow(label = stringResource(R.string.recovery_plan_title), onBack = onBack)
+        Column(modifier = Modifier.padding(horizontal = sidePadding, vertical = 8.dp)) {
+            PlanItems(items = items, activeWindowId = activeWindowId)
+        }
+    }
+}
+
+/** The user's coaching plan (W1/W3): steps, if-then plans, and value statements. */
+@Composable
+private fun PlanItems(items: List<CoachingStep>, activeWindowId: String?) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(stringResource(R.string.recovery_plan_title), style = MaterialTheme.typography.titleMedium)
         if (items.isEmpty()) {
             Text(
                 stringResource(R.string.recovery_plan_empty),
@@ -531,11 +602,7 @@ private fun PlanSection(items: List<CoachingStep>, activeWindowId: String?) {
             )
             kindItems.forEach { item ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "• ${item.actionText}",
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.weight(1f),
-                    )
+                    BulletLine(item.actionText, modifier = Modifier.weight(1f))
                     // OPEN-4 default: every item shows; one tied to the window that is active now
                     // is marked, so the plan can be read in order and still answer "what now?".
                     if (activeWindowId != null && item.associatedTriggerWindow == activeWindowId) {

@@ -62,6 +62,8 @@ class EnrollmentDaoTest {
             AccountabilityDatabase.MIGRATION_7_8, // unpair journal (AD-13a/b)
             AccountabilityDatabase.MIGRATION_8_9, // Step 15 rotation anchors
             AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
+            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
+            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
         ).build()
 
     @Test

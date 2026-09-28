@@ -29,6 +29,10 @@ private val KEY_DISCREET = booleanPreferencesKey("discreet_mode")
 private val KEY_EVAL_UTC = longPreferencesKey("eval_utc")
 private val KEY_EVAL_ELAPSED = longPreferencesKey("eval_elapsed")
 private val KEY_EVAL_BOOT_COUNT = intPreferencesKey("eval_boot_count")
+private val KEY_STREAK_ELAPSED_MS = longPreferencesKey("streak_elapsed_ms")
+private val KEY_STREAK_VERIFIED_UTC = longPreferencesKey("streak_verified_utc")
+private val KEY_STREAK_VERIFIED_ELAPSED = longPreferencesKey("streak_verified_elapsed")
+private val KEY_STREAK_VERIFIED_BOOT = intPreferencesKey("streak_verified_boot")
 
 /** Recorded when the boot count was unreadable. If both the write and the read get this sentinel
  *  they compare equal and can no longer discriminate, leaving [displayedStatusFor]'s elapsed-time
@@ -58,10 +62,25 @@ data class ProtectionSnapshot(
      *  is the wrong track as far as the user can tell). Null = no habit / not known yet;
      *  absent in samples written before this field existed, which renders unlabelled. */
     val habitLabel: String?,
+    /** When the streak fields above were last actually read from the store, and what the
+     *  accumulator stood at then. Absent = never verified (or a sample from before this field
+     *  existed), which the writer treats as "refresh now". The pair is what lets the day count
+     *  stay cached without lying: the accumulator advances 1:1 with elapsedRealtime
+     *  (Decision 17), so `elapsedMs + (now - verifiedElapsed)` proves whether the next whole
+     *  day has been crossed since — no calendar math, no re-read. */
+    val streakSample: StreakSample? = null,
     val discreet: Boolean,
     val evalUtc: Long,
     val evalElapsed: Long,
     val evalBootCount: Int,
+)
+
+/** One observed reading of the streak accumulator, with the clocks it was taken under. */
+data class StreakSample(
+    val elapsedMs: Long,
+    val verifiedUtc: Long,
+    val verifiedElapsed: Long,
+    val verifiedBoot: Int,
 )
 
 /** Decodes a persisted sample; null when nothing was ever written or the record is unusable. */
@@ -76,6 +95,16 @@ fun snapshotFrom(prefs: Preferences?): ProtectionSnapshot? {
         },
         streakDays = prefs[KEY_STREAK_DAYS],
         habitLabel = prefs[KEY_HABIT_LABEL],
+        // Absent accumulator = the sample predates the field (or nothing was verified):
+        // the writer reads that as "verify now", so a partial record fails toward refresh.
+        streakSample = prefs[KEY_STREAK_ELAPSED_MS]?.let { elapsedMs ->
+            StreakSample(
+                elapsedMs = elapsedMs,
+                verifiedUtc = prefs[KEY_STREAK_VERIFIED_UTC] ?: 0L,
+                verifiedElapsed = prefs[KEY_STREAK_VERIFIED_ELAPSED] ?: 0L,
+                verifiedBoot = prefs[KEY_STREAK_VERIFIED_BOOT] ?: UNSET_BOOT_COUNT,
+            )
+        },
         // Discreet is the default (FR5): an absent flag must never disclose.
         discreet = prefs[KEY_DISCREET] ?: true,
         evalUtc = evalUtc,
@@ -90,6 +119,18 @@ fun MutablePreferences.putSnapshot(snapshot: ProtectionSnapshot) {
     if (streakDays == null) remove(KEY_STREAK_DAYS) else this[KEY_STREAK_DAYS] = streakDays
     val habitLabel = snapshot.habitLabel
     if (habitLabel == null) remove(KEY_HABIT_LABEL) else this[KEY_HABIT_LABEL] = habitLabel
+    val streakSample = snapshot.streakSample
+    if (streakSample == null) {
+        remove(KEY_STREAK_ELAPSED_MS)
+        remove(KEY_STREAK_VERIFIED_UTC)
+        remove(KEY_STREAK_VERIFIED_ELAPSED)
+        remove(KEY_STREAK_VERIFIED_BOOT)
+    } else {
+        this[KEY_STREAK_ELAPSED_MS] = streakSample.elapsedMs
+        this[KEY_STREAK_VERIFIED_UTC] = streakSample.verifiedUtc
+        this[KEY_STREAK_VERIFIED_ELAPSED] = streakSample.verifiedElapsed
+        this[KEY_STREAK_VERIFIED_BOOT] = streakSample.verifiedBoot
+    }
     this[KEY_DISCREET] = snapshot.discreet
     this[KEY_EVAL_UTC] = snapshot.evalUtc
     this[KEY_EVAL_ELAPSED] = snapshot.evalElapsed

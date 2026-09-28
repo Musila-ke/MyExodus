@@ -1,6 +1,6 @@
 # Partner Pillar — Implementation Specification (v2)
 
-**Status:** Approved for implementation
+**Status:** ✅ **BUILT — all 20 §7 steps implemented and device-verified (ADR #55, ADR #58); 20/20 §18 DoD boxes checked. Do not build from this document.** Only two verification legs remain open, both named and tracked (not dropped): the FCM foreground/background/Doze device-matrix leg, and the GCP budget-alert *firing* test (configured 2026-09-19, task #34). See §18's unchecked boxes.
 **Supersedes:** v1 (corrected following plan-specific audit — see Section 0)
 **Target Audience:** Implementation engineer / coding agent
 **Stack:** Kotlin, Jetpack Compose, Hilt, Room 3 + SQLCipher (Android Keystore-backed), Firebase (Firestore, Cloud Functions v2 — Node.js 22, `firebase-admin` pinned, Firestore-triggered), FCM, Huawei Push Kit (HMS), Cloud Scheduler

@@ -267,7 +267,7 @@ object AccountabilityModule {
         eventCipher = eventCipher,
         signer = signer,
         epochStore = epochStore,
-        agreementPrivateKey = keystore::agreementPrivateKey,
+        agreementPrivateKey = keystore::agreementPrivateKeyFor,
         sessionKeyManager = sessionKeyManager,
     )
 
@@ -292,7 +292,8 @@ object AccountabilityModule {
             enrollmentDao = enrollmentDao,
             store = store,
             journal = db.unpairStateDao(),
-            destroyAgreementKey = keystore::destroyAgreementKey,
+            destroyPairAgreementKey = keystore::destroyPairAgreementKey,
+            destroyDeviceAgreementKey = keystore::destroyAgreementKey,
             terminatePair = exchange::terminatePair,
             deliverRequest = { partnerUid, row ->
                 val uid = FirebaseAuth.getInstance().currentUser?.uid
@@ -397,10 +398,13 @@ object AccountabilityModule {
         registration = registration,
         secretsRepository = secretsRepository,
         nowEpochMillis = System::currentTimeMillis,
+        ensureIdentityKeys = { keystore.ensureKeys() },
         signingCertificateChain = keystore::signingCertificateChain,
         signingPublicKey = keystore::signingPublicKey,
-        agreementPublicKey = keystore::agreementPublicKey,
-        agreementPrivateKey = keystore::agreementPrivateKey,
+        generateAgreementKey = keystore::generatePairAgreementKey,
+        agreementPublicKey = keystore::pairAgreementPublicKey,
+        agreementPrivateKey = keystore::pairAgreementPrivateKey,
+        destroyAgreementKey = keystore::destroyPairAgreementKey,
     )
 
     @Provides @Singleton
@@ -461,7 +465,7 @@ object AccountabilityModule {
             decoderFor = { enrollment ->
                 val cek = cekDerivation.deriveCek(
                     enrollment.pairId,
-                    keystore.agreementPrivateKey(),
+                    keystore.agreementPrivateKeyFor(enrollment.myAgreementKeyAlias),
                     decodePublicKey(enrollment.partnerAgreementPubKey),
                 )
                 val partnerSigningKey = decodePublicKey(enrollment.partnerSigningPubKey)

@@ -12,6 +12,7 @@ import androidx.core.app.NotificationManagerCompat
 import com.example.myexodus.MainActivity
 import com.example.myexodus.R
 import com.example.myexodus.notifications.NotificationAccess
+import com.example.myexodus.ui.formatDuration
 
 /**
  * Notification surface for app-block protection (blocking-core plan §8.2/§9): the FGS
@@ -25,21 +26,30 @@ object ProtectionNotifications {
     const val CHANNEL_ALERTS = "protection_alerts"
     const val NOTIF_FGS = 1001
     const val NOTIF_DEGRADED = 1002
+    const val NOTIF_OUTAGE = 1003
 
     fun createChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_STATUS, "MyExodus protection", NotificationManager.IMPORTANCE_LOW),
+            NotificationChannel(
+                CHANNEL_STATUS,
+                context.getString(R.string.protection_channel_status_name),
+                NotificationManager.IMPORTANCE_LOW,
+            ),
         )
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ALERTS, "MyExodus protection alerts", NotificationManager.IMPORTANCE_HIGH),
+            NotificationChannel(
+                CHANNEL_ALERTS,
+                context.getString(R.string.protection_channel_alerts_name),
+                NotificationManager.IMPORTANCE_HIGH,
+            ),
         )
     }
 
     fun ongoing(context: Context): Notification = NotificationCompat.Builder(context, CHANNEL_STATUS)
         .setSmallIcon(R.mipmap.ic_launcher)
-        .setContentTitle("Protection active")
-        .setContentText("Restricted apps are blocked as soon as they open.")
+        .setContentTitle(context.getString(R.string.protection_ongoing_title))
+        .setContentText(context.getString(R.string.protection_ongoing_text))
         .setOngoing(true)
         .setPriority(NotificationCompat.PRIORITY_LOW)
         .build()
@@ -73,18 +83,18 @@ object ProtectionNotifications {
                 )
             ProtectionDegradation.APP_STOPPED ->
                 DegradedCopy(
-                    "Protection was stopped",
+                    context.getString(R.string.protection_stopped_title),
                     // Same honest-loss copy as the Home banner (regression finding #1):
                     // "resume blocking" was false while Path A is live after a stop.
-                    "MyExodus was stopped from the Task Manager. Time limits stay paused until you re-enable.",
-                    "Re-enable",
+                    context.getString(R.string.protection_stopped_text),
+                    context.getString(R.string.protection_stopped_action),
                     actionPendingIntent(context, ProtectionActionReceiver.ACTION_REENABLE),
                 )
             ProtectionDegradation.NOTIFICATIONS_OFF ->
                 DegradedCopy(
-                    "Protection status hidden",
-                    "Notifications are off for MyExodus — open the app to see protection status.",
-                    "Open app",
+                    context.getString(R.string.protection_hidden_title),
+                    context.getString(R.string.protection_hidden_text),
+                    context.getString(R.string.protection_hidden_action),
                     PendingIntent.getActivity(
                         context,
                         0,
@@ -126,5 +136,62 @@ object ProtectionNotifications {
         }
         if (!NotificationAccess.canPost(context)) return
         manager.notify(NOTIF_DEGRADED, degraded(context, degradation))
+    }
+
+    /**
+     * D1's outage notification (§8.7): the measured interruption stated as a fact — how long
+     * tracking went unobserved, never why (AD-13). "Fix" opens Settings and consumes the offer;
+     * "Not now" records the decline. Nothing is cancelled by opening the app: the offer stands
+     * until it is answered, declined, or ages out of the freshness window.
+     */
+    fun outage(context: Context, largestWindowMs: Long): Notification {
+        val openSettings = Intent(context, MainActivity::class.java)
+            .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_SETTINGS)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val text = context.getString(
+            R.string.outage_notification_text,
+            formatDuration(largestWindowMs),
+        )
+        return NotificationCompat.Builder(context, CHANNEL_ALERTS)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(context.getString(R.string.outage_notification_title))
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(
+                PendingIntent.getActivity(
+                    context, 0, openSettings,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+            // "Fix" is an activity PendingIntent, not a broadcast: the request itself is fired
+            // from the Settings row the user lands on, so nothing here has to start an activity
+            // from the background (the API-29+ launch restriction).
+            .addAction(
+                0, context.getString(R.string.outage_action_fix),
+                PendingIntent.getActivity(
+                    context, 1, openSettings,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+            .addAction(
+                0, context.getString(R.string.outage_action_later),
+                actionPendingIntent(context, ProtectionActionReceiver.ACTION_OUTAGE_DECLINED),
+            )
+            .build()
+    }
+
+    /** Posts or clears the outage notification; no-op silently when notifications are denied. */
+    // Suppressed for the same reason as updateDegraded: the gate is NotificationAccess.canPost.
+    @SuppressLint("MissingPermission")
+    fun updateOutage(context: Context, largestWindowMs: Long?) {
+        val manager = NotificationManagerCompat.from(context)
+        if (largestWindowMs == null) {
+            manager.cancel(NOTIF_OUTAGE)
+            return
+        }
+        if (!NotificationAccess.canPost(context)) return
+        manager.notify(NOTIF_OUTAGE, outage(context, largestWindowMs))
     }
 }

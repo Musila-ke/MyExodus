@@ -46,7 +46,7 @@ Status: **COMPLETE 2026-09-19** (W1–W8 built; JVM suite green 721/0/0/0/97-cla
 The surface exists (`RecoveryScreen` tab; entry = block-screen button `overlay_open_recovery` → starts friction session → lands on Recovery tab; widget "Manage urge" → same tab). Add the missing content, driven by the existing session state:
 - **Suggested activities section** — ordered by W4's willpower mapping (low window → low-effort grounding first: paced breathing, calming audio if it ships (OPEN-5); high/normal → coaching steps, values, journaling-style prompts).
 - **Coaching steps list** — W3's steps, inline, offline.
-- **Breathing pacer** — 4 s in / 6 s out; honor system "remove animations" (static text pacing); optional haptic tick (default off); rotating prompts every 30 s. Copy in `strings_recovery.xml`; no efficacy claims; "self-help tool, not medical treatment" footer exists on Settings→About.
+- **Breathing pacer** — 4 s in / 6 s out; honor system "remove animations" (static text pacing); optional haptic tick (default off); rotating prompts every 30 s. Copy in `strings_recovery.xml`; no efficacy claims; "self-help tool, not medical treatment" footer exists on Settings→About. *(Footer **built 2026-09-23**, ADR #82: this line was true of the plan and false of the code — no About surface and no such string existed until Settings became an index with an About row. `AboutScreen` + `settings_about_disclaimer` now carry it.)*
 - **Crisis link** — W6 → crisis screen ("Need urgent help?").
 - **Urge-log action** — W2.
 - **Timer** — reuse `RecoveryTimer`/`RecoveryCountdown` as-is. No new countdown math.

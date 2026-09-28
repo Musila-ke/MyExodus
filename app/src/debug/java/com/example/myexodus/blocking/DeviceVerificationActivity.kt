@@ -38,7 +38,7 @@ import kotlinx.coroutines.runBlocking
  * drives the parts that need shell powers (key presses, touch injection) by reacting to
  * MARKER log lines, and asserts the tapjacking result from the victim's logcat lines.
  *
- * Host usage: am start -n <app>/.blocking.DeviceVerificationActivity --es suite <functional|latency|multiwindow|browser|fgs|fgs-down|sync|seed-ui|clear-ui|usage-seed|usage-clear> [--ez requireService false] [--ez preSplit true (multiwindow only: the suite seeds, logs MARKER_MULTIWINDOW_SEEDED, and waits for the host to form the split — host launches the victim fullscreen, then Recents → Split screen → pick a partner app; the suite observes, never launches)] [usage-seed: --es pkg <pkg> --ei limitMs <n> --ei usedMs <n> [--es days <7-char Mon-first, default 1111111 — rule day scope] [--ez quotaOnly true — no window at all: the pure daily-limit rule] [--es anchorDate <yyyy-MM-dd> --es tzAnchor <tzid> — §12 rollover/tz-change legs; defaults: today / device tz] [--es w1 <NOT_DUE|PENDING_DELIVERY|DELIVERED> --es w2 <same> — §12 mid-day-change-while-pending leg; default NOT_DUE] [--ez notifyEngine true — mirrors the editor's post-save onDailyLimitChanged call]; usage-clear: --es pkg <pkg>]. Focus-free row reads (mid-measurement): `am broadcast -n <app>/.blocking.DeviceVerificationReceiver -a usage-read --es pkg <pkg>`.
+ * Host usage: am start -n <app>/.blocking.DeviceVerificationActivity --es suite <functional|latency|multiwindow|browser|fgs|fgs-down|sync|seed-ui|clear-ui|usage-seed|usage-clear> [--ez requireService false] [--ez preSplit true (multiwindow only: the suite seeds, logs MARKER_MULTIWINDOW_SEEDED, and waits for the host to form the split — host launches the victim fullscreen, then Recents → Split screen → pick a partner app; the suite observes, never launches)] [usage-seed: --es pkg <pkg> --ei limitMs <n> --ei usedMs <n> [--es days <7-char Mon-first, default 1111111 — rule day scope] [--ez quotaOnly true — no window at all: the pure daily-limit rule] [--es anchorDate <yyyy-MM-dd> --es tzAnchor <tzid> — §12 rollover/tz-change legs; defaults: today / device tz] [--es w1 <NOT_DUE|PENDING_DELIVERY|DELIVERED> --es w2 <same> — §12 mid-day-change-while-pending leg; default NOT_DUE] [--ez notifyEngine true — mirrors the editor's post-save onDailyLimitChanged call]; usage-clear: --es pkg <pkg> [--ez withRule true — also delete the seeded rule]]. Focus-free row reads (mid-measurement): `am broadcast -n <app>/.blocking.DeviceVerificationReceiver -a usage-read --es pkg <pkg>`.
  *
  * `seed-ui`/`clear-ui` seed and remove four rules (one per live-state branch of the home
  * dashboard) for UI screenshot verification; they keep existing data — no DB reset.
@@ -237,17 +237,27 @@ class DeviceVerificationActivity : Activity() {
         return value
     }
 
-    /** `--es suite usage-clear --es pkg <pkg>` — removes the package's tracker rows only
-     *  (the rule is left as-is; restore its limit via the editor or another usage-seed). */
+    /** `--es suite usage-clear --es pkg <pkg> [--ez withRule true]` — removes the package's
+     *  tracker rows; with `--ez withRule` it also deletes the seeded rule itself (a seeded
+     *  limit left behind is a live block rule — every seeded leg must be able to clean up
+     *  completely). Without the flag the rule is left as-is, the historical contract. */
     private suspend fun usageClearSuite() {
         val pkg = intent.getStringExtra(EXTRA_PKG) ?: error("--es $EXTRA_PKG required")
+        val withRule = intent.getBooleanExtra(EXTRA_WITH_RULE, false)
         val store = entryPoint.appRulesStoreFactory().open() ?: error("store unavailable")
         val profile = store.userProfileDao().observeActive().first() ?: return
         val trackerDao = store.dailyUsageTrackerDao()
         trackerDao.getForProfile(profile.userId)
             .filter { it.packageName == pkg }
             .forEach { trackerDao.delete(it) }
-        Log.i(TAG, "usage cleared pkg=$pkg")
+        val deletedRule = if (withRule) {
+            store.restrictionRuleDao().getByProfileAndPackage(profile.userId, pkg)?.also {
+                entryPoint.rulesRepository().deleteRule(it)
+            }
+        } else {
+            null
+        }
+        Log.i(TAG, "usage cleared pkg=$pkg rule=${deletedRule?.ruleId ?: "left-as-is"}")
     }
 
     // --- functional suite (life-safety x3, tapjacking, browser URL) ---------------------
@@ -675,6 +685,7 @@ class DeviceVerificationActivity : Activity() {
         const val EXTRA_W1 = "w1"
         const val EXTRA_W2 = "w2"
         const val EXTRA_NOTIFY_ENGINE = "notifyEngine"
+        const val EXTRA_WITH_RULE = "withRule"
         const val PROFILE_ID = "device-test-profile"
         const val UI_SEED_PREFIX = "ui-seed"
         val PROFILE = UserProfile(

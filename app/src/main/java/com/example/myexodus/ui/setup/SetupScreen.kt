@@ -2,6 +2,7 @@ package com.example.myexodus.ui.setup
 
 import android.Manifest
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -134,6 +135,11 @@ fun SetupScreen(
     fun advance() {
         if (lastStep) onFinish() else index++
     }
+
+    // System back steps the wizard back while an earlier step exists — the on-screen Back's
+    // twin, so the two back affordances never disagree (ADR #91). At step 0 the platform
+    // default stands: back leaves the app.
+    BackHandler(enabled = index > 0) { index-- }
 
     val primary: Pair<String, () -> Unit> = when (step) {
         SetupStep.USAGE -> if (granted == true) {

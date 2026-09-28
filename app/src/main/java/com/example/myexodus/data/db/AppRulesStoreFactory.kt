@@ -10,6 +10,9 @@ import androidx.room3.migration.Migration
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.SQLiteDriver
 import androidx.sqlite.driver.AndroidSQLiteDriver
+import com.example.myexodus.BuildConfig
+import com.example.myexodus.data.db.entity.UsageLedgerKind
+import com.example.myexodus.data.db.entity.UsageLedgerSource
 import java.io.File
 import java.time.LocalDate
 import java.time.ZoneId
@@ -208,6 +211,117 @@ class AppRulesStoreFactory(
     companion object {
         const val DB_NAME = "myexodus_rules.db"
         private const val TAG = "MyExodusDb"
+
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                // Domain-usage metering (§8 S7.1): the per-(rule, revision, day) active-time
+                // totals. Additive only — every other table is untouched (D-24). DDL is the
+                // exported v10 schema verbatim, including the composite primary key's implicit
+                // index, which Room validates on open.
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS rule_usage_daily (" +
+                        "rule_id TEXT NOT NULL, revision INTEGER NOT NULL, day_key TEXT NOT NULL, " +
+                        "active_ms INTEGER NOT NULL, PRIMARY KEY(rule_id, revision, day_key))",
+                ).use { it.step() }
+            }
+        }
+
+        /**
+         * D-33's rollback path: a release APK built against v9 (mode `OFF`) must be able to
+         * reopen a database that briefly ran at v10. Drops only this feature's table; every other
+         * table survives intact — which is why `fallbackToDestructiveMigrationOnDowngrade()` is
+         * deliberately not used (it would recreate the whole database). Registered in the same
+         * `addMigrations` list as the forward migrations: `RoomDatabase.Builder` selects by
+         * `(from, to)` regardless of direction.
+         */
+        val MIGRATION_10_9 = object : Migration(10, 9) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("DROP TABLE IF EXISTS rule_usage_daily").use { it.step() }
+            }
+        }
+
+        /**
+         * Usage-ledger plan §8.10 / R10: the journal (schema v11) plus its day-aware seeding.
+         * DDL is the exported v11 schema verbatim, spelled plain rather than `IF NOT EXISTS`
+         * (AD-11) so an unexpected pre-existing `usage_ledger` fails the migration loudly
+         * instead of being silently masked — a deliberate departure from this file's other
+         * migrations, which the plan's AD-11 overrides for this step.
+         *
+         * Seeding is never a blind copy of the v10 scalar: the tracker row carries the local
+         * date and the timezone it was anchored under (Decision 20), so a value whose anchor
+         * does not match the migration's own (date, timezone) pair is a *yesterday* value that
+         * no write ever reset — carrying it forward would hand today a budget it never used.
+         * Those seed 0 and leave a local note recording the raw legacy value instead. The
+         * resulting `event_id` is deterministic (`migration_seed:<pkg>`), so the seed row is
+         * unique by construction and RE-runnable.
+         */
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE `usage_ledger` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`event_id` TEXT NOT NULL, `kind` INTEGER NOT NULL, " +
+                        "`wall_clock_ts_ms` INTEGER NOT NULL, `elapsed_start_ms` INTEGER NOT NULL, " +
+                        "`elapsed_end_ms` INTEGER NOT NULL, `boot_count` INTEGER NOT NULL, " +
+                        "`package_name` TEXT NOT NULL, `day_key` TEXT NOT NULL, " +
+                        "`credited_ms` INTEGER NOT NULL, `source` TEXT NOT NULL, " +
+                        "`source_version` TEXT NOT NULL, `references_event_id` TEXT)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE UNIQUE INDEX `index_usage_ledger_event_id` ON `usage_ledger` (`event_id`)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX `index_usage_ledger_package_name_day_key_kind_credited_ms` " +
+                        "ON `usage_ledger` (`package_name`, `day_key`, `kind`, `credited_ms`)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX `index_usage_ledger_wall_clock_ts_ms` " +
+                        "ON `usage_ledger` (`wall_clock_ts_ms`)",
+                ).use { it.step() }
+
+                val today = LocalDate.now().toString()
+                val zoneNow = ZoneId.systemDefault().id
+                // A carryover is an aggregate inherited from legacy state: no reconstructable
+                // sub-timeline, so its interval bounds are 0/0 and it is never read as an
+                // interval event (the §8.13 aggregation is the only thing that touches it).
+                connection.prepare(
+                    "INSERT INTO `usage_ledger` (event_id, kind, wall_clock_ts_ms, elapsed_start_ms, " +
+                        "elapsed_end_ms, boot_count, package_name, day_key, credited_ms, source, " +
+                        "source_version, references_event_id) " +
+                        "SELECT 'migration_seed:' || dt.package_name, ?, ?, 0, 0, 0, " +
+                        "dt.package_name, dt.local_date_anchor, dt.ms_used_today, ?, ?, NULL " +
+                        "FROM daily_usage_tracker dt " +
+                        "WHERE dt.ms_used_today > 0 AND dt.local_date_anchor = ? " +
+                        "AND dt.timezone_id_at_anchor = ? " +
+                        "AND dt.profile_id = (SELECT user_id FROM user_profile WHERE is_active = 1 LIMIT 1)",
+                ).use { stmt ->
+                    stmt.bindLong(1, UsageLedgerKind.MIGRATION_CARRYOVER.toLong())
+                    stmt.bindLong(2, System.currentTimeMillis())
+                    stmt.bindText(3, UsageLedgerSource.MAINTENANCE)
+                    stmt.bindText(4, BuildConfig.VERSION_NAME)
+                    stmt.bindText(5, today)
+                    stmt.bindText(6, zoneNow)
+                    stmt.step()
+                }
+
+                // The deliberately-not-carried-forward values, recorded once, locally, so the
+                // decision is auditable rather than invisible.
+                connection.prepare(
+                    "SELECT dt.package_name, dt.ms_used_today, dt.local_date_anchor " +
+                        "FROM daily_usage_tracker dt WHERE dt.ms_used_today > 0 " +
+                        "AND (dt.local_date_anchor <> ? OR dt.timezone_id_at_anchor <> ?)",
+                ).use { stmt ->
+                    stmt.bindText(1, today)
+                    stmt.bindText(2, zoneNow)
+                    while (stmt.step()) {
+                        Log.w(
+                            TAG,
+                            "ledger seed: dropped stale scalar pkg=${stmt.getText(0)} " +
+                                "ms=${stmt.getLong(1)} anchor=${stmt.getText(2)}",
+                        )
+                    }
+                }
+            }
+        }
 
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override suspend fun migrate(connection: SQLiteConnection) {
@@ -410,16 +524,18 @@ class AppRulesStoreFactory(
         }
 
         /**
-         * Every migration, oldest schema to current — the one list [build] registers. Declared
-         * last: the array reads the migration vals, so it must initialize after them. The
-         * accountability store lost two device upgrades to hand-maintained lists diverging
-         * (7→8 ADR #50, 9→10 ADR #58); this store had the same exposure, so
+         * Every migration, oldest schema to current, plus the one downgrade step (D-33) that
+         * Room selects by `(from, to)` — the one list [build] registers. Declared last: the
+         * array reads the migration vals, so it must initialize after them. The accountability
+         * store lost two device upgrades to hand-maintained lists diverging (7→8 ADR #50, 9→10
+         * ADR #58); this store had the same exposure, so
          * `AppRulesStoreMigrationTest#allMigrations_coverEveryVersionStepToTheDeclaredSchemaVersion`
          * asserts this list covers every step to the version Room creates for a fresh install.
          */
         val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
-            MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+            MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
+            MIGRATION_10_9,
         )
     }
 }

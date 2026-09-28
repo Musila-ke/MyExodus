@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
-    <application>
+    <!-- Debug-only: the local QA test server speaks plain HTTP (I-17's own-app request,
+         PF legs), and targetSdk 28+ blocks cleartext by default. Release is untouched. -->
+    <application android:usesCleartextTraffic="true">
         <activity
             android:name=".blocking.DeviceVerificationActivity"
             android:exported="true" />
@@ -11,17 +13,50 @@
         <activity
             android:name=".accountability.PairingTestActivity"
             android:exported="true" />
+        <!-- First-run wizard re-entry: the production gate shows it once per install, so the
+             physical test phone (never uninstalled, data never cleared) would never see it
+             again. Renders the same SetupScreen against the real monitor. -->
+        <activity
+            android:name=".ui.setup.SetupHarnessActivity"
+            android:exported="true"
+            tools:ignore="ExportedActivity" />
         <!-- Debug-only QA harness: driven by `am broadcast` from the host adb shell,
              which cannot reach a non-exported receiver. Never present in release. -->
         <receiver
             android:name=".blocking.DeviceVerificationReceiver"
             android:exported="true"
             tools:ignore="ExportedReceiver" />
+        <!-- Domain-usage §12.2 harness, same rule: driven by `am broadcast` from the host
+             shell, which cannot reach a non-exported receiver. Fails closed — every command
+             is an explicit action string, and an unknown one is logged and ignored. -->
+        <receiver
+            android:name=".domainusage.DomainUsageTestReceiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver" />
+        <!-- Milestone-delivery §12 harness, same rule: `streak-read` / `streak-catchup`
+             (the boot receiver's catch-up call, which the shell cannot trigger for real
+             because BOOT_COMPLETED is a protected broadcast). -->
+        <receiver
+            android:name=".streaks.StreaksTestReceiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver" />
+        <activity
+            android:name=".domainusage.DomainUsageTestActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            tools:ignore="ExportedActivity" />
         <!-- Emulator-only App Check substitution (two-device rig). A provider so it runs
-             before Application.onCreate and can seed AppCheckInstaller before the install. -->
+             before Application.onCreate and can seed AppCheckInstaller before the install.
+             Also applies the DebugBackend local-suite redirect when a host is stored. -->
         <provider
             android:name=".accountability.DebugAppCheckProvider"
             android:authorities="${applicationId}.debug-appcheck"
             android:exported="false" />
+        <!-- Local-suite rig: host set/clear via `am broadcast` (exported for the host shell). -->
+        <receiver
+            android:name=".accountability.DebugBackendReceiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver" />
     </application>
 </manifest>

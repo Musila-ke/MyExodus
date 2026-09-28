@@ -33,4 +33,16 @@ data class EnrollmentRecord(
      * 0 = pre-v7 enrollment (treated as epoch 0, matching a server doc that never re-paired).
      */
     @ColumnInfo(name = "pairing_epoch") val pairingEpoch: Int = 0,
+    /**
+     * §19.5 item 3: the partner's self-chosen label exchanged during pairing (sanitized
+     * ≤32 chars). Null = absent — the dashboard falls back to the key-id fragment rather
+     * than inventing a name. Null for every pre-v11 enrollment too (migration default).
+     */
+    @ColumnInfo(name = "partner_label") val partnerLabel: String? = null,
+    /**
+     * §19.5 (ADR #106) — this pair's OWN ECDH key alias (Keystore), so unpair shreds only
+     * this pair's key. Null for every pre-v12 enrollment, which used the device-level
+     * agreement key (one key shared by all old pairs; it dies with the last enrollment).
+     */
+    @ColumnInfo(name = "my_agreement_key_alias") val myAgreementKeyAlias: String? = null,
 )

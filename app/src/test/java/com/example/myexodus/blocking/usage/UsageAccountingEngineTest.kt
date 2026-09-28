@@ -2,6 +2,7 @@ package com.example.myexodus.blocking.usage
 
 import android.app.Application
 import android.content.Context
+import android.provider.Settings
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.blocking.usage.EnforcementAction.Block
 import com.example.myexodus.blocking.usage.EnforcementAction.NoAction
@@ -16,7 +17,10 @@ import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.data.db.RulesStoreKeyManager
 import com.example.myexodus.data.db.entity.DailyUsageTracker
 import com.example.myexodus.data.db.entity.RestrictionRule
+import com.example.myexodus.data.db.entity.UsageLedgerKind
+import com.example.myexodus.data.db.entity.UsageLedgerSource
 import com.example.myexodus.data.db.entity.UserProfile
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +28,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -43,11 +48,26 @@ class UsageAccountingEngineTest {
     private lateinit var context: Context
     private lateinit var recovery: RecoveryManager
     private lateinit var db: AppRulesStore
+    private lateinit var ledger: UsageLedgerRepository
     private lateinit var engine: UsageAccountingEngine
+
+    /**
+     * Pinned "now" — local noon of the day this test instance was created. The engine's day
+     * attribution reads the injected clock (§8.5), so a 20–45 min span can never straddle real
+     * midnight mid-suite (flake caught 2026-09-28 00:12). [today] is that same instant's local
+     * date, so assertions and the engine's anchors cannot disagree whatever hour the suite runs.
+     */
+    private val wallNowMs: Long = LocalDate.now().atStartOfDay(ZoneId.systemDefault())
+        .plusHours(12).toInstant().toEpochMilli()
+    private val today: LocalDate =
+        LocalDate.ofInstant(Instant.ofEpochMilli(wallNowMs), ZoneId.systemDefault())
 
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
+        // Pin the boot frame the engine reads, so the §8.9 same-boot overlap scoping is
+        // deterministic instead of depending on the Robolectric default.
+        Settings.Global.putInt(context.contentResolver, Settings.Global.BOOT_COUNT, BOOT)
         val healthStore = DatabaseHealthStore()
         recovery = RecoveryManager(
             context, FakeKeyManager(), ActivityLogKeyManager(context), RulesStoreKeyManager(context), healthStore,
@@ -55,11 +75,10 @@ class UsageAccountingEngineTest {
         recovery.resetAllData()
         val factory = AppRulesStoreFactory(context, recovery, healthStore)
         db = factory.open()!!
-        engine = UsageAccountingEngine(
-            factory,
-            Dispatchers.IO.limitedParallelism(1),
-            com.example.myexodus.telemetry.CrashReporting(context),
-        )
+        val dispatcher = Dispatchers.IO.limitedParallelism(1)
+        val crashReporting = com.example.myexodus.telemetry.CrashReporting(context)
+        ledger = UsageLedgerRepository(factory, dispatcher, crashReporting)
+        engine = UsageAccountingEngine(factory, dispatcher, crashReporting, ledger, context) { wallNowMs }
         kotlinx.coroutines.runBlocking {
             db.userProfileDao().insert(
                 UserProfile(
@@ -117,31 +136,31 @@ class UsageAccountingEngineTest {
 
     @Test
     fun warningLifecycle_pendingRetriesThenDelivered_thenBlockAtLimit() = runTest {
-        assertEquals(NoAction, engine.processUsageObservation(PKG, 19 * MIN + 59 * SEC, 10 * SEC))
-        assertEquals(ShowWarning(1, 10 * MIN), engine.processUsageObservation(PKG, 1 * SEC, 20 * SEC))
+        assertEquals(NoAction, engine.processUsageObservation(PKG, 19 * MIN + 59 * SEC, 10 * SEC, UsageLedgerSource.PATH_A))
+        assertEquals(ShowWarning(1, 10 * MIN), engine.processUsageObservation(PKG, 1 * SEC, 20 * SEC, UsageLedgerSource.PATH_A))
         // Undelivered → retried on the next observation (Decision 14).
-        assertEquals(ShowWarning(1, 10 * MIN), engine.processUsageObservation(PKG, 0L, 30 * SEC))
+        assertEquals(ShowWarning(1, 10 * MIN), engine.processUsageObservation(PKG, 0L, 30 * SEC, UsageLedgerSource.PATH_A))
         engine.markWarningDelivered(PKG, 1)
         engine.markWarningDelivered(PKG, 1)
         assertEquals(WarningState.DELIVERED, trackerRow()!!.warning1State)
-        assertEquals(NoAction, engine.processUsageObservation(PKG, 4 * MIN + 59 * SEC, 40 * SEC))
-        assertEquals(ShowWarning(2, 5 * MIN), engine.processUsageObservation(PKG, 1 * SEC, 50 * SEC))
+        assertEquals(NoAction, engine.processUsageObservation(PKG, 4 * MIN + 59 * SEC, 40 * SEC, UsageLedgerSource.PATH_A))
+        assertEquals(ShowWarning(2, 5 * MIN), engine.processUsageObservation(PKG, 1 * SEC, 50 * SEC, UsageLedgerSource.PATH_A))
         engine.markWarningDelivered(PKG, 2)
-        assertEquals(NoAction, engine.processUsageObservation(PKG, 4 * MIN + 59 * SEC, 60 * SEC))
-        assertEquals(Block, engine.processUsageObservation(PKG, 1 * SEC, 70 * SEC))
+        assertEquals(NoAction, engine.processUsageObservation(PKG, 4 * MIN + 59 * SEC, 60 * SEC, UsageLedgerSource.PATH_A))
+        assertEquals(Block, engine.processUsageObservation(PKG, 1 * SEC, 70 * SEC, UsageLedgerSource.PATH_A))
         assertEquals(true, trackerRow()!!.blockedToday)
         // Above the limit every observation keeps returning Block (Step 4 re-arm contract).
-        assertEquals(Block, engine.processUsageObservation(PKG, 0L, 80 * SEC))
+        assertEquals(Block, engine.processUsageObservation(PKG, 0L, 80 * SEC, UsageLedgerSource.PATH_A))
     }
 
     @Test
     fun rolloverRunsBeforeEvaluation_discardingStaleDay() = runTest {
-        seedTracker(LocalDate.now().minusDays(1).toString(), msUsed = 29 * MIN, blocked = true)
+        seedTracker(today.minusDays(1).toString(), msUsed = 29 * MIN, blocked = true)
         // Without rollover-first this observation would be 29+1 = 30 min → Block.
-        assertEquals(NoAction, engine.processUsageObservation(PKG, 1 * MIN, 10 * SEC))
+        assertEquals(NoAction, engine.processUsageObservation(PKG, 1 * MIN, 10 * SEC, UsageLedgerSource.PATH_A))
         val row = trackerRow()!!
         assertEquals(1 * MIN, row.msUsedToday)
-        assertEquals(LocalDate.now().toString(), row.localDateAnchor)
+        assertEquals(today.toString(), row.localDateAnchor)
         assertEquals(false, row.blockedToday)
         assertEquals(WarningState.NOT_DUE, row.warning1State)
         assertEquals(WarningState.NOT_DUE, row.warning2State)
@@ -150,8 +169,8 @@ class UsageAccountingEngineTest {
     @Test
     fun rollover_anyAnchorMismatchResets_coveredByTimezoneMoveCase() = runTest {
         // Decision 20: any stored-vs-current date mismatch rolls, regardless of direction.
-        seedTracker(LocalDate.now().plusDays(1).toString(), msUsed = 5 * MIN)
-        assertEquals(NoAction, engine.processUsageObservation(PKG, 2 * MIN, 10 * SEC))
+        seedTracker(today.plusDays(1).toString(), msUsed = 5 * MIN)
+        assertEquals(NoAction, engine.processUsageObservation(PKG, 2 * MIN, 10 * SEC, UsageLedgerSource.PATH_A))
         assertEquals(2 * MIN, trackerRow()!!.msUsedToday)
     }
 
@@ -161,7 +180,7 @@ class UsageAccountingEngineTest {
         var now = 0L
         repeat(3) {
             now += 10 * SEC
-            assertEquals(NoAction, engine.processUsageObservation(PKG, now - sessionStart, now))
+            assertEquals(NoAction, engine.processUsageObservation(PKG, now - sessionStart, now, UsageLedgerSource.PATH_A))
             sessionStart = now
         }
         // Incremental deltas sum to 30s; a double-counting caller would record 10+20+30 = 60s.
@@ -172,11 +191,11 @@ class UsageAccountingEngineTest {
 
     @Test
     fun midDayLimitChange_lowerBlocksImmediately_raiseUnblocks() = runTest {
-        engine.processUsageObservation(PKG, 29 * MIN, 10 * SEC)
+        engine.processUsageObservation(PKG, 29 * MIN, 10 * SEC, UsageLedgerSource.PATH_A)
         setLimit(20 * MIN)
         engine.onDailyLimitChanged(PKG)
         assertEquals(true, trackerRow()!!.blockedToday)
-        assertEquals(Block, engine.processUsageObservation(PKG, 0L, 20 * SEC))
+        assertEquals(Block, engine.processUsageObservation(PKG, 0L, 20 * SEC, UsageLedgerSource.PATH_A))
 
         setLimit(35 * MIN)
         engine.onDailyLimitChanged(PKG)
@@ -186,16 +205,16 @@ class UsageAccountingEngineTest {
         assertEquals(WarningState.NOT_DUE, row.warning2State)
         // New thresholds are 25/30 min: 29 min of usage is past the first one again —
         // and the remaining-budget copy reflects the new limit (6 min of 35).
-        assertEquals(ShowWarning(1, 6 * MIN), engine.processUsageObservation(PKG, 0L, 30 * SEC))
+        assertEquals(ShowWarning(1, 6 * MIN), engine.processUsageObservation(PKG, 0L, 30 * SEC, UsageLedgerSource.PATH_A))
     }
 
     @Test
     fun limitRaised_recomputesThresholds_notJustClearsState() = runTest {
-        engine.processUsageObservation(PKG, 29 * MIN, 10 * SEC)
+        engine.processUsageObservation(PKG, 29 * MIN, 10 * SEC, UsageLedgerSource.PATH_A)
         setLimit(60 * MIN)
         engine.onDailyLimitChanged(PKG)
         // New thresholds are 50/55 min — 29 min must not re-warn (proves the cache recomputed).
-        assertEquals(NoAction, engine.processUsageObservation(PKG, 0L, 20 * SEC))
+        assertEquals(NoAction, engine.processUsageObservation(PKG, 0L, 20 * SEC, UsageLedgerSource.PATH_A))
     }
 
     // --- §9 error-table rows reachable from the engine ---
@@ -203,15 +222,15 @@ class UsageAccountingEngineTest {
     @Test
     fun nonPositiveLimit_blocksImmediately() = runTest {
         setLimit(0L)
-        assertEquals(Block, engine.processUsageObservation(PKG, 1 * SEC, 10 * SEC))
+        assertEquals(Block, engine.processUsageObservation(PKG, 1 * SEC, 10 * SEC, UsageLedgerSource.PATH_A))
         assertEquals(true, trackerRow()!!.blockedToday)
         setLimit(-5 * MIN)
-        assertEquals(Block, engine.processUsageObservation(PKG, 0L, 20 * SEC))
+        assertEquals(Block, engine.processUsageObservation(PKG, 0L, 20 * SEC, UsageLedgerSource.PATH_A))
     }
 
     @Test
     fun untrackedPackage_noActionAndNoRowCreated() = runTest {
-        assertEquals(NoAction, engine.processUsageObservation("com.other.app", 5 * SEC, 10 * SEC))
+        assertEquals(NoAction, engine.processUsageObservation("com.other.app", 5 * SEC, 10 * SEC, UsageLedgerSource.PATH_A))
         assertNull(db.dailyUsageTrackerDao().findByPackage(PROFILE_ID, "com.other.app"))
     }
 
@@ -219,7 +238,7 @@ class UsageAccountingEngineTest {
     fun disabledRule_isUntracked_noAccumulation() = runTest {
         val rule = db.restrictionRuleDao().getById(RULE_ID)!!
         db.restrictionRuleDao().update(rule.copy(isEnabled = false))
-        assertEquals(NoAction, engine.processUsageObservation(PKG, 5 * SEC, 10 * SEC))
+        assertEquals(NoAction, engine.processUsageObservation(PKG, 5 * SEC, 10 * SEC, UsageLedgerSource.PATH_A))
         assertNull(trackerRow())
     }
 
@@ -229,11 +248,11 @@ class UsageAccountingEngineTest {
     @Test
     fun expiredRule_isUntracked_noAccumulationNoWarning() = runTest {
         val rule = db.restrictionRuleDao().getById(RULE_ID)!!
-        db.restrictionRuleDao().update(rule.copy(blockExpiresAt = System.currentTimeMillis() - 1))
-        seedTracker(anchor = LocalDate.now().toString(), msUsed = 29 * MIN)
+        db.restrictionRuleDao().update(rule.copy(blockExpiresAt = wallNowMs - 1))
+        seedTracker(anchor = today.toString(), msUsed = 29 * MIN)
 
         // Past the level-1 threshold: a tracked rule would return ShowWarning here.
-        assertEquals(NoAction, engine.processUsageObservation(PKG, 1 * SEC, 10 * SEC))
+        assertEquals(NoAction, engine.processUsageObservation(PKG, 1 * SEC, 10 * SEC, UsageLedgerSource.PATH_A))
         assertEquals(29 * MIN, trackerRow()!!.msUsedToday)
         assertEquals(false, trackerRow()!!.blockedToday)
         assertNull(engine.remainingBudgetMs(PKG))
@@ -247,24 +266,24 @@ class UsageAccountingEngineTest {
         // 45 min against a 30 min limit: on an active day this is Block — on an inactive day
         // the rule does not operate, so nothing accrues, nothing blocks, and no row is even
         // opened for the day.
-        assertEquals(NoAction, engine.processUsageObservation(PKG, 45 * MIN, 10 * SEC))
+        assertEquals(NoAction, engine.processUsageObservation(PKG, 45 * MIN, 10 * SEC, UsageLedgerSource.PATH_A))
         assertNull(trackerRow())
     }
 
     @Test
     fun activeDay_stillAccruesAndBlocks() = runTest {
         setDayScope(daysOnlyToday())
-        assertEquals(Block, engine.processUsageObservation(PKG, 45 * MIN, 10 * SEC))
+        assertEquals(Block, engine.processUsageObservation(PKG, 45 * MIN, 10 * SEC, UsageLedgerSource.PATH_A))
         assertEquals(45 * MIN, trackerRow()!!.msUsedToday)
     }
 
     @Test
     fun inactiveDay_stillRollsAStaleRow_withoutAccruing() = runTest {
         setDayScope(daysExceptToday())
-        seedTracker(LocalDate.now().minusDays(1).toString(), msUsed = 29 * MIN, blocked = true)
-        assertEquals(NoAction, engine.processUsageObservation(PKG, 1 * MIN, 10 * SEC))
+        seedTracker(today.minusDays(1).toString(), msUsed = 29 * MIN, blocked = true)
+        assertEquals(NoAction, engine.processUsageObservation(PKG, 1 * MIN, 10 * SEC, UsageLedgerSource.PATH_A))
         val row = trackerRow()!!
-        assertEquals(LocalDate.now().toString(), row.localDateAnchor)
+        assertEquals(today.toString(), row.localDateAnchor)
         assertEquals(0L, row.msUsedToday)
         assertEquals(false, row.blockedToday)
     }
@@ -276,7 +295,7 @@ class UsageAccountingEngineTest {
         db.dailyUsageTrackerDao().insert(
             DailyUsageTracker(
                 trackerId = "stale", profileId = PROFILE_ID, packageName = PKG,
-                localDateAnchor = LocalDate.now().minusDays(1).toString(),
+                localDateAnchor = today.minusDays(1).toString(),
                 timezoneIdAtAnchor = "UTC", msUsedToday = 29 * MIN,
                 warning1State = WarningState.DELIVERED, warning2State = WarningState.PENDING_DELIVERY,
                 blockedToday = true,
@@ -285,7 +304,7 @@ class UsageAccountingEngineTest {
         db.dailyUsageTrackerDao().insert(
             DailyUsageTracker(
                 trackerId = "today", profileId = PROFILE_ID, packageName = TODAY_PKG,
-                localDateAnchor = LocalDate.now().toString(),
+                localDateAnchor = today.toString(),
                 timezoneIdAtAnchor = "UTC", msUsedToday = 5 * MIN,
                 warning1State = WarningState.DELIVERED, warning2State = WarningState.NOT_DUE,
                 blockedToday = true,
@@ -296,7 +315,7 @@ class UsageAccountingEngineTest {
 
         val rolled = db.dailyUsageTrackerDao().findByPackage(PROFILE_ID, PKG)!!
         assertEquals(0L, rolled.msUsedToday)
-        assertEquals(LocalDate.now().toString(), rolled.localDateAnchor)
+        assertEquals(today.toString(), rolled.localDateAnchor)
         assertEquals(false, rolled.blockedToday)
         assertEquals(WarningState.NOT_DUE, rolled.warning1State)
         assertEquals(WarningState.NOT_DUE, rolled.warning2State)
@@ -308,6 +327,188 @@ class UsageAccountingEngineTest {
 
         // Second run rolls nothing (idempotent — the sweep may fire twice around the boundary).
         assertEquals(0, engine.rolloverStaleDays())
+    }
+
+    // --- reconcileWithPlatform (OPD #28(a): seed from the platform's own number) ---
+
+    @Test
+    fun reconcile_seedsFreshTracker_andBlocksWhenPlatformIsOverLimit() = runTest {
+        // The device-caught shape: no tracker row (rule was paused / just created), platform
+        // reports 45 min against a 30 min limit.
+        engine.reconcileWithPlatform(PKG, 45 * MIN)
+        val row = trackerRow()!!
+        assertEquals(45 * MIN, row.msUsedToday)
+        assertEquals(true, row.blockedToday)
+        assertEquals(WarningState.NOT_DUE, row.warning1State)
+        // The next observation is past the limit and keeps the block armed.
+        assertEquals(Block, engine.processUsageObservation(PKG, 0L, 10 * SEC, UsageLedgerSource.PATH_A))
+    }
+
+    @Test
+    fun reconcile_isMonotone_lowerPlatformNeverLowersUsageOrUnblocks() = runTest {
+        engine.processUsageObservation(PKG, 20 * MIN, 10 * SEC, UsageLedgerSource.PATH_A)
+        engine.reconcileWithPlatform(PKG, 45 * MIN)
+        assertEquals(45 * MIN, trackerRow()!!.msUsedToday)
+        // A second read (or a stale one) below the credited amount must not roll it back —
+        // the platform number is absolute, the live paths' credit is already in it.
+        engine.reconcileWithPlatform(PKG, 10 * MIN)
+        assertEquals(45 * MIN, trackerRow()!!.msUsedToday)
+        assertEquals(true, trackerRow()!!.blockedToday)
+    }
+
+    @Test
+    fun reconcile_nullOrZeroPlatform_noOpNoRowCreated() = runTest {
+        engine.reconcileWithPlatform(PKG, null)
+        engine.reconcileWithPlatform(PKG, 0L)
+        assertNull(trackerRow())
+    }
+
+    @Test
+    fun reconcile_inactiveDayScope_neverSeeds() = runTest {
+        setDayScope(daysExceptToday())
+        engine.reconcileWithPlatform(PKG, 45 * MIN)
+        assertNull(trackerRow())
+    }
+
+    @Test
+    fun reconcile_staleRow_rollsThenSeeds() = runTest {
+        seedTracker(today.minusDays(1).toString(), msUsed = 29 * MIN, blocked = true)
+        engine.reconcileWithPlatform(PKG, 45 * MIN)
+        val row = trackerRow()!!
+        assertEquals(today.toString(), row.localDateAnchor)
+        assertEquals(45 * MIN, row.msUsedToday)
+        assertEquals(true, row.blockedToday)
+    }
+
+    @Test
+    fun reconcile_disabledRuleOrNoLimit_isUntracked() = runTest {
+        val rule = db.restrictionRuleDao().getById(RULE_ID)!!
+        db.restrictionRuleDao().update(rule.copy(isEnabled = false))
+        engine.reconcileWithPlatform(PKG, 45 * MIN)
+        assertNull(trackerRow())
+
+        db.restrictionRuleDao().update(rule.copy(dailyLimitMs = 0L))
+        engine.reconcileWithPlatform(PKG, 45 * MIN)
+        assertNull(trackerRow())
+    }
+
+    // --- creditReconciledWindow (§8.9/§8.11: platform-derived recovery as RECONCILIATION) ---
+
+    @Test
+    fun reconciledWindow_creditsAsReconciliation_andTheRebuildReproducesIt() = runTest {
+        val credited = engine.creditReconciledWindow(PKG, 100_000L, 100_000L + 5 * MIN, 5 * MIN, UsageLedgerSource.MAINTENANCE)
+
+        assertEquals(5 * MIN, credited)
+        assertEquals(5 * MIN, trackerRow()!!.msUsedToday)
+        val row = db.usageLedgerDao().rowsOfKindSince(UsageLedgerKind.RECONCILIATION, 0L).single()
+        assertEquals(UsageLedgerKind.RECONCILIATION, row.kind)
+        assertEquals(5 * MIN, row.creditedMs)
+        assertEquals(100_000L, row.elapsedStartMs)
+        // §8.13: RECONCILIATION is in the resolving set, so the projection it advanced is
+        // exactly what a rebuild re-derives.
+        db.dailyUsageTrackerDao().update(trackerRow()!!.copy(msUsedToday = 0L))
+        assertEquals(1, ledger.rebuildProjection())
+        assertEquals(5 * MIN, trackerRow()!!.msUsedToday)
+    }
+
+    @Test
+    fun reconciledWindow_overlappingAccountingRow_creditsOnlyTheUncoveredRemainder() = runTest {
+        // A live observation already credited [300_000, 600_000) — the first half of the
+        // recovered window.
+        engine.processUsageObservation(PKG, 5 * MIN, 600_000L, UsageLedgerSource.PATH_A)
+
+        val credited = engine.creditReconciledWindow(PKG, 300_000L, 900_000L, 10 * MIN, UsageLedgerSource.MAINTENANCE)
+
+        // Half the window was already accounted → half the foreground credit survives.
+        assertEquals(5 * MIN, credited)
+        assertEquals(10 * MIN, trackerRow()!!.msUsedToday)
+    }
+
+    @Test
+    fun reconciledWindow_fullyCoveredWindow_creditsNothingAndWritesNoRow() = runTest {
+        engine.processUsageObservation(PKG, 5 * MIN, 600_000L, UsageLedgerSource.PATH_A)
+
+        val credited = engine.creditReconciledWindow(PKG, 300_000L, 600_000L, 5 * MIN, UsageLedgerSource.MAINTENANCE)
+
+        assertEquals(0L, credited)
+        assertEquals(5 * MIN, trackerRow()!!.msUsedToday)
+        assertTrue(db.usageLedgerDao().rowsOfKindSince(UsageLedgerKind.RECONCILIATION, 0L).isEmpty())
+    }
+
+    @Test
+    fun reconciledWindow_rerunInsideTheCreditedSpan_addsNothing() = runTest {
+        engine.creditReconciledWindow(PKG, 1_000_000L, 1_000_000L + 5 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE)
+
+        // The same recovery re-expressed with tighter bounds: covered, so nothing — the
+        // overlap check (not the event id) is what absorbs it.
+        val rerun = engine.creditReconciledWindow(PKG, 1_010_000L, 1_000_000L + 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE)
+
+        assertEquals(0L, rerun)
+        assertEquals(4 * MIN, trackerRow()!!.msUsedToday)
+    }
+
+    @Test
+    fun reconciledWindow_canDeliverTheVerdictItsOutageSwallowed() = runTest {
+        seedTracker(anchor = today.toString(), msUsed = 29 * MIN)
+
+        val credited = engine.creditReconciledWindow(PKG, 0L, 2 * MIN, 2 * MIN, UsageLedgerSource.MAINTENANCE)
+
+        assertEquals(2 * MIN, credited)
+        // 31 min against the 30 min limit: the recovered credit re-derives the block and
+        // journals the verdict change exactly as a live observation would.
+        assertEquals(true, trackerRow()!!.blockedToday)
+        assertEquals(1, db.usageLedgerDao().rowsOfKindSince(UsageLedgerKind.RULE_EVALUATION, 0L).size)
+    }
+
+    @Test
+    fun reconciledWindow_staleRow_rollsThenCredits() = runTest {
+        seedTracker(anchor = today.minusDays(1).toString(), msUsed = 29 * MIN, blocked = true)
+
+        assertEquals(4 * MIN, engine.creditReconciledWindow(PKG, 0L, 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE))
+
+        val row = trackerRow()!!
+        assertEquals(today.toString(), row.localDateAnchor)
+        assertEquals(4 * MIN, row.msUsedToday)
+        assertEquals(false, row.blockedToday)
+    }
+
+    @Test
+    fun reconciledWindow_ignoresRowsFromAnotherBootsElapsedFrame() = runTest {
+        // §8.5: elapsed values reset every boot, so an old frame's numbers landing in the same
+        // range are a coincidence, not coverage — the credit must not be scaled down by them.
+        ledger.appendStandalone(
+            LedgerEventDraft(
+                kind = UsageLedgerKind.ACCOUNTING,
+                packageName = PKG,
+                creditedMs = 5 * MIN,
+                elapsedStartMs = 300_000L,
+                elapsedEndMs = 600_000L,
+                bootCount = BOOT - 1,
+                source = UsageLedgerSource.PATH_A,
+                wallClockTsMs = wallNowMs - 60_000L,
+            ),
+        )
+
+        val credited = engine.creditReconciledWindow(PKG, 300_000L, 900_000L, 10 * MIN, UsageLedgerSource.MAINTENANCE)
+
+        assertEquals(10 * MIN, credited)
+    }
+
+    @Test
+    fun reconciledWindow_untrackedOrDegenerateInputs_creditNothing() = runTest {
+        // Zero/negative foreground or a non-positive span is not a recovery.
+        assertEquals(0L, engine.creditReconciledWindow(PKG, 0L, 4 * MIN, 0L, UsageLedgerSource.MAINTENANCE))
+        assertEquals(0L, engine.creditReconciledWindow(PKG, 4 * MIN, 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE))
+        // Untracked package, disabled rule, inactive day scope: no accrual, no row.
+        assertEquals(0L, engine.creditReconciledWindow("com.other.app", 0L, 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE))
+        val rule = db.restrictionRuleDao().getById(RULE_ID)!!
+        db.restrictionRuleDao().update(rule.copy(isEnabled = false))
+        assertEquals(0L, engine.creditReconciledWindow(PKG, 0L, 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE))
+        db.restrictionRuleDao().update(rule.copy(isEnabled = true))
+        setDayScope(daysExceptToday())
+        assertEquals(0L, engine.creditReconciledWindow(PKG, 0L, 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE))
+        assertNull(trackerRow())
+        assertTrue(db.usageLedgerDao().rowsOfKindSince(UsageLedgerKind.RECONCILIATION, 0L).isEmpty())
     }
 
     // --- Helpers ---
@@ -343,7 +544,7 @@ class UsageAccountingEngineTest {
     private fun daysOnlyToday(): String = dayString(invert = false)
 
     private fun dayString(invert: Boolean): String {
-        val todayIndex = LocalDate.now().dayOfWeek.value - 1
+        val todayIndex = today.dayOfWeek.value - 1
         return (0..6).joinToString("") { index -> if ((index == todayIndex) != invert) "1" else "0" }
     }
 
@@ -360,5 +561,6 @@ class UsageAccountingEngineTest {
         const val TODAY_PKG = "com.today.app"
         const val SEC = 1_000L
         const val MIN = 60_000L
+        const val BOOT = 7
     }
 }

@@ -66,6 +66,22 @@ class HabitRepository(
     /** Last persisted snapshot; null until a habit is onboarded or evaluated. */
     val state: StateFlow<HabitState?> = _state.asStateFlow()
 
+    private val _resolved = MutableStateFlow(false)
+
+    /**
+     * True once [state] carries a definite answer — a habit's state, or "none is set up".
+     * Distinct from `state == null`, which also means "the store has not been read yet"
+     * (pre-unlock process start, first tick). The widget's writer needs the distinction so a
+     * not-yet-read null can never overwrite a known streak ("No streak yet" flicker).
+     */
+    val resolved: StateFlow<Boolean> = _resolved.asStateFlow()
+
+    /** The only way [state] changes: every definite read marks the repository resolved. */
+    private fun publishState(state: HabitState?) {
+        _state.value = state
+        _resolved.value = true
+    }
+
     sealed interface OnboardingResult {
         data class Ready(val state: HabitState) : OnboardingResult
 
@@ -184,7 +200,7 @@ class HabitRepository(
                 }
             },
         )
-        _state.value = state
+        publishState(state)
         scheduler.reconcile(habitId)
         return OnboardingResult.Ready(state)
     }
@@ -203,7 +219,7 @@ class HabitRepository(
             evaluateLocked(db, habitId, forceDisplay = true)
             db.withWriteTransaction { relapseOnce(db, habitId, backdatedRelapseAt) }
         }
-        if (result is RelapseResult.RolledOver) _state.value = result.state
+        if (result is RelapseResult.RolledOver) publishState(result.state)
         scheduler.reconcile(habitId)
         return result
     }
@@ -220,14 +236,14 @@ class HabitRepository(
     suspend fun refreshActive(): HabitState? {
         val db = storeFactory.open() ?: return _state.value
         val profile = db.userProfileDao().getActive() ?: run {
-            _state.value = null
+            publishState(null)
             return null
         }
         val state = evaluationMutex.withLock {
             val habit = db.habitProgressDao().getSelected(profile.userId)
                 ?: db.habitProgressDao().getFirstForProfile(profile.userId)
             if (habit == null) {
-                _state.value = null
+                publishState(null)
                 null
             } else {
                 evaluateLocked(db, habit.progressId, forceDisplay = true)
@@ -291,7 +307,7 @@ class HabitRepository(
             val streak = db.recoveryStreakDao().getActiveStreak(habitId) ?: return@withWriteTransaction
             db.milestoneEventDao().acknowledge(streak.streakId, milestoneDay, readings().tWallMillis)
         }
-        loadState(db, habitId)?.let { _state.value = it }
+        loadState(db, habitId)?.let { publishState(it) }
     }
 
     /**
@@ -311,7 +327,7 @@ class HabitRepository(
                     forceDisplay ||
                     (outcome.state != null && outcome.state.habitId == _state.value?.habitId)
                 ) {
-                    _state.value = outcome.state
+                    publishState(outcome.state)
                 }
                 return outcome.state
             }

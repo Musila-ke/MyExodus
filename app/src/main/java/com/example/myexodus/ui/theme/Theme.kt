@@ -5,15 +5,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import com.example.myexodus.ui.rememberWindowWidth
+import com.example.myexodus.ui.typeScaleFactor
 
 // Internal, not private: the home-screen widget renders from these same two schemes
 // (widget/DesertDawnGlanceTheme.kt) so Desert Dawn keeps exactly one definition.
 internal val LightColorScheme = lightColorScheme(
     primary = TealLight,
     onPrimary = OnPrimaryLight,
-    primaryContainer = Color(0xFFD2ECE8),
-    onPrimaryContainer = Color(0xFF0B3A35),
+    primaryContainer = PrimaryContainerLight,
+    onPrimaryContainer = OnPrimaryContainerLight,
     secondary = Color(0xFF8A8075),
     onSecondary = Color.White,
     // Warm taupe container (M3 baseline purple was leaking into the nav pill, tonal buttons,
@@ -52,8 +57,8 @@ internal val LightColorScheme = lightColorScheme(
 internal val DarkColorScheme = darkColorScheme(
     primary = TealDark,
     onPrimary = OnPrimaryDark,
-    primaryContainer = Color(0xFF123C37),
-    onPrimaryContainer = Color(0xFFC4E8E3),
+    primaryContainer = PrimaryContainerDark,
+    onPrimaryContainer = OnPrimaryContainerDark,
     secondary = MutedDark,
     onSecondary = Color(0xFF201C18),
     secondaryContainer = Color(0xFF3A342C),
@@ -87,16 +92,32 @@ internal val DarkColorScheme = darkColorScheme(
     onErrorContainer = Color(0xFFF5C9C0),
 )
 
+/**
+ * Which scheme is live, for the few surfaces whose *role* has no M3 slot that maps to both
+ * schemes at once — the floating nav bar is white in light (container-lowest) but must be an
+ * elevated ink surface in dark (container-high); neither role alone means "the bar".
+ */
+internal val LocalIsDarkTheme = staticCompositionLocalOf { false }
+
+/** Type steps up once past 600dp and twice past 840dp; the ramp itself lives in
+ *  Adaptive.kt (`WindowWidth.typeScaleFactor`) so the View-world block surfaces ramp with
+ *  the same numbers. Layout adapts separately (AppShell's ContentMaxWidth). */
 @Composable
 fun MyExodusTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
+    val widthClass = rememberWindowWidth()
+    val typography = remember(widthClass) {
+        scaledTypography(Typography, widthClass.typeScaleFactor)
+    }
     // Brand palette is fixed (Desert Dawn) — dynamic color is intentionally off so the
     // chosen identity survives on Android 12+.
-    MaterialTheme(
-        colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
-        typography = Typography,
-        content = content
-    )
+    CompositionLocalProvider(LocalIsDarkTheme provides darkTheme) {
+        MaterialTheme(
+            colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme,
+            typography = typography,
+            content = content
+        )
+    }
 }

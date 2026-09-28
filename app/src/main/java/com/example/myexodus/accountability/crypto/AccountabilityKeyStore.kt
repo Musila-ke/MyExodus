@@ -22,6 +22,11 @@ import javax.inject.Singleton
  * - [AGREEMENT_ALIAS]: ECDH key-agreement key, PURPOSE_AGREE_KEY, never user-authenticated
  *   (derivation must not prompt; plan §5). Destroying this key is the crypto-shredding lever.
  *
+ * §19.5 multi-pair: from schema v12 each pairing gets its OWN agreement keypair
+ * ([pairAgreementAliasOf], destroyed pair-scoped on unpair), so shredding one pair leaves the
+ * rest intact. [AGREEMENT_ALIAS] remains for pre-v12 enrollments (whose records carry no
+ * alias) and as the AD-22 wipe canary — it is destroyed only when the last enrollment goes.
+ *
  * StrongBox is requested first; on [StrongBoxUnavailableException] the key is retried on TEE
  * (plan §9). Attestation is only requested for the signing key (§8.1 sets the challenge
  * there only).
@@ -103,6 +108,48 @@ open class AccountabilityKeyStore @Inject constructor() {
      *  same seam [AccountabilitySigner.beginSign] provides for signing. */
     open fun agreementPrivateKey(): PrivateKey =
         keyStore.getKey(AGREEMENT_ALIAS, null) as? PrivateKey ?: error("agreement key missing")
+
+    /**
+     * The pair's own ECDH key (§19.5, schema v12): the record's alias when it has one, the
+     * legacy device-level key for pre-v12 enrollments. Open for the same harness seam as
+     * [agreementPrivateKey].
+     */
+    open fun agreementPrivateKeyFor(alias: String?): PrivateKey =
+        alias?.let { pairAgreementPrivateKey(it) } ?: agreementPrivateKey()
+
+    /** §19.5: fresh ECDH keypair scoped to one pairing attempt ([pairAgreementAliasOf]). */
+    fun generatePairAgreementKey(alias: String): PublicKey {
+        requirePairAlias(alias)
+        if (Build.VERSION.SDK_INT < 31) {
+            throw UnsupportedOperationException("in-Keystore ECDH requires API 31+")
+        }
+        val builder = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_AGREE_KEY)
+            .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+            .setUserAuthenticationRequired(false)
+        val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEYSTORE)
+        generator.initialize(builder.build())
+        return generator.generateKeyPair().public
+    }
+
+    fun pairAgreementPublicKey(alias: String): PublicKey =
+        keyStore.getCertificate(alias)?.publicKey ?: error("pair agreement key missing")
+
+    fun pairAgreementPrivateKey(alias: String): PrivateKey =
+        keyStore.getKey(alias, null) as? PrivateKey ?: error("pair agreement key missing")
+
+    /** §19.5 pair-scoped shred: destroys only this pair's key. */
+    fun destroyPairAgreementKey(alias: String) {
+        // A wrong alias here deletes the wrong key — the prefix keeps a caller bug (or a
+        // null/blank alias) away from the signing key and the legacy device key.
+        requirePairAlias(alias)
+        keyStore.deleteEntry(alias)
+    }
+
+    private fun requirePairAlias(alias: String) {
+        require(alias.startsWith(PAIR_AGREEMENT_ALIAS_PREFIX) && alias.length > PAIR_AGREEMENT_ALIAS_PREFIX.length) {
+            "not a pair agreement alias"
+        }
+    }
 
     /**
      * Signing key for a BiometricPrompt [javax.crypto.Signature] CryptoObject. The keystore
@@ -196,6 +243,14 @@ open class AccountabilityKeyStore @Inject constructor() {
     companion object {
         const val SIGNING_ALIAS = "accountability_signing_key"
         const val AGREEMENT_ALIAS = "accountability_agreement_key"
+
+        /** §19.5 per-pair key alias = this prefix plus the pairing session id. The session id
+         *  (not the pairId) scopes it because the initiator's key must exist — and be named —
+         *  before the partner (and so the durable pairId) is known; the alias is recorded on
+         *  the enrollment so every later derivation finds the right key. */
+        const val PAIR_AGREEMENT_ALIAS_PREFIX = "accountability_pair_agreement_key_"
+
+        fun pairAgreementAliasOf(sessionId: String): String = PAIR_AGREEMENT_ALIAS_PREFIX + sessionId
         /** NFR4: biometric authentication timeout. */
         const val AUTH_TIMEOUT_SECONDS = 900
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"

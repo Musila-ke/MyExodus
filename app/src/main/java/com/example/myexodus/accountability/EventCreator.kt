@@ -34,7 +34,8 @@ class EventCreator(
     private val eventCipher: EventCipher,
     private val signer: AccountabilitySigner,
     private val epochStore: IdentityEpochStore,
-    private val agreementPrivateKey: () -> PrivateKey,
+    /** (enrollment's per-pair key alias — null for pre-v12 records) -> ECDH private key. */
+    private val agreementPrivateKey: (alias: String?) -> PrivateKey,
     private val sessionKeyManager: SessionKeyManager,
 ) {
 
@@ -89,7 +90,7 @@ class EventCreator(
 
         val cek = cekDerivation.deriveCek(
             pairId,
-            agreementPrivateKey(),
+            agreementPrivateKey(enrollment.myAgreementKeyAlias),
             KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(enrollment.partnerAgreementPubKey)),
         )
         val sessionKey = cekDerivation.deriveSessionKey(cek, keyEpoch)

@@ -11,7 +11,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.example.myexodus.R
 import com.example.myexodus.streaks.HabitState
 
 /**
@@ -29,18 +31,17 @@ internal fun WithdrawalTimelineCard(state: HabitState) {
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("What to expect", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    if (currentWeek == null) {
-                        "Your first month, week by week — you're past the four-week curve now."
-                    } else {
-                        "Your four-week curve, week by week."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            // No card title: this renders only under the spoke's own `BackRow`, which already
+            // names it "What to expect" (ADR #85). The subtitle is not a restatement — it says
+            // which curve this is, and whether the live streak is still inside it.
+            Text(
+                stringResource(
+                    if (currentWeek == null) R.string.streaks_timeline_subtitle_past
+                    else R.string.streaks_timeline_subtitle,
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             weeks.forEach { week ->
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(
@@ -50,7 +51,7 @@ internal fun WithdrawalTimelineCard(state: HabitState) {
                         Text(weekLabel(week), style = MaterialTheme.typography.labelLarge)
                         if (week.weekNumber == currentWeek) {
                             Text(
-                                "You are here",
+                                stringResource(R.string.streaks_timeline_here),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.primary,
                             )

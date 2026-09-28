@@ -85,6 +85,13 @@ fun formatDate(epochMillis: Long): String =
     DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)
         .format(Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()).toLocalDate())
 
+/** Weekday + day + month, no year — the Home header eyebrow ("Tuesday, 22 September"). The
+ *  year is dead weight on a screen whose subject is the current streak, and no localized
+ *  FormatStyle drops it, so the pattern is explicit (names still come from the locale). */
+fun formatHeaderDate(epochMillis: Long): String =
+    DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault())
+        .format(Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()).toLocalDate())
+
 fun formatDuration(ms: Long): String {
     val totalMinutes = ms / 60_000
     val hours = totalMinutes / 60

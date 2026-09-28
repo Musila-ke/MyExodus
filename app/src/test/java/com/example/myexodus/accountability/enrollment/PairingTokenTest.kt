@@ -10,7 +10,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * §10 step 1: the one-time pairing token — 32 random bytes, 10-minute TTL, CBOR codec.
+ * §10 step 1: the one-time pairing token — 60 random bits zero-padded into the fixed
+ * 32-byte field (the typed-code domain, §19.4 item 1), 10-minute TTL, CBOR codec.
  */
 class PairingTokenTest {
 
@@ -26,10 +27,12 @@ class PairingTokenTest {
     }
 
     @Test
-    fun expiryIsStrictlyPastTheDeadline() {
+    fun expiryDeniesAtTheDeadline_notAfterIt() {
         val now = 1_700_000_000_000L
         val token = PairingToken.generate(now)
-        assertFalse(token.isExpired(token.expiresAtEpochMillis))
+        assertFalse(token.isExpired(token.expiresAtEpochMillis - 1))
+        // Deployed rules read `expiresAt > request.time` — the deadline instant is denied.
+        assertTrue(token.isExpired(token.expiresAtEpochMillis))
         assertTrue(token.isExpired(token.expiresAtEpochMillis + 1))
     }
 

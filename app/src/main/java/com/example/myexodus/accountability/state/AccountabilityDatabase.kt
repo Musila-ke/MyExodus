@@ -25,7 +25,7 @@ import com.example.myexodus.accountability.enrollment.EnrollmentRecord
         ProcessedEvent::class,
         UnpairState::class,
     ],
-    version = 10,
+    version = 12,
     exportSchema = false,
 )
 abstract class AccountabilityDatabase : RoomDatabase() {
@@ -196,6 +196,26 @@ abstract class AccountabilityDatabase : RoomDatabase() {
             }
         }
 
+        /** v11 adds the §19.5 partner label on enrollments — a nullable presentation column, so
+         *  a pre-existing enrollment keeps its identity material and simply has no label. */
+        internal val MIGRATION_10_11 = object : Migration(10, 11) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE enrollments ADD COLUMN partner_label TEXT",
+                ).use { it.step() }
+            }
+        }
+
+        /** v12 adds the §19.5 (ADR #106) per-pair agreement key alias on enrollments — nullable,
+         *  so a pre-existing enrollment keeps using the legacy device-level key. */
+        internal val MIGRATION_11_12 = object : Migration(11, 12) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE enrollments ADD COLUMN my_agreement_key_alias TEXT",
+                ).use { it.step() }
+            }
+        }
+
         /**
          * Every migration, oldest schema to current — the one list every builder registers.
          * Hand-maintained copies have silently diverged twice (7→8, ADR #50; 9→10, ADR #58),
@@ -204,7 +224,8 @@ abstract class AccountabilityDatabase : RoomDatabase() {
          */
         internal val ALL_MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
-            MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
+            MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
+            MIGRATION_11_12,
         )
 
         @Volatile private var instance: AccountabilityDatabase? = null

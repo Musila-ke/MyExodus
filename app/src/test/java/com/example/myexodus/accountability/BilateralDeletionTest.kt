@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import androidx.room3.Room
 import androidx.test.core.app.ApplicationProvider
+import com.example.myexodus.accountability.crypto.AccountabilityKeyStore
 import com.example.myexodus.accountability.crypto.AccountabilitySigner
 import com.example.myexodus.accountability.crypto.EventCipher
 import com.example.myexodus.accountability.crypto.IdentityEpochStore
@@ -27,6 +28,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -63,11 +65,20 @@ class BilateralDeletionTest {
     private val partnerSigning = ecKeyPair()
     private val mySenderKeyId = sha256Hex(mySigning.public.encoded)
     private val pairId = "pair-deletion-test"
+    private val pairAlias = AccountabilityKeyStore.pairAgreementAliasOf("session-main")
+    private val otherPairId = "pair-deletion-test-2"
+    private val otherAlias = AccountabilityKeyStore.pairAgreementAliasOf("session-other")
 
     private var clock = 1_700_000_000_000L
-    private var destroyed = false
+
+    /** True once the shred asked for the device-level key (only legal with no enrollment left). */
+    private var destroyedDeviceKey = false
+    private val destroyedPairAliases = mutableListOf<String>()
     private val terminated = mutableListOf<String>()
     private val ops = mutableListOf<String>()
+
+    /** Simulates the 2026-09-28 crypto-dead pair: EventCreator cannot derive a CEK. */
+    private var agreementKeyMissing = false
 
     /** drainOutbox fake: queued outcomes, optionally marking the pair's real outbox rows SENT
      *  (what the production drainer does) so the journal's delivered bookkeeping is exercised. */
@@ -99,7 +110,10 @@ class BilateralDeletionTest {
             eventCipher = cipher,
             signer = signer,
             epochStore = epochStore,
-            agreementPrivateKey = { myAgreement.private },
+            agreementPrivateKey = {
+                if (agreementKeyMissing) error("agreement key missing")
+                myAgreement.private
+            },
             sessionKeyManager = SessionKeyManager(store),
         )
         deletion = BilateralDeletion(
@@ -118,9 +132,13 @@ class BilateralDeletionTest {
             enrollmentDao = db.enrollmentDao(),
             store = store,
             journal = db.unpairStateDao(),
-            destroyAgreementKey = {
-                destroyed = true
+            destroyPairAgreementKey = { alias ->
+                destroyedPairAliases += alias
                 ops += "destroy"
+            },
+            destroyDeviceAgreementKey = {
+                destroyedDeviceKey = true
+                ops += "destroy-device"
             },
             terminatePair = { terminated += it },
             deliverRequest = { partnerUid, row ->
@@ -143,6 +161,7 @@ class BilateralDeletionTest {
                     partnerSigningPubKey = partnerSigning.public.encoded,
                     partnerAgreementPubKey = partnerAgreement.public.encoded,
                     createdAtEpochMillis = 1_700_000_000_000L,
+                    myAgreementKeyAlias = pairAlias,
                 ),
             )
             // Seed one ordinary event so the wipe has chain data to remove.
@@ -170,6 +189,22 @@ class BilateralDeletionTest {
         context.deleteDatabase(dbName)
     }
 
+    /** A second live pair on the same device: its own agreement-key alias, its own chain event. */
+    private fun seedSecondPair() = runBlocking {
+        db.enrollmentDao().upsert(
+            EnrollmentRecord(
+                pairId = otherPairId,
+                mySenderKeyId = mySenderKeyId,
+                partnerSigningKeyId = sha256Hex(partnerSigning.public.encoded),
+                partnerSigningPubKey = partnerSigning.public.encoded,
+                partnerAgreementPubKey = partnerAgreement.public.encoded,
+                createdAtEpochMillis = 1_700_000_000_000L,
+                myAgreementKeyAlias = otherAlias,
+            ),
+        )
+        creator.create(otherPairId, EventPayload(type = "activity", text = "sibling"), signing())
+    }
+
     // --- Initiator: §12 partner-reachable vs partner-unreachable ---
 
     @Test
@@ -181,7 +216,8 @@ class BilateralDeletionTest {
         assertEquals(BilateralDeletion.DeletionResult.Deleted, deletion.initiate(pairId, "uid-a", "uid-b", signing()))
 
         // Local shred ran unconditionally; the request is out; the wait is honest.
-        assertTrue("key destroyed", destroyed)
+        assertTrue("last enrollment gone — device key destroyed", destroyedDeviceKey)
+        assertEquals("only this pair's key shredded", listOf(pairAlias), destroyedPairAliases)
         assertNull(db.enrollmentDao().getByPairId(pairId))
         assertTrue(store.chainFor(pairId).isEmpty())
         assertNull("approval rows shredded with the pair", db.approvalRequestDao().byId("k:1"))
@@ -240,6 +276,64 @@ class BilateralDeletionTest {
         assertEquals(UnpairPhase.TERMINAL, db.unpairStateDao().get(pairId)!!.phaseAt(clock))
     }
 
+    // --- §19.5 / ADR #106: pair-scoped key destruction ---
+
+    @Test
+    fun unpairOfOnePair_destroysOnlyItsKey_leavesSiblingPairIntact() = runTest {
+        seedSecondPair()
+        markOnDrain = true
+        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(1)
+        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(0)
+
+        assertEquals(BilateralDeletion.DeletionResult.Deleted, deletion.initiate(pairId, "uid-a", "uid-b", signing()))
+
+        // The unpair's blast radius is exactly the one pair (the 2026-09-28 defect).
+        assertEquals(listOf(pairAlias), destroyedPairAliases)
+        assertFalse("sibling still enrolled — the device key must live", destroyedDeviceKey)
+        assertNull(db.enrollmentDao().getByPairId(pairId))
+        assertTrue(store.chainFor(pairId).isEmpty())
+        val sibling = db.enrollmentDao().getByPairId(otherPairId)
+        assertNotNull("sibling enrollment intact", sibling)
+        assertEquals(otherAlias, sibling!!.myAgreementKeyAlias)
+        assertTrue("sibling chain untouched", store.chainFor(otherPairId).isNotEmpty())
+    }
+
+    @Test
+    fun deviceLevelKeyDiesOnlyWithTheLastEnrollment() = runTest {
+        seedSecondPair()
+        markOnDrain = true
+        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(1)
+        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(0)
+        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(1)
+        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(0)
+
+        deletion.initiate(pairId, "uid-a", "uid-b", signing())
+        assertFalse("one pair left — the pre-v12 shared key must survive", destroyedDeviceKey)
+
+        deletion.initiate(otherPairId, "uid-a", "uid-c", signing())
+        assertTrue("last enrollment gone — the device key dies with it (AD-22 canary)", destroyedDeviceKey)
+        assertTrue(db.enrollmentDao().all().isEmpty())
+    }
+
+    @Test
+    fun cryptoDeadPair_stillErasesLocally_neverClaimingThePartner() = runTest {
+        // The 2026-09-28 incident shape: the key is already gone, so the request event cannot
+        // be created. The tap must still erase — and the empty envelope keeps the report honest
+        // (nothing to deliver, so the 7-day timeout, never a confirmation claim).
+        agreementKeyMissing = true
+        assertEquals(BilateralDeletion.DeletionResult.Deleted, deletion.initiate(pairId, "uid-a", "uid-b", signing()))
+
+        assertEquals("pair key shredded", listOf(pairAlias), destroyedPairAliases)
+        assertNull(db.enrollmentDao().getByPairId(pairId))
+        assertTrue(store.chainFor(pairId).isEmpty())
+        assertNull("approval rows shredded with the pair", db.approvalRequestDao().byId("k:1"))
+        val row = db.unpairStateDao().get(pairId)!!
+        assertTrue(row.localShredded)
+        assertTrue("no request bytes — nothing to deliver", row.requestEnvelope.isEmpty())
+        assertNull(row.confirmedAtEpochMillis)
+        assertEquals(UnpairPhase.AWAITING_CONFIRMATION, row.phaseAt(clock))
+    }
+
     // --- AD-13b crash invariants ---
 
     @Test
@@ -260,7 +354,8 @@ class BilateralDeletionTest {
         )
         deletion.resumePending()
 
-        assertTrue("shred completed from the journal row alone", destroyed)
+        assertTrue("shred completed from the journal row alone", destroyedDeviceKey)
+        assertEquals("shred targeted the pair's key", listOf(pairAlias), destroyedPairAliases)
         assertNull(db.enrollmentDao().getByPairId(pairId))
         val row = db.unpairStateDao().get(pairId)!!
         assertTrue(row.localShredded)
@@ -285,7 +380,8 @@ class BilateralDeletionTest {
         )
         deletion.resumePending()
         assertNull("superseded row dropped", db.unpairStateDao().get(pairId))
-        assertFalse("live pair never re-shredded", destroyed)
+        assertFalse("live pair never re-shredded", destroyedDeviceKey)
+        assertTrue("no key touched at all", destroyedPairAliases.isEmpty())
         assertTrue("enrollment intact", db.enrollmentDao().getByPairId(pairId) != null)
     }
 
@@ -298,7 +394,8 @@ class BilateralDeletionTest {
 
         assertTrue(result is BilateralDeletion.DeletionResult.Failed)
         assertNull(db.unpairStateDao().get(pairId))
-        assertFalse(destroyed)
+        assertFalse(destroyedDeviceKey)
+        assertTrue(destroyedPairAliases.isEmpty())
     }
 
     @Test
@@ -333,7 +430,7 @@ class BilateralDeletionTest {
         drainQueue += MailboxOutboxDrainer.DrainResult.Sent(0)
         assertEquals(BilateralDeletion.DeletionResult.Deleted, deletion.initiate(pairId, "uid-a", "uid-b", signing()))
 
-        assertTrue(destroyed)
+        assertTrue(destroyedDeviceKey)
         assertEquals(3, drained.size)
     }
 
@@ -361,7 +458,7 @@ class BilateralDeletionTest {
     fun responder_shredsThenAcks_thenDismisses() = runTest {
         assertTrue(deletion.handleIncoming(pairId, "msg-1"))
 
-        assertTrue(destroyed)
+        assertTrue(destroyedDeviceKey)
         assertNull(db.enrollmentDao().getByPairId(pairId))
         assertTrue(store.chainFor(pairId).isEmpty())
         assertNull("approval rows shredded with the pair", db.approvalRequestDao().byId("k:1"))

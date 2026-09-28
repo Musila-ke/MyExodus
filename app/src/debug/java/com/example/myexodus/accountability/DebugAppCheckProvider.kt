@@ -24,6 +24,10 @@ import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 class DebugAppCheckProvider : ContentProvider() {
 
     override fun onCreate(): Boolean {
+        // Runs in every process before Application.onCreate — the seam for the local-suite
+        // backend redirect, which must precede all Firebase client use. Host-gated (no-op
+        // unless `set-backend` stored one), so the X6532 is untouched by default.
+        DebugBackend.apply(context ?: return true)
         if (isEmulator()) {
             AppCheckInstaller.factoryOverride = DebugAppCheckProviderFactory.getInstance()
             Log.i(TAG, "App Check: debug provider substituted (emulator; Play Integrity unavailable)")

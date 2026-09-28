@@ -1,18 +1,23 @@
 package com.example.myexodus.widget
 
+import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
+import android.util.Log
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.glance.GlanceId
 import androidx.glance.GlanceTheme
+import androidx.glance.LocalSize
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.provideContent
 import androidx.glance.appwidget.updateAll
+import com.example.myexodus.BuildConfig
 import com.example.myexodus.MainActivity
 import com.example.myexodus.blocking.systemBootCount
 import com.example.myexodus.data.db.entity.RecoverySession
@@ -26,6 +31,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private const val TAG = "MyExodusWidget"
+
 /**
  * The home-screen widget (spec §5 Decision 1: glance-appwidget + DataStore, no app-process coupling
  * beyond the flow it reads).
@@ -37,12 +44,15 @@ import kotlinx.coroutines.withContext
  */
 class DesertDawnWidget : GlanceAppWidget() {
 
-    /** Three breakpoints: a 2×1 has room for one line, anything taller gets the day count plus the
-     *  status word and the deep link (spec §7 Step 5). `WidgetContent` branches on height alone, so
-     *  whatever size a launcher actually reports picks the right variant; [NARROW_SIZE] exists so a
-     *  tall 2×2 maps to the expanded variant instead of stretching the compact one (finding #11). */
+    /** Four breakpoints: a 2×1 has room for one line; a 4×2 and a tall 2×2 get the day count plus
+     *  the band card; a resized full-height cell gets its own band composition (spec §7 Step 5;
+     *  TALL_SIZE rationale in `WidgetContent`). `WidgetContent` branches on the reported height,
+     *  so whatever size a launcher actually reports picks the right variant; [NARROW_SIZE] exists
+     *  so a tall 2×2 maps to the expanded variant instead of stretching the compact one, and
+     *  [TALL_SIZE] so a user-resized card does not stretch the 110dp preset into a hero over a
+     *  void (finding #11, user-flagged 2026-09-27). */
     override val sizeMode: SizeMode =
-        SizeMode.Responsive(setOf(COMPACT_SIZE, EXPANDED_SIZE, NARROW_SIZE))
+        SizeMode.Responsive(setOf(COMPACT_SIZE, EXPANDED_SIZE, NARROW_SIZE, TALL_SIZE))
 
     /** Spec §14: composition failures in the app/widget-processing path are the app's to report —
      *  the launcher's own inflation failures are not observable from here and are not claimed. */
@@ -61,6 +71,16 @@ class DesertDawnWidget : GlanceAppWidget() {
         // not an unverified placeholder flicker. IO: DataStore and the boot-count binder read both
         // block, and this is the main thread (spec NFR1).
         val initial = withContext(Dispatchers.IO) { readView(context) }
+        if (BuildConfig.DEBUG) {
+            // The size the launcher is actually handing this instance, for the on-device sizing
+            // loop: without it a wrong variant is indistinguishable from a wrong preset mapping.
+            runCatching {
+                val appWidgetId = GlanceAppWidgetManager(context).getAppWidgetId(id)
+                val options = AppWidgetManager.getInstance(context)
+                    .getAppWidgetOptions(appWidgetId)
+                Log.i(TAG, "widget options: " + options.keySet().joinToString { "$it=${options.get(it)}" })
+            }
+        }
         // Built outside the composition on purpose: a flow operator chain inside a composable would
         // be re-created on every recomposition, and lint's FlowOperatorInvokedInComposition check
         // is right to flag it. One chain per session, observed for the session's lifetime.
@@ -77,9 +97,17 @@ class DesertDawnWidget : GlanceAppWidget() {
 
         provideContent {
             GlanceTheme(colors = DesertDawnGlanceColors) {
+                if (BuildConfig.DEBUG) {
+                    val size = LocalSize.current
+                    Log.i(TAG, "widget size: ${size.width} x ${size.height}")
+                }
                 val view by views.collectAsState(initial = initial)
                 DesertDawnWidgetContent(
                     view = view,
+                    openStreaks = actionStartActivity(
+                        appLaunchIntent(context)
+                            .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_STREAKS),
+                    ),
                     manageUrge = actionStartActivity(
                         appLaunchIntent(context)
                             .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_RECOVERY)
@@ -118,17 +146,49 @@ private suspend fun readView(context: Context): WidgetView =
     )
 
 /** Where the freshness policy meets the copy the user sees. */
-private fun viewFor(context: Context, snapshot: ProtectionSnapshot?): WidgetView = WidgetView(
-    status = displayedStatusFor(
-        snapshot = snapshot,
-        nowUtc = System.currentTimeMillis(),
-        nowElapsed = SystemClock.elapsedRealtime(),
-        nowBootCount = systemBootCount(context),
-    ),
-    streakDays = snapshot?.streakDays,
-    habitLabel = snapshot?.habitLabel,
-    discreet = snapshot?.discreet ?: true,
-)
+private fun viewFor(context: Context, snapshot: ProtectionSnapshot?): WidgetView {
+    val nowUtc = System.currentTimeMillis()
+    val nowElapsed = SystemClock.elapsedRealtime()
+    val nowBootCount = systemBootCount(context)
+    val milestone = nextMilestone(snapshot?.streakDays)
+    val view = WidgetView(
+        status = displayedStatusFor(
+            snapshot = snapshot,
+            nowUtc = nowUtc,
+            nowElapsed = nowElapsed,
+            nowBootCount = nowBootCount,
+        ),
+        streakDays = snapshot?.streakDays,
+        habitLabel = snapshot?.habitLabel,
+        // The same predicate the writer uses to decide a re-read is owed — asked here of the
+        // value the user is looking at. True means this number cannot be proven current, so it
+        // renders with its age attached rather than silently ageing (spec §16 Q5, closed
+        // 2026-09-27). Guarded on the count itself: with nothing to show, there is nothing to
+        // qualify — and the predicate is answering a writer's question then, not the user's.
+        streakCheckedAgoMillis = if (snapshot?.streakDays != null &&
+            needsStreakRefresh(snapshot, nowElapsed, nowBootCount)
+        ) {
+            // A record written before the verification pair existed still knows when it was
+            // written: use that rather than claiming a check that never happened.
+            nowUtc - (snapshot.streakSample?.verifiedUtc ?: snapshot.evalUtc)
+        } else {
+            null
+        },
+        nextMilestoneDay = milestone?.first,
+        nextMilestoneDaysAway = milestone?.second,
+        discreet = snapshot?.discreet ?: true,
+    )
+    if (BuildConfig.DEBUG) {
+        // What a render actually puts on the home screen, for the on-device loop.
+        Log.i(
+            TAG,
+            "widget view: status=${view.status} days=${view.streakDays}" +
+                " checkedAgo=${view.streakCheckedAgoMillis} milestone=${view.nextMilestoneDay}" +
+                " discreet=${view.discreet}",
+        )
+    }
+    return view
+}
 
 /**
  * The manifest receiver. `exported="true"` is mandatory for an app widget provider — the host

@@ -84,16 +84,71 @@ class DomainBlocklistTest {
         assertFalse(DomainBlocklist.EMPTY.isBlocked("anything.example"))
     }
 
-    private fun pattern(raw: String): UrlPattern {
+    @Test
+    fun limitOnlyRule_excluded_meteredNotBlocked() {
+        // Plan §1/FR-7: a rule whose only mechanism is a daily limit is metered — the usage
+        // shaper answers it (NXDOMAIN only once exhausted). Blocking it here would stop the
+        // site before it could ever load, so no usage could accrue (device-caught 2026-09-21).
+        val list = DomainBlocklist.fromUrlPatterns(
+            listOf(pattern("https://example.com", isAlwaysOn = false, dailyLimitMs = 1_800_000)),
+        )
+        assertEquals(0, list.size)
+        assertFalse(list.isBlocked("example.com"))
+        assertFalse(list.isBlocked("www.example.com"))
+    }
+
+    @Test
+    fun limitPlusWindowRule_excluded_shaperOwnsIt() {
+        val list = DomainBlocklist.fromUrlPatterns(
+            listOf(
+                pattern(
+                    "https://example.com",
+                    isAlwaysOn = false,
+                    dailyLimitMs = 1_800_000,
+                    timeStart = 360, timeEnd = 1020,
+                ),
+            ),
+        )
+        assertEquals(0, list.size)
+    }
+
+    @Test
+    fun alwaysOnPlusLimitRule_staysBlocked() {
+        // Always-on is a state-independent mechanism: it blocks unconditionally, limit or not.
+        val list = DomainBlocklist.fromUrlPatterns(
+            listOf(pattern("https://example.com", isAlwaysOn = true, dailyLimitMs = 1_800_000)),
+        )
+        assertEquals(1, list.size)
+        assertTrue(list.isBlocked("example.com"))
+    }
+
+    @Test
+    fun windowOnlyRule_stillBlocked_documentedCeiling() {
+        // Pre-existing ceiling (class doc): the DNS layer has no clock, so a window-only rule
+        // keeps its V1 all-day block here; the Accessibility engine enforces the window.
+        val list = DomainBlocklist.fromUrlPatterns(
+            listOf(pattern("https://example.com", isAlwaysOn = false, timeStart = 360, timeEnd = 1020)),
+        )
+        assertEquals(1, list.size)
+        assertTrue(list.isBlocked("example.com"))
+    }
+
+    private fun pattern(
+        raw: String,
+        isAlwaysOn: Boolean = true,
+        dailyLimitMs: Long = 0,
+        timeStart: Long? = null,
+        timeEnd: Long? = null,
+    ): UrlPattern {
         val rule = com.example.myexodus.data.db.entity.RestrictionRule(
             ruleId = "r-" + raw.hashCode(),
             profileId = "p",
             blockedPackage = raw,
             targetType = "WEBSITE",
-            isAlwaysOn = true,
-            dailyLimitMs = 0,
-            timeRangeStart = null,
-            timeRangeEnd = null,
+            isAlwaysOn = isAlwaysOn,
+            dailyLimitMs = dailyLimitMs,
+            timeRangeStart = timeStart,
+            timeRangeEnd = timeEnd,
             activeDaysOfWeek = "1111111",
             blockExpiresAt = Long.MAX_VALUE,
             severityLevel = "MEDIUM",

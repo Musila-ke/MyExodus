@@ -93,6 +93,22 @@ class EnforcementForegroundServiceTest {
         assertNull(EnforcementForegroundService.currentForegroundAfterPoll(null, null))
     }
 
+    // --- platform-foreground oracle for Path A's foreign-close confirmation (ADR #107) ---
+
+    @Test
+    fun oracle_publishesPackageAndObservationTime() {
+        EnforcementForegroundService.notePlatformForeground(APP, 12_345L)
+        assertEquals(APP, EnforcementForegroundService.platformForegroundPackage)
+        assertEquals(12_345L, EnforcementForegroundService.platformForegroundObservedAtElapsedMs)
+    }
+
+    @Test
+    fun oracle_stoppedServiceClearsIt() {
+        EnforcementForegroundService.notePlatformForeground(APP, 12_345L)
+        EnforcementForegroundService.notePlatformForeground(null, 99_999L)
+        assertNull(EnforcementForegroundService.platformForegroundPackage)
+    }
+
     private companion object {
         const val APP = "com.instagram.android"
         const val OTHER = "com.tiktok.android"

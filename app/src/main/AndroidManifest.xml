@@ -9,6 +9,11 @@
         android:name="android.hardware.camera"
         android:required="false" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Block close (user ruling 2026-09-27: "logically just block the app and close it"):
+        eviction to Home alone left a blocked app running in the background, still audible
+        (device-caught: Instagram playing under the wall). killBackgroundProcesses is the
+        strongest close a third-party app can perform; normal permission, granted at install. -->
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
     <!-- Full-tunnel VpnService (plan §8.4): the TUN socket is created by the system and
         only readable by us; INTERNET is needed for the protect()-ed upstream sockets. -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -33,6 +38,12 @@
         Android never uses it (the a11y overlay needs no permission); it is an appop, not
         a runtime prompt. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- §8.7/D1 battery-prompt leg: powers ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, and
+        only from the Settings row the outage prompt unlocks (§8.2's "verify the channel is
+        permitted" resolves to yes — direct-APK distribution, no Play listing, so Play's
+        acceptable-use table does not gate this app; ruling recorded in
+        BatteryPromptGate.DIRECT_REQUEST_PERMITTED). Never requested at first launch. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- App picker (Rules screen): needed on API 30+ for queryIntentActivities on
         launcher apps and for the app-label lookup on the picked package. -->
@@ -63,6 +74,7 @@
             android:launchMode="singleTop"
             android:theme="@style/Theme.MyExodus"
             android:windowSoftInputMode="adjustResize"
+            android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode">
             <!-- configChanges (the androidx Compose template set) keeps in-flight session state
                 alive: recreation reset the delay timer and the pacer, and made the recovery
@@ -90,6 +102,10 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- Direct-APK updates (install -r) kill the process; nothing re-armed the FGS
+                     afterward and protection stayed down until the app was next opened
+                     (X6532-observed 2026-09-28). MY_PACKAGE_REPLACED re-arms it like a boot. -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 
@@ -152,6 +168,7 @@
             tools:targetApi="33"
             android:excludeFromRecents="true"
             android:exported="false"
+            android:screenOrientation="portrait"
             android:taskAffinity="" />
 
         <!-- Plan §8.5: fires pre-unlock so enforcement data (DE snapshot copy) is published

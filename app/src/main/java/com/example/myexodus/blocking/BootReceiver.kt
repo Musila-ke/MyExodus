@@ -28,10 +28,14 @@ class BootReceiver : BroadcastReceiver() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+        if (intent.action != Intent.ACTION_BOOT_COMPLETED &&
+            intent.action != Intent.ACTION_MY_PACKAGE_REPLACED
+        ) {
+            return
+        }
         // Debug-only: BOOT_COMPLETED delivery is flaky on some OEMs (issuetracker 471573182,
         // incl. Infinix/TECNO) — the device matrix needs to see this fire (2026-08-28 research).
-        if (BuildConfig.DEBUG) Log.i(TAG, "BOOT_COMPLETED received")
+        if (BuildConfig.DEBUG) Log.i(TAG, "${intent.action} received")
         publisher.loadFastPath()
         scope.launch { publisher.loadFromDb() }
         if (settings.enhancedModeEnabled) {

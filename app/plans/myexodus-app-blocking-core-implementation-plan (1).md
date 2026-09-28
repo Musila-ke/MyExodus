@@ -1,5 +1,5 @@
 # MyExodus V1 — App Blocking Core: Implementation Specification
-Status: Approved for implementation (Revision 2 — incorporates corrections from a second independent audit round). All decisions below are final unless listed in §16.
+Status: ✅ **BUILT — shipped and device-verified; the blocking core (`blocking/`, `vpn/`, `secrets/`) is live. Do not build from this document.** Kept as the spec of record. §16's open questions were resolved during build: API 26 confirmed (ADR #22), DE-storage confidentiality ruled, the FGS polling interval chosen, Enhanced Mode later built (its own plan), and the application ID settled as `com.example.myexodus` (V1.md §naming convention; direct-APK distribution only, ADR #15). Original header follows: Approved for implementation (Revision 2 — incorporates corrections from a second independent audit round). All decisions below are final unless listed in §16.
 ---
 ## 1. Feature Overview
 MyExodus is an Android app that helps adult users (18+) reduce compulsive phone-based behaviors (social media, betting, adult content) through a friction-plus-accountability model rather than absolute technical enforcement. V1 ships two blocking capabilities:

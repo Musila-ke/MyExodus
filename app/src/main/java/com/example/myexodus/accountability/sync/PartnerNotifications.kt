@@ -39,21 +39,25 @@ object PartnerNotifications {
     fun ensureSyncStatusChannel(context: Context) {
         if (!BuildConfig.DEBUG) return
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL_SYNC_STATUS, "MyExodus sync status", NotificationManager.IMPORTANCE_LOW),
+            NotificationChannel(
+                CHANNEL_SYNC_STATUS,
+                context.getString(R.string.partner_channel_sync_status_name),
+                NotificationManager.IMPORTANCE_LOW,
+            ),
         )
     }
 
     fun notifyPartnerEvent(context: Context) =
-        post(context, CHANNEL_PARTNER_ALERTS, "MyExodus partner activity", NotificationManager.IMPORTANCE_HIGH, NOTIF_PARTNER_EVENT, R.string.partner_event_title, R.string.partner_event_text)
+        post(context, CHANNEL_PARTNER_ALERTS, context.getString(R.string.partner_channel_activity_name), NotificationManager.IMPORTANCE_HIGH, NOTIF_PARTNER_EVENT, R.string.partner_event_title, R.string.partner_event_text)
 
     /** A verified disable-approval request arrived — the responder's actionable item.
      *  Plan Step 16 channel spec: `approval_requests` is HIGH importance. */
     fun notifyApprovalRequest(context: Context) =
-        post(context, CHANNEL_APPROVAL_REQUESTS, "MyExodus partner requests", NotificationManager.IMPORTANCE_HIGH, NOTIF_APPROVAL_REQUEST, R.string.approval_request_title, R.string.approval_request_text)
+        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, NOTIF_APPROVAL_REQUEST, R.string.approval_request_title, R.string.approval_request_text)
 
     /** The partner answered our request — informational. */
     fun notifyApprovalDecision(context: Context) =
-        post(context, CHANNEL_APPROVAL_REQUESTS, "MyExodus partner requests", NotificationManager.IMPORTANCE_HIGH, NOTIF_APPROVAL_DECISION, R.string.approval_decision_title, R.string.approval_decision_text)
+        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, NOTIF_APPROVAL_DECISION, R.string.approval_decision_title, R.string.approval_decision_text)
 
     // Suppressed: the gate is NotificationAccess.canPost (the only way in), which lint can't
     // trace through a helper.

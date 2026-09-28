@@ -1,6 +1,7 @@
 package com.example.myexodus.blocking
 
 import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.app.Service
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
@@ -17,12 +18,25 @@ import android.annotation.SuppressLint
 import android.util.Log
 import android.view.Display
 import androidx.core.content.ContextCompat
+import com.example.myexodus.BuildConfig
 import com.example.myexodus.blocking.usage.EnforcementAction
+import com.example.myexodus.blocking.usage.AccountingOutageSource
+import com.example.myexodus.blocking.usage.GapRecoveryRequest
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
+import com.example.myexodus.blocking.usage.UsageDiagnosticsRecorder
+import com.example.myexodus.blocking.usage.UsageGapRepair
+import com.example.myexodus.blocking.usage.UsageMark
 import com.example.myexodus.blocking.usage.UsageSessionMachine
+import com.example.myexodus.blocking.usage.latestResumedPackage
+import com.example.myexodus.blocking.usage.usageEventPackage
+import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.entity.RestrictionRule
+import com.example.myexodus.data.db.entity.UsageLedgerSource
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.telemetry.CrashReporting
 import dagger.hilt.android.AndroidEntryPoint
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -84,6 +98,12 @@ class EnforcementForegroundService : Service() {
     @Inject lateinit var statusMonitor: ProtectionStatusMonitor
     @Inject lateinit var attempts: AttemptRecorder
     @Inject lateinit var usageEngine: UsageAccountingEngine
+    @Inject lateinit var diagnostics: UsageDiagnosticsRecorder
+    @Inject lateinit var outageSource: AccountingOutageSource
+    // §8 Step 8's daily body, in-process: XOS never dispatches WorkManager (ADR #27), so the
+    // scheduled job alone would leave the ledger's retention sweep unrun on the primary device.
+    @Inject lateinit var maintenancePass: DailyMaintenancePass
+    @Inject lateinit var storeFactory: AppRulesStoreFactory
     @Inject lateinit var profiler: LatencyProfiler
     @Inject lateinit var crashReporting: CrashReporting
 
@@ -178,7 +198,11 @@ class EnforcementForegroundService : Service() {
             stopSelf()
             return
         }
-        checkForUserStop()
+        val previousWatermark = checkForUserStop()
+        // v3 §5 D1/D3: a death the platform recorded is a window nothing observed — the
+        // ticker credited nothing and no block could run. Credit it from the platform's own
+        // foreground record instead of letting the limit hold against a frozen counter.
+        scope.launch { repairAccountingGap(previousWatermark) }
         // §8 Step 6: publish the current authority + status at service start (covers the
         // master switch being turned on/off and any permission change while stopped).
         statusMonitor.refresh()
@@ -189,8 +213,11 @@ class EnforcementForegroundService : Service() {
     }
 
     /** §8.2: a Task-Manager Stop since the last known-good startup is an enforcement-loss
-     *  event — degraded state, blocking stays off until the user explicitly re-enables. */
-    private fun checkForUserStop() {
+     *  event — degraded state, blocking stays off until the user explicitly re-enables.
+     *
+     *  @return the previous known-good startup watermark, which bounds the gap repair to
+     *  exits that happened since the last service start. */
+    private fun checkForUserStop(): Long {
         val watermark = status.lastKnownGoodExitCheckEpochMillis
         status.lastKnownGoodExitCheckEpochMillis = System.currentTimeMillis()
         val exitReasons = runCatching {
@@ -201,16 +228,269 @@ class EnforcementForegroundService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 @Suppress("InlinedApi")
                 manager.getHistoricalProcessExitReasons(packageName, 0, 0)
-                    .map { ProcessExit(it.reason, it.timestamp) }
+                    .map { ProcessExit(it.reason, it.timestamp, it.description.orEmpty()) }
             } else {
                 emptyList()
             }
         }.getOrDefault(emptyList())
         if (UserStoppedDetector.wasUserStopped(exitReasons, watermark)) {
-            Log.w(TAG, "Task-Manager Stop detected — protection degraded, re-enable required")
+            // The description is logged because it is the discriminator the detector reads —
+            // an unrecognized OEM shape shows up here instead of silently degrading protection.
+            val seen = exitReasons
+                .filter { it.reason == ApplicationExitInfo.REASON_USER_REQUESTED }
+                .maxByOrNull { it.timestampEpochMillis }
+            Log.w(
+                TAG,
+                "user stop detected — protection degraded, re-enable required " +
+                    "(reason=${seen?.reason} desc=${seen?.description})",
+            )
             // The flag only: the refresh below derives and publishes APP_STOPPED from it.
             status.requiresExplicitReEnable = true
         }
+        return watermark
+    }
+
+    /**
+     * v3 §5 D1/D3: fill the accounting gap left by a process death.
+     *
+     * The ticker is the only accountant, so a killed process credits nothing for the window
+     * it was gone, and no block can run in that window either — measured on the X6532 as up
+     * to ~17 minutes off-charger without the battery exemption. The platform already records
+     * the death ([ActivityManager.getHistoricalProcessExitReasons]), so the span is known
+     * exactly rather than inferred, and `queryEvents` supplies the foreground marks to fill
+     * it. The window starts at the last journal observation, not the death (v3 §5 D3's
+     * `(last_credited_wall_ms, now]`): a freezer SIGSTOPs the process minutes before the
+     * watchdog kill, and that prefix is exactly the under-counted class this path exists for.
+     * Runs once per service start, on the same transactional writer every other credit
+     * uses, and is bounded to a span this process demonstrably did not observe — so it can
+     * never overlap a span a live path already credited. The credit itself goes through
+     * [UsageAccountingEngine.creditReconciledWindow]: platform-derived data is RECONCILIATION
+     * (§8.9/R4), and its overlap check dedupes this path against the heartbeat-driven one.
+     */
+    @Suppress("InlinedApi") // getHistoricalProcessExitReasons is API 30+, gated below
+    private suspend fun repairAccountingGap(previousWatermark: Long) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        runCatching {
+            if (!hasUsageAccess()) return
+            val db = storeFactory.open() ?: return
+            val tracked = db.restrictionRuleDao().getActiveRules()
+                .filter { it.isEnabled && it.dailyLimitMs > 0L }
+            if (tracked.isEmpty()) return
+            val midnight = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            // v3 §5 D3's span starts at the last observation, not at the death: a freezer's
+            // SIGSTOP prefix (measured: 156 s on the X6532, 2026-09-28) has no other claimant.
+            val observedUntil = runCatching {
+                diagnostics.lastObservedWallClock(systemBootCount(this))
+            }.getOrNull()
+            // Binder work on the isolated tick pool: a usage-stats or appops call can wedge
+            // indefinitely on this device (2026-08-30 finding, see [tickWithTimeout]), and this
+            // is the one place outside the poll loop that makes such calls.
+            val probe = onBinderThread<Pair<LongRange, Map<String, List<UsageMark>>>?> {
+                probeUnobservedWindow(previousWatermark, tracked, midnight, observedUntil)
+            } ?: return
+            val window = probe.first
+            val marks = probe.second
+            val clipEnd = window.last + 1
+            // The recorded span is wall-clock; the ledger's interval is monotonic. Both derive
+            // from the same window, so the RECONCILIATION row's interval is the span the
+            // platform actually answered for.
+            val nowWall = System.currentTimeMillis()
+            val nowElapsed = SystemClock.elapsedRealtime()
+            var repaired = 0
+            for (rule in tracked) {
+                val credit = UsageGapRepair.foregroundMsWithin(
+                    marks[rule.blockedPackage].orEmpty(),
+                    window.first,
+                    clipEnd,
+                )
+                if (credit <= 0L) continue
+                // §8.9/R4: platform-derived recovery is RECONCILIATION, never ACCOUNTING — and
+                // its overlap check makes a re-run (or a second recovery path over the same
+                // window, e.g. the heartbeat-driven one) credit nothing twice.
+                val credited = usageEngine.creditReconciledWindow(
+                    rule.blockedPackage,
+                    nowElapsed - (nowWall - window.first),
+                    nowElapsed - (nowWall - clipEnd),
+                    credit,
+                    UsageLedgerSource.MAINTENANCE,
+                )
+                if (credited <= 0L) continue
+                repaired++
+                Log.i(
+                    TAG,
+                    "gap repair: credited ${credited}ms to ${rule.blockedPackage} " +
+                        "over a ${window.last - window.first}ms unobserved window",
+                )
+            }
+            if (repaired > 0) {
+                // §14 / Decision 12: counts only — no package names or durations leave the device.
+                crashReporting.nonFatal(
+                    "accounting_gap_repaired",
+                    cause = "process_death",
+                    "packages" to repaired.toString(),
+                    "window_ms" to (window.last - window.first).toString(),
+                )
+            }
+        }.onFailure { Log.w(TAG, "gap repair skipped", it) }
+    }
+
+    /**
+     * The binder half of the repair: read the platform's exit record, derive the span this
+     * process demonstrably did not observe, and pull the foreground marks for the tracked
+     * packages across it. Null = nothing safe to repair.
+     */
+    @Suppress("InlinedApi") // getHistoricalProcessExitReasons is API 30+, gated by the caller
+    private fun probeUnobservedWindow(
+        previousWatermark: Long,
+        tracked: List<RestrictionRule>,
+        midnightEpochMillis: Long,
+        observedUntilEpochMillis: Long?,
+    ): Pair<LongRange, Map<String, List<UsageMark>>>? {
+        val exits = getSystemService(ActivityManager::class.java)
+            .getHistoricalProcessExitReasons(packageName, 0, 0)
+            .map { ProcessExit(it.reason, it.timestamp, it.description.orEmpty()) }
+        val exit = UsageGapRepair.latestExitAfter(exits, previousWatermark) ?: return null
+        // Fully qualified: a bare `Process` here resolves to java.lang.Process.
+        val processStartWall = System.currentTimeMillis() -
+            (SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime())
+        val window = UsageGapRepair.repairWindow(
+            exit.timestampEpochMillis,
+            processStartWall,
+            midnightEpochMillis,
+            observedUntilEpochMillis = observedUntilEpochMillis,
+        ) ?: return null
+        val marks = foregroundMarksByPackage(
+            tracked.mapTo(HashSet()) { it.blockedPackage },
+            midnightEpochMillis,
+            processStartWall,
+        )
+        return window to marks
+    }
+
+    /** Runs [block] on the isolated tick pool under the tick's hard bound, so a wedged binder
+     *  call abandons its thread instead of stalling the caller. Null = abandoned or failed;
+     *  every caller treats that as "skip", never as a value. */
+    private fun <T> onBinderThread(block: () -> T): T? = try {
+        tickExecutor.submit(Callable { block() }).get(TICK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+    } catch (e: Exception) {
+        Log.w(TAG, "binder call abandoned", e)
+        null
+    }
+
+    /** Foreground marks per tracked package across [beginMillis, endMillis), one query for all
+     *  of them; callers clip the sum to the window they are allowed to credit. */
+    @SuppressLint("InlinedApi") // ACTIVITY_PAUSED is a compile-time int; ACTIVITY_RESUMED already used above
+    private fun foregroundMarksByPackage(
+        trackedPackages: Set<String>,
+        beginMillis: Long,
+        endMillis: Long,
+    ): Map<String, List<UsageMark>> {
+        if (beginMillis >= endMillis) return emptyMap()
+        val events = runCatching { usageStats().queryEvents(beginMillis, endMillis) }.getOrNull()
+            ?: return emptyMap()
+        val marks = HashMap<String, MutableList<UsageMark>>()
+        while (events.hasNextEvent()) {
+            val event = UsageEvents.Event()
+            if (!events.getNextEvent(event)) continue
+            val resumed = when (event.eventType) {
+                UsageEvents.Event.ACTIVITY_RESUMED -> true
+                UsageEvents.Event.ACTIVITY_PAUSED -> false
+                else -> continue
+            }
+            val pkg = usageEventPackage(event) ?: continue
+            if (pkg !in trackedPackages) continue
+            marks.getOrPut(pkg) { mutableListOf() }.add(UsageMark(event.timeStamp, resumed))
+        }
+        return marks
+    }
+
+    /**
+     * One §8.7 diagnostics cycle: the recorder judges the authoritative source's liveness
+     * against the ledger, and when it finds a measurement gap this method does the one part
+     * only the service can — ask the platform. Recovery is UsageStatsManager's own foreground
+     * record, credited as RECONCILIATION (§8.9/R4); the corroboration outcome is fed back so
+     * the prompt-eligibility flag is only ever set on a real platform answer.
+     */
+    private suspend fun diagnosticsPass() {
+        val source = when (statusMonitor.authority.value) {
+            ProtectionAuthority.FULL -> UsageLedgerSource.PATH_A
+            ProtectionAuthority.DEGRADED_POLLING_ONLY -> UsageLedgerSource.PATH_B
+            // No detection is not an outage to measure — nothing is expected to be accounting.
+            else -> return
+        }
+        val request = diagnostics.pass(
+            source,
+            systemBootCount(this),
+            SystemClock.elapsedRealtime(),
+            System.currentTimeMillis(),
+        ) ?: return
+        if (!hasUsageAccess()) {
+            // §8.9: without the permission there is nothing to query and nothing to conclude —
+            // the gap stands recorded, and the window is never escalated as corroborated.
+            crashReporting.nonFatal("accounting_gap_unrecoverable", cause = "no_permission")
+            return
+        }
+        val db = storeFactory.open() ?: return
+        val tracked = db.restrictionRuleDao().getActiveRules()
+            .filter { it.isEnabled && it.dailyLimitMs > 0L }
+        if (tracked.isEmpty()) return
+        val clipEnd = request.window.last + 1
+        val marks = onBinderThread<Map<String, List<UsageMark>>> {
+            foregroundMarksByPackage(
+                tracked.mapTo(HashSet()) { it.blockedPackage },
+                request.window.first,
+                clipEnd,
+            )
+        } ?: return
+        var recoverableMs = 0L
+        var creditedMs = 0L
+        var packages = 0
+        for (rule in tracked) {
+            val foreground = UsageGapRepair.foregroundMsWithin(
+                marks[rule.blockedPackage].orEmpty(),
+                request.window.first,
+                clipEnd,
+            )
+            if (foreground <= 0L) continue
+            recoverableMs += foreground
+            creditedMs += usageEngine.creditReconciledWindow(
+                rule.blockedPackage,
+                request.elapsedFromMs,
+                request.elapsedToMs,
+                foreground,
+                UsageLedgerSource.MAINTENANCE,
+            )
+            packages++
+        }
+        diagnostics.recordRecovery(
+            request.gapSpanMs,
+            recoverableMs,
+            System.currentTimeMillis(),
+            bootBoundary = request.bootBoundary,
+        )
+        if (packages > 0) {
+            // §14 / Decision 12: counts and durations only — no package names leave the device.
+            crashReporting.nonFatal(
+                "accounting_gap_reconciled",
+                cause = "measurement_gap",
+                "packages" to packages.toString(),
+                "foreground_ms" to recoverableMs.toString(),
+                "credited_ms" to creditedMs.toString(),
+            )
+        }
+    }
+
+    /**
+     * D1's notification surface (§8.7): post the measured interruption while the exemption
+     * offer is live, clear it otherwise. The offer's own gate is [AccountingOutageSource]'s —
+     * this method only translates its answer into the notification's post/cancel.
+     */
+    private suspend fun syncOutageNotification() {
+        val outage = outageSource.current()
+        ProtectionNotifications.updateOutage(
+            this,
+            outage?.takeIf { it.promptRoute != null }?.summary?.largestWindowMs,
+        )
     }
 
     private suspend fun pollLoop() {
@@ -305,38 +585,24 @@ class EnforcementForegroundService : Service() {
                 "tick $tickNumber: usage=$usageOk authority=${statusMonitor.authority.value} " +
                     "degradation=${status.degradation}",
             )
+            // Ledger gap diagnostics (§8.7) ride the same 30 s cadence: off the tick thread, so
+            // the heartbeat's database work can never eat into the tick's hard bound. The
+            // outage notification is synced right after — it is the same pass's outcome.
+            scope.launch {
+                runCatching { diagnosticsPass() }
+                    .onFailure { Log.w(TAG, "diagnostics pass failed", it) }
+                runCatching { syncOutageNotification() }
+                    .onFailure { Log.w(TAG, "outage notification sync failed", it) }
+                // Self-guarded to one run a day: this cycle is the trigger of record on
+                // devices where the scheduled job never dispatches (ADR #27).
+                runCatching { maintenancePass.runIfDue() }
+                    .onFailure { Log.w(TAG, "daily maintenance pass failed", it) }
+            }
         }
         return lastQueryEndMillis
     }
 
     private fun usageStats(): UsageStatsManager = getSystemService(UsageStatsManager::class.java)
-
-    /** Latest ACTIVITY_RESUMED event in the window; pre-API 29 the package field is read
-     *  reflectively (getPackageName is API 29+; the value of ACTIVITY_RESUMED equals the
-     *  deprecated MOVE_TO_FOREGROUND on older runtimes, so one comparison covers both). */
-    private fun latestResumedPackage(events: UsageEvents?): String? {
-        if (events == null) return null
-        var latest: String? = null
-        while (events.hasNextEvent()) {
-            val event = UsageEvents.Event()
-            if (!events.getNextEvent(event)) continue
-            if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED) {
-                latest = eventPackage(event)
-            }
-        }
-        return latest
-    }
-
-    @SuppressLint("DiscouragedPrivateApi") // pre-29-only fallback; getPackageName is API 29+ (ADR #24)
-    private fun eventPackage(event: UsageEvents.Event): String? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        event.packageName
-    } else {
-        runCatching {
-            UsageEvents.Event::class.java.getDeclaredField("mPackage")
-                .apply { isAccessible = true }
-                .get(event) as? String
-        }.getOrNull()
-    }
 
     private fun launchBlocker(outcome: AppBlockDecision.Launch) {
         val intent = Intent(this, BlockerActivity::class.java)
@@ -362,14 +628,22 @@ class EnforcementForegroundService : Service() {
      *  (BlockerActivity is covering it) — covered time must not accrue as usage. */
     private fun feedUsage(latest: String?, scheduleBlocked: Boolean) {
         lastObservedForegroundPackage = currentForegroundAfterPoll(lastObservedForegroundPackage, latest)
+        if (BuildConfig.DEBUG && latest != null) {
+            Log.i(TAG, "poll foreground=$latest carried=$lastObservedForegroundPackage")
+        }
+        // ADR #107: mirror the poll's platform-foreground knowledge for Path A's foreign-close
+        // confirmation — every tick re-stamps it, so a dead or wedged FGS reads as a stale
+        // oracle and never blocks a close.
+        notePlatformForeground(lastObservedForegroundPackage, SystemClock.elapsedRealtime())
         val wall = (usageOverlay.currentContent(Display.DEFAULT_DISPLAY) as? OverlayContent.DailyLimitBlocked)
             ?.packageName
-        if (shouldHideWall(wall, latest)) {
+        if (wall != null && shouldHideWall(wall, latest)) {
             mainHandler.post {
                 // Re-checked at run time: a queued hide whose foreground returned to the
                 // walled app must not lift a live wall (the re-arm gap).
                 if (lastObservedForegroundPackage != wall) {
                     usageOverlay.hide(usageStateMachine.currentGeneration, Display.DEFAULT_DISPLAY)
+                    killWalledProcess(wall)
                 }
             }
         }
@@ -399,6 +673,20 @@ class EnforcementForegroundService : Service() {
             // re-entry (§8 Step 4 re-arm) and makes a non-positive limit block immediately.
             accountUsage(UsageSessionMachine.Tick(latest, 0L, Display.DEFAULT_DISPLAY))
         }
+    }
+
+    /** Path B's half of the user's "block the app and close it" ruling (2026-09-27): it holds
+     *  no accessibility token, so there is no HOME eviction (Decision 16 — a background
+     *  Activity launch is the reliability risk that decision exists to avoid). The app is
+     *  killed once the user's own Home press has backgrounded it — `killBackgroundProcesses`
+     *  is a no-op against a foreground app, and an app holding services survives it either
+     *  way (the same ceiling ADR #93 records for Path A). */
+    private fun killWalledProcess(packageName: String) {
+        runCatching {
+            (getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)
+                ?.killBackgroundProcesses(packageName)
+            Log.i(TAG, "wall close pkg=$packageName")
+        }.onFailure { Log.w(TAG, "wall close failed pkg=$packageName", it) }
     }
 
     /** The adaptive ticker (§8 Step 5): credits the open session once its deadline passes.
@@ -438,7 +726,10 @@ class EnforcementForegroundService : Service() {
                         SystemClock.elapsedRealtime() + usageTickIntervalMs(budget)
                 }
                 val action = usageEngine.processUsageObservation(
-                    tick.packageName, tick.deltaMs, SystemClock.elapsedRealtime(),
+                    tick.packageName,
+                    tick.deltaMs,
+                    SystemClock.elapsedRealtime(),
+                    UsageLedgerSource.PATH_B,
                 )
                 mainHandler.post { renderUsageAction(tick.packageName, action) }
             }.onFailure { Log.w(TAG, "usage accounting failed pkg=${tick.packageName}", it) }
@@ -463,7 +754,7 @@ class EnforcementForegroundService : Service() {
                     usageStateMachine.currentGeneration,
                     Display.DEFAULT_DISPLAY,
                     usageOverlay.warningBounds(Display.DEFAULT_DISPLAY),
-                    OverlayContent.Warning(action.level, action.remainingMs),
+                    OverlayContent.Warning(packageName, action.level, action.remainingMs),
                 ) {
                     // Delivery confirmed only once the banner actually attached (§9: a warning
                     // that failed to attach stays PENDING_DELIVERY / Decision 14).
@@ -472,8 +763,11 @@ class EnforcementForegroundService : Service() {
             }
             is EnforcementAction.Block -> {
                 // The wall replaces the session: nothing accrues under a covered app. No
-                // eviction (Decision 16) — the wall is focusable and touch-modal, so Home is
-                // the user's own escape, never a performed action.
+                // eviction here (Decision 16): Path B holds no accessibility token, so
+                // GLOBAL_ACTION_HOME is unavailable and a background Activity launch is the
+                // reliability risk that decision exists to avoid — the wall itself is the
+                // block, FR2's non-evictable fallback. The blocked app is closed by [killWalledProcess]
+                // once the user's own Home press backgrounds it and the wall lifts.
                 if (usageSessions.activePackage == packageName) closeUsageSession()
                 if (usageOverlay.currentContent(Display.DEFAULT_DISPLAY) !is OverlayContent.DailyLimitBlocked) {
                     usageOverlay.show(
@@ -526,6 +820,9 @@ class EnforcementForegroundService : Service() {
         screenOffReceiver = null
         mainHandler.removeCallbacksAndMessages(null)
         usageSessions.reset()
+        // ADR #107: a stopped service has no platform knowledge — clear the oracle so Path A
+        // reads "stale", never a frozen keep.
+        notePlatformForeground(null, SystemClock.elapsedRealtime())
         usageOverlay.detachAll()
         activeBlockTarget = null
         // §8 Step 6: the service is no longer running, so it can no longer hold authority.
@@ -599,6 +896,24 @@ class EnforcementForegroundService : Service() {
          *  render gate and the wall-hide re-check read. Pure for direct testing. */
         fun currentForegroundAfterPoll(previous: String?, latest: String?): String? =
             latest ?: previous
+
+        /** Path A's foreign-close oracle (ADR #107, 2026-09-28): the poll's last-known
+         *  platform foreground plus the tick that observed it, read by
+         *  [BlockerAccessibilityService] in the same process (no binder). Written on every
+         *  poll tick, so a stopped service leaves a stale timestamp — never a stale keep.
+         *  Read directly (companion property); write via [notePlatformForeground]. */
+        @Volatile
+        var platformForegroundPackage: String? = null
+            private set
+
+        @Volatile
+        var platformForegroundObservedAtElapsedMs: Long = 0L
+            private set
+
+        fun notePlatformForeground(packageName: String?, nowElapsedMs: Long) {
+            platformForegroundPackage = packageName
+            platformForegroundObservedAtElapsedMs = nowElapsedMs
+        }
 
         /** Package the blocker is currently covering; null when none. Cleared in
          *  BlockerActivity.onDestroy; the poll skips relaunching while it is set. */

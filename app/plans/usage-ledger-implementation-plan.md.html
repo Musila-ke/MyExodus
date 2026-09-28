@@ -1,0 +1,539 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}</style><style>:root{color-scheme:light dark;--md-bg:#fff;--md-text:rgba(0,0,0,.8);--md-muted:rgba(0,0,0,.6);--md-fill:rgba(0,0,0,.04);--md-fill-strong:rgba(0,0,0,.06);--md-rule:rgba(0,0,0,.1);--md-rule-strong:rgba(0,0,0,.16);--md-link:hsl(210 100% 45%)}@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])){--md-bg:#0d0d0d;--md-text:rgba(255,255,255,.85);--md-muted:rgba(255,255,255,.6);--md-fill:rgba(255,255,255,.06);--md-fill-strong:rgba(255,255,255,.09);--md-rule:rgba(255,255,255,.14);--md-rule-strong:rgba(255,255,255,.22);--md-link:hsl(210 100% 72%)}}:root[data-theme="dark"]{color-scheme:dark;--md-bg:#0d0d0d;--md-text:rgba(255,255,255,.85);--md-muted:rgba(255,255,255,.6);--md-fill:rgba(255,255,255,.06);--md-fill-strong:rgba(255,255,255,.09);--md-rule:rgba(255,255,255,.14);--md-rule-strong:rgba(255,255,255,.22);--md-link:hsl(210 100% 72%)}:root[data-theme="light"]{color-scheme:light}@media print{:root,:root[data-theme="dark"]{color-scheme:light;--md-bg:#fff;--md-text:rgba(0,0,0,.8);--md-muted:rgba(0,0,0,.6);--md-fill:rgba(0,0,0,.04);--md-fill-strong:rgba(0,0,0,.06);--md-rule:rgba(0,0,0,.1);--md-rule-strong:rgba(0,0,0,.16);--md-link:hsl(210 100% 45%)}}body{background:var(--md-bg);color:var(--md-text);max-width:720px;margin:0 auto;padding:32px;display:flex;flex-direction:column;gap:10px;font:14px/1.55 -apple-system,BlinkMacSystemFont,'SF Pro','Segoe UI',sans-serif;overflow-wrap:break-word}body>:first-child{margin-top:0}h1,h2,h3,h4,h5,h6{margin:6px 0 0;line-height:1.25;font-weight:600;text-wrap:balance}h1{font-size:1.35em}h2{font-size:1.15em;color:var(--md-muted)}h3,h4,h5,h6{font-size:1em}p,ul,ol,blockquote,table,pre,hr{margin:0}strong{font-weight:600}a{color:var(--md-link);text-decoration:none}a:hover{text-decoration:underline}ul,ol{display:flex;flex-direction:column;gap:6px;padding-left:22px}ul{list-style:disc}ol{list-style:decimal}:is(li,td,th)>*+:is(p,ul,ol,blockquote){margin-top:6px}blockquote{display:flex;flex-direction:column;gap:10px;border-left:2px solid var(--md-rule);padding-left:10px;color:var(--md-muted)}:not(pre)>code{background:var(--md-fill);padding:1px 3px;border-radius:4px;font:.92em 'SF Mono',ui-monospace,Menlo,Consolas,monospace}a>code{background:none;color:inherit}pre{background:var(--md-fill);padding:10px 12px;border-radius:6px;overflow-x:auto;font:12px/1.5 'SF Mono',ui-monospace,Menlo,Consolas,monospace;margin-block:4px}pre code{background:none;padding:0;font:inherit}table{width:100%;border-collapse:separate;border-spacing:2px;font:inherit}th,td{padding:6px 8px;border-radius:3px;text-align:left;vertical-align:top}th{background:var(--md-fill-strong);font-weight:600}td{background:var(--md-fill)}:is(th,td) :not(pre)>code{background:transparent}hr{border:0;border-top:1px solid var(--md-rule-strong);margin-block:10px}img{max-width:100%;height:auto;border-radius:4px}</style>
+</head><body>
+<h1>Usage Ledger &amp; Tracking Reliability — Implementation Specification (v2)</h1>
+<h2>Implementation status (2026-09-28) — SHIPPED, uncommitted on <code>dev</code></h2>
+<p><strong>Status: complete.</strong> All requirements R1–R12 and AD-1…AD-18 are implemented, tested, and device-verified on the X6532 (physical, Android 14 / XOS). Decision record: ADR #94 in <code>app/docs/MyExodus Architecture Decisions.md</code>. Everything below this section is the plan as written; where implementation revised a parameter or answered an Open Question, the revision is recorded here rather than by editing the spec text above.</p>
+<h3>Revisions made during implementation (each with its reason)</h3>
+<ul>
+<li><strong>§8.7 gap threshold — the plan's "cadence plus tolerance margin (initial default: cadence × 3)" is implemented literally, with the cadence pinned by Step 1 to the 30 s heartbeat</strong> (not the 1.5 s enforcement poll): 30 s + 3 × 30 s = <code>MEASUREMENT_GAP_THRESHOLD_MS</code> = 120 s. The formula reads the heartbeat cadence, so the threshold follows the constant if the cadence ever changes. Shipped in <code>AccountingDiagnostics</code>.</li>
+<li><strong>§8.7 escalation threshold fixed at 5 minutes</strong> (the plan named the requirement without a value). Below 5 min a restart is ordinary churn and a prompt would be noise; revisable on device evidence. Shipped as <code>AccountingDiagnostics.ESCALATION_THRESHOLD_MS</code>.</li>
+<li><strong>AD-16 deviation, deliberate: reboot-spanning intervals are reconstructed via <code>UsageStatsManager</code> when permission is held</strong> (recorded as <code>RECONCILIATION</code>), rather than always recorded as uncredited <code>measurement_gap</code> tagged <code>reboot_boundary</code>. Rationale: the plan's own §8.9 reconciliation machinery already existed, the reboot case is the single largest real-world credit loss, and the conservative credit-only-going-forward rule of R12/AD-18 is preserved — the reconciliation never backdates a total the user already saw. When permission is absent, the plan's uncredited-gap behavior is exactly what ships. Documented in ADR #94.</li>
+<li><strong>Zero-length reboot convention:</strong> the first observation after a boot-count change records the boundary as a zero-length interval so elapsed time is never subtracted across boots (R5) while still giving every boot a ledger anchor.</li>
+<li><strong>Day-boundary clip (§8.5/§8.11):</strong> an interval crossing local midnight is split proportionally; a span ≤ 0 or a boundary outside the span degrades to the closing-day single slice. Midnight is computed in elapsed space against the boot-relative anchor.</li>
+</ul>
+<h3>§16 Open Questions — resolved</h3>
+<ol>
+<li><strong>Confirmed cadence:</strong> enforcement poll 1.5 s (<code>POLL_INTERVAL_MILLIS</code>); accounting tick 30 s default / 5 s tight (<code>USAGE_TICK_DEFAULT_MS</code> / <code>USAGE_TICK_TIGHT_MS</code>); heartbeat journal row every 30 s (<code>HEARTBEAT_TICKS</code> = 20 × 1.5 s).</li>
+<li><strong>Retention:</strong> 90 days (<code>LedgerRetention.RETENTION_DAYS</code>), pruned 500 rows/batch, ≤ 20 batches/run, 24 h clock-jump cool-down at a 6 h jump threshold.</li>
+<li><strong>v10 scalar date field:</strong> yes — the tracker entity carries <code>local_date_anchor</code> and <code>timezone_id_at_anchor</code>, so §8.10's dated branch applies (seed only when the anchor matches the current local day; stale anchors seed 0). The undated branch is implemented and unit-tested as a defensive path only.</li>
+<li><strong>Corruption recovery UX:</strong> user-initiated reset, via the existing <code>DatabaseHealth</code> states rendered in <code>MainActivity</code> — recoverable-data-found → offer discard; database issue / key unavailable → Reset dialog; transient → Retry + Reset. Keystore-key problems recover only by reset; data problems do not (plan §9). No auto-quarantine, no silent recreation (AC-20).</li>
+<li><strong><code>ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS</code>:</strong> permitted — direct-APK distribution only (ADR #15), so <code>DIRECT_REQUEST_PERMITTED = true</code>; the settings-guidance fallback remains for any future channel where the intent is ineligible.</li>
+<li><strong>Room/SQLCipher integration:</strong> Room 3 (<code>androidx.room3</code> 3.0.x) with the SQLCipher driver — not the Room 2 open-helper factory.</li>
+<li><strong>WAL:</strong> already explicitly enabled before this feature (<code>AppRulesStoreFactory</code> sets <code>JournalMode.WRITE_AHEAD_LOGGING</code>), so §8.14 was a confirmation, not a change.</li>
+<li><strong>Crash telemetry:</strong> captures event counts only — no database contents, no query text (AC-21 holds).</li>
+</ol>
+<h3>Verification summary</h3>
+<ul>
+<li>Full JVM unit suite green: 1,197 tests / 148 classes, 0 failures. Ledger classes: mapper 15, repository 16, gap repair 20, diagnostics 13, prompt gate 4, maintenance 14, engine 33, and the adversarial matrix 11 (<code>UsageLedgerAdversarialTest</code>). Migration: JVM 3 + the real v10→v11 device upgrade (below).</li>
+<li><strong>Adversarial pass (task #47, 2026-09-28) — one real defect found and fixed:</strong> an interval closing <em>exactly</em> at local midnight was attributed to the new day (the split guard caught the equality case as if the boundary were outside the span). Half-open reading says every millisecond belongs to the day it began; the guard now only rejects spans outside the interval, the equality case splits with all credit on the opening day and a zero-credit closing row, and the 11-row matrix is pinned in <code>UsageLedgerAdversarialTest</code> (the failing row first). Full matrix and reasoning: ADR #95.</li>
+<li>Device (X6532, physical): live in-place v10→v11 upgrade with data intact; a real 564 s gap row + 30 s-cadence heartbeats; outage read model both ways; battery-prompt notification gate (posts only on an unexempt window, cancels on re-exemption); prune of a seeded past-retention row; clock-jump suspension verified and reset; process-death repair credited 20,196 ms as <code>RECONCILIATION</code> with tracker arithmetic reconciled and no escalation.</li>
+<li>§11 performance measured on-device (two consistent runs): single append p50 ≈ 9 ms; day-split p50 ≈ 10 ms; production transaction p50 ≈ 9 ms; batched 20 rows/tx ≈ 33–39 ms; read latencies sub-millisecond; retained footprint exactly 225 B/row (measured via <code>page_count − freelist_count</code>); ≤ 101 MB projected at 90 days for a 5,280-rows/day profile. Cleanup verified (bench rows and tracker row removed, pages back to baseline).</li>
+<li>16 KB page size: all ELF LOAD segments <code>0x4000</code> across all four ABIs including <code>libsqlcipher.so</code>; <code>zipalign -c -P 16</code> passes. Runtime boot on a 16 KB device remains a release-stage item (no such device on hand).</li>
+</ul>
+<h3>Deferred (explicitly, not silently dropped)</h3>
+<ul>
+<li><strong>Runtime 16 KB boot verification</strong> — no 16 KB-page device available; emulator ruled out by user ruling. Release-stage item.</li>
+<li><strong>Staged rollout monitoring (§13/§14)</strong> — the app ships as direct APK only (no Play staged rollout), so the monitoring configuration is the existing Firebase projects instead. Not applicable as written.</li>
+</ul>
+<h2>1. Feature Overview</h2>
+<p>This feature replaces the mutable daily usage scalar in <code>AppRulesStore</code> with an append-only usage ledger (Room schema v10 → v11, SQLCipher-encrypted). The ledger is the single source of historical truth for usage accounting and diagnostics. A transactionally-coupled current-day projection provides fast enforcement/UI reads without re-aggregating the full ledger on every check.</p>
+<p><strong>User-visible behavior:</strong></p>
+<ul>
+<li>Existing app rules, limits, and all v10 data survive the migration.</li>
+<li>The user's in-progress daily usage total at the moment of upgrade is preserved using day-aware seeding logic (§8.10) — never blindly copied from a possibly stale scalar.</li>
+<li>Daily usage is computed against an immutable, per-event day attribution (§8.1, §8.5) rather than being recomputed later from a raw timestamp under the device's current timezone.</li>
+<li>Historical ledger data is retained only for a configured retention period, then pruned in bounded batches.</li>
+<li>A battery-optimization prompt is never shown on first launch or merely because the app started. It is shown only after a corroborated gap threshold is met, is rate-limited, and respects distribution/policy eligibility. It is described to the user as addressing a detected tracking gap — never asserted to the user or in logs as a proven OEM cause.</li>
+<li>Database corruption or key-access failure never results in silently creating a fresh, unrestricted database.</li>
+<li>All ledger data, diagnostics, and the temporal baseline are local-only; they are excluded from Android Auto Backup (including device-transfer/cross-platform-transfer paths) and from remote crash telemetry.</li>
+<li>A tracking gap never fabricates usage credit and never retroactively erases already-committed usage; if a later reconciliation determines a past total was wrong, it is corrected via an explicit compensating event (§8.12), never by editing history.</li>
+</ul>
+<p><strong>V1 scope decision (closes prior Open Question about multi-source accounting):</strong> V1 uses exactly one authoritative accounting source. No AccessibilityService is used in V1. <code>UsageStatsManager</code> is used only as a best-effort, clearly-labeled reconciliation source for backfilling gaps — it never independently credits usage in parallel with the authoritative source. Multi-source accounting with overlap reconciliation is explicitly out of scope for V1 and deferred to a future version if a second accounting source is ever added.</p>
+<h2>2. Requirements</h2>
+<h3>Functional</h3>
+<ul>
+<li><strong>R1 — Ledger persistence.</strong> A <code>usage_ledger</code> table exists in schema v11. Each row records: a stable, deterministic <code>event_id</code> (dedup key, §8.6), wall-clock observation time, monotonic elapsed-time-since-boot, boot count, package name, event kind, credited duration, interval start/end (elapsed-time basis), an immutable <code>day_key</code>, source, and source-version metadata.</li>
+<li><strong>R2 — Insert-only ledger for historical facts.</strong> The application DAO exposes insert and read/delete operations only. No update operation exists on any <code>ACCOUNTING</code>, <code>DIAGNOSTIC</code>, or <code>MIGRATION_CARRYOVER</code> row. A mistaken credit is fixed only via a <code>CORRECTION</code> row (§8.12) that references the original event — never by editing it in place. Maintenance may delete rows past retention.</li>
+<li><strong>R3 — Idempotency via deterministic identity.</strong> <code>event_id</code> is derived deterministically from the observation's own stable properties (source id, package, interval start/end in elapsed-time, boot count) — never a randomly generated value created fresh on every attempt. A unique index on <code>event_id</code> rejects duplicate inserts. Retried delivery (WorkManager retry, callback replay, service restart) reproduces the same <code>event_id</code> and is therefore safely ignored on retry.</li>
+<li><strong>R4 — Accounting semantics, single authoritative source.</strong> Only the one designated accounting source may write <code>ACCOUNTING</code>-kind events. <code>HEARTBEAT</code>, <code>RULE_EVALUATION</code>, and <code>GAP_DETECTED</code> kinds never contribute to the usage projection, regardless of their <code>credited_ms</code> value. <code>UsageStatsManager</code>-derived recovery data is written as <code>RECONCILIATION</code> kind, which contributes to the projection only for time ranges the authoritative source did not already cover (§8.9), and is deduplicated against existing <code>ACCOUNTING</code> rows by interval overlap, not by <code>event_id</code> alone.</li>
+<li><strong>R5 — Time semantics.</strong> Every accounting-relevant event stores wall-clock time, monotonic elapsed time, and elapsed-time interval start/end. Elapsed time is never subtracted across a boot-count change and treated as an exact duration. A reboot is a hard temporal boundary; the interval spanning it is reconstructed via <code>UsageStatsManager</code> where available, otherwise recorded as an explicit, uncredited <code>measurement_gap</code>.</li>
+<li><strong>R6 — Immutable day attribution.</strong> Each accounting-relevant event stores a <code>day_key</code> (local calendar date, computed once at interval-end time using the device's timezone offset <em>at that moment</em>, then frozen). An interval whose elapsed span crosses a day boundary is split into two accounting rows at ingestion time, each carrying its own <code>day_key</code> and its own share of <code>credited_ms</code>. A later timezone or manual clock change never changes a <code>day_key</code> already written to the ledger, and the projection is never recomputed from raw timestamps under a different timezone than the one active at event time.</li>
+<li><strong>R7 — Gap diagnostics.</strong> A gap is recorded as <code>measurement_gap</code> when the interval between observations from the single authoritative source exceeds the confirmed expected cadence plus a tolerance margin (§8.7). A gap may be escalated to <code>prompt_eligible_gap</code> once corroborating conditions are met (§8.7, replaces the previous <code>background_execution_outage</code> label) — this label describes prompt eligibility, not a proven cause, and must never be presented to the user, logged, or coded as an assertion that Android or an OEM killed the process.</li>
+<li><strong>R8 — Battery optimization UX.</strong> Before requesting <code>ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS</code>: verify the app is not already exempt (<code>PowerManager.isIgnoringBatteryOptimizations()</code>); verify the current build/distribution channel is permitted to use this API; require <code>prompt_eligible_gap</code> status; enforce a prompt cooldown. Provide a settings-guidance fallback for ineligible channels. User-facing copy describes a detected tracking interruption, not a named cause.</li>
+<li><strong>R9 — Retention.</strong> A single configuration constant defines retention duration. Pruning runs in bounded batches, is safely retryable, and is suspended (not silently applied) for a defined cool-down period after a detected large forward clock jump, to avoid deleting recent diagnostic evidence under a false &quot;these rows are old&quot; read (§8.8).</li>
+<li><strong>R10 — Migration.</strong> Schema version moves 10 → 11 via one explicit <code>Migration(10, 11)</code>. No destructive fallback is registered anywhere in production code. The migration seeds the ledger from the existing v10 scalar using the day-aware algorithm in §8.10 — never a blind copy. The seeded row is written as <code>MIGRATION_CARRYOVER</code> kind, distinct from <code>ACCOUNTING</code>, and is documented as an aggregate with no reconstructable sub-timeline. The migration uses plain <code>CREATE TABLE</code>/<code>CREATE INDEX</code> (not <code>IF NOT EXISTS</code>) so unexpected pre-existing schema state fails the migration loudly rather than being silently masked.</li>
+<li><strong>R11 — Recovery.</strong> A database-open failure (bad key, corruption, migration failure) is classified, from the observed error signal, into the most specific category the evidence supports; when the evidence is ambiguous, it is classified as <code>unclassified_open_failure</code> rather than guessed into a specific category. The app never silently replaces a database containing active security rules with a blank one, in any category.</li>
+<li><strong>R12 — Enforcement under uncertainty (closes prior Open Question).</strong> When usage for the current day is partially unknown because of an unresolved <code>measurement_gap</code>, enforcement continues to use the last successfully committed <code>usage_daily</code> projection value and does not retroactively add estimated usage for the gap period. If reconciliation (via <code>UsageStatsManager</code> or, in a future version, another source) later determines that credited usage during the gap should be added, it is added going forward from the moment of reconciliation as a <code>RECONCILIATION</code> or <code>CORRECTION</code> event — never backdated into a way that silently changes a total the user already saw and acted on. This is a deliberate conservative default: it never causes the app to lock a user out based on estimated/unverified usage, and never causes it to silently grant extra allowance either.</li>
+</ul>
+<h3>Non-functional</h3>
+<ul>
+<li>No destructive migration fallback in production, ever.</li>
+<li>All existing v10 data survives the migration.</li>
+<li>Ledger writes are atomic (single Room transaction) and durable under the configured SQLite durability settings (§8.9, §11).</li>
+<li>Duplicate or replayed accounting events never double-count usage.</li>
+<li>Accounting events are structurally distinguishable from diagnostic, reconciliation, migration-carryover, and correction events via <code>kind</code>.</li>
+<li>Time calculations explicitly account for wall-clock changes, reboot boundaries, and day/timezone boundaries.</li>
+<li>Maintenance work is bounded, retryable, and never blocks the foreground enforcement path or causes an ANR.</li>
+<li>No sensitive ledger content is written to remote logs, analytics, or crash telemetry.</li>
+<li>The feature is local-only; nothing in this implementation introduces network transmission of ledger data. All local state related to this feature (ledger DB, wrapped key material, temporal baseline) is excluded from Android backup in every backup path the platform offers.</li>
+</ul>
+<h2>3. Existing System Context</h2>
+<p>The project is an Android application using Room 3, SQLCipher, WorkManager, and <code>UsageStatsManager</code>, targeting API 26+. The feature is scoped to <code>AppRulesStore</code> and existing usage/rule enforcement. V1 does not use <code>AccessibilityService</code> and has exactly one existing usage-observation source.</p>
+<p><strong>Preserve unchanged, unless Step 1 inspection proves otherwise:</strong></p>
+<ul>
+<li>Existing access-rule entities and DAOs.</li>
+<li>Existing accountability/partner-facing logic.</li>
+<li>Existing VPN/DNS enforcement logic.</li>
+<li>Unrelated Room entities and unrelated WorkManager jobs.</li>
+<li>UI navigation not directly tied to usage diagnostics.</li>
+<li>The existing SQLCipher key-management/provisioning path.</li>
+</ul>
+<p><strong>Data flow to build against:</strong></p>
+<pre><code>usage observation source (single authoritative source)
+  → accounting mapper (validate, classify, split at day boundary, derive deterministic event_id, attach day_key)
+  → repository.recordAccountingEvent()
+  → single Room transaction: insert ledger row(s) + update current-day projection
+  → enforcement/UI reads projection
+  → diagnostics read ledger + gap metadata directly
+</code></pre>
+<p>Before writing any code, map this flow onto the actual classes in the repository (database builder, DAO layer, the existing usage-writing call site, existing day-boundary logic, key-provisioning code, exact Room/SQLCipher artifact versions in use). Do not proceed to schema work until this mapping is confirmed against the real codebase (§7 Step 1).</p>
+<h2>4. Architecture</h2>
+<p><strong>Chosen architecture:</strong> a single-source append-only usage ledger (authoritative history) plus a transactionally-coupled current-day projection (derived, rebuildable performance cache), with an explicit compensating-event mechanism for corrections and a clearly-labeled legacy-carryover event for migration.</p>
+<h3>Components</h3>
+<p><strong>4.1 Usage observation adapter</strong> — the one existing observation mechanism in V1. Emits raw observations only; does not decide accounting semantics.</p>
+<p><strong>4.2 Accounting mapper</strong> — the single place raw observations become <code>UsageLedgerEvent</code> domain objects. Validates package name and duration bounds, classifies event kind, attaches wall-clock time, elapsed-realtime interval start/end, boot count, computes and freezes <code>day_key</code>, splits any interval crossing a day boundary into two rows, and derives the deterministic <code>event_id</code> (§8.6).</p>
+<p><strong>4.3 Usage repository</strong> — the only application-level entry point for ledger writes. Owns: insert with idempotency enforcement, atomic projection update, reconstruction queries for diagnostics, correction-event insertion, and retention/prune operations. No other layer issues raw SQL against <code>usage_ledger</code>.</p>
+<p><strong>4.4 Current usage projection</strong> — a compact <code>usage_daily(package, day_key, credited_ms, …)</code> table. Updated in the same transaction as its triggering ledger insert. Fully rebuildable from the ledger via an explicit rebuild utility that applies <code>ACCOUNTING</code>, <code>MIGRATION_CARRYOVER</code>, <code>RECONCILIATION</code>, and <code>CORRECTION</code> kinds using the aggregation rule in §8.13, and ignores <code>HEARTBEAT</code>/<code>RULE_EVALUATION</code>/<code>GAP_DETECTED</code> kinds.</p>
+<p><strong>4.5 Diagnostic gap detector</strong> — tracks observation cadence for the single authoritative source. Its baseline state (last elapsed reading, last boot count, last wall-clock reading) is derived from the latest persisted <code>usage_ledger</code> row for that source — <strong>there is no separate baseline store</strong> (this closes the prior atomicity/scoping problem: the baseline can never disagree with the ledger, because it is read from the ledger). Classifies a detected gap as <code>measurement_gap</code> by default; escalates only per §8.7's corroboration rule, and only to a prompt-eligibility label, never a causal one.</p>
+<p><strong>4.6 Maintenance worker</strong> — existing WorkManager infrastructure, extended to prune ledger rows in bounded batches, suspend pruning during a clock-anomaly cool-down (§8.8), and record local pruning diagnostics. Never sits on the foreground enforcement critical path.</p>
+<h2>5. Architecture Decisions</h2>
+<ul>
+<li><strong>AD-1 — Ledger is the source of historical truth.</strong> Fixes the core defect of the legacy scalar design; accepted storage/write cost.</li>
+<li><strong>AD-2 — Maintain a transactionally-coupled current-day projection.</strong> Avoids re-aggregating the full ledger on every enforcement check; kept consistent by updating it in the same transaction as the ledger insert; fully rebuildable.</li>
+<li><strong>AD-3 — Every accounting-relevant event has a deterministic <code>event_id</code> derived from stable inputs, not a randomly generated one.</strong> A random ID generated fresh on every attempt does not survive a retry of the same logical observation; a deterministic hash of source/package/interval/boot-count does.</li>
+<li><strong>AD-4 — Store elapsed-time interval start and end, not only a derived span.</strong> This is what makes day-boundary splitting (AD-6) and deterministic event identity (AD-3) possible; a bare duration is neither orderable nor splittable.</li>
+<li><strong>AD-5 — Reboot is a hard temporal boundary; cross-boot durations are never derived from wall-clock subtraction.</strong> <code>elapsedRealtime()</code> resets its origin on reboot and wall-clock time can move independently of it.</li>
+<li><strong>AD-6 — Day attribution is computed once at interval-end time and frozen into the row (<code>day_key</code>), and any interval crossing a day boundary is split at ingestion.</strong> This is what makes the projection genuinely rebuildable — recomputing &quot;which day&quot; from a raw timestamp under a possibly-different current timezone would silently change historical totals on replay, which is unacceptable for an audit ledger.</li>
+<li><strong>AD-7 — WAL checkpointing is left to SQLite's automatic behavior; <code>wal_checkpoint(TRUNCATE)</code> is never run as a routine maintenance step.</strong> Automatic checkpointing manages WAL growth in the common case; the application must still tolerate and monitor for WAL growth caused by long-running readers or large transactions rather than assuming growth is fully bounded by this alone.</li>
+<li><strong>AD-8 — No fixed <code>PRAGMA cache_size</code> override ships without device-class benchmark data.</strong></li>
+<li><strong>AD-9 — <code>auto_vacuum</code> mode is not changed as part of the 10 → 11 migration, and storage is bounded by retention/pruning of live rows, not by expecting the <code>.db</code> file's high-water mark to shrink.</strong> SQLite only applies an <code>auto_vacuum</code> mode change via a full <code>VACUUM</code>. A one-time, explicitly scheduled, idle-triggered <code>VACUUM</code> remains a possible future maintenance operation if measured file-size growth data later justifies it (tracked in Open Questions, not built in v1).</li>
+<li><strong>AD-10 — The migration does not rotate or touch the SQLCipher key.</strong></li>
+<li><strong>AD-11 — Migration uses an explicit <code>Migration(10, 11)</code> with plain (non-<code>IF NOT EXISTS</code>) DDL.</strong> Both automatic and manual migrations are supported by Room for this kind of change; explicit migration with strict DDL is chosen for full control over validation, the legacy-seeding step, and for failing loudly on unexpected pre-existing schema state rather than silently masking it.</li>
+<li><strong>AD-12 — The migration seeds the ledger using the day-aware algorithm in §8.10, writing a <code>MIGRATION_CARRYOVER</code> row, never a plain <code>ACCOUNTING</code> row.</strong> A blind copy of the v10 scalar risks crediting a stale (previous-day) value to the current day. The <code>MIGRATION_CARRYOVER</code> kind is explicitly documented as an aggregate with no reconstructable sub-timeline, so diagnostic tooling never mistakes it for a real interval.</li>
+<li><strong>AD-13 — A detected gap is stored as <code>measurement_gap</code> by default; escalation to <code>prompt_eligible_gap</code> requires the corroboration in §8.7, and neither label is ever presented — to the user, in logs, or in code comments — as a proven OEM or Android cause.</strong> The available signals (boot-count unchanged, gap duration relative to cadence, absence of recoverable <code>UsageStats</code> activity) establish that tracking was interrupted; they do not establish why.</li>
+<li><strong>AD-14 — Backup exclusion covers every stateful artifact this feature introduces, with no separate artifact left uncovered.</strong> Because the temporal baseline is derived from the ledger itself (AD-15) rather than stored separately, there is only one artifact to exclude: the SQLCipher database file and its wrapped key material. This is verified against both cloud-backup and device-transfer/cross-platform-transfer configuration paths.</li>
+<li><strong>AD-15 — There is no separate temporal-baseline store; the baseline is derived from the latest relevant <code>usage_ledger</code> row.</strong> A separate <code>SharedPreferences</code>/DataStore baseline created a second state machine that could desynchronize from the ledger across a crash, and left an artifact outside the single backup-exclusion boundary. Deriving it from the ledger removes both problems at once.</li>
+<li><strong>AD-16 — V1 uses exactly one authoritative accounting source; <code>UsageStatsManager</code> is a reconciliation-only source, never a second accounting source.</strong> This removes the need for cross-source overlap detection and reconciliation-watermarking logic in V1, which is disproportionate complexity for a single-observation-source product. Revisit only if a second real-time accounting source is added in a future version.</li>
+<li><strong>AD-17 — Accounting mistakes are corrected via an explicit <code>CORRECTION</code> event referencing the original <code>event_id</code>, never by mutating a historical row.</strong> This preserves the append-only invariant while still allowing production bugs to be fixed without permanently baking in wrong totals.</li>
+<li><strong>AD-18 — Enforcement under an unresolved measurement gap uses the last committed projection value and never estimates or backdates usage for the gap period (R12).</strong> This is the conservative default: it can never falsely lock a user out based on an estimate, and never silently grants unearned allowance either.</li>
+</ul>
+<h2>6. Data Flow</h2>
+<p><strong>Normal accounting event</strong></p>
+<ol>
+<li>The authoritative observation source produces a raw observation with an elapsed-time interval (start, end).</li>
+<li>Accounting mapper validates it, computes <code>day_key</code> from the interval's end time and the current timezone offset, and — if the interval crosses a day boundary — splits it into two rows, each with its own <code>day_key</code> and proportional <code>credited_ms</code>.</li>
+<li>Mapper derives a deterministic <code>event_id</code> for each resulting row from (source, package, interval start, interval end, boot_count).</li>
+<li>Repository opens one Room transaction per resulting row (or a single transaction covering both split rows together).</li>
+<li>Insert into <code>usage_ledger</code>.</li>
+<li>Update <code>usage_daily</code> projection for the row's <code>day_key</code>.</li>
+<li>Commit.</li>
+<li>Enforcement/UI reads the projection. Diagnostics read the ledger directly.</li>
+</ol>
+<p><strong>Duplicate delivery</strong></p>
+<ol>
+<li>The same logical observation is retried; the mapper derives the same <code>event_id</code> as before, because it is computed from the observation's own stable properties.</li>
+<li>Unique index rejects the insert.</li>
+<li>Repository returns an idempotent-duplicate result. No projection change.</li>
+</ol>
+<p><strong>Event-ID collision with different payload</strong></p>
+<ol>
+<li>An insert attempt with an already-used <code>event_id</code> but a materially different payload (different <code>credited_ms</code>, different interval) is rejected as an <strong>ID collision</strong>, not silently treated as an idempotent duplicate, and is recorded as a diagnostic anomaly for investigation — it is never silently dropped as if it were a normal retry.</li>
+</ol>
+<p><strong>Reboot</strong></p>
+<ol>
+<li>New process observes a boot count different from the last persisted ledger row for the source.</li>
+<li>The interval spanning the reboot is not computed by subtracting old and new <code>elapsedRealtime()</code> values.</li>
+<li><code>UsageStatsManager</code> is queried (wall-clock range, after confirming <code>PACKAGE_USAGE_STATS</code> access — §8.9) to backfill recoverable foreground activity across the boundary, written as <code>RECONCILIATION</code> kind.</li>
+<li>Any unresolved portion of the interval is recorded as <code>measurement_gap</code> tagged <code>reboot_boundary</code>, and per R12/AD-18, contributes nothing to the projection until/unless reconciled.</li>
+</ol>
+<p><strong>Wall-clock shift</strong></p>
+<ol>
+<li>A new event's wall-clock delta is compared against its monotonic delta since the previous event from the same source (same boot only).</li>
+<li>A material conflict is recorded as a <code>clock_anomaly</code> diagnostic row.</li>
+<li>Usage credit always uses the monotonic-derived duration when the two disagree.</li>
+<li>No existing ledger row is ever rewritten. <code>day_key</code> values already frozen on prior rows are never recomputed.</li>
+</ol>
+<p><strong>Pruning</strong></p>
+<ol>
+<li>Maintenance worker reads the configured retention threshold.</li>
+<li>If a large forward clock jump was recently detected (within the configured cool-down window), pruning is skipped for this run.</li>
+<li>Otherwise, deletes rows older than the threshold in bounded batches, committing each batch separately.</li>
+<li>Records batch progress locally; retries from the last committed batch on failure.</li>
+<li>A failed or delayed prune never affects current accounting correctness.</li>
+</ol>
+<h2>7. Implementation Sequence</h2>
+<p><strong>Step 1 — Inspect the existing repository before writing schema code.</strong>
+Confirm from the actual code: current Room database version is 10; the exact SQLCipher/Room integration in use (Room 2 <code>SupportOpenHelperFactory</code> vs. Room 3 <code>SQLCipherDriver</code>); the current day-boundary/day-reset algorithm; the existing v10 daily-scalar entity/column and whether it carries any associated date/last-reset field; the existing WorkManager maintenance job (if any); the existing key-provisioning path; whether WAL is already enabled; whether multiple processes touch this database; whether the existing single observation source reports discrete intervals, a running state, or periodic snapshots. Do not proceed past this step until these are confirmed.</p>
+<p><strong>Step 2 — Define the <code>UsageLedgerEvent</code> domain model and validation rules</strong> (§8.2).</p>
+<p><strong>Step 3 — Add the <code>usage_ledger</code> schema</strong> (§8.1) with the unique deterministic-<code>event_id</code> index and the query-supporting indexes.</p>
+<p><strong>Step 4 — Write the explicit <code>Migration(10, 11)</code></strong> implementing the day-aware seeding algorithm (§8.10), using plain <code>CREATE TABLE</code>/<code>CREATE INDEX</code> (AD-11).</p>
+<p><strong>Step 5 — Update the Room database class.</strong> Version → 11. Register <code>MIGRATION_10_11</code>. Confirm no destructive-fallback call exists anywhere in the builder chain. <code>exportSchema = true</code>.</p>
+<p><strong>Step 6 — Implement <code>UsageRepository.recordAccountingEvent(event)</code></strong> as the sole ledger-write entry point, including day-boundary splitting, deterministic-ID collision handling (§8.6), and correction-event support (§8.12), all inside one transaction per logical write.</p>
+<p><strong>Step 7 — Migrate the existing usage-writing call site</strong> to call the repository instead of writing the legacy scalar directly. Document its cadence and interval-reporting shape from Step 1's findings.</p>
+<p><strong>Step 8 — Remove any in-memory-only temporal state; confirm the gap detector reads its baseline from the latest persisted ledger row for the source (AD-15), not from a separate store.</strong></p>
+<p><strong>Step 9 — Implement gap diagnostics and the escalation rule</strong> using the confirmed heartbeat/observation cadence from Step 1 (§8.7).</p>
+<p><strong>Step 10 — Integrate <code>UsageStatsManager</code> reconciliation</strong> for reboot and long-gap recovery, with the permission check, watermarking, and overlap-avoidance rules in §8.9.</p>
+<p><strong>Step 11 — Implement bounded, idempotent retention pruning</strong>, including the clock-anomaly cool-down suspension (§8.8).</p>
+<p><strong>Step 12 — Implement battery-optimization gating</strong> per R8/§8.7.</p>
+<p><strong>Step 13 — Write and run the full test suite</strong> (§12) against the real SQLCipher/Room stack.</p>
+<p><strong>Step 14 — Configure backup exclusion (database + wrapped key only, per AD-14/AD-15) and audit logging paths before release</strong> (§10, §14).</p>
+<p><strong>Step 15 — Verify native-library (SQLCipher) compatibility with current Android/Play platform requirements</strong>, including the 16 KB page-size requirement for apps shipping native code (§13).</p>
+<h2>8. Detailed Implementation Steps</h2>
+<h3>8.1 Ledger schema</h3>
+<pre><code class="language-sql">CREATE TABLE usage_ledger (
+    id INTEGER PRIMARY KEY NOT NULL,
+    event_id TEXT NOT NULL,
+    kind INTEGER NOT NULL,
+    wall_clock_ts_ms INTEGER NOT NULL,
+    elapsed_start_ms INTEGER NOT NULL,
+    elapsed_end_ms INTEGER NOT NULL,
+    boot_count INTEGER NOT NULL,
+    package_name TEXT NOT NULL,
+    day_key TEXT NOT NULL,
+    credited_ms INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    source_version TEXT NOT NULL,
+    references_event_id TEXT
+);
+
+CREATE UNIQUE INDEX index_usage_ledger_event_id
+    ON usage_ledger(event_id);
+
+CREATE INDEX index_usage_ledger_package_day
+    ON usage_ledger(package_name, day_key, kind, credited_ms);
+
+CREATE INDEX index_usage_ledger_wall_clock
+    ON usage_ledger(wall_clock_ts_ms);
+</code></pre>
+<p><code>day_key</code> is a <code>TEXT</code> local-date string (e.g. <code>2026-09-27</code>), computed once at write time and never recomputed from <code>wall_clock_ts_ms</code> later. <code>references_event_id</code> is populated only for <code>CORRECTION</code> rows, pointing at the <code>event_id</code> being corrected; it is <code>NULL</code> for every other kind. <code>index_usage_ledger_package_day</code> is a covering index for the daily aggregation query (<code>package_name</code>, <code>day_key</code>, filtered by <code>kind</code>, summing <code>credited_ms</code>) so that query does not require a table lookup per row.</p>
+<p><code>kind</code> values: <code>1 = ACCOUNTING</code>, <code>2 = HEARTBEAT</code>, <code>3 = RULE_EVALUATION</code>, <code>4 = GAP_DETECTED</code>, <code>5 = MIGRATION_CARRYOVER</code>, <code>6 = RECONCILIATION</code>, <code>7 = CORRECTION</code>.</p>
+<h3>8.2 Event validation (enforced in the accounting mapper before insert)</h3>
+<p>Reject an event if: <code>event_id</code> is empty; <code>credited_ms &lt; 0</code>; <code>elapsed_end_ms &lt; elapsed_start_ms</code>; <code>credited_ms &gt; (elapsed_end_ms - elapsed_start_ms)</code> for <code>ACCOUNTING</code>/<code>RECONCILIATION</code> kinds; <code>kind</code> is not a known value; <code>package_name</code> is empty or exceeds the bounded length used elsewhere in the codebase; any timestamp arithmetic would overflow a signed 64-bit value; a <code>CORRECTION</code> row with an empty or unresolvable <code>references_event_id</code>.</p>
+<h3>8.3 Current projection</h3>
+<p>Update <code>usage_daily(package_name, day_key, credited_ms)</code> in the same transaction as the triggering ledger insert. Implement and test a rebuild function that recomputes <code>usage_daily</code> purely from <code>usage_ledger</code> per the aggregation rule in §8.13; this function is the authoritative recovery path after corruption or a projection bug.</p>
+<h3>8.4 Temporal baseline (no separate store)</h3>
+<p>The gap detector queries the latest <code>usage_ledger</code> row for the authoritative source to obtain the last known <code>elapsed_end_ms</code>, <code>boot_count</code>, and <code>wall_clock_ts_ms</code>. There is no <code>SharedPreferences</code>/DataStore baseline. This guarantees the baseline can never disagree with the ledger and removes one artifact from the backup-exclusion surface.</p>
+<h3>8.5 Temporal and day-boundary rules</h3>
+<p><strong>Within one boot:</strong> <code>delta = currentElapsedStart - previousElapsedEnd</code>. Reject a negative delta as an anomaly. A delta larger than the confirmed cadence plus tolerance becomes a <code>measurement_gap</code>. A wall-clock delta that materially disagrees with the monotonic delta becomes a <code>clock_anomaly</code>; credited usage always follows the monotonic delta.</p>
+<p><strong>Day-boundary splitting:</strong> if <code>elapsed_start_ms</code> and <code>elapsed_end_ms</code> correspond to wall-clock times on different local calendar days (computed once, at write time, using the timezone offset active at that moment), split the interval at the boundary into two rows. Each row's <code>credited_ms</code> is its own proportional share of the original duration. Each row's <code>day_key</code> is frozen at insert time and is never recomputed later.</p>
+<p><strong>Across a boot:</strong> never subtract elapsed-realtime values across a boot-count change. Use <code>UsageStatsManager</code> reconciliation where available; otherwise record an explicit, uncredited gap.</p>
+<h3>8.6 Deterministic event identity and duplicate/collision handling</h3>
+<p><code>event_id</code> is derived as a stable hash (e.g. SHA-256, truncated) of: <code>source_id + package_name + elapsed_start_ms + elapsed_end_ms + boot_count</code>. This guarantees a retry of the same logical observation produces the same <code>event_id</code>.</p>
+<p>On insert conflict:</p>
+<ul>
+<li>If the conflicting row's other fields (<code>credited_ms</code>, interval bounds, <code>kind</code>) match the incoming event exactly → idempotent duplicate, no-op, return success.</li>
+<li>If they differ → <strong>ID collision</strong>, not a duplicate. Reject the insert, record a <code>clock_anomaly</code>-class diagnostic distinct from a normal duplicate, and surface it for investigation. Never silently drop a differing payload as if it were a safe retry.</li>
+</ul>
+<h3>8.7 Gap detection, escalation, and battery-prompt gating</h3>
+<p>A gap is <code>measurement_gap</code> when the time since the last observation from the authoritative source exceeds the confirmed cadence (from Step 1) plus a tolerance margin (initial default: cadence × 3, subject to revision after on-device measurement — see Open Questions).</p>
+<p>A <code>measurement_gap</code> escalates to <code>prompt_eligible_gap</code> only when: boot count is unchanged since the last observation, the gap duration exceeds the escalation threshold, and <code>UsageStatsManager</code> shows no recoverable activity for the interval (subject to the permission check in §8.9). This escalation is a <strong>prompt-eligibility signal</strong>, not a causal diagnosis; no code, log message, or user-facing string may describe it as a confirmed OEM or Android battery-management action.</p>
+<p>Battery-prompt gating: not exempt already → distribution channel eligible → <code>prompt_eligible_gap</code> present → cooldown elapsed → show contextual education describing a detected tracking interruption (not a named cause) → offer settings-guidance fallback when the direct exemption intent is unavailable or ineligible for the channel.</p>
+<h3>8.8 Maintenance</h3>
+<p>Delete in bounded batches (fixed row-count cap per transaction, confirmed against real device testing in Step 13). Suspend pruning entirely for a configured cool-down window (default: 24 hours) after detecting a forward wall-clock jump larger than a configured threshold (default: 6 hours), so that recent diagnostic evidence is not deleted under a false &quot;these rows are old&quot; read caused by the jump. A failed or partial prune batch leaves the ledger consistent and retries on the next scheduled run.</p>
+<h3>8.9 Reconciliation via UsageStatsManager (V1: recovery-only, never a second accounting source)</h3>
+<p>Before querying, check <code>AppOpsManager.unsafeCheckOpNoThrow(OPSTR_GET_USAGE_STATS)</code> (or the current equivalent API). If not granted, record the gap as <code>unrecoverable_no_permission</code> and take no further action — do not throw, do not crash.</p>
+<p>When granted: query only the wall-clock range covering an existing <code>measurement_gap</code>. Persist a per-source watermark (the latest wall-clock time already reconciled) so a repeated query never re-processes an already-reconciled range. Before inserting a <code>RECONCILIATION</code> row, check for existing <code>ACCOUNTING</code> or <code>RECONCILIATION</code> rows overlapping the same interval for the same package; if found, credit only the non-overlapping remainder, if any. Because V1 has exactly one designated accounting source and <code>UsageStatsManager</code> is reconciliation-only, this check only needs to guard against reconciliation being run twice — not against a second live accounting source (AD-16).</p>
+<h3>8.10 Migration seeding (day-aware, implements AD-12 — replaces the naive version)</h3>
+<p>Inside <code>Migration(10, 11)</code>, after creating the new tables, for each package with a nonzero v10 scalar value, determine freshness before seeding:</p>
+<ul>
+<li><strong>If the v10 schema has an associated last-reset/last-write date or timestamp for the scalar (confirmed in Step 1):</strong> seed a <code>MIGRATION_CARRYOVER</code> row only if that date matches the current local day at migration time. If it does not match (the scalar belongs to a previous day and was never reset because no write occurred), seed <code>0</code> for that package and do not treat the stale value as today's usage.</li>
+<li><strong>If the v10 schema has no such date field:</strong> do not assume the scalar reflects today's usage. Conservatively seed <code>0</code>, and separately log a one-time diagnostic note (locally only) recording the raw legacy value that was intentionally not carried forward, for later manual investigation if needed. This is the safe default given the original design's documented lazy-reset-at-first-write-after-midnight behavior, which makes a stale scalar indistinguishable from a fresh one without an explicit date field.</li>
+</ul>
+<p>Whichever branch applies, the resulting <code>event_id</code> is generated deterministically as <code>&quot;migration_seed:&quot; + package_name</code>, making the migration itself safely re-runnable. The <code>usage_daily</code> projection row for the current day is initialized from the same value in the same transaction. A <code>MIGRATION_CARRYOVER</code> row is documented, in schema comments and in any diagnostic UI, as an aggregate inherited from legacy state with no reconstructable sub-timeline — it is never treated by the rebuild function or by diagnostics as a normal interval event.</p>
+<h3>8.11 Enforcement under uncertainty (implements R12/AD-18)</h3>
+<p>The enforcement path reads only the committed <code>usage_daily</code> projection value. It never adds an estimate for time covered by an unresolved <code>measurement_gap</code>. If <code>UsageStatsManager</code> reconciliation later resolves part of a gap, the resulting <code>RECONCILIATION</code> credit is added to the projection at the moment reconciliation completes, going forward — it is not backdated in a way that changes a total already shown to or acted on by the user for a prior moment in time.</p>
+<h3>8.12 Corrections</h3>
+<p>A <code>CORRECTION</code> row references an existing <code>event_id</code> via <code>references_event_id</code> and carries a signed <code>credited_ms</code> value (positive or negative) representing the adjustment. It contributes to the projection like any other accounting-relevant kind, applied in insertion order. The original referenced row is never edited or deleted by a correction.</p>
+<h3>8.13 Aggregation rule (used by both the live projection updater and the rebuild utility)</h3>
+<p>For a given <code>(package_name, day_key)</code>, the total is the sum of <code>credited_ms</code> across all rows of kind <code>ACCOUNTING</code>, <code>MIGRATION_CARRYOVER</code>, <code>RECONCILIATION</code>, and <code>CORRECTION</code> matching that scope. Rows of kind <code>HEARTBEAT</code>, <code>RULE_EVALUATION</code>, and <code>GAP_DETECTED</code> are always excluded. This single rule is used identically by the transactional projection updater and by the standalone rebuild function, so the two are guaranteed to agree by construction.</p>
+<h3>8.14 Database configuration</h3>
+<p>Use Room/driver-supported configuration APIs; do not set raw per-connection PRAGMAs unless confirmed to apply consistently to every connection Room/SQLCipher opens. WAL mode is required going forward; confirm in Step 1 whether it is already enabled and, if not, enable it explicitly rather than leaving it implicit. <code>synchronous = NORMAL</code> is used under WAL, with the accepted durability trade-off documented explicitly: recently committed transactions can be lost on a kernel panic or sudden power loss, but the database itself remains structurally consistent; this is an accepted trade-off for this feature's data (usage diagnostics), not for anything else in the app. <code>auto_vacuum</code> is not changed by this feature (AD-9). <code>cache_size</code> is not overridden without benchmark evidence (AD-8).</p>
+<h2>9. Error Handling</h2>
+<p><strong>Migration failure:</strong> propagate the failure; leave the original v10 database files untouched (the migration runs inside Room's own migration transaction, which rolls back on failure); record a local diagnostic code; do not fall back to destructive recreation.</p>
+<p><strong>Duplicate event:</strong> idempotent no-op, per §8.6.</p>
+<p><strong>ID collision (differing payload, same derived ID):</strong> reject the insert, record a distinct diagnostic anomaly, never silently drop.</p>
+<p><strong>Database locked/busy:</strong> rely on the configured busy-timeout; keep every application-level write transaction short.</p>
+<p><strong>Disk full:</strong> treat <code>SQLiteFullException</code> (or equivalent) as a real persistence failure. Do not silently discard a rejected accounting event. Attempt bounded maintenance if safe. Surface a degraded-tracking indicator to the user rather than pretending the write succeeded; enforcement continues per §8.11 using the last committed projection.</p>
+<p><strong>SQLCipher key failure:</strong> classify from the observed error signal into the most specific category the evidence supports (missing key material, invalid key, format/integration mismatch, likely corruption); classify as <code>unclassified_open_failure</code> when the evidence is ambiguous rather than guessing a specific category. Never auto-generate a fresh database when the existing one contains active security rules.</p>
+<p><strong>Database corruption:</strong> never auto-quarantine-and-replace with a blank database if doing so removes active protections, in any failure category. Recovery is fail-closed by default pending resolution of Open Question 5 (below).</p>
+<p><strong>Unexpected temporal state</strong> (negative elapsed delta, unavailable boot count, unexpected boot-count change, drastic wall-clock jump, timezone change mid-interval, overlapping intervals): record the specific anomaly type; never invent a duration to fill the gap; never double-credit.</p>
+<h2>10. Security Requirements</h2>
+<ul>
+<li>SQLCipher encrypts the database file at rest. This protects against <strong>offline file extraction only</strong> — it does not protect against a compromised, rooted, or instrumented live process that has already obtained a valid database key. Document this scope explicitly in code comments and any security review artifact.</li>
+<li>Reuse the existing, already-stable SQLCipher key-provisioning path; this feature does not introduce a new key-wrapping layer.</li>
+<li><code>PRAGMA integrity_check</code> is used as an on-demand diagnostic tool, not a mandatory every-launch gate. SQLCipher's HMAC provides tamper detection on encrypted pages; it does not authenticate application-level event sources and provides no anti-rollback protection.</li>
+<li>Never log: full ledger rows, per-package usage history, SQLCipher passphrases, wrapped key material, decrypted key bytes, or raw database contents, in any logging or crash-reporting sink.</li>
+<li>Verify the exact SQLCipher build's temporary-storage (<code>temp_store</code>) configuration during Step 1, and confirm large queries/sorts cannot spill plaintext data to unencrypted temporary files.</li>
+<li>Exclude the SQLCipher database file and any wrapped key material from Android Auto Backup, and separately verify device-transfer and cross-platform-transfer configuration paths exclude the same artifacts. Because the temporal baseline is derived from the ledger (AD-15), there is no second artifact to separately exclude.</li>
+<li>Use parameterized/bound queries for all dynamic SQL. Never interpolate package name, source, or any user- or device-derived string into a SQL statement.</li>
+<li>Pin the exact SQLCipher and Room artifact versions used; verify the resulting native library against current platform compatibility requirements (§13).</li>
+</ul>
+<h2>11. Performance Requirements</h2>
+<ul>
+<li>Measure, on at least one representative low-end device: single-event insert latency (including day-boundary-split cases), batched-insert latency, transaction latency including the projection update, and WAL growth under realistic event rates.</li>
+<li>Measure read latency for: current-day projection read, single-package ledger reconstruction, multi-package history reconstruction, and prune-candidate selection — using the covering index in §8.1.</li>
+<li>Capacity model to validate before finalizing retention/cadence values: <code>retained_rows ≈ event_rate × tracked_package_count × retention_duration</code>, using the actual confirmed cadence from Step 1 (see Open Questions if not yet confirmed).</li>
+<li>Measure prune-transaction duration, WAL growth during pruning, and CPU cost of SQLCipher encryption overhead under the batch sizes chosen in §8.8, on representative low-end hardware.</li>
+<li>Measure SQLCipher's memory footprint (page cache, crypto context) on a low-RAM device class alongside the query-latency measurements, since this can contribute to OOM risk independent of <code>cache_size</code> tuning.</li>
+</ul>
+<h2>12. Testing Requirements</h2>
+<p><strong>Migration:</strong> v10 database opens; all v10 data survives; v11 schema matches the exported schema JSON; <code>usage_ledger</code> and its indexes exist; unique <code>event_id</code> constraint is enforced; the day-aware seeding algorithm (§8.10) is exercised for: scalar with a matching current-day date field, scalar with a stale prior-day date field, scalar with no date field at all, and zero-usage case; a mid-migration failure rolls back cleanly leaving the original v10 state (replaces the earlier &quot;idempotent re-run&quot; framing, which does not apply to a normal Room version transition); encrypted SQLCipher driver opens the migrated database; no destructive fallback path is exercised.</p>
+<p><strong>Ledger behavior:</strong> insert one event; insert an exact duplicate (<code>event_id</code> matches, payload matches — idempotent no-op); insert an ID collision (<code>event_id</code> matches, payload differs — rejected and flagged); insert across multiple packages; zero-duration event; negative-duration event (rejected); unknown <code>kind</code> value (rejected); interval crossing a day boundary (verify correct split and correct <code>day_key</code> on each half); a <code>CORRECTION</code> row referencing a real prior event (verify projection reflects the signed adjustment); a <code>CORRECTION</code> row with an invalid reference (rejected).</p>
+<p><strong>Concurrency:</strong> multiple threads submitting distinct events; multiple threads submitting the same logical (and therefore same-ID) observation; concurrent reader + writer; concurrent maintenance job + accounting write.</p>
+<p><strong>Time:</strong> normal monotonic progression; wall-clock moved backward; wall-clock moved forward; timezone change mid-day (verify already-written <code>day_key</code> values are untouched and the rebuild function reproduces the same totals regardless of current timezone); reboot; elapsed-time reset after reboot; very large observation gap; out-of-order event arrival; large forward clock jump (verify pruning suspension per §8.8).</p>
+<p><strong>Reconciliation:</strong> <code>UsageStatsManager</code> permission denied (verify graceful <code>unrecoverable_no_permission</code> classification, no crash); permission granted with recoverable data; repeated reconciliation of an already-reconciled range (verify watermark prevents double-credit); reconciliation overlapping an existing <code>ACCOUNTING</code> row (verify only the non-overlapping remainder is credited).</p>
+<p><strong>Process lifecycle:</strong> process killed between observation and insert; process killed mid-transaction; app resumed after a long background period; database temporarily unavailable while tracking continues.</p>
+<p><strong>Maintenance:</strong> no rows to prune; large row count to prune; prune interrupted mid-batch and retried; new events arriving during a prune run; database nearly full; database full; pruning correctly suspended during the clock-anomaly cool-down window.</p>
+<p><strong>Recovery:</strong> invalid SQLCipher key; missing wrapped key; corrupted page; corrupted schema metadata; migration failure path; app-binary rollback attempted against a v11 database (verify it is prevented per §13, not handled via destructive downgrade).</p>
+<p><strong>Battery prompt:</strong> no prompt on first launch; no prompt while already exempt; no prompt for a gap within the confirmed normal cadence plus tolerance; prompt fires only once <code>prompt_eligible_gap</code> is set; cooldown enforced after a decline; settings-guidance fallback exercised when the direct exemption intent is unavailable/ineligible; verify no user-facing string or log line asserts a specific cause.</p>
+<p><strong>Invariant/property tests (must hold in every run):</strong></p>
+<ol>
+<li>Retrying the same logical observation never increases total credited usage.</li>
+<li>The <code>usage_daily</code> projection total always equals the sum computed by the standalone rebuild function using the §8.13 rule, for every scope.</li>
+<li>Removing diagnostic-only rows (<code>HEARTBEAT</code>, <code>RULE_EVALUATION</code>, <code>GAP_DETECTED</code>) from the ledger never changes any projection total.</li>
+<li>No monotonic interval is ever negative across a reboot boundary.</li>
+<li>No historical <code>usage_ledger</code> row of kind <code>ACCOUNTING</code>, <code>MIGRATION_CARRYOVER</code>, <code>RECONCILIATION</code>, or <code>CORRECTION</code> is ever mutated by routine accounting or maintenance code.</li>
+<li>Pruning never removes a row newer than the configured retention cutoff, and never runs at all during an active clock-anomaly cool-down.</li>
+<li>The migration never deletes any pre-existing v10 rule/user data.</li>
+<li>Every user with a v10 scalar value that the day-aware algorithm determines to be current-day has a correctly seeded <code>MIGRATION_CARRYOVER</code> row and correctly initialized <code>usage_daily</code> value; every user whose scalar is determined stale or undated is seeded at <code>0</code>, not the stale value.</li>
+<li>An interval crossing a day boundary always produces exactly two rows whose combined <code>credited_ms</code> equals the original interval's duration, with no double-counted or lost milliseconds.</li>
+<li>A <code>day_key</code> value, once written, is never recomputed even if the rebuild function is later run under a different device timezone.</li>
+</ol>
+<h2>13. Deployment Requirements</h2>
+<ul>
+<li>Test the v10 → v11 upgrade against a real, production-shaped v10 database, including devices with nonzero accumulated daily usage at migration time under all three seeding scenarios in §8.10.</li>
+<li>Test cold start immediately after migration.</li>
+<li>Test on low-storage devices.</li>
+<li>Test on at least one physical device per major OEM battery-management variant available for testing.</li>
+<li>Because database downgrade is unsupported, the release process must prevent a v10 binary from ever being distributed against a device that already holds a v11 database. Do not implement a destructive downgrade path as a workaround.</li>
+<li>Verify the shipped native SQLCipher library is compatible with current Android/Google Play platform requirements for apps containing native code, including 16 KB memory page-size device support; test on a 16 KB-page emulator or device before release.</li>
+<li>Roll out in stages. The first monitoring cohort must be large enough to reach multiple Android vendors and hardware tiers before expanding further; expand based on the monitoring signals below being clean, not on elapsed time alone.</li>
+<li>Monitor during rollout: migration failures (including which seeding branch of §8.10 was taken, in aggregate), database-open failures, SQLCipher key errors, <code>SQLITE_BUSY</code>/<code>SQLITE_FULL</code>/constraint-violation errors, ANRs, usage-discrepancy reports, ID-collision count, ledger row-count growth, maintenance job failures, and measurement-gap frequency.</li>
+</ul>
+<h2>14. Monitoring Requirements</h2>
+<p>All monitoring is local-only; this feature does not add remote telemetry.</p>
+<p><strong>Local counters/metrics to maintain:</strong> ledger insert failures, duplicate-event count, ID-collision count, measurement-gap count, prompt-eligible-gap count, largest recorded gap, reboot-boundary count, clock-anomaly count, forward-clock-jump count (and resulting pruning suspensions), prune success/failure count, database-busy count, database-full count, key-open-failure count (by classification), projection-rebuild invocation count, reconciliation-credit count, correction-event count.</p>
+<p>Do not retain unbounded diagnostic history outside the ledger itself — these are bounded counters, not a second log.</p>
+<p><strong>Remote crash telemetry (if the app already uses a crash-reporting SDK):</strong> verify, before release, that its configuration scrubs SQL statement text, database file paths, per-package usage arrays, ledger row payloads, and any cryptographic key material from captured reports.</p>
+<h2>15. Risk Register</h2>
+<table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Likelihood</th>
+<th>Impact</th>
+<th>Mitigation</th>
+<th>Detection</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Duplicate event double-counts usage</td>
+<td>High</td>
+<td>Critical</td>
+<td>Deterministic <code>event_id</code> + single-transaction write (AD-3, R3)</td>
+<td>Duplicate-event and retry tests</td>
+</tr>
+<tr>
+<td>Migration seeds a stale prior-day scalar as today's usage</td>
+<td>High if unmitigated</td>
+<td>Critical</td>
+<td>Day-aware seeding algorithm, conservative zero-default when undatable (§8.10, AD-12)</td>
+<td>Invariant test #8</td>
+</tr>
+<tr>
+<td>Interval crossing midnight misattributed to one day</td>
+<td>Medium</td>
+<td>High</td>
+<td>Mandatory day-boundary splitting at ingestion (AD-6, §8.5)</td>
+<td>Invariant test #9</td>
+</tr>
+<tr>
+<td>Historical daily totals drift after a timezone change</td>
+<td>Medium</td>
+<td>High</td>
+<td><code>day_key</code> frozen at write time, never recomputed (AD-6)</td>
+<td>Invariant test #10</td>
+</tr>
+<tr>
+<td>Reboot misread as a continuous interval</td>
+<td>High</td>
+<td>High</td>
+<td>Boot-count boundary check; no cross-boot elapsed subtraction (AD-5)</td>
+<td>Reboot test suite</td>
+</tr>
+<tr>
+<td>Missed heartbeat misclassified as a proven OEM/Android cause</td>
+<td>High</td>
+<td>High</td>
+<td>Escalation is prompt-eligibility only, never causal (AD-13)</td>
+<td>Battery-prompt copy/log review</td>
+</tr>
+<tr>
+<td>Baseline state desyncs from ledger across a crash</td>
+<td>Was High, now closed</td>
+<td>High if reintroduced</td>
+<td>Baseline derived from ledger; no separate store (AD-15)</td>
+<td>Process-kill tests around insert</td>
+</tr>
+<tr>
+<td><code>auto_vacuum</code>/full-<code>VACUUM</code> blocks migration or causes ANR</td>
+<td>Was Critical, now closed</td>
+<td>Critical if reintroduced</td>
+<td>Explicitly not changed in this migration (AD-9)</td>
+<td>Migration timing test</td>
+</tr>
+<tr>
+<td>Accounting bug has no correction path</td>
+<td>High if unmitigated</td>
+<td>High</td>
+<td><code>CORRECTION</code> event kind referencing original event (AD-17)</td>
+<td>Correction-event tests</td>
+</tr>
+<tr>
+<td>Enforcement estimates usage during an unresolved gap</td>
+<td>Medium if unmitigated</td>
+<td>Critical (false lockout or bypass)</td>
+<td>Last-committed-projection-only policy, no backdating (R12/AD-18)</td>
+<td>Gap-during-enforcement tests</td>
+</tr>
+<tr>
+<td>Reconciliation double-credits an already-covered interval</td>
+<td>Medium</td>
+<td>High</td>
+<td>Overlap check against existing rows before crediting (§8.9)</td>
+<td>Reconciliation overlap tests</td>
+</tr>
+<tr>
+<td>Routine <code>wal_checkpoint(TRUNCATE)</code> blocks readers/writers</td>
+<td>Medium</td>
+<td>Medium/High</td>
+<td>Never run routinely (AD-7)</td>
+<td>Concurrency tests</td>
+</tr>
+<tr>
+<td>Fixed cache_size multiplies memory via connection pooling</td>
+<td>Medium</td>
+<td>Medium</td>
+<td>No fixed override without benchmark (AD-8)</td>
+<td>Memory profiling on low-end device</td>
+</tr>
+<tr>
+<td>SQLCipher key unavailable after device restore</td>
+<td>Medium</td>
+<td>Critical</td>
+<td>Backup exclusion covering DB + key only (AD-14)</td>
+<td>Restore-scenario tests</td>
+</tr>
+<tr>
+<td>Rooted/instrumented process extracts live key</td>
+<td>Low/Medium</td>
+<td>High</td>
+<td>Threat model explicitly scoped; not claimed to be prevented (§10)</td>
+<td>Security review sign-off</td>
+</tr>
+<tr>
+<td>Corruption triggers unsafe silent DB replacement</td>
+<td>Low</td>
+<td>Critical</td>
+<td>Fail-closed default pending Open Question 5</td>
+<td>Corruption-injection tests</td>
+</tr>
+<tr>
+<td>Retention pruning deletes evidence right after a clock jump</td>
+<td>Medium</td>
+<td>Medium</td>
+<td>Cool-down suspension (§8.8)</td>
+<td>Clock-jump/prune interaction tests</td>
+</tr>
+<tr>
+<td>Ledger grows faster than retention model assumed</td>
+<td>Medium</td>
+<td>High</td>
+<td>Capacity model validated against measured real cadence before shipping retention value</td>
+<td>Storage-growth benchmark</td>
+</tr>
+<tr>
+<td>Native library incompatible with 16 KB page-size devices</td>
+<td>Medium</td>
+<td>High (release-blocking)</td>
+<td>Explicit compatibility verification (§13)</td>
+<td>16 KB device/emulator test</td>
+</tr>
+</tbody>
+</table>
+<h2>16. Open Questions</h2>
+<p>These require an answer from the actual repository or a product decision before the corresponding parameter is finalized. Nothing else in this document is contingent on them — they gate specific values and one recovery-UX decision only; the architecture and all invariants above hold regardless of their answers.</p>
+<ol>
+<li>What is the exact confirmed observation cadence of the single existing accounting source? (Gates the tolerance margin in §8.7 and the capacity model in §11.)</li>
+<li>What is the intended ledger/projection retention duration? (Gates R9's configuration constant.)</li>
+<li>Does the v10 scalar have any associated date/last-reset field? (Gates which branch of §8.10's seeding algorithm applies — this is a repository-inspection fact, not a design decision.)</li>
+<li>What is the exact recovery UX after a classified database corruption: fail closed, degraded mode, user-initiated recovery, or restore-from-backup? This is the one genuine product/security decision left open, because it depends on the product's tolerance for temporary lockout versus temporary reduced enforcement, which is outside this document's authority to decide unilaterally.</li>
+<li>Is <code>ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS</code> intended for every distribution channel this app ships on, or only specific builds? (Gates R8's policy-eligibility check.)</li>
+<li>Which exact SQLCipher/Room integration is in production — Room 2 <code>SupportOpenHelperFactory</code> or Room 3 <code>SQLCipherDriver</code>? (Repository-inspection fact, gates §8.14 implementation details.)</li>
+<li>Is the database already running in WAL mode? (Repository-inspection fact, gates whether §8.14's WAL requirement is a no-op confirmation or an active change.)</li>
+<li>Can the current crash-reporting integration capture database contents or query text by default? (Repository-inspection fact, gates §14 verification.)</li>
+</ol>
+<h2>17. Acceptance Criteria</h2>
+<ol>
+<li>A real, production-shaped v10 SQLCipher database upgrades to v11 without any loss of existing rule or user data.</li>
+<li>The database opens with the same valid key immediately after upgrade.</li>
+<li>Every accounting-relevant event has a deterministic <code>event_id</code>; a retry of the same logical observation reproduces the same ID and never double-credits.</li>
+<li>A differing payload under a colliding ID is rejected and flagged, never silently dropped as a duplicate.</li>
+<li>No diagnostic-kind event ever contributes to the usage projection.</li>
+<li>The <code>usage_daily</code> projection and the standalone rebuild function agree, for every scope, in every test run.</li>
+<li>No reboot boundary ever produces a negative or fabricated monotonic interval.</li>
+<li>A manual wall-clock change never creates usage credit derived from a raw wall-clock subtraction.</li>
+<li>A <code>day_key</code> value, once written, is never changed by a later timezone change or by a rebuild run under a different timezone.</li>
+<li>An interval crossing midnight is split into two correctly-attributed rows with no lost or duplicated duration.</li>
+<li>A measurement gap is never automatically re-labeled a confirmed OEM/Android cause, in code, logs, or user-facing copy.</li>
+<li>Battery-optimization prompts are gated, corroborated, rate-limited, and channel-eligibility-checked before appearing.</li>
+<li>No destructive migration fallback is registered anywhere in the codebase.</li>
+<li>The migration's day-aware seeding algorithm correctly handles all three cases in §8.10 (dated-and-current, dated-and-stale, undated), verified by invariant test #8.</li>
+<li>Enforcement never estimates or backdates usage for an unresolved measurement gap.</li>
+<li>A reconciliation credit is never applied twice for the same interval.</li>
+<li>A production accounting mistake can be corrected via a <code>CORRECTION</code> event without mutating any historical row.</li>
+<li>No routine maintenance path requires a full-database <code>VACUUM</code> or calls <code>wal_checkpoint(TRUNCATE)</code>.</li>
+<li>No fixed <code>cache_size</code> override ships without accompanying benchmark data.</li>
+<li>A classified key-failure or corruption event never silently deletes or replaces a database holding active security rules.</li>
+<li>No sensitive ledger content appears in logs or crash-telemetry payloads.</li>
+<li>The SQLCipher database file and wrapped key material are confirmed excluded from Android Auto Backup and from device-transfer/cross-platform-transfer paths; there is no second stateful artifact left uncovered, since the temporal baseline is derived from the ledger.</li>
+<li>The shipped native library is verified compatible with 16 KB page-size devices.</li>
+<li>All tests listed in §12 pass against the real SQLCipher/Room stack, including all ten invariant tests.</li>
+<li>No unrelated component, table, or workflow outside the scope of §3 is modified.</li>
+</ol>
+<h2>18. Definition of Done</h2>
+<ul>
+<li>Schema v11 is implemented, reviewed, and its schema JSON exported.</li>
+<li><code>Migration(10, 11)</code> is implemented with the day-aware seeding algorithm (§8.10), uses plain DDL (no <code>IF NOT EXISTS</code>), and passes migration + rollback-on-failure tests.</li>
+<li><code>usage_ledger</code> (with day-key/interval fields), its DAO, and <code>UsageRepository</code> are implemented per §4/§8.</li>
+<li>The existing usage-writing call site is migrated to the repository with documented cadence/interval-reporting characteristics.</li>
+<li>The current-day projection is transactionally coupled to ledger writes, has a tested rebuild path, and is proven to agree with the rebuild function under the §8.13 aggregation rule.</li>
+<li>The temporal baseline is derived from the ledger; no separate baseline store exists in the codebase.</li>
+<li>Gap diagnostics use the confirmed real cadence, escalate only per the corroboration rule, and never assert a cause anywhere in code, logs, or UI copy.</li>
+<li>Battery-optimization UX follows the gated, corroborated, policy-checked flow in R8.</li>
+<li>Retention pruning is bounded, idempotent, respects the clock-jump cool-down, and does not touch <code>auto_vacuum</code>.</li>
+<li>Enforcement-under-uncertainty behavior (§8.11) is implemented exactly as specified.</li>
+<li>Corrections are implemented via the <code>CORRECTION</code> event kind, never via row mutation.</li>
+<li>Recovery behavior is implemented for key failure, corruption, migration failure, and disk-full, per the resolution of Open Question 4.</li>
+<li>Backup exclusion is configured and verified for the database file and wrapped key material across every backup path the platform offers.</li>
+<li>Crash-reporting/logging configuration has been reviewed and confirmed not to leak ledger content.</li>
+<li>16 KB page-size compatibility of the native SQLCipher library has been verified.</li>
+<li>The full test suite in §12, including all ten invariant tests, passes against the real encrypted SQLCipher/Room stack.</li>
+<li>Performance has been measured on at least one representative low-end device per §11.</li>
+<li>Staged rollout monitoring (§13/§14) is configured and ready before the first release percentage ships.</li>
+<li>No component outside the scope defined in §3 has been refactored.</li>
+<li>All Open Questions in §16 are either answered and reflected in the implementation, or — for Open Question 4 only — explicitly deferred with a documented owner and follow-up ticket, since it is the one item requiring a product decision this document cannot make unilaterally.</li>
+</ul>
+
+</body></html>

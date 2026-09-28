@@ -11,8 +11,16 @@ object VpnPacket {
 
     const val MTU = 1400
     const val MAX_TCP_SEGMENT = 1200
+    const val PROTO_ICMP = 1
     const val PROTO_TCP = 6
     const val PROTO_UDP = 17
+    const val PROTO_ICMPV6 = 58
+
+    /** RFC 792 type 3 code 3 / RFC 4443 type 1 code 4 — "port unreachable" for v4/v6. */
+    const val ICMP_TYPE_PORT_UNREACHABLE = 3
+    const val ICMP_CODE_PORT_UNREACHABLE = 3
+    const val ICMPV6_TYPE_PORT_UNREACHABLE = 1
+    const val ICMPV6_CODE_PORT_UNREACHABLE = 4
 
     val EMPTY = ByteArray(0)
 
@@ -301,6 +309,62 @@ object VpnPacket {
         var c = upperChecksum(pseudo, array, base, udpLen)
         if (c == 0) c = 0xFFFF
         array[base + 6] = (c ushr 8).toByte(); array[base + 7] = c.toByte()
+        return array
+    }
+
+    /**
+     * §6.10's ICMP Port-Unreachable for one datagram: addresses swapped, quoted payload the
+     * original IP header plus the first 8 bytes of its payload (RFC 792/4443 — the 8 bytes carry
+     * the UDP ports, which is what lets the client match the error to its own socket).
+     *
+     * INV-14: every length and offset is validated against [packet]; anything inconsistent returns
+     * null so the caller falls back to a silent drop rather than writing a malformed packet.
+     */
+    fun buildIcmpPortUnreachable(ip: IpHeader, packet: ByteArray): ByteArray? {
+        val headerLen = ip.payloadOffset
+        val expectedAddr = if (ip.isV6) 16 else 4
+        if (ip.src.size != expectedAddr || ip.dst.size != expectedAddr) return null
+        if (headerLen < (if (ip.isV6) 40 else 20) || headerLen > packet.size) return null
+        if (ip.payloadLength < 0 || headerLen + ip.payloadLength > packet.size) return null
+
+        val quotedLen = headerLen + minOf(8, ip.payloadLength)
+        val icmpLen = 8 + quotedLen
+        val base = if (ip.isV6) 40 else 20
+        val buf = ByteBuffer.allocate(base + icmpLen)
+        // RFC 792/4443: the error goes back to the datagram's source, from its destination.
+        val src = ip.dst
+        val dst = ip.src
+        if (ip.isV6) {
+            buf.put(0x60.toByte()); buf.put(0); buf.put(0); buf.put(0)
+            buf.putShort(icmpLen.toShort())
+            buf.put(PROTO_ICMPV6.toByte()); buf.put(64)
+            buf.put(src); buf.put(dst)
+        } else {
+            buf.put(0x45.toByte()); buf.put(0)
+            buf.putShort((base + icmpLen).toShort())
+            buf.putShort(0); buf.putShort(0x4000) // DF, no fragment
+            buf.put(64); buf.put(PROTO_ICMP.toByte())
+            buf.putShort(0) // header checksum placeholder
+            buf.put(src); buf.put(dst)
+        }
+        buf.put(if (ip.isV6) ICMPV6_TYPE_PORT_UNREACHABLE.toByte() else ICMP_TYPE_PORT_UNREACHABLE.toByte())
+        buf.put(if (ip.isV6) ICMPV6_CODE_PORT_UNREACHABLE.toByte() else ICMP_CODE_PORT_UNREACHABLE.toByte())
+        buf.putShort(0) // checksum placeholder
+        buf.putInt(0) // unused
+        buf.put(packet, 0, quotedLen)
+
+        val array = buf.array()
+        if (!ip.isV6) {
+            val hc = headerChecksumV4(array, 0, 20)
+            array[10] = (hc ushr 8).toByte(); array[11] = hc.toByte()
+        }
+        // ICMPv4 checksums over its own message; ICMPv6 appends the pseudo-header.
+        val c = if (ip.isV6) {
+            upperChecksum(v6Pseudo(src, dst, PROTO_ICMPV6, icmpLen), array, base, icmpLen)
+        } else {
+            complement(fold16(sum16(array, base, icmpLen)))
+        }
+        array[base + 2] = (c ushr 8).toByte(); array[base + 3] = c.toByte()
         return array
     }
 }

@@ -13,6 +13,13 @@ OQ-5 figure — $5/month — was supplied by the owner): 1 email notification ch
 policies, 3 log-based metrics, 1 dashboard, 1 budget alert; every artifact listed and verified
 in §4 (all enabled, all wired to the channel).
 
+**2026-09-28 (task #37, ADR #101): the pairing-ceremony plan's own §14 (six bullets) is
+realized too — see §5.** Added to the live project: 2 log-based metrics
+(`pairing_transcript_mismatch_count`, `pairing_idempotency_replay_count`), 1 alert policy
+(429-throttling, wired to the same channel), 4 dashboard tiles + a text-map update, and the
+client `pairing_ceremony_outcome` rail. The dashboard tile text also had a stale figure
+corrected ($5 → $2 budget).
+
 ---
 
 ## 1. Client instrumentation (code, done)
@@ -68,6 +75,8 @@ Firebase IS the GCP project — no separate product). Verified by list-and-read 
 
 1. **Notification channel:** `MyExodus owner email` — `projects/myexodus-53804/notificationChannels/18347258884556077313`, email → the project owner (`project-owner@example.invalid`, confirmed via `getIamPolicy` `roles/owner`), enabled. If Google sends an email-channel verification note, clicking it is the only remaining step.
 2. **Alert policy — error rate:** `MyExodus: Cloud Functions error rate > 5% (15m)` — ratio of `cloudfunctions.googleapis.com/function/execution_count` with `metric.labels.status="error"` over the same metric unfiltered, ALIGN_SUM over 900 s, threshold 0.05, severity ERROR (§14 line 570).
+   - **2026-09-28 refinement (floor):** the policy now combines the ratio condition (unchanged) with `at least 2 errored executions over 15m` (same metric, `status="error"`, ALIGN_SUM 900 s, `> 1.5`, combiner AND). Trigger: a single correctly-rejected unauthenticated call (`verifications app=MISSING auth=MISSING` — a post-deploy probe carrying neither an Auth header nor an App Check token) was the only error in its window, so the bare ratio paged (incident 01:38:52Z → auto-closed 01:53:17Z). The floor preserves §14 line 570's 5 %/15 m intent while one rejected request can no longer page at pre-launch volumes.
+   - Operational note: post-deploy reachability probes *without* tokens count as errored executions on an `enforceAppCheck` callable — verify deploys via the revision's rollout status instead, or probe with valid tokens from the app.
 3. **Alert policy — sweep failure (R-03):** `MyExodus: dispatch sweep not running (R-03)` — conditionAbsent on `retryDispatchSweep` execution_count for 30 min, severity WARNING (scheduler failure/delay signal).
 4. **Alert policy — terminal delivery:** `MyExodus: relay gave up on a delivery (terminal)` — user log metric `sweep_terminal_count` sum over 1 h > 0, severity ERROR (a push permanently undelivered after the 8-attempt cap).
 5. **Log-based counter metrics:** `sweep_terminal_count` (`jsonPayload.terminal > 0` on `dispatch sweep`), `relay_rate_limit_rejections` (label-extracted `pair_id`, `relayStatus="RATE_LIMITED"`), `dispatch_failures` (labels `terminal`, `provider`).
@@ -79,7 +88,44 @@ this project — the honest reading is: dashboards can go live on the production
 (single-user scale, real data), and the "staging day" criterion is a DoD item to be met or
 explicitly deferred with the rest of §18.
 
-## 5. Honest limits (recorded, not hidden)
+## 5. Pairing-ceremony plan §14 (task #37, DONE 2026-09-28 — ADR #101)
+
+*The pairing plan's own §14 (partner-pairing-implementation-plan.md lines 441–449, six bullets)
+is a separate requirement set from the partner-pillar-v2 §14 above — it instruments the ceremony
+(`registerPairing` + `PairingCeremonyScreen`), not the sync pillar. Wired per §7 step 16: after
+the functional flow passed the emulator suite (ADR #100).*
+
+| §14 bullet | Rail | Where |
+|---|---|---|
+| 1. Session outcomes by terminal state (+ CANCELLED reason) | Client event `pairing_ceremony_outcome outcome=<x>` per ceremony terminal, via `CrashReporting.nonFatal` (one issue class, metadata only). Terminals: `paired`, `sas_mismatch`, `expired`, `token_used`, `cancelled`, `failed`. Exactly-once per attempt: every path routes through one `reportOnce()` seam (`AtomicBoolean` CAS, reset on attempt start) so a double-tap on Cancel cannot double-count. Wire strings pinned by `PairingCeremonyTelemetryTest`. | `PairingCeremonyTelemetry` + `PairingCeremonyScreen` |
+| 2. Cross-session per-reporting-UID mismatch counter (manual review, never a lock) | Log-based metric `pairing_transcript_mismatch_count`, labels `uid` (the reporter whose proof disagreed) + `pair_id`; emitted by the `registerPairing rejected reason=TRANSCRIPT_MISMATCH` warn line. 24h rolling view = the metric in the explorer with a 24h alignment; "distinct partners" = distinct `pair_id` values per `uid`. | metric: `logging.googleapis.com/user/pairing_transcript_mismatch_count` |
+| 3. CF invocation counts / error rates / throttling | Native `run.googleapis.com/request_count` per `registerpairing` (labels `response_code`, `response_code_class`, `route`); dashboard tile "requests by response code" (ALIGN_SUM 300 s). 429 = `maxInstances` throttling → its own WARNING alert policy (fires on first 429 in 5 min, auto-close 30 min). Error rate also covered by the pre-existing >5%/15m policy (§4 item 2 — the `cloud_function`-namespace metric, which v2 functions dual-emit). | dashboard + policy `projects/myexodus-53804/alertPolicies/1164734849334613422` |
+| 4. Idempotency cache-hit rate | Numerator: log-based metric `pairing_idempotency_replay_count` (the deployed `registerPairing idempotent replay` line). Denominator: bullet 3's request count. Dashboard tile shows the numerator; a rising ratio = client retry bug, not network. | metric: `logging.googleapis.com/user/pairing_idempotency_replay_count` |
+| 5. Cold-start latency distribution | Platform metric `run.googleapis.com/container/startup_latencies` (DELTA distribution; verified carrying live data before the tile was built). Dashboard tile: p50 + p95. **No code was added** — a hand-rolled `bootMs` log line would measure process init, not container startup, and would be the dishonest version. | dashboard tile "cold start latency (p50/p95)" |
+| 6. No SAS/tokens/signatures/key material in any label or log line | Contract enforced in code: `PairingCeremonyTelemetry` reports only `outcome=<enum>` (KDoc records Decision 12; the exact-string test would fail on any added field); server log lines carry `reason`/`pairId`/`uid` only, never protocol material; `failed` deliberately folds specific rejection causes into one token so they stay in logcat/CF logs and don't leak into metric labels. | reviewed in #37; pinned by test |
+
+Vocabulary reconciliation (recorded, not silent): the plan's cancel reasons
+`user_cancelled` / `superseded` / `process_restart_required` predate the shipped token-doc design —
+`user_cancelled` is the only shipped reason; the other two have no counterpart (no single-active-
+session lock to supersede; pending keys are in-memory so a restart drops the attempt and nothing
+survives to require). A `CANCELLED`-reason breakdown metric is therefore unnecessary — there is
+exactly one reason.
+
+### 5.1 Honest limits
+- Crashlytics gives **counts and issue grouping, not rates with denominators** — the outcome
+  tile is console-side event counting; "paired rate" = `paired` count over total outcome count,
+  computed by reading the console, not stored.
+- The 429 policy is a **"the cap engaged" signal, not a saturation curve** (threshold >0 on a
+  5-min sum): one throttled request pages, and no distinction is drawn between a single shed
+  request and sustained shedding.
+- Cold-start latency is **service-wide**: deploy-triggered instance starts are included alongside
+  user-triggered ones. With containerConcurrency 80 a cold start serves many requests, so the
+  distribution is the honest platform view of what a cold request might pay, not a per-request
+  average.
+- The mismatch counter's consumer is a **human reading a dashboard** (per §5.19: manual review,
+  never an automatic lock) — the rail deliberately stops at "indexed and queryable."
+
+## 6. Honest limits (recorded, not hidden) — partner-pillar-v2 §14 rails
 
 - Crashlytics gives counts and issue grouping, **not percentiles** — T1/T3 "distributions"
   land as bucketed counts; p50/p95 targets are approximated by bucket shares.

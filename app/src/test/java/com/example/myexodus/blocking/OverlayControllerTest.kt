@@ -8,6 +8,7 @@ import android.os.Looper
 import android.view.WindowManager
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.BuildConfig
+import com.example.myexodus.R
 import java.time.Duration
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -131,7 +132,8 @@ class OverlayControllerTest {
 
     private fun limitCard() = OverlayContent.DailyLimitBlocked("com.instagram.android")
 
-    private fun banner(level: Int = 1) = OverlayContent.Warning(level, remainingMs = 10 * 60_000L)
+    private fun banner(level: Int = 1) =
+        OverlayContent.Warning("com.instagram.android", level, remainingMs = 10 * 60_000L)
 
     @Suppress("UNCHECKED_CAST")
     private fun view(displayId: Int): BlockOverlayView {
@@ -145,11 +147,11 @@ class OverlayControllerTest {
         controller.show(gen, displayId = 0, bounds = fullScreen(), content = cover())
         controller.show(gen, displayId = 0, bounds = Rect(0, 0, 1080, 300), content = banner())
         assertEquals(cover(), controller.currentContent(0))
-        // The device-verified cover flags must survive the dropped banner: still
-        // non-focusable, still touch-modal, no FLAG_SECURE.
+        // The dropped banner must not touch the cover's flags: still non-focusable, still
+        // touch-transparent outside its bounds (the 2026-09-27 nav-bar fix), no FLAG_SECURE.
         val flags = dialog(0).window!!.attributes.flags
         assertTrue(flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE != 0)
-        assertEquals(0, flags and WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL)
+        assertTrue(flags and WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL != 0)
         assertEquals(0, flags and WindowManager.LayoutParams.FLAG_SECURE)
     }
 
@@ -213,15 +215,33 @@ class OverlayControllerTest {
     }
 
     @Test
+    fun wall_dismissesFromItsOwnCloseAction_onTheEvictingHostOnly() {
+        val gen = advance()
+        controller.show(gen, displayId = 0, bounds = fullScreen(), content = limitCard())
+        // Path A (this host) evicts, so its wall carries the Close action. Path B's controller
+        // passes no callback (canEvict=false) and the view renders no action — pinned by
+        // BlockOverlayViewTest.dailyLimitBlock_withoutAnEvictingHost_hasNoActions_showsTheHintOnly.
+        val close = view(0).let { v ->
+            (0 until v.childCount).flatMap { i ->
+                val row = v.getChildAt(i) as android.view.ViewGroup
+                (0 until row.childCount).mapNotNull { row.getChildAt(it) as? android.widget.Button }
+            }.first { it.text == ApplicationProvider.getApplicationContext<android.content.Context>().getString(R.string.overlay_wall_dismiss) }
+        }
+        assertEquals(android.view.View.VISIBLE, close.visibility)
+        close.performClick()
+        assertFalse("Close is the wall's only dismissal (user ruling 2026-09-27)", controller.isShown(0))
+    }
+
+    @Test
     fun flagsForContent_perModel() {
         val coverFlags = OverlayController.flagsForContent(cover())
         assertTrue(coverFlags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE != 0)
-        assertEquals(0, coverFlags and WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL)
+        assertTrue(coverFlags and WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL != 0)
         assertEquals(0, coverFlags and WindowManager.LayoutParams.FLAG_SECURE)
 
         val blockFlags = OverlayController.flagsForContent(limitCard())
         assertEquals(0, blockFlags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
-        assertEquals(0, blockFlags and WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL)
+        assertTrue(blockFlags and WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL != 0)
         assertTrue(blockFlags and WindowManager.LayoutParams.FLAG_SECURE != 0)
 
         // Debug-build visual-QA lift (user-approved 2026-09-15): capture allowed,

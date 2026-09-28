@@ -1,25 +1,24 @@
 package com.example.myexodus.ui.settings
 
-import android.os.Build
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.BugReport
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -30,31 +29,30 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.myexodus.BuildConfig
 import com.example.myexodus.R
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.RulesRepository
+import com.example.myexodus.blocking.usage.AccountingOutage
+import com.example.myexodus.blocking.usage.AccountingOutageSource
+import com.example.myexodus.domainusage.DomainUsageEngine
 import com.example.myexodus.recovery.RecoveryPlanRepository
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.IntegrityStatus
 import com.example.myexodus.settings.ProtectionChecks
 import com.example.myexodus.settings.StrictModeManager
 import com.example.myexodus.settings.WidgetSettings
-import com.example.myexodus.settings.accessibilitySettingsIntent
-import com.example.myexodus.settings.appInfoSettingsIntent
-import com.example.myexodus.settings.batteryOptimizationSettingsIntent
-import com.example.myexodus.settings.oemRestrictionSettingsIntent
-import com.example.myexodus.settings.overlaySettingsIntent
 import com.example.myexodus.settings.readProtectionChecks
-import com.example.myexodus.settings.usageAccessSettingsIntent
+import com.example.myexodus.settings.requestBatteryExemption
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.ui.BrandMark
-import com.example.myexodus.ui.EnhancedModeScreen
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.recovery.CoachingPlanScreen
 import com.example.myexodus.ui.recovery.RecoveryPrefs
@@ -65,12 +63,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * V1 Settings (plan §2/§8.6/§9): one row per mechanism — accessibility, usage access, exact
- * alarms, Android battery optimization, OEM background restrictions, overlay capability, and
- * keystore-backed enforcement integrity. The Android and OEM rows stay separate on purpose:
- * they are different mechanisms with different remedies, and no API reports OEM state, so that
- * row says so instead of inventing a status. Every action opens the platform screen; none of
- * them grants anything by itself.
+ * Settings as an index (owner sign-off 2026-09-22, porting the reference's flat row list): one
+ * row per thing the user can check or change, and the six permission/enforcement rows — the only
+ * ones carrying a live status word and an action — behind the Protection row. Everything else is
+ * one tap: switches toggle in place, destinations open a pane.
  */
 @Composable
 fun SettingsScreen(
@@ -83,15 +79,23 @@ fun SettingsScreen(
     planRepository: RecoveryPlanRepository,
     rulesRepository: RulesRepository,
     recoveryPrefs: RecoveryPrefs,
+    domainUsageEngine: DomainUsageEngine,
+    accountingOutageSource: AccountingOutageSource,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val serviceEnabled by monitor.enabled.collectAsStateWithLifecycle()
     var checks by remember { mutableStateOf<ProtectionChecks?>(null) }
-    // The two recovery editors are full-screen panes of this tab (the Recovery tab's own
-    // pattern): null = the settings list, otherwise the open editor.
-    var recoveryPane by remember { mutableStateOf<String?>(null) }
+    // §8.7/D1's Settings surface input: re-read on every resume beside the permission rows,
+    // since the exemption the user just granted is exactly what changes this answer.
+    var outage by remember { mutableStateOf<AccountingOutage?>(null) }
+    // Every destination is a full-screen pane of this tab (the Recovery tab's own pattern):
+    // null = the index, otherwise the open pane.
+    var pane by remember { mutableStateOf<String?>(null) }
+    // System back leaves a pane the way its BackRow does; at the index the shell's own
+    // handler takes over (tab → Home).
+    BackHandler(enabled = pane != null) { pane = null }
 
     // Permissions change in system Settings while this screen is backgrounded; re-read on
     // every resume so a granted permission is never shown as missing.
@@ -101,30 +105,93 @@ fun SettingsScreen(
             if (event == Lifecycle.Event.ON_RESUME) {
                 monitor.refresh()
                 scope.launch { checks = withContext(Dispatchers.IO) { readProtectionChecks(context) } }
+                scope.launch { outage = withContext(Dispatchers.IO) { accountingOutageSource.current() } }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
     val loaded = checks
-    if (recoveryPane == PANE_COACHING_PLAN) {
-        CoachingPlanScreen(
+    when (pane) {
+        PANE_PROTECTION -> if (loaded != null) {
+            ProtectionScreen(
+                checks = loaded,
+                serviceEnabled = serviceEnabled,
+                onRecheck = {
+                    monitor.refresh()
+                    scope.launch { checks = withContext(Dispatchers.IO) { readProtectionChecks(context) } }
+                },
+                domainUsageEngine = domainUsageEngine,
+                // D1: the offer, and the one place its request is fired from. Consuming the
+                // offer is part of firing it — the eligibility it came from is spent.
+                batteryPrompt = outage?.promptRoute,
+                onRequestExemption = {
+                    accountingOutageSource.markOfferShown()
+                    requestBatteryExemption(context)
+                },
+                onBack = { pane = null },
+                modifier = modifier,
+            )
+        }
+        PANE_COACHING_PLAN -> CoachingPlanScreen(
             planRepository = planRepository,
             rulesRepository = rulesRepository,
             prefs = recoveryPrefs,
-            onBack = { recoveryPane = null },
+            onBack = { pane = null },
             modifier = modifier,
         )
-    } else if (recoveryPane == PANE_RISK_WINDOWS) {
-        RiskWindowsScreen(
+        PANE_RISK_WINDOWS -> RiskWindowsScreen(
             planRepository = planRepository,
             prefs = recoveryPrefs,
-            onBack = { recoveryPane = null },
+            onBack = { pane = null },
             modifier = modifier,
         )
-    } else {
+        PANE_ABOUT -> AboutScreen(onBack = { pane = null }, modifier = modifier)
+        else -> SettingsIndex(
+            modifier = modifier,
+            serviceEnabled = serviceEnabled,
+            checks = loaded,
+            monitor = monitor,
+            strictMode = strictMode,
+            settings = settings,
+            crashReporting = crashReporting,
+            widgetSettings = widgetSettings,
+            onWidgetSettingsChanged = onWidgetSettingsChanged,
+            onOpenPane = { pane = it },
+        )
+    }
+}
+
+private const val PANE_PROTECTION = "protection"
+private const val PANE_COACHING_PLAN = "coaching_plan"
+private const val PANE_RISK_WINDOWS = "risk_windows"
+private const val PANE_ABOUT = "about"
+
+@Composable
+private fun SettingsIndex(
+    serviceEnabled: Boolean,
+    checks: ProtectionChecks?,
+    monitor: EnhancedModeHealthMonitor,
+    strictMode: StrictModeManager,
+    settings: EnhancedModeSettings,
+    crashReporting: CrashReporting,
+    widgetSettings: WidgetSettings,
+    onWidgetSettingsChanged: () -> Unit,
+    onOpenPane: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
+    var discreet by remember { mutableStateOf(widgetSettings.discreetMode) }
+    var crashReportsOn by remember { mutableStateOf(crashReporting.enabled) }
+    // Null until the checks land: the row shows no status rather than claiming one it hasn't read.
+    val attention = checks?.let { attentionCount(it, serviceEnabled) }
+    val protectionSubtitle = when (attention) {
+        null -> null
+        0 -> stringResource(R.string.settings_protection_summary_ok)
+        else -> pluralStringResource(R.plurals.settings_protection_summary_attention, attention, attention)
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -147,319 +214,94 @@ fun SettingsScreen(
             }
         }
 
-        if (loaded != null) {
-            ProtectionSection(
-                checks = loaded,
-                serviceEnabled = serviceEnabled,
-                onRecheck = {
-                    monitor.refresh()
-                    scope.launch { checks = withContext(Dispatchers.IO) { readProtectionChecks(context) } }
-                },
-            )
-        }
-
-        EnhancedModeScreen(monitor, strictMode, settings)
-
-        WidgetSection(widgetSettings, onWidgetSettingsChanged)
-
-        RecoveryPlanSection(
-            onOpenPlan = { recoveryPane = PANE_COACHING_PLAN },
-            onOpenWindows = { recoveryPane = PANE_RISK_WINDOWS },
-        )
-
-        PrivacySection(crashReporting)
-    }
-    }
-}
-
-private const val PANE_COACHING_PLAN = "coaching_plan"
-private const val PANE_RISK_WINDOWS = "risk_windows"
-
-/** W3/W4: the two user-authored recovery surfaces — their own words and their risk windows. */
-@Composable
-private fun RecoveryPlanSection(onOpenPlan: () -> Unit, onOpenWindows: () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(stringResource(R.string.settings_recovery_header), style = MaterialTheme.typography.titleMedium)
-        SettingsLinkRow(
-            titleRes = R.string.settings_recovery_plan_title,
-            bodyRes = R.string.settings_recovery_plan_body,
-            onClick = onOpenPlan,
-        )
-        SettingsLinkRow(
-            titleRes = R.string.settings_recovery_windows_title,
-            bodyRes = R.string.settings_recovery_windows_body,
-            onClick = onOpenWindows,
-        )
-    }
-}
-
-@Composable
-private fun SettingsLinkRow(titleRes: Int, bodyRes: Int, onClick: () -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(stringResource(titleRes), style = MaterialTheme.typography.titleMedium)
-            Text(
-                stringResource(bodyRes),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-/**
- * The widget's own copy setting (V1 Req 36 FR5/FR6). Default-on discreet: the home screen is the
- * most exposed surface this app has, so the disclosure-free wording is what a user gets without
- * asking. Writing the value here does not render anything — the callback re-publishes the snapshot,
- * and the writer's `updateAll()` is what reaches the launcher (widget spec §5 Decision 10).
- */
-@Composable
-private fun WidgetSection(settings: WidgetSettings, onChanged: () -> Unit) {
-    var discreet by remember { mutableStateOf(settings.discreetMode) }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(stringResource(R.string.settings_widget_header), style = MaterialTheme.typography.titleMedium)
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        stringResource(R.string.settings_widget_discreet_title),
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        stringResource(R.string.settings_widget_discreet_body),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(
-                    checked = discreet,
-                    onCheckedChange = { enabled ->
-                        settings.discreetMode = enabled
-                        discreet = enabled
-                        onChanged()
-                    },
-                )
-            }
-        }
-    }
-}
-
-/** Decision 12: telemetry is opt-out — this row is the opt-out. Copy states exactly what is
- *  and is not transmitted; the toggle takes effect immediately (SDK call is synchronous). */
-@Composable
-private fun PrivacySection(crashReporting: CrashReporting) {
-    var crashReportsOn by remember { mutableStateOf(crashReporting.enabled) }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(stringResource(R.string.settings_privacy_header), style = MaterialTheme.typography.titleMedium)
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        stringResource(R.string.settings_crash_reports_title),
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        stringResource(R.string.settings_crash_reports_body),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(
-                    checked = crashReportsOn,
-                    onCheckedChange = { enabled ->
-                        crashReporting.enabled = enabled
-                        crashReportsOn = enabled
-                    },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProtectionSection(
-    checks: ProtectionChecks,
-    serviceEnabled: Boolean,
-    onRecheck: () -> Unit,
-) {
-    val context = LocalContext.current
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(stringResource(R.string.settings_protection_header), style = MaterialTheme.typography.titleMedium)
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainerLow,
             shape = MaterialTheme.shapes.medium,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column {
-                var first = true
-                @Composable
-                fun divider() {
-                    if (!first) {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(start = 16.dp),
-                            color = MaterialTheme.colorScheme.outlineVariant,
-                        )
-                    }
-                    first = false
-                }
-
-                divider()
-                StatusRow(
-                    title = stringResource(R.string.settings_accessibility_title),
-                    status = stringResource(
-                        if (serviceEnabled) R.string.settings_accessibility_ok else R.string.settings_accessibility_off,
-                    ),
-                    tone = if (serviceEnabled) StatusTone.GOOD else StatusTone.ATTENTION,
-                    actionLabel = stringResource(
-                        if (serviceEnabled) R.string.settings_action_open else R.string.settings_action_fix,
-                    ),
-                    onAction = { context.startActivity(accessibilitySettingsIntent()) },
+                IndexRow(
+                    icon = Icons.Outlined.Shield,
+                    title = stringResource(R.string.settings_protection_header),
+                    subtitle = protectionSubtitle,
+                    tone = when (attention) {
+                        null -> null
+                        0 -> StatusTone.GOOD
+                        else -> StatusTone.ATTENTION
+                    },
+                    onClick = { onOpenPane(PANE_PROTECTION) },
                 )
 
-                divider()
-                StatusRow(
-                    title = stringResource(R.string.settings_usage_title),
-                    status = stringResource(
-                        if (checks.usageAccess) R.string.settings_usage_ok else R.string.settings_usage_off,
-                    ),
-                    tone = if (checks.usageAccess) StatusTone.GOOD else StatusTone.ATTENTION,
-                    actionLabel = stringResource(
-                        if (checks.usageAccess) R.string.settings_action_open else R.string.settings_action_fix,
-                    ),
-                    onAction = { context.startActivity(usageAccessSettingsIntent()) },
-                )
+                RowDivider()
+                EnhancedModeToggleRow(monitor, strictMode, settings)
 
-                divider()
-                StatusRow(
-                    title = stringResource(R.string.settings_battery_title),
-                    status = stringResource(
-                        if (checks.batteryExempt) R.string.settings_battery_ok else R.string.settings_battery_off,
-                    ),
-                    supporting = stringResource(R.string.settings_battery_hint),
-                    tone = if (checks.batteryExempt) StatusTone.GOOD else StatusTone.ATTENTION,
-                    actionLabel = stringResource(
-                        if (checks.batteryExempt) R.string.settings_action_open else R.string.settings_action_fix,
-                    ),
-                    onAction = { context.startActivity(batteryOptimizationSettingsIntent()) },
-                )
+                RowDivider()
+                StrictModeToggleRow(monitor, strictMode)
 
-                divider()
-                StatusRow(
-                    title = stringResource(R.string.settings_oem_title),
-                    status = stringResource(R.string.settings_oem_status, Build.MANUFACTURER),
-                    tone = StatusTone.INFO,
-                    actionLabel = stringResource(R.string.settings_action_open),
-                    onAction = {
-                        val intent = oemRestrictionSettingsIntent(context)
-                        // Known OEM screens move between builds; a dead deep link lands on
-                        // App info rather than nowhere.
-                        runCatching { context.startActivity(intent) }
-                            .onFailure { context.startActivity(appInfoSettingsIntent(context)) }
+                RowDivider()
+                ToggleRow(
+                    icon = Icons.Outlined.Widgets,
+                    title = stringResource(R.string.settings_widget_discreet_title),
+                    subtitle = stringResource(R.string.settings_widget_discreet_body),
+                    checked = discreet,
+                    enabled = true,
+                    onCheckedChange = { enabled ->
+                        widgetSettings.discreetMode = enabled
+                        discreet = enabled
+                        onWidgetSettingsChanged()
                     },
                 )
 
-                divider()
-                StatusRow(
-                    title = stringResource(R.string.settings_overlay_title),
-                    status = stringResource(
-                        if (checks.overlayGranted) R.string.settings_overlay_ok else R.string.settings_overlay_off,
-                    ),
-                    tone = if (checks.overlayGranted) StatusTone.GOOD else StatusTone.ATTENTION,
-                    actionLabel = stringResource(
-                        if (checks.overlayGranted) R.string.settings_action_open else R.string.settings_action_fix,
-                    ),
-                    onAction = { context.startActivity(overlaySettingsIntent(context)) },
+                RowDivider()
+                IndexRow(
+                    icon = Icons.Outlined.MenuBook,
+                    title = stringResource(R.string.settings_recovery_plan_title),
+                    subtitle = stringResource(R.string.settings_recovery_plan_body),
+                    onClick = { onOpenPane(PANE_COACHING_PLAN) },
                 )
 
-                divider()
-                val integrity = checks.integrity
-                StatusRow(
-                    title = stringResource(R.string.settings_integrity_title),
-                    status = stringResource(
-                        when (integrity) {
-                            IntegrityStatus.VERIFIED -> R.string.settings_integrity_verified
-                            IntegrityStatus.UNVERIFIED -> R.string.settings_integrity_unverified
-                            IntegrityStatus.UNAVAILABLE -> R.string.settings_integrity_unavailable
-                            IntegrityStatus.FAILED -> R.string.settings_integrity_failed
-                        },
-                    ),
-                    tone = when (integrity) {
-                        IntegrityStatus.VERIFIED -> StatusTone.GOOD
-                        IntegrityStatus.FAILED -> StatusTone.ATTENTION
-                        else -> StatusTone.INFO
+                RowDivider()
+                IndexRow(
+                    icon = Icons.Outlined.Schedule,
+                    title = stringResource(R.string.settings_recovery_windows_title),
+                    subtitle = stringResource(R.string.settings_recovery_windows_body),
+                    onClick = { onOpenPane(PANE_RISK_WINDOWS) },
+                )
+
+                RowDivider()
+                ToggleRow(
+                    icon = Icons.Outlined.BugReport,
+                    title = stringResource(R.string.settings_crash_reports_title),
+                    subtitle = stringResource(R.string.settings_crash_reports_body),
+                    checked = crashReportsOn,
+                    enabled = true,
+                    onCheckedChange = { enabled ->
+                        crashReporting.enabled = enabled
+                        crashReportsOn = enabled
                     },
-                    actionLabel = stringResource(R.string.settings_integrity_recheck),
-                    onAction = onRecheck,
+                )
+
+                RowDivider()
+                IndexRow(
+                    icon = Icons.Outlined.Info,
+                    title = stringResource(R.string.settings_about_title),
+                    subtitle = stringResource(R.string.settings_about_version, BuildConfig.VERSION_NAME),
+                    onClick = { onOpenPane(PANE_ABOUT) },
                 )
             }
         }
     }
 }
 
-private enum class StatusTone { GOOD, ATTENTION, INFO }
-
-@Composable
-private fun StatusRow(
-    title: String,
-    status: String,
-    tone: StatusTone,
-    actionLabel: String?,
-    onAction: (() -> Unit)?,
-    supporting: String? = null,
-) {
-    val accent = when (tone) {
-        StatusTone.GOOD -> MaterialTheme.colorScheme.primary
-        StatusTone.ATTENTION -> MaterialTheme.colorScheme.error
-        StatusTone.INFO -> MaterialTheme.colorScheme.outline
-    }
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Box(Modifier.size(8.dp).background(accent, CircleShape))
-                Text(
-                    status,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            supporting?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        if (actionLabel != null && onAction != null) {
-            TextButton(onClick = onAction) { Text(actionLabel) }
-        }
-    }
-}
+/**
+ * How many of the Protection rows carry an ATTENTION tone — the index row's own claim, so it has
+ * to mirror them exactly: the five that can be wrong, with integrity counted only when it has
+ * actually failed (unverified and unavailable are informational, and the OEM row never reports).
+ */
+internal fun attentionCount(checks: ProtectionChecks, serviceEnabled: Boolean): Int = listOf(
+    !serviceEnabled,
+    !checks.usageAccess,
+    !checks.batteryExempt,
+    !checks.overlayGranted,
+    checks.integrity == IntegrityStatus.FAILED,
+).count { it }

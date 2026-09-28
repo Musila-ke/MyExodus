@@ -9,6 +9,10 @@ val SurfaceLight = Color(0xFFFFFFFF)
 // Named because the block overlay (a plain View, outside Composition) paints the on-teal text
 // and the neutral container from the same constants the scheme uses — one palette, no drift.
 val OnPrimaryLight = Color.White
+// Named for the same reason as OnPrimary: the block surfaces' anchor disc paints from these
+// constants in the View world (BlockOverlayView) and the scheme in Compose.
+val PrimaryContainerLight = Color(0xFFD2ECE8)
+val OnPrimaryContainerLight = Color(0xFF0B3A35)
 val SurfaceVariantLight = Color(0xFFEFEAE2)
 val TextLight = Color(0xFF1D1B19)
 val MutedLight = Color(0xFF6E675E)
@@ -20,6 +24,8 @@ val ErrorLight = Color(0xFFB3402F)
 val SandDark = Color(0xFF141311)
 val SurfaceDark = Color(0xFF1D1B19)
 val OnPrimaryDark = Color(0xFF0C211F)
+val PrimaryContainerDark = Color(0xFF123C37)
+val OnPrimaryContainerDark = Color(0xFFC4E8E3)
 val SurfaceVariantDark = Color(0xFF2A2622)
 val TextDark = Color(0xFFF2EEE9)
 val MutedDark = Color(0xFFA39B90)

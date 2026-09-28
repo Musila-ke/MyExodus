@@ -105,7 +105,11 @@ class EnhancedModeHealthMonitor @Inject constructor(
     private fun notifyDisabled() {
         val manager = appContext.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "MyExodus blocker status", NotificationManager.IMPORTANCE_LOW),
+            NotificationChannel(
+                CHANNEL_ID,
+                appContext.getString(R.string.enhanced_mode_health_channel_name),
+                NotificationManager.IMPORTANCE_LOW,
+            ),
         )
         val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)

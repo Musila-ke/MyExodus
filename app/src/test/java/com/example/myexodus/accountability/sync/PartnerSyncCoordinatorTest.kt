@@ -30,6 +30,7 @@ import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.PrivateKey
+import java.security.PublicKey
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
 import kotlinx.coroutines.runBlocking
@@ -82,9 +83,14 @@ class PartnerSyncCoordinatorTest {
     private var rejectionsToReport = 0
     private val stepOrder = mutableListOf<String>()
 
+    /** §19.5: the uids each pair resolves to. A test adds a second supported user here; a pair
+     *  absent from the map models an unresolvable one (its slice is skipped, the rest run). */
+    private val uids = mutableMapOf<String, Pair<String, String>>()
+
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
+        uids[pairId] = "me" to "partner"
         db = Room.databaseBuilder(context, AccountabilityDatabase::class.java, "test_${System.nanoTime()}.db")
             .build()
         store = ChainStateStore(db)
@@ -276,6 +282,56 @@ class PartnerSyncCoordinatorTest {
         assertTrue("no chain event for a technique-less log", store.chainFor(pairId).isEmpty())
     }
 
+    /**
+     * §19.5 item 2 at the sync layer: every remote step runs once per enrollment, carrying that
+     * enrollment's pairId and its own resolved partner. A second supported user is not skipped
+     * because a first exists, and the per-pair counts add up on the report.
+     */
+    @Test
+    fun multiPair_everyRemoteStepRunsPerPair_withItsOwnUids() = runTest {
+        val secondPair = "pair-second"
+        val secondPartnerSigning = ecKeyPair()
+        val secondPartnerAgreement = ecKeyPair()
+        enroll()
+        enroll(secondPair, partnerSigningKey = secondPartnerSigning.public, partnerAgreementKey = secondPartnerAgreement.public)
+        uids[secondPair] = "me" to "partner-two"
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(true, report.enrolled)
+        assertEquals("every enrollment resolved", true, report.uidsResolved)
+        assertEquals(setOf(pairId, secondPair), drainCalls.map { it.first }.toSet())
+        assertEquals(
+            setOf(
+                Triple(pairId, "me", "partner"),
+                Triple(secondPair, "me", "partner-two"),
+            ),
+            drainCalls.toSet(),
+        )
+        assertEquals(setOf(pairId, secondPair), pullCalls.toSet())
+        assertEquals(setOf(pairId to "partner", secondPair to "partner-two"), rejectionChecks.toSet())
+        assertEquals("repair pass ran for both", 2, repairCalls)
+        assertEquals(2 * 2, report.drainedCount)
+        assertEquals(2 * 3, report.pulledCount)
+        assertEquals(2 * 2, report.repairRequestsCreated)
+    }
+
+    /** An unresolvable second pair degrades to "that slice was skipped" — the first pair's
+     *  pass still completes, and the report says the resolution was partial. */
+    @Test
+    fun multiPair_anUnresolvablePairIsSkipped_neverBlockingTheRest() = runTest {
+        val secondPair = "pair-second"
+        enroll()
+        enroll(secondPair, partnerSigningKey = ecKeyPair().public, partnerAgreementKey = ecKeyPair().public)
+        // No uids entry for secondPair: resolving it fails, as it would offline/deleted.
+
+        val report = coordinator.syncOnce()
+
+        assertEquals("partial resolution is reported, not hidden", false, report.uidsResolved)
+        assertEquals(listOf(pairId), pullCalls)
+        assertEquals(listOf(pairId), drainCalls.map { it.first })
+    }
+
     // ---- helpers ----
 
     private fun coordinator(
@@ -295,7 +351,7 @@ class PartnerSyncCoordinatorTest {
             sessionKeyManager = SessionKeyManager(store),
         ),
         signer = signer,
-        resolveUids = { pairId -> if (pairId == this.pairId) "me" to "partner" else null },
+        resolveUids = { pId -> uids[pId] },
         drainOutbox = { pId, authorUid, partnerUid ->
             stepOrder += "drain"
             drainCalls += Triple(pId, authorUid, partnerUid)
@@ -314,14 +370,18 @@ class PartnerSyncCoordinatorTest {
         repairPass = { repairCalls++; 2 },
     )
 
-    private fun enroll() = runBlocking {
+    private fun enroll(
+        pairId: String = this.pairId,
+        partnerSigningKey: PublicKey = partnerSigning.public,
+        partnerAgreementKey: PublicKey = partnerAgreement.public,
+    ) = runBlocking {
         db.enrollmentDao().upsert(
             EnrollmentRecord(
                 pairId = pairId,
                 mySenderKeyId = mySenderKeyId,
-                partnerSigningKeyId = sha256Hex(partnerSigning.public.encoded),
-                partnerSigningPubKey = partnerSigning.public.encoded,
-                partnerAgreementPubKey = partnerAgreement.public.encoded,
+                partnerSigningKeyId = sha256Hex(partnerSigningKey.encoded),
+                partnerSigningPubKey = partnerSigningKey.encoded,
+                partnerAgreementPubKey = partnerAgreementKey.encoded,
                 createdAtEpochMillis = 1_700_000_000_000L,
             ),
         )

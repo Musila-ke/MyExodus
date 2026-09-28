@@ -30,11 +30,16 @@ android {
             // Gate 2.5 coverage: AGP's `createDebugUnitTestCoverageReport` then emits the
             // JaCoCo XML SonarQube ingests (build/reports/coverage/test/debug/report.xml).
             enableUnitTestCoverage = true
+            // Domain usage metering (§8 S1.3): debug runs ENFORCE so the engine's enforcement
+            // path is on-device testable; the S1.3 DataStore override can lower it per-install.
+            buildConfigField("String", "DOMAIN_USAGE_MODE", "\"ENFORCE\"")
         }
         release {
             optimization {
                 enable = false
             }
+            // §8 S1.3: release ships OFF until rollout (§13); the override is ignored here.
+            buildConfigField("String", "DOMAIN_USAGE_MODE", "\"OFF\"")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -66,6 +71,18 @@ android {
 
 dependencyLocking {
     lockAllConfigurations()
+}
+
+// §8 S1.4/S1.6 — static checks: wall-clock confinement inside `domainusage`, and PSL asset
+// checksum against its provenance record.
+val domainUsageCiChecks by tasks.registering(Exec::class) {
+    description = "Domain usage metering static checks (wall-clock confinement, PSL pinning)"
+    group = "verification"
+    commandLine("bash", rootDir.resolve("scripts/domainusage-ci-checks.sh").absolutePath)
+}
+
+tasks.named("check") {
+    dependsOn(domainUsageCiChecks)
 }
 
 ksp {

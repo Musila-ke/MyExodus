@@ -1,6 +1,8 @@
 package com.example.myexodus.ui.streaks
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,13 +19,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.myexodus.R
 import com.example.myexodus.streaks.HabitSummary
 
 /**
@@ -42,10 +47,17 @@ internal fun HabitPickerSheet(
     onAddHabit: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(bottom = 16.dp)) {
+    // Same shape as the urge sheet: full-height anchor (the default half-height trims the list
+    // once habits outgrow it) and a scrolling column so N habits stay reachable at any N.
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 16.dp),
+        ) {
             Text(
-                "Your habits",
+                stringResource(R.string.streaks_picker_title),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
             )
@@ -79,7 +91,10 @@ internal fun HabitPickerSheet(
             ) {
                 Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(12.dp))
-                Text("Add habit", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    stringResource(R.string.streaks_picker_add),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
             }
         }
     }

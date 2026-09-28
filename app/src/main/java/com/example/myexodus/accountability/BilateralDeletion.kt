@@ -40,8 +40,12 @@ import java.util.UUID
  * undelivered unpair must not leave the credential writable forever). The initiator of a
  * mutual unpair simply loses the race: a denied terminate is a no-op.
  *
- * Destruction is device-level (one agreement key serves all pairs), so shredding one pair
- * renders every pair's ciphertext unrecoverable — per §10.
+ * Destruction is PAIR-scoped (§19.5 / ADR #106): each enrollment carries its own agreement
+ * key alias, so shredding one pair destroys only that key and the other pairs keep working.
+ * Pre-v12 enrollments carry no alias and share the device-level key (one key served all old
+ * pairs); that key cannot be destroyed per-pair, so it dies with the LAST enrollment — which
+ * is also what keeps the AD-22 wipe canary honest (after a full unpair no pairing key remains
+ * to mistake for a wiped database).
  *
  * All boundary collaborators are function-typed seams (same pattern as the rotate lambda in
  * IdentityMigration), so the initiate/deliver/confirm ordering is unit-testable with fakes.
@@ -52,7 +56,12 @@ class BilateralDeletion(
     private val enrollmentDao: EnrollmentDao,
     private val store: ChainStateStore,
     private val journal: UnpairStateDao,
-    private val destroyAgreementKey: () -> Unit,
+    /** Destroys the pair's own agreement key (the enrollment's alias); failures propagate so
+     *  the journal row stays unshredded and the erase is honestly retried, never claimed. */
+    private val destroyPairAgreementKey: (alias: String) -> Unit,
+    /** Destroys the legacy device-level agreement key — only ever called once no enrollment
+     *  remains (it is the shared key of every pre-v12 pair, and the AD-22 wipe canary). */
+    private val destroyDeviceAgreementKey: () -> Unit,
     /** Flips `/pairings/{pairId}` status to `terminated`; already-terminated / no longer a
      *  member is a no-op, not a failure (the partner may have terminated first). */
     private val terminatePair: suspend (pairId: String) -> Unit,
@@ -110,6 +119,13 @@ class BilateralDeletion(
             return DeletionResult.Deleted
         }
 
+        // Nothing to erase and no partner to notify: the row (and any earlier crash's
+        // remnant) goes with it.
+        if (enrollmentDao.getByPairId(pairId) == null) {
+            journal.delete(pairId)
+            return DeletionResult.Failed("not enrolled")
+        }
+
         val messageId = existing?.messageId?.takeIf { it.isNotEmpty() }
             ?: UUID.randomUUID().toString()
         if (runCatching { store.outboxSnapshot(messageId) }.getOrNull() == null) {
@@ -124,16 +140,25 @@ class BilateralDeletion(
                     requestedAtEpochMillis = existing?.requestedAtEpochMillis ?: now(),
                 ),
             )
-            val created = creator.create(
-                pairId,
-                EventPayload(type = EventPayload.TYPE_DELETION_REQUEST, text = ""),
-                signature,
-                messageId,
-            )
+            // Best effort by design: the request is the partner's notification, never a
+            // precondition for erasing locally (AD-13b). A chain that refuses an append
+            // (gap/fork) — or a crypto-dead pair whose key is already gone (the 2026-09-28
+            // multi-pair incident) — must not trap the user in a partnership they are ending.
+            // Without an event the journal keeps an empty envelope: no delivery, so the 7-day
+            // timeout reports LOCAL_ONLY_TERMINATED instead of claiming the partner erased.
+            val created = runCatching {
+                creator.create(
+                    pairId,
+                    EventPayload(type = EventPayload.TYPE_DELETION_REQUEST, text = ""),
+                    signature,
+                    messageId,
+                )
+            }.getOrElse { e ->
+                Log.w(TAG, "deletion request not created — the local shred runs regardless", e)
+                null
+            }
             if (created is EventCreator.CreateResult.Failed) {
-                // Nothing happened: the row (and any earlier crash's remnant) goes with it.
-                journal.delete(pairId)
-                return DeletionResult.Failed(created.reason)
+                Log.w(TAG, "deletion request not chained (${created.reason}) — the local shred runs regardless")
             }
         }
 
@@ -163,21 +188,40 @@ class BilateralDeletion(
         }
 
         // AD-13b: unconditional and immediate — no drain outcome blocks the shred.
-        destroyAgreementKey()
-        wipePair(pairId)
-        journal.markShredded(pairId)
+        shredPair(pairId)
 
         resumeRequester(pairId)
         return DeletionResult.Deleted
     }
 
     /** AD-13b crash repair: a journaled unpair whose shred never completed must still erase —
-     *  re-running is idempotent (one device-level key destroy + an idempotent pair wipe). */
+     *  re-running is idempotent (a pair-key destroy + an idempotent pair wipe). */
     private suspend fun shredIfPending(row: UnpairState) {
         if (row.localShredded) return
-        destroyAgreementKey()
-        wipePair(row.pairId)
-        journal.markShredded(row.pairId)
+        shredPair(row.pairId)
+    }
+
+    /**
+     * §10 + §19.5 (ADR #106): erase exactly one pair. Its own ECDH key is destroyed first (the
+     * shredding lever — a failure here propagates so the journal row stays unshredded and the
+     * erase is retried, never claimed), then its rows, then the journal is marked. The
+     * device-level key — the shared key of every pre-v12 pair, and the AD-22 wipe canary —
+     * dies only with the last enrollment: destroying it mid-life would make the remaining
+     * legacy pairs undecryptable (the 2026-09-28 defect), and for the last enrollment it must
+     * die before the wipe or a crash between the steps reads as a local wipe.
+     */
+    private suspend fun shredPair(pairId: String) {
+        val record = enrollmentDao.getByPairId(pairId)
+        if (record?.myAgreementKeyAlias != null) destroyPairAgreementKey(record.myAgreementKeyAlias)
+        // The device-level key dies BEFORE the last enrollment's wipe: the AD-22 canary reads
+        // *device key present + no enrollment* as a local wipe, so destroying it after the wipe
+        // would turn a crash between the two steps into a false "Pairing data was lost" report.
+        if (record != null && enrollmentDao.all().size == 1) destroyDeviceAgreementKey()
+        wipePair(pairId)
+        // Crash-resume where the wipe already ran (record == null): nothing left to derive
+        // from, so the shared key must still go.
+        if (enrollmentDao.all().isEmpty()) destroyDeviceAgreementKey()
+        journal.markShredded(pairId)
     }
 
     /**
@@ -199,9 +243,7 @@ class BilateralDeletion(
             ),
         )
         try {
-            destroyAgreementKey()
-            wipePair(pairId)
-            journal.markShredded(pairId)
+            shredPair(pairId)
         } catch (e: Exception) {
             Log.w(TAG, "incoming unpair shred failed pairId=$pairId — request stays unacked", e)
             return false

@@ -6,6 +6,7 @@ import android.util.Log
 import com.example.myexodus.accountability.EventCreator
 import com.example.myexodus.accountability.crypto.AccountabilitySigner
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
+import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.AttemptLog
@@ -72,12 +73,42 @@ class PartnerSyncCoordinator(
 
     /** [wakeMessageId] carries the FCM wake's own message id (null on periodic/deleted-messages
      *  runs): the pull handles it first so an out-of-order arrival cannot be missed by the
-     *  watermark query (plan §6 step 3's expedited path). */
+     *  watermark query (plan §6 step 3's expedited path).
+     *
+     *  §19.5 multi-pair: one device can hold several enrollments (a partner supporting several
+     *  users), and every one of them syncs — the single-enrollment `firstOrNull()` this loop
+     *  replaced was OPD #15's "second pairing silently half-works" gap. Per-pair steps are
+     *  independent; one pair's failure never skips another's. The report aggregates the pass
+     *  (counters summed, [SyncReport.uidsResolved] true only when every pair resolved). */
     suspend fun syncOnce(wakeMessageId: String? = null): SyncReport {
         runCatching { resumeUnpairs() }.onFailure { Log.w(TAG, "unpair resume failed", it) }
-        val enrollment = enrollmentDao.all().firstOrNull()
-            ?: return SyncReport() // Unpaired: attempts stay local (§6 attempt log is the record).
-        val uids = resolveUids(enrollment.pairId) ?: return SyncReport(enrolled = true)
+        val enrollments = enrollmentDao.all()
+        if (enrollments.isEmpty()) {
+            return SyncReport() // Unpaired: attempts stay local (§6 attempt log is the record).
+        }
+        var report = SyncReport(enrolled = true)
+        var resolved = 0
+        for (enrollment in enrollments) {
+            val one = syncPair(enrollment, wakeMessageId) ?: continue
+            resolved++
+            report = report.copy(
+                eventsLinked = report.eventsLinked + one.eventsLinked,
+                drained = report.drained || one.drained,
+                drainedCount = report.drainedCount + one.drainedCount,
+                pulledCount = report.pulledCount + one.pulledCount,
+                repairRequestsCreated = report.repairRequestsCreated + one.repairRequestsCreated,
+                approvalsExpired = report.approvalsExpired + one.approvalsExpired,
+                rotatedKeyEpoch = one.rotatedKeyEpoch ?: report.rotatedKeyEpoch,
+                rejectionsFound = report.rejectionsFound + one.rejectionsFound,
+            )
+        }
+        return report.copy(uidsResolved = resolved == enrollments.size)
+    }
+
+    /** One pair's slice of the pass; null when its uids could not be resolved (the pair is
+     *  skipped, every other pair still runs). */
+    private suspend fun syncPair(enrollment: EnrollmentRecord, wakeMessageId: String?): SyncReport? {
+        val uids = resolveUids(enrollment.pairId) ?: return null
         val (myUid, partnerUid) = uids
 
         val rotated = runCatching { rotateKeys(enrollment.pairId, enrollment.mySenderKeyId) }
@@ -213,18 +244,22 @@ class PairUidResolver(
     private val appContext: Context,
     private val firestore: FirebaseFirestore,
 ) {
-    suspend fun resolve(pairId: String): Pair<String, String>? {
+    /** The local device's uid — anonymous sign-in if needed. [resolve]'s first half, on its
+     *  own for the pairing ceremony, which needs a uid before any pair id exists. */
+    suspend fun ensureUid(): String? {
         AppCheckInstaller.install(appContext)
         val auth = FirebaseAuth.getInstance()
         val user = auth.currentUser
             ?: runCatching { auth.signInAnonymously().await() }
-                .onFailure { Log.w(TAG, "pair $pairId: anonymous sign-in failed", it) }
+                .onFailure { Log.w(TAG, "anonymous sign-in failed", it) }
                 .getOrNull()
                 ?.user
-        if (user == null) {
-            Log.w(TAG, "pair $pairId: no uid — sign-in unavailable")
-            return null
-        }
+        if (user == null) Log.w(TAG, "no uid — sign-in unavailable")
+        return user?.uid
+    }
+
+    suspend fun resolve(pairId: String): Pair<String, String>? {
+        val uid = ensureUid() ?: return null
         val members = runCatching {
             FirestoreSchema.pairingDocument(firestore, pairId).get().await().get("members")
         }
@@ -234,12 +269,12 @@ class PairUidResolver(
             Log.w(TAG, "pair $pairId: pairing document missing or has no members field")
             return null
         }
-        val partner = (members as? List<*>)?.filterIsInstance<String>()?.firstOrNull { it != user.uid }
+        val partner = (members as? List<*>)?.filterIsInstance<String>()?.firstOrNull { it != uid }
         if (partner == null) {
             Log.w(TAG, "pair $pairId: no other member (members=${(members as? List<*>)?.size ?: "not a list"})")
             return null
         }
-        return user.uid to partner
+        return uid to partner
     }
 
     private companion object {

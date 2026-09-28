@@ -2,9 +2,11 @@ package com.example.myexodus.blocking
 
 import android.accessibilityservice.AccessibilityService
 import android.content.BroadcastReceiver
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.Configuration
 import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
@@ -22,6 +24,7 @@ import com.example.myexodus.blocking.usage.EnforcementAction
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.blocking.usage.UsageSessionMachine
 import com.example.myexodus.data.db.entity.RecoverySession
+import com.example.myexodus.data.db.entity.UsageLedgerSource
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.ui.appLabel
 import dagger.hilt.android.AndroidEntryPoint
@@ -71,6 +74,7 @@ class BlockerAccessibilityService : AccessibilityService() {
      *  deltas. Per-bind state, like the overlay. */
     private val usageSessions = UsageSessionMachine()
     private var usageTickJob: Job? = null
+    private var pendingForeignCloseRecheck: Runnable? = null
 
     private val normalizer = AccessibilityEventNormalizer()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -99,6 +103,13 @@ class BlockerAccessibilityService : AccessibilityService() {
             stateMachine = this.stateMachine,
             onResult = ::handleUrlResult,
         )
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (BuildConfig.DEBUG) {
+            Log.i(TAG, "config change: newWidthDp=${newConfig.screenWidthDp} serviceWidthDp=${resources.configuration.screenWidthDp}")
+        }
     }
 
     override fun onServiceConnected() {
@@ -180,13 +191,50 @@ class BlockerAccessibilityService : AccessibilityService() {
         if (emergency.isProtected(packageName, window) && isActiveForeground(packageName, window)) {
             overlay.hide(stateMachine.currentGeneration, displayId)
             // A protected package (dialer) is untracked: the session for the app it replaced
-            // closes with its final tick (enforcement plan v2 §6 step 4).
-            closeUsageSession()
+            // closes with its final tick (enforcement plan v2 §6 step 4). Same foreign-close
+            // confirmation as Path A's decisions (ADR #107): XOS reports the notification
+            // shade as a TYPE_SYSTEM window of com.android.systemui, so this branch used to
+            // end a live session on every shade pull even though the platform never left the
+            // tracked app (device-caught 2026-09-28 on the X6532 — the 07:44 gap and the
+            // "7 interruptions" report; the emulator's shade never reproduced it because
+            // AOSP reports a non-system window type and took the deferred decision path).
+            // A surface that really took over (dialer, call UI) stops confirming within one
+            // 1.5 s poll and closes on the re-check.
+            val active = usageSessions.activePackage
+            val oracleAgeMs = SystemClock.elapsedRealtime() -
+                EnforcementForegroundService.platformForegroundObservedAtElapsedMs
+            if (packageName != null && active != null && active != packageName && shouldDeferForeignClose(
+                    activePackage = active,
+                    incomingPackage = packageName,
+                    oraclePackage = EnforcementForegroundService.platformForegroundPackage,
+                    oracleAgeMs = oracleAgeMs,
+                )
+            ) {
+                if (BuildConfig.DEBUG) {
+                    Log.i(TAG, "foreign close deferred active=$active incoming=$packageName")
+                }
+                scheduleForeignCloseRecheck(active, packageName, displayId, scheduleBlocked = false)
+            } else {
+                closeUsageSession()
+            }
             return
         }
         // Step 4: unknown package → immediate hide, no retain window.
         if (packageName.isNullOrEmpty()) {
             overlay.hide(stateMachine.currentGeneration, displayId)
+            return
+        }
+
+        // The walled app re-foregrounding under a live wall goes straight back out: covering
+        // is not stopping (device-caught 2026-09-27 — Instagram came back RESUMED and audible
+        // under the wall). This must run before the window-list machinery below: while the
+        // wall covers the app, XOS reports the transition with a window it no longer lists,
+        // so the deferred re-check dropped the event and no decide ever ran (device-caught,
+        // same session). The wall's own existence is the evidence — it is only up while its
+        // package was pushed out — so no window validation is needed, or possible, here.
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            reevictIfWalled(packageName, displayId)
+        ) {
             return
         }
 
@@ -308,7 +356,10 @@ class BlockerAccessibilityService : AccessibilityService() {
             runBlocking {
                 runCatching {
                     usageEngine.processUsageObservation(
-                        finalTick.packageName, finalTick.deltaMs, SystemClock.elapsedRealtime(),
+                        finalTick.packageName,
+                        finalTick.deltaMs,
+                        SystemClock.elapsedRealtime(),
+                        UsageLedgerSource.PATH_A,
                     )
                 }.onFailure { Log.w(TAG, "handoff final credit failed pkg=${finalTick.packageName}", it) }
             }
@@ -370,18 +421,29 @@ class BlockerAccessibilityService : AccessibilityService() {
                 } else {
                     null
                 }
-                // A daily-limit wall must survive the same-package WSC churn (§8 Step 4
-                // re-arm): the schedule engine carries no usage data, so the walled app's
-                // own WSC decides Allow — lifting the card here would only have the usage
-                // engine re-show it a moment later. A *different* package's Allow still
-                // hides it: the wall follows the foreground (Home always works).
-                val limitWalledHere =
-                    (current as? OverlayContent.DailyLimitBlocked)?.packageName == packageName
+                // A daily-limit wall is persistent (user ruling 2026-09-27): no foreground
+                // change lifts it — not the walled app's own WSC churn, and not the
+                // launcher coming forward after the wall's eviction. Only its Close button
+                // (the Accessibility host's, the one that can evict) dismisses it. If the
+                // walled app itself re-foregrounds under a live wall — notification tap,
+                // recents — re-run the eviction: covering is not stopping (device-caught
+                // 2026-09-27: Instagram stayed RESUMED and audible under the wall).
+                val wallScene = current as? OverlayContent.DailyLimitBlocked
+                // A live warning banner owns its 5s window: the banner's own appearance
+                // makes the app below re-emit window-state changes, and deciding Allow on
+                // them hid the banner ~5ms after attach — the user saw a flash, yet
+                // attach-confirm had already marked the warning delivered, so it never
+                // retried (device-caught 2026-09-27 on the X6532). A different package's
+                // Allow still yields it (the banner follows the foreground).
+                val warningHere =
+                    (current as? OverlayContent.Warning)?.packageName == packageName
                 if (barId != null) {
                     scanGeneration = generation
                     scanDisplayId = displayId
                     scanner.onContentChanged(packageName, barId, { rootInActiveWindow }, generation)
-                } else if (limitWalledHere) {
+                } else if (wallScene != null) {
+                    if (wallScene.packageName == packageName) closeBlockedApp(packageName)
+                } else if (warningHere) {
                     Unit
                 } else if (!overlay.isShown(displayId) || !restrictedPaneBeside(displayId, window)) {
                     overlay.hide(generation, displayId)
@@ -432,8 +494,37 @@ class BlockerAccessibilityService : AccessibilityService() {
      *  by its schedule; a limit card already up for the same package walls it too — neither
      *  may have a session (covered time must not accrue as usage). */
     private fun syncUsageSession(packageName: String, displayId: Int, scheduleBlocked: Boolean) {
-        val card = overlay.currentContent(displayId)
-        val limitWalled = (card as? OverlayContent.DailyLimitBlocked)?.packageName == packageName
+        // Foreign-transition confirmation (ADR #107, 2026-09-28): a transient surface (shade,
+        // heads-up, system window) that never pauses the tracked app still emits a WSC that
+        // used to close the session with no reopen until the app's next real WSC — 97 s of
+        // platform-credited time lost in 2026-09-28's 07:34:35-08:09:29 interval (6 gaps of
+        // 7-34 s inside one continuous USM interval). When Path B's fresh poll still reports
+        // the tracked app as the platform foreground, defer the close and re-verify below.
+        val active = usageSessions.activePackage
+        val oraclePackage = EnforcementForegroundService.platformForegroundPackage
+        val oracleAgeMs = SystemClock.elapsedRealtime() -
+            EnforcementForegroundService.platformForegroundObservedAtElapsedMs
+        if (BuildConfig.DEBUG && active != null && active != packageName) {
+            Log.i(
+                TAG,
+                "foreign transition active=$active incoming=$packageName " +
+                    "oracle=$oraclePackage ageMs=$oracleAgeMs",
+            )
+        }
+        if (active != null && shouldDeferForeignClose(
+                activePackage = active,
+                incomingPackage = packageName,
+                oraclePackage = oraclePackage,
+                oracleAgeMs = oracleAgeMs,
+            )
+        ) {
+            if (BuildConfig.DEBUG) {
+                Log.i(TAG, "foreign close deferred active=$active incoming=$packageName")
+            }
+            scheduleForeignCloseRecheck(active, packageName, displayId, scheduleBlocked)
+            return
+        }
+        val limitWalled = dailyWallPackage(displayId) == packageName
         val tracked = !scheduleBlocked && !limitWalled && isLimitTracked(packageName)
         val observed = usageSessions.observeForeground(
             packageName, tracked, displayId, SystemClock.elapsedRealtime(), systemBootCount(this),
@@ -450,6 +541,41 @@ class BlockerAccessibilityService : AccessibilityService() {
     private fun closeUsageSession() {
         usageSessions.close(SystemClock.elapsedRealtime())?.let { accountUsage(it) }
         syncUsageTicker()
+    }
+
+    /** Re-verifies a deferred foreign close (ADR #107) one poll after the suspicious
+     *  transition: the platform foreground moved on → the leave was real, close with the
+     *  final tick and hand the session to the incoming package (the original WSC is the
+     *  only transition the app will emit until it is touched again); still the tracked app
+     *  → the WSC was a transient surface and the session simply continues. The over-count
+     *  a lost race can produce is bounded by this delay (~2 s), inside the plan's accepted
+     *  sub-poll sojourn tolerance. One pending re-check at a time — the latest transition
+     *  wins. */
+    private fun scheduleForeignCloseRecheck(
+        trackedPackage: String,
+        incomingPackage: String,
+        displayId: Int,
+        scheduleBlocked: Boolean,
+    ) {
+        pendingForeignCloseRecheck?.let { mainHandler.removeCallbacks(it) }
+        val recheck = Runnable {
+            pendingForeignCloseRecheck = null
+            if (usageSessions.activePackage != trackedPackage) return@Runnable
+            val confirms = platformForegroundConfirms(
+                trackedPackage,
+                EnforcementForegroundService.platformForegroundPackage,
+                SystemClock.elapsedRealtime() -
+                    EnforcementForegroundService.platformForegroundObservedAtElapsedMs,
+            )
+            if (confirms) return@Runnable
+            if (BuildConfig.DEBUG) {
+                Log.i(TAG, "deferred foreign close confirmed pkg=$trackedPackage incoming=$incomingPackage")
+            }
+            closeUsageSession()
+            syncUsageSession(incomingPackage, displayId, scheduleBlocked)
+        }
+        pendingForeignCloseRecheck = recheck
+        mainHandler.postDelayed(recheck, FOREIGN_CLOSE_RECHECK_MS)
     }
 
     /** The 10s ticker (§8 Step 4): one tick per open session, incremental delta, anchor reset
@@ -484,7 +610,10 @@ class BlockerAccessibilityService : AccessibilityService() {
         scope.launch {
             runCatching {
                 val action = usageEngine.processUsageObservation(
-                    tick.packageName, tick.deltaMs, SystemClock.elapsedRealtime(),
+                    tick.packageName,
+                    tick.deltaMs,
+                    SystemClock.elapsedRealtime(),
+                    UsageLedgerSource.PATH_A,
                 )
                 mainHandler.post { renderUsageAction(tick.packageName, tick.displayId, action) }
             }.onFailure { Log.w(TAG, "usage accounting failed pkg=${tick.packageName}", it) }
@@ -512,7 +641,7 @@ class BlockerAccessibilityService : AccessibilityService() {
                     stateMachine.currentGeneration,
                     displayId,
                     overlay.warningBounds(displayId),
-                    OverlayContent.Warning(action.level, action.remainingMs),
+                    OverlayContent.Warning(packageName, action.level, action.remainingMs),
                 ) {
                     // Delivery confirmed only once the banner actually attached (§9: a
                     // warning that failed to attach stays PENDING_DELIVERY / Decision 14).
@@ -524,31 +653,58 @@ class BlockerAccessibilityService : AccessibilityService() {
                 if (usageSessions.activePackage == packageName) closeUsageSession()
                 val current = overlay.currentContent(displayId)
                 if (current !is OverlayContent.DailyLimitBlocked) {
-                    val generation = stateMachine.currentGeneration
                     overlay.show(
-                        generation,
+                        stateMachine.currentGeneration,
                         displayId,
                         overlay.displayBounds(displayId),
                         OverlayContent.DailyLimitBlocked(packageName),
                     ) {
-                        // §8 Step 4 eviction: confirmed attach, then Home — never assumed.
-                        // The wall's usual lifeline is the next decided foreground change, but
-                        // XOS can defer-then-drop the launcher's WSC outright (device-caught
-                        // 2026-09-15: launcher never entered the window list within the six
-                        // deferral attempts) — leaving the wall focused and touch-modal over
-                        // the home screen. Eviction is the wall's end anyway, so hide it after
-                        // a short beat. Generation-guarded: an immediate re-entry decides (new
-                        // generation) and this stale hide no-ops.
-                        if (performGlobalAction(GLOBAL_ACTION_HOME)) {
-                            mainHandler.postDelayed(
-                                { overlay.hide(generation, displayId) },
-                                BLOCK_EVICT_HIDE_MS,
-                            )
-                        }
+                        // §8 Step 4 eviction, attach-confirmed: covering is not stopping. Left
+                        // resumed under the wall, the app kept playing audio and Digital
+                        // Wellbeing kept counting it as foreground (device-caught 2026-09-27
+                        // on the X6532 — Instagram held the audio-focus stack behind the
+                        // wall). Home backgrounds it; no timed hide follows (user ruling
+                        // 2026-09-27: the wall stays until the user dismisses it via Close).
+                        closeBlockedApp(packageName)
                     }
                 }
             }
         }
+    }
+
+    private fun dailyWallPackage(displayId: Int): String? =
+        (overlay.currentContent(displayId) as? OverlayContent.DailyLimitBlocked)?.packageName
+
+    /** §8 Step 4 block eviction (FR2: "the app is blocked and the user is returned to the home
+     *  screen"), completed by the user ruling 2026-09-27 — "logically just block the app and
+     *  close it". Eviction alone returned the app to the *background*, where it kept running
+     *  and still played audio under the wall (device-caught: Instagram audible while covered;
+     *  covering is not stopping). [ActivityManager.killBackgroundProcesses] is the strongest
+     *  close a third-party app can perform, and it only applies once the target is genuinely
+     *  backgrounded — hence the retry after the (asynchronous) HOME transition. The wall itself
+     *  is untouched: it keeps its own lifetime (the user's Close tap). */
+    private fun closeBlockedApp(packageName: String) {
+        val evicted = performGlobalAction(GLOBAL_ACTION_HOME)
+        killBlockedProcess(packageName)
+        mainHandler.postDelayed({ killBlockedProcess(packageName) }, BLOCK_CLOSE_RETRY_MS)
+        Log.i(TAG, "block close pkg=$packageName evicted=$evicted")
+    }
+
+    private fun killBlockedProcess(packageName: String) {
+        runCatching {
+            (getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)
+                ?.killBackgroundProcesses(packageName)
+        }.onFailure { Log.w(TAG, "block close failed pkg=$packageName", it) }
+    }
+
+    /** True when [packageName] is the live daily wall's own target — the re-entry signal that
+     *  re-runs the eviction. Only a WSC for the wall's package counts: any other package coming
+     *  forward (the launcher, after the eviction) must leave the wall standing. */
+    private fun reevictIfWalled(packageName: String?, displayId: Int): Boolean {
+        val wall = dailyWallPackage(displayId) ?: return false
+        if (wall != packageName) return false
+        closeBlockedApp(wall)
+        return true
     }
 
     /** A tracked package = an enabled rule with a real limit, on a day the rule covers —
@@ -623,6 +779,7 @@ class BlockerAccessibilityService : AccessibilityService() {
         OverlayContent.AppBlocked(
             target = appLabel(this, packageName),
             ruleId = publisher.snapshot.appRules[packageName]?.ruleId,
+            packageName = packageName,
         )
 
     /** Multi-window (plan §8 Step 5 / Decision 10): each display showing a restricted package
@@ -636,7 +793,14 @@ class BlockerAccessibilityService : AccessibilityService() {
      *  a block transition (and its bounded settle re-runs), never per steady-state WSC
      *  (2026-08-28 review). */
     private fun coverBlockedApp(generation: Long, displayId: Int, packageName: String) {
-        overlay.show(generation, displayId, overlay.displayBounds(displayId), appBlockedContent(packageName))
+        // Attach-confirmed block close (§8 Step 4 / FR2, user ruling 2026-09-27): the cover
+        // being on screen is what licenses closing the app — never the add/show call.
+        overlay.show(
+            generation,
+            displayId,
+            overlay.displayBounds(displayId),
+            appBlockedContent(packageName),
+        ) { closeBlockedApp(packageName) }
         blockOtherRestrictedWindows(generation)
     }
 
@@ -746,10 +910,16 @@ class BlockerAccessibilityService : AccessibilityService() {
                 }
             }
             is BlockDecision.Allow -> {
-                // URL evidence is not a foreground transition: it must never lift a
-                // daily-limit wall (§8 Step 4 re-arm — the wall is lifted only by the usage
-                // engine or by the foreground moving to a different app).
-                if (overlay.currentContent(displayId) is OverlayContent.DailyLimitBlocked) return
+                // URL evidence is not a foreground transition: it must never lift a usage
+                // surface — the daily-limit wall (§8 Step 4 re-arm — the wall is lifted only
+                // by the usage engine or by the foreground moving to a different app) or the
+                // browser's own warning banner (device-caught 2026-09-27: Chrome's omnibox
+                // content-change Allowed and hid a level-1 banner 270 ms after it was shown).
+                // Both are engine-owned; the banner still dismisses on its 5 s timer or via
+                // decideApp when the foreground changes.
+                val current = overlay.currentContent(displayId)
+                if (current is OverlayContent.DailyLimitBlocked) return
+                if ((current as? OverlayContent.Warning)?.packageName == browserPackage) return
                 overlay.hide(generation, displayId)
             }
         }
@@ -895,9 +1065,10 @@ class BlockerAccessibilityService : AccessibilityService() {
          *  still resolving (~1.2s worst case — mirrors the deferred-WSC lag handling). */
         private const val MAX_CONNECT_REACQUIRE_ATTEMPTS = 3
 
-        /** Beat between the §8 Step 4 eviction and dropping the block wall (see the Block
-         *  render's eviction callback). */
-        private const val BLOCK_EVICT_HIDE_MS = 1_000L
+        /** Delay before the block close's second kill attempt: performGlobalAction is
+         *  asynchronous, and killBackgroundProcesses only lands once the target is genuinely
+         *  backgrounded — the first attempt covers the common case, this one the lag. */
+        private const val BLOCK_CLOSE_RETRY_MS = 700L
 
         /** Beat between settle-loop samples (device-tuned on XOS 2026-09-16: an OEM task-switch
          *  animation is still moving at ~700ms, measures settled by the following sample). */
@@ -907,6 +1078,35 @@ class BlockerAccessibilityService : AccessibilityService() {
          *  pathological window-list (~4.2s worst case), matching DEFERRED_WSC's bounded-retry
          *  posture — a genuinely stale block must not re-cover forever. */
         private const val COVER_SETTLE_MAX_ATTEMPTS = 6
+
+        /** How long Path B's poll oracle may go unrefreshed and still overrule a foreground
+         *  transition (ADR #107): the poll re-stamps it every ≤1.5 s, so 5 s spans several
+         *  ticks — anything older means the FGS is stopped or wedged, and its silence must
+         *  read as "no evidence", never as a frozen keep. */
+        private const val FOREIGN_CLOSE_ORACLE_FRESH_MS = 5_000L
+
+        /** Re-verification delay after a deferred foreign close (ADR #107): one poll interval
+         *  plus margin, so the next Path B tick has landed. Bounds a lost race's over-count. */
+        private const val FOREIGN_CLOSE_RECHECK_MS = 2_000L
+
+        /** Does a fresh-enough oracle still report [packageName] as the platform foreground?
+         *  Pure for direct testing. */
+        fun platformForegroundConfirms(
+            packageName: String,
+            oraclePackage: String?,
+            oracleAgeMs: Long,
+        ): Boolean = oraclePackage == packageName && oracleAgeMs in 0..FOREIGN_CLOSE_ORACLE_FRESH_MS
+
+        /** ADR #107's deferral rule: a foreign-package transition must not close the active
+         *  session while a fresh oracle still reports the active package as the platform
+         *  foreground. Pure for direct testing. */
+        fun shouldDeferForeignClose(
+            activePackage: String,
+            incomingPackage: String,
+            oraclePackage: String?,
+            oracleAgeMs: Long,
+        ): Boolean = activePackage != incomingPackage &&
+            platformForegroundConfirms(activePackage, oraclePackage, oracleAgeMs)
 
         /** True between onServiceConnected and onDestroy; the device suite waits on it because
          *  the accessibility re-bind after a process restart lags on XOS. */

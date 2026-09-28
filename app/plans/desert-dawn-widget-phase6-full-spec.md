@@ -2,6 +2,13 @@
 
 *This supersedes the Phase 4 specification in its entirety. It is fact-checked against current Android/AndroidX documentation (see the accompanying Phase 5 reconciliation document for what changed and why) and is ready to hand to an implementing engineer or AI coding agent without needing to cross-reference the earlier draft.*
 
+> **Shipped-state amendment (2026-09-27 — this spec is the design intent; ADR #40 and ADR #87 are the shipped record).** The deltas a reader must know before treating any line below as current:
+> - **No `:feature:widget` module** — code lives in `:app` under the `widget` package (user ruling, ADR #40).
+> - **Not two variants** — §1/FR1–FR2's 2×1 and 4×2 grew to four compositions (COMPACT, NARROW, EXPANDED, TALL) routed by the size a launcher *reports*, after the 2026-09-27 sweep measured that launchers match a declared preset only when it *contains* the cell (ADR #87). EXPANDED remains the 4×2 shape; no tested launcher selects it.
+> - **Worker backstop** — Decision 14's `onEnabled`/`onDisabled` scheduling is not used; the app's existing 15-minute `HealthCheckWorker` drives the writer (ADR #40).
+> - **§16 Q5 is closed** (2026-09-27): the *streak number* shows its age ("Checked 2h ago") when the record can no longer be proven current; the *status word* keeps the original silent-UNVERIFIED ruling. Q2 was closed by ADR #40 (authority, not `blocksNow`); Q3 stands as decided.
+> - **Freshness proof** — the record carries `StreakSample` (accumulator + verified clocks); a process start with a young sample performs no durable read (ADR #87).
+
 ## 1. Feature Overview
 A Jetpack Glance home-screen widget for the Desert Dawn app, in two responsive variants:
 - **2×1 Compact**: streak count only.

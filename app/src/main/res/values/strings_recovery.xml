@@ -11,6 +11,9 @@
     <string name="recovery_suggested_title">Try right now</string>
     <string name="recovery_risk_window_note">You\'re inside one of your risk windows — low-effort options first.</string>
 
+    <!-- Hub tiles: the Recovery page's subpages, reached by icon + label. -->
+    <string name="recovery_tile_techniques">Techniques</string>
+
     <!-- Coaching plan (W1 display, W3 editor) -->
     <string name="recovery_plan_title">My plan</string>
     <string name="recovery_plan_empty">Add your own steps, if-then plans, and values in Settings → Coaching plan.</string>
@@ -35,11 +38,14 @@
     <string name="recovery_plan_hint_step">One small thing you can do</string>
     <string name="recovery_plan_hint_ifthen">If … then …</string>
     <string name="recovery_plan_hint_value">What matters more to you than this</string>
+    <!-- Reorder + delete live behind a per-item overflow; the row itself opens the editor.
+         The description carries the item's own words so fifteen of these don't all announce
+         "Item actions". -->
+    <string name="recovery_plan_item_actions">Actions for “%1$s”</string>
     <string name="recovery_plan_window_label">Show this when</string>
     <string name="recovery_plan_window_any">Any time</string>
 
     <!-- Settings section (W3/W4 entry points) -->
-    <string name="settings_recovery_header">Recovery</string>
     <string name="settings_recovery_plan_title">Coaching plan</string>
     <string name="settings_recovery_plan_body">Your own steps, if-then plans, and values — shown on the Recovery tab and while a technique runs.</string>
     <string name="settings_recovery_windows_title">Risk windows</string>
@@ -52,12 +58,16 @@
     <string name="recovery_windows_add_title">New window</string>
     <string name="recovery_windows_edit_title">Edit window</string>
     <string name="recovery_windows_off">Off</string>
+    <string name="recovery_windows_toggle">On for this window</string>
     <string name="recovery_windows_overnight">The window ends the next day.</string>
 
     <!-- Urge log (W2) -->
     <string name="recovery_log_action">Log an urge</string>
     <string name="recovery_log_title">Log this urge</string>
     <string name="recovery_log_intensity">How strong is it right now?</string>
+    <!-- The chip label stays a bare numeral; this names the control for screen readers, where
+         "7" alone is unlabelled. -->
+    <string name="recovery_log_intensity_chip">Intensity %1$d of 10</string>
     <string name="recovery_log_note">Logging keeps the block in place — this is not an override. Nothing here is shared with your partner.</string>
     <string name="recovery_log_cancel">Cancel</string>
     <string name="recovery_log_submit">Log it</string>
@@ -141,6 +151,28 @@
     <string name="recovery_history_abandoned">Stopped</string>
     <string name="recovery_history_interrupted">Interrupted</string>
     <string name="recovery_history_logged_only">Logged, no technique</string>
+    <!-- Summary (owner sign-off 2026-09-22, revised same day). Ranges are spelled out: "W"/"M"
+         were the reference's initials with no legend anywhere on the page. The eyebrow names
+         the figure the way the reference's "Total Income" does. The three buckets are the three
+         things the log can actually say about a row — "Not finished" merges Stopped with
+         Interrupted, and deliberately is not the word "Stopped", which the row pill uses for
+         only one of the two. -->
+    <string name="recovery_history_summary_eyebrow">Urges logged</string>
+    <string name="recovery_history_bucket_not_finished">Not finished</string>
+    <!-- One line at a third of the card width, so the three bucket figures stay on one baseline.
+         Shorter than the row title "Logged, no technique" on purpose; it collides with no row
+         outcome pill, which is the only vocabulary that has to match exactly. -->
+    <string name="recovery_history_bucket_logged_only">Logged only</string>
+    <string name="recovery_history_summary_none">No urges logged in this period.</string>
+    <string name="recovery_history_range_week">Week</string>
+    <string name="recovery_history_range_month">Month</string>
+    <string name="recovery_history_range_all">All time</string>
+    <string name="recovery_history_log_header">All urges</string>
+    <!-- Row trailing stamp: the day is spoken only while it is still current. -->
+    <string name="recovery_history_today">Today</string>
+    <string name="recovery_history_yesterday">Yesterday</string>
+    <string name="recovery_history_intensity">Intensity %1$d/10</string>
+    <string name="recovery_history_duration">%1$dm %2$ds</string>
 
     <!-- Privacy gate (W6) -->
     <string name="recovery_gate_title_history">Unlock to see your history</string>

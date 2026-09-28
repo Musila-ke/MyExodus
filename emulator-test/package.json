@@ -1,0 +1,11 @@
+{
+  "name": "myexodus-functions-emulator-test",
+  "private": true,
+  "description": "§12.2 integration suite for the shipped pairing surface: the real `registerPairing` callable over the Functions emulator's HTTP wire (App Check + auth + the real attestation verifier) plus in-process handler runs against a real Firestore emulator. Run: npm test (needs the Firebase CLI; the Firestore emulator needs Java 11+).",
+  "scripts": {
+    "test": "cd .. && firebase emulators:exec --only firestore,functions --project demo-myexodus \"node --test 'emulator-test/**/*.test.js'\""
+  },
+  "devDependencies": {
+    "firebase-admin": "14.4.0"
+  }
+}

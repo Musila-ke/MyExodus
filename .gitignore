@@ -36,3 +36,7 @@ google-services.json
 # Node workspaces (functions/, rules-test/) — dependencies are local (npm install), never committed
 node_modules/
 .firebase/
+
+# Firebase Auth credential stores from the pairing rig (test accounts) — never committed
+.tmp-auth-backup/
+.tmp-auth-rig-snapshot/

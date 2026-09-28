@@ -12,14 +12,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -47,6 +45,8 @@ import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.data.db.entity.CoachingStep
 import com.example.myexodus.data.db.entity.RiskWindow
 import com.example.myexodus.recovery.RecoveryPlanRepository
+import com.example.myexodus.ui.BackRow
+import com.example.myexodus.ui.SecureSurface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -65,6 +65,7 @@ fun CoachingPlanScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    SecureSurface()
     GatedContent(prefs = prefs, titleRes = R.string.recovery_gate_title_plan) {
         CoachingPlanBody(
             planRepository = planRepository,
@@ -104,22 +105,7 @@ private fun CoachingPlanBody(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = stringResource(R.string.recovery_back),
-                )
-            }
-            Text(
-                stringResource(R.string.recovery_plan_editor_title),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
+        BackRow(label = stringResource(R.string.recovery_plan_editor_title), onBack = onBack)
         val id = profileId
         if (id == null) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -238,15 +224,21 @@ private fun KindSection(
     onDelete: (CoachingStep) -> Unit,
     onMove: (CoachingStep, Int) -> Unit,
 ) {
+    val header = stringResource(kindHeader(kind))
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                stringResource(kindHeader(kind)),
+                header,
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f),
             )
             IconButton(onClick = onAdd, enabled = canAdd) {
-                Icon(Icons.Default.Add, contentDescription = stringResource(R.string.recovery_plan_add))
+                // Three of these announce a bare "Add" with no way to tell which kind they add
+                // to — the same missing-subject defect as findings #25/#26 (WCAG 2.4.6).
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = "${stringResource(R.string.recovery_plan_add)} — $header",
+                )
             }
         }
         if (items.isEmpty()) {
@@ -258,35 +250,84 @@ private fun KindSection(
         }
         items.forEachIndexed { index, item ->
             Surface(
+                onClick = { onEdit(item) },
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
                 shape = MaterialTheme.shapes.medium,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Column(Modifier.padding(start = 16.dp, top = 8.dp, end = 4.dp, bottom = 8.dp)) {
-                    Text(item.actionText, style = MaterialTheme.typography.bodyLarge)
-                    windowLabel(item, windows)?.let {
-                        Text(
-                            it,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { onEdit(item) }) {
-                            Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.recovery_plan_edit))
-                        }
-                        IconButton(onClick = { onDelete(item) }) {
-                            Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.rules_delete))
-                        }
-                        IconButton(onClick = { onMove(item, -1) }, enabled = index > 0) {
-                            Icon(Icons.Default.KeyboardArrowUp, contentDescription = stringResource(R.string.recovery_plan_move_up))
-                        }
-                        IconButton(onClick = { onMove(item, 1) }, enabled = index < items.lastIndex) {
-                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = stringResource(R.string.recovery_plan_move_down))
+                Row(
+                    Modifier.padding(start = 16.dp, top = 8.dp, end = 4.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Column(
+                        Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(item.actionText, style = MaterialTheme.typography.bodyLarge)
+                        windowLabel(item, windows)?.let {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
                         }
                     }
+                    ItemMenu(
+                        itemText = item.actionText,
+                        canMoveUp = index > 0,
+                        canMoveDown = index < items.lastIndex,
+                        onMove = { onMove(item, it) },
+                        onDelete = { onDelete(item) },
+                    )
                 }
             }
+        }
+    }
+}
+
+/**
+ * Reorder + delete behind one overflow. The row itself is the edit target, so four visible
+ * icon buttons per item became one: at five items in each of three kinds the old row put up to
+ * **60** targets on the page, each too small to hit reliably and each announcing the same
+ * subjectless word as its neighbours.
+ */
+@Composable
+private fun ItemMenu(
+    itemText: String,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onMove: (Int) -> Unit,
+    onDelete: () -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) {
+            Icon(
+                Icons.Default.MoreVert,
+                contentDescription = stringResource(R.string.recovery_plan_item_actions, itemText),
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.recovery_plan_move_up)) },
+                enabled = canMoveUp,
+                onClick = { open = false; onMove(-1) },
+            )
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.recovery_plan_move_down)) },
+                enabled = canMoveDown,
+                onClick = { open = false; onMove(1) },
+            )
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        stringResource(R.string.rules_delete),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                },
+                onClick = { open = false; onDelete() },
+            )
         }
     }
 }

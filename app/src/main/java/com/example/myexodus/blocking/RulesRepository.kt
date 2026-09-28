@@ -71,6 +71,13 @@ class RulesRepository(
         return dao.getActive() ?: LOCAL_PROFILE.also { dao.insert(it) }
     }
 
+    /** §19.5: the self-chosen name the pairing ceremony exchanges as this device's label.
+     *  Callers pass an already-sanitized value ([com.example.myexodus.accountability.enrollment.PartnerLabel]). */
+    suspend fun updateProfileName(name: String) {
+        val dao = store().userProfileDao()
+        dao.update(ensureActiveProfile().copy(name = name))
+    }
+
     suspend fun getActiveRules(): List<RestrictionRule> = store().restrictionRuleDao().getActiveRules()
 
     fun observeRules(profileId: String): Flow<List<RestrictionRule>> =
@@ -79,13 +86,17 @@ class RulesRepository(
     private fun targetLabel(targetType: String): String =
         if (targetType == "APP") "app" else "website"
 
-    private companion object {
-        /** Fixed id: a racing double-insert fails on the PK instead of creating two profiles. */
-        const val LOCAL_PROFILE_ID = "local"
+    companion object {
+        /** The placeholder for a device whose owner never chose a name — never sent as a
+         *  pairing label; the ceremony shows an empty field until the owner types one. */
+        const val DEFAULT_PROFILE_NAME = "You"
 
-        val LOCAL_PROFILE = UserProfile(
+        /** Fixed id: a racing double-insert fails on the PK instead of creating two profiles. */
+        private const val LOCAL_PROFILE_ID = "local"
+
+        private val LOCAL_PROFILE = UserProfile(
             userId = LOCAL_PROFILE_ID,
-            name = "You",
+            name = DEFAULT_PROFILE_NAME,
             email = "",
             phoneNumber = null,
             dateOfBirth = 0L,

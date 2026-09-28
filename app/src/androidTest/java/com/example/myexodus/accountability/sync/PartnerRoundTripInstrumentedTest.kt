@@ -9,8 +9,6 @@ import com.example.myexodus.accountability.PartnerTestIdentity
 import com.example.myexodus.accountability.RoundTripTestEntryPoint
 import com.example.myexodus.accountability.crypto.AccountabilitySigner
 import com.example.myexodus.accountability.enrollment.EnrollmentTranscript
-import com.example.myexodus.accountability.enrollment.PairingFlow
-import com.example.myexodus.accountability.enrollment.PairingToken
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.state.ChainHead
 import com.google.firebase.FirebaseApp
@@ -19,17 +17,12 @@ import com.google.firebase.firestore.FirebaseFirestore
 import dagger.hilt.android.EntryPointAccessors
 import java.util.Base64
 import java.util.UUID
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.tasks.await
-import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -85,13 +78,17 @@ class PartnerRoundTripInstrumentedTest {
         // Stage 1 — pairing through the live registerPairing. No server pre-read: the rules
         // deliberately deny reads of a pair document the caller can't already see (probing
         // guard, firestore.rules), and with a fresh uid pair nothing exists yet anyway.
-        pairDevice(ep, identity, uidA, uidB)
+        pairDeviceWith(ep, identity, uidA, uidB, INITIATOR_LABEL, PARTNER_LABEL)
         val aRecord = ep.enrollmentDao().getByPairId(pairId)
             ?: error("A enrollment record missing after pairing")
         val bRecord = identity.enrollmentDao.getByPairId(pairId)
             ?: error("B enrollment record missing after pairing")
         assertEquals("A must store B's attested signing key", aRecord.partnerSigningKeyId, bRecord.mySenderKeyId)
         assertEquals("B must store A's attested signing key", bRecord.partnerSigningKeyId, aRecord.mySenderKeyId)
+        // §19.5 label exchange: each side's display name crossed the wire inside the signed
+        // invite/response payloads — the roster renders these, never a key fragment.
+        assertEquals("A must store the partner's name", PARTNER_LABEL, aRecord.partnerLabel)
+        assertEquals("B must store the initiator's name", INITIATOR_LABEL, bRecord.partnerLabel)
 
         val store = ep.chainStateStore()
 
@@ -169,52 +166,12 @@ class PartnerRoundTripInstrumentedTest {
         log("RESULT roundtrip=PASS pair=$pairId base=$base")
     }
 
-    private suspend fun pairDevice(
-        ep: RoundTripTestEntryPoint,
-        identity: PartnerTestIdentity,
-        uidA: String,
-        uidB: String,
-    ) {
-        log("pairing: A initiates, B redeems, A confirms")
-        val initiation = ep.pairingFlow().initiate(uidA)
-        coroutineScope {
-            val partnerOutcome = async(Dispatchers.IO) {
-                identity.pairingFlow().complete(initiation.qrBytes, uidB, identity.signer.beginSign())
-            }
-            val await = ep.pairingFlow().awaitPartner(initiation.token, PairingToken.TTL_MILLIS)
-            assertNotNull("partner material not verified (initiator rejected — see MyExodusPairing log)", await)
-            log("SAS (both roles must agree): ${await!!.sas}")
-            val outcomeA = ep.pairingFlow().submitInitiatorSignature(await, initiation.token, uidA, ep.signer().beginSign())
-            val outcomeB = withTimeout(PARTNER_OUTCOME_TIMEOUT_MILLIS) { partnerOutcome.await() }
-            log("initiator=$outcomeA partner=$outcomeB")
-            assertTrue("initiator pairing failed: $outcomeA", outcomeA is PairingFlow.Outcome.Paired)
-            assertTrue("partner pairing failed: $outcomeB", outcomeB is PairingFlow.Outcome.Paired)
-            assertEquals(
-                "SAS mismatch between roles",
-                (outcomeA as PairingFlow.Outcome.Paired).sas,
-                (outcomeB as PairingFlow.Outcome.Paired).sas,
-            )
-        }
-    }
-
-    private fun assertWarmSigningWindow(signer: AccountabilitySigner) {
-        val signature = signer.beginSign()
-        signature.update("warm-window-probe".toByteArray())
-        try {
-            signer.finishSign(signature)
-        } catch (e: Exception) {
-            fail(
-                "signing window is cold — tap \"Warm signing window\" in PairingTestActivity " +
-                    "(adb shell am start -n com.example.myexodus/.accountability.PairingTestActivity) " +
-                    "and re-run. Cause: ${e.message}",
-            )
-        }
-    }
-
     private fun log(message: String) = Log.i(TAG, message)
 
     private companion object {
         const val TAG = "MyExodusPartnerTest"
         const val PARTNER_OUTCOME_TIMEOUT_MILLIS = 60_000L
+        const val INITIATOR_LABEL = "Musila"
+        const val PARTNER_LABEL = "RoundTrip Partner"
     }
 }

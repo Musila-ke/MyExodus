@@ -7,7 +7,6 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.time.ZoneId
@@ -16,7 +15,9 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Daily maintenance job (§8 Step 8): on days no tracked app is opened this is what finally
- * clears stale `blockedToday`/warning state, plus a [ProtectionStatusMonitor] refresh.
+ * clears stale `blockedToday`/warning state, plus a protection-status refresh and the §8.8
+ * ledger retention sweep (§4.6) — the body lives in [DailyMaintenancePass], shared with the
+ * service-side trigger that covers devices where WorkManager never dispatches (ADR #27).
  * Explicitly NOT a rollover-correctness mechanism (Decision 5) — every enforcement path rolls
  * its own row over; this only cleans state nothing else would touch on an idle day.
  */
@@ -24,12 +25,11 @@ import java.util.concurrent.TimeUnit
 class DailyMaintenanceWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted params: WorkerParameters,
-    private val engine: UsageAccountingEngine,
-    private val statusMonitor: ProtectionStatusMonitor,
+    private val pass: DailyMaintenancePass,
 ) : CoroutineWorker(appContext, params) {
+    /** Unconditional — the scheduled daily cadence is this trigger's own guard. */
     override suspend fun doWork(): Result {
-        engine.rolloverStaleDays()
-        statusMonitor.refresh()
+        pass.run()
         return Result.success()
     }
 }

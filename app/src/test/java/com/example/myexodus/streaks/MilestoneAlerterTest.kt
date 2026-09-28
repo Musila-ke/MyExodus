@@ -182,6 +182,132 @@ class MilestoneAlerterTest {
         assertEquals(1, postedLogLines())
     }
 
+    @Test
+    fun deliverUnclaimed_postsWhenTheAlarmNeverFired() = runBlocking {
+        seedProfile()
+        onboard()
+        grantNotifications()
+        // The foreground evaluation stamps the crossing, but no alarm ever fired — the
+        // device was off across the projected trigger (owner report 2026-09-27).
+        now = TimeReadings(tWallMillis = T0 + 7 * DAY + 1_000, rBootMillis = 1_000 + 7 * DAY + 1_000, bootCount = 7)
+        repository.refreshActive()
+        assertNotNull(store.milestoneEventDao().get(streakIdOf(), 7)!!.achievedAt)
+
+        alerter.deliverUnclaimed(habitIdOf())
+
+        assertEquals(1, shadowOf(notificationManager()).size())
+        assertNotNull(store.milestoneEventDao().get(streakIdOf(), 7)!!.notificationSentAt)
+        assertEquals(1, postedLogLines())
+    }
+
+    @Test
+    fun deliverUnclaimed_postsNothingWhenNothingHasCrossed() = runBlocking {
+        seedProfile()
+        onboard()
+        grantNotifications()
+        now = TimeReadings(tWallMillis = T0 + 6 * DAY, rBootMillis = 1_000 + 6 * DAY, bootCount = 7)
+        repository.refreshActive()
+
+        alerter.deliverUnclaimed(habitIdOf())
+
+        assertEquals(0, shadowOf(notificationManager()).size())
+        assertNull(store.milestoneEventDao().get(streakIdOf(), 7)!!.notificationSentAt)
+        assertEquals(0, postedLogLines())
+    }
+
+    @Test
+    fun handle_afterCatchUpDelivery_doesNotPostASecondNotification() = runBlocking {
+        seedProfile()
+        onboard()
+        grantNotifications()
+        now = TimeReadings(tWallMillis = T0 + 7 * DAY + 1_000, rBootMillis = 1_000 + 7 * DAY + 1_000, bootCount = 7)
+        repository.refreshActive()
+        alerter.deliverUnclaimed(habitIdOf())
+
+        // The deferred alarm fires after the catch-up already claimed the milestone.
+        alerter.handle(streakIdOf(), 7)
+
+        assertEquals(1, shadowOf(notificationManager()).size())
+        assertEquals(1, postedLogLines())
+    }
+
+    @Test
+    fun deliverUnclaimed_deniedPermission_keepsTheClaimForALaterGrant() = runBlocking {
+        seedProfile()
+        onboard()
+        now = TimeReadings(tWallMillis = T0 + 7 * DAY + 1_000, rBootMillis = 1_000 + 7 * DAY + 1_000, bootCount = 7)
+        repository.refreshActive()
+
+        // Robolectric grants no runtime permissions by default; the claim stays unconsumed
+        // so a later grant can still deliver (§9 — same guarantee as the alarm path).
+        alerter.deliverUnclaimed(habitIdOf())
+        assertEquals(0, shadowOf(notificationManager()).size())
+        assertNull(store.milestoneEventDao().get(streakIdOf(), 7)!!.notificationSentAt)
+
+        grantNotifications()
+        alerter.deliverUnclaimed(habitIdOf())
+
+        assertEquals(1, shadowOf(notificationManager()).size())
+        assertNotNull(store.milestoneEventDao().get(streakIdOf(), 7)!!.notificationSentAt)
+        assertEquals(1, postedLogLines())
+    }
+
+    @Test
+    fun catchUpAfterBoot_stampsAndPostsACrossingFromTheDeviceOffWindow() = runBlocking {
+        seedProfile()
+        onboard()
+        grantNotifications()
+        // Reboot-detected transition: the crossing happened while the device was off, so
+        // nothing evaluated or delivered at the old boot's wall time.
+        now = TimeReadings(tWallMillis = T0 + 7 * DAY + 60_000, rBootMillis = 1_000 + 7 * DAY + 60_000, bootCount = 8)
+        assertNull(store.milestoneEventDao().get(streakIdOf(), 7)!!.achievedAt)
+
+        alerter.catchUpAfterBoot()
+
+        assertNotNull(store.milestoneEventDao().get(streakIdOf(), 7)!!.achievedAt)
+        assertEquals(1, shadowOf(notificationManager()).size())
+        assertNotNull(store.milestoneEventDao().get(streakIdOf(), 7)!!.notificationSentAt)
+        assertEquals(1, postedLogLines())
+    }
+
+    @Test
+    fun catchUpAfterBoot_evaluatesAndPostsForEveryActiveHabit() = runBlocking {
+        seedProfile()
+        onboard()
+        val second = repository.onboard(
+            profileId = PROFILE_ID,
+            targetIdentifier = "TikTok",
+            habitDurationYears = 2,
+            severity = WithdrawalSeverity.MODERATE,
+            recoveryStartAt = T0,
+        )
+        check(second is HabitRepository.OnboardingResult.Ready) { "second onboard: $second" }
+        grantNotifications()
+        now = TimeReadings(tWallMillis = T0 + 7 * DAY + 60_000, rBootMillis = 1_000 + 7 * DAY + 60_000, bootCount = 8)
+
+        alerter.catchUpAfterBoot()
+
+        assertEquals(2, shadowOf(notificationManager()).size())
+        assertEquals(2, postedLogLines())
+    }
+
+    @Test
+    fun catchUpAfterBoot_leavesARelapsedStreaksMilestoneUnposted() = runBlocking {
+        seedProfile()
+        onboard()
+        grantNotifications()
+        val endedStreakId = streakIdOf()
+        now = TimeReadings(tWallMillis = T0 + 7 * DAY + 1_000, rBootMillis = 1_000 + 7 * DAY + 1_000, bootCount = 7)
+        repository.logRelapse(habitIdOf())
+
+        alerter.catchUpAfterBoot()
+
+        // The ended streak's Day 7 predates the relapse and is never announced
+        // retroactively; the new streak has not crossed anything.
+        assertEquals(0, shadowOf(notificationManager()).size())
+        assertNull(store.milestoneEventDao().get(endedStreakId, 7)!!.notificationSentAt)
+    }
+
     private fun notificationManager(): NotificationManager =
         context.getSystemService(NotificationManager::class.java)
 

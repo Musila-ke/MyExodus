@@ -65,6 +65,8 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_7_8, // unpair journal (AD-13a/b)
             AccountabilityDatabase.MIGRATION_8_9, // Step 15 rotation anchors
             AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
+            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
+            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
         ).build()
         runBlocking {
             // Fresh identity_epoch table: no rows yet, fully usable.
@@ -116,6 +118,8 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_7_8, // unpair journal (AD-13a/b)
             AccountabilityDatabase.MIGRATION_8_9, // Step 15 rotation anchors
             AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
+            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
+            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
         ).build()
         runBlocking {
             // The ADD COLUMN default backfills the pre-existing head row.
@@ -186,6 +190,8 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_7_8, // unpair journal (AD-13a/b)
             AccountabilityDatabase.MIGRATION_8_9, // Step 15 rotation anchors
             AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
+            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
+            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
         ).build()
         runBlocking {
             val head = db.chainHeadDao().get("pair-a", "k1")
@@ -236,6 +242,8 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_7_8, // unpair journal (AD-13a/b)
             AccountabilityDatabase.MIGRATION_8_9, // Step 15 rotation anchors
             AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
+            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
+            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
         ).build()
         runBlocking {
             val enrollment = db.enrollmentDao().getByPairId("pair-a")!!
@@ -298,6 +306,8 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_7_8,
             AccountabilityDatabase.MIGRATION_8_9, // Step 15 rotation anchors
             AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
+            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
+            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
         ).build()
         runBlocking {
             val enrollment = db.enrollmentDao().getByPairId("pair-a")!!
@@ -362,6 +372,8 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_7_8,
             AccountabilityDatabase.MIGRATION_8_9, // Step 15 rotation anchors
             AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
+            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
+            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
         ).build()
         runBlocking {
             val head = db.chainHeadDao().get("pair-a", "k1")!!
@@ -415,6 +427,8 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_7_8,
             AccountabilityDatabase.MIGRATION_8_9,
             AccountabilityDatabase.MIGRATION_9_10,
+            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
+            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
         ).build()
         runBlocking {
             // The migrated row survives byte-for-byte and is due exactly one read-back.
@@ -428,6 +442,157 @@ class AccountabilityDatabaseMigrationTest {
             // and makes it countable for the dashboard window.
             db.outboxDao().stampRelayCheck("m-1", Outbox.REJECTION_RATE_LIMITED, 5)
             assertTrue(db.outboxDao().relayCheckDue("pair-a", settleBeforeEpochMillis = 0, limit = 10).isEmpty())
+            assertEquals(1, db.outboxDao().rejectionCountSince("pair-a", sinceEpochMillis = 0))
+        }
+        db.close()
+    }
+
+    /**
+     * §19.5 item 3 (v10→v11): enrollments gains the partner label. A pre-existing enrollment
+     * keeps every byte of its identity material and reads back with a null label — the honest
+     * "no name was ever exchanged" — and the column is writable from then on. The v10 outbox
+     * (with its Step 18 relay-check columns) must survive untouched: 10→11 touches only
+     * enrollments.
+     */
+    @Test
+    fun migration10to11_addsThePartnerLabel_preservingTheEnrollment() {
+        val dbPath = context.getDatabasePath(AccountabilityDatabase.DB_NAME).absolutePath
+
+        AndroidSQLiteDriver().open(dbPath).use { conn ->
+            V10_DDL.forEach { ddl ->
+                conn.prepare(ddl).use { it.step() }
+            }
+            conn.prepare(
+                "INSERT INTO enrollments (pair_id, my_sender_key_id, partner_signing_key_id, " +
+                    "partner_signing_pubkey, partner_agreement_pubkey, created_at, mailbox_watermark_ts, " +
+                    "pairing_epoch) VALUES ('pair-a', 'k1', 'k2', x'01', x'02', 5, 9, 3)",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO events (pair_id, sender_key_id, epoch, sequence, previous_event_hash, " +
+                    "event_hash, envelope, direction, created_at, sync_state) " +
+                    "VALUES ('pair-a', 'k1', 0, 1, NULL, x'01', x'02', 'OUT', 1, 'SYNCED')",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO outbox (message_id, event_id, destination_uid, envelope_bytes, status, " +
+                    "created_at, last_attempt_at, attempt_count, relay_checked_at, relay_rejection) " +
+                    "VALUES ('m-1', 1, 'uid-b', x'03', 'SENT', 1, NULL, 0, 7, 'RATE_LIMITED')",
+            ).use { it.step() }
+            conn.prepare("PRAGMA user_version = 10").use { it.step() }
+        }
+
+        val db = Room.databaseBuilder(
+            context,
+            AccountabilityDatabase::class.java,
+            AccountabilityDatabase.DB_NAME,
+        ).addMigrations(
+            AccountabilityDatabase.MIGRATION_1_2,
+            AccountabilityDatabase.MIGRATION_2_3,
+            AccountabilityDatabase.MIGRATION_3_4,
+            AccountabilityDatabase.MIGRATION_4_5,
+            AccountabilityDatabase.MIGRATION_5_6,
+            AccountabilityDatabase.MIGRATION_6_7,
+            AccountabilityDatabase.MIGRATION_7_8,
+            AccountabilityDatabase.MIGRATION_8_9,
+            AccountabilityDatabase.MIGRATION_9_10,
+            AccountabilityDatabase.MIGRATION_10_11,
+            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
+        ).build()
+        runBlocking {
+            val enrollment = checkNotNull(db.enrollmentDao().getByPairId("pair-a"))
+            assertEquals("k1", enrollment.mySenderKeyId)
+            assertEquals("k2", enrollment.partnerSigningKeyId)
+            assertEquals(3, enrollment.pairingEpoch)
+            assertEquals(9L, enrollment.mailboxWatermarkTsEpochMillis)
+            assertNull("a pre-v11 enrollment never exchanged a name", enrollment.partnerLabel)
+
+            // The label column is live: a re-pair or a name backfill can write one.
+            db.enrollmentDao().upsert(enrollment.copy(partnerLabel = "Ana"))
+            assertEquals("Ana", db.enrollmentDao().getByPairId("pair-a")?.partnerLabel)
+            assertEquals(1, db.enrollmentDao().all().size)
+
+            // The v10 outbox and its already-stamped relay check are untouched by 10→11.
+            assertTrue(
+                "a stamped row is not due again",
+                db.outboxDao().relayCheckDue("pair-a", settleBeforeEpochMillis = 0, limit = 10).isEmpty(),
+            )
+            assertEquals(1, db.outboxDao().rejectionCountSince("pair-a", sinceEpochMillis = 0))
+        }
+        db.close()
+    }
+
+    /**
+     * ADR #106 (v11→v12): enrollments gains the pair's own agreement-key alias. A pre-existing
+     * enrollment keeps every byte of its identity material, reads back with a null alias — the
+     * honest "this pair shares the device-level agreement key" — and the column is writable from
+     * then on. The v11 label and outbox survive untouched: 11→12 touches only enrollments.
+     */
+    @Test
+    fun migration11to12_addsThePairAgreementAlias_preservingTheEnrollment() {
+        val dbPath = context.getDatabasePath(AccountabilityDatabase.DB_NAME).absolutePath
+
+        AndroidSQLiteDriver().open(dbPath).use { conn ->
+            V11_DDL.forEach { ddl ->
+                conn.prepare(ddl).use { it.step() }
+            }
+            conn.prepare(
+                "INSERT INTO enrollments (pair_id, my_sender_key_id, partner_signing_key_id, " +
+                    "partner_signing_pubkey, partner_agreement_pubkey, created_at, mailbox_watermark_ts, " +
+                    "pairing_epoch, partner_label) VALUES ('pair-a', 'k1', 'k2', x'01', x'02', 5, 9, 3, 'Ana')",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO events (pair_id, sender_key_id, epoch, sequence, previous_event_hash, " +
+                    "event_hash, envelope, direction, created_at, sync_state) " +
+                    "VALUES ('pair-a', 'k1', 0, 1, NULL, x'01', x'02', 'OUT', 1, 'SYNCED')",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO outbox (message_id, event_id, destination_uid, envelope_bytes, status, " +
+                    "created_at, last_attempt_at, attempt_count, relay_checked_at, relay_rejection) " +
+                    "VALUES ('m-1', 1, 'uid-b', x'03', 'SENT', 1, NULL, 0, 7, 'RATE_LIMITED')",
+            ).use { it.step() }
+            conn.prepare("PRAGMA user_version = 11").use { it.step() }
+        }
+
+        val db = Room.databaseBuilder(
+            context,
+            AccountabilityDatabase::class.java,
+            AccountabilityDatabase.DB_NAME,
+        ).addMigrations(
+            AccountabilityDatabase.MIGRATION_1_2,
+            AccountabilityDatabase.MIGRATION_2_3,
+            AccountabilityDatabase.MIGRATION_3_4,
+            AccountabilityDatabase.MIGRATION_4_5,
+            AccountabilityDatabase.MIGRATION_5_6,
+            AccountabilityDatabase.MIGRATION_6_7,
+            AccountabilityDatabase.MIGRATION_7_8,
+            AccountabilityDatabase.MIGRATION_8_9,
+            AccountabilityDatabase.MIGRATION_9_10,
+            AccountabilityDatabase.MIGRATION_10_11,
+            AccountabilityDatabase.MIGRATION_11_12,
+        ).build()
+        runBlocking {
+            val enrollment = checkNotNull(db.enrollmentDao().getByPairId("pair-a"))
+            assertEquals("k1", enrollment.mySenderKeyId)
+            assertEquals("Ana", enrollment.partnerLabel)
+            assertEquals(3, enrollment.pairingEpoch)
+            assertEquals(9L, enrollment.mailboxWatermarkTsEpochMillis)
+            assertNull(
+                "a pre-v12 enrollment used the device-level agreement key",
+                enrollment.myAgreementKeyAlias,
+            )
+
+            // The alias column is live: the next pairing records its own key here.
+            db.enrollmentDao().upsert(enrollment.copy(myAgreementKeyAlias = "accountability_pair_agreement_key_s1"))
+            assertEquals(
+                "accountability_pair_agreement_key_s1",
+                db.enrollmentDao().getByPairId("pair-a")?.myAgreementKeyAlias,
+            )
+            assertEquals(1, db.enrollmentDao().all().size)
+
+            // The v11 outbox and its already-stamped relay check are untouched by 11→12.
+            assertTrue(
+                "a stamped row is not due again",
+                db.outboxDao().relayCheckDue("pair-a", settleBeforeEpochMillis = 0, limit = 10).isEmpty(),
+            )
             assertEquals(1, db.outboxDao().rejectionCountSince("pair-a", sinceEpochMillis = 0))
         }
         db.close()
@@ -621,6 +786,38 @@ class AccountabilityDatabaseMigrationTest {
                 "`key_epoch_started_at` INTEGER, " +
                 "`key_epoch_start_sequence` INTEGER NOT NULL DEFAULT 0, " +
                 "PRIMARY KEY(`pair_id`, `sender_key_id`))",
+        )
+
+        /** v10 baseline: v9 + MIGRATION_9_10's relay-check columns on outbox; chain_heads and
+         *  enrollments are unchanged in 9→10 (enrollments gains its label only in 10→11). */
+        private val V10_DDL = V9_DDL.filterNot { it.contains("`outbox`") } + listOf(
+            "CREATE TABLE IF NOT EXISTS `outbox` (" +
+                "`message_id` TEXT NOT NULL, " +
+                "`event_id` INTEGER NOT NULL, " +
+                "`destination_uid` TEXT, " +
+                "`envelope_bytes` BLOB NOT NULL, " +
+                "`status` TEXT NOT NULL, " +
+                "`created_at` INTEGER NOT NULL, " +
+                "`last_attempt_at` INTEGER, " +
+                "`attempt_count` INTEGER NOT NULL, " +
+                "`relay_checked_at` INTEGER, " +
+                "`relay_rejection` TEXT, " +
+                "PRIMARY KEY(`message_id`))",
+        )
+
+        /** v11 baseline: v10 + MIGRATION_10_11's partner_label on enrollments (§19.5 item 3);
+         *  every other table is unchanged in 10→11. */
+        private val V11_DDL = V10_DDL.filterNot { it.contains("enrollments") } + listOf(
+            "CREATE TABLE IF NOT EXISTS enrollments (" +
+                "pair_id TEXT NOT NULL PRIMARY KEY, " +
+                "my_sender_key_id TEXT NOT NULL, " +
+                "partner_signing_key_id TEXT NOT NULL, " +
+                "partner_signing_pubkey BLOB NOT NULL, " +
+                "partner_agreement_pubkey BLOB NOT NULL, " +
+                "created_at INTEGER NOT NULL, " +
+                "mailbox_watermark_ts INTEGER, " +
+                "pairing_epoch INTEGER NOT NULL DEFAULT 0, " +
+                "partner_label TEXT)",
         )
     }
 }

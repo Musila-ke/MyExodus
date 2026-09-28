@@ -28,21 +28,70 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.myexodus.R
+import com.example.myexodus.data.db.entity.MilestoneEvent
 import com.example.myexodus.streaks.HabitState
 
 /**
- * Live streak headline: days free (primary), best run (secondary), next milestone. The label
- * row doubles as the multi-habit switcher ([onSwitch] opens the picker sheet) — the sheet is
- * also where "Add habit" lives, so the control shows whenever it's wired, not only at 2+ habits.
+ * The hero's label row, shared by the Streaks summary card and Home's streak card — the two
+ * render the same label off the same habit, and before they were shared the copies drifted:
+ * Home capped the label to one line and Streaks did not, so a long habit name wrapped to four
+ * lines on the Streaks tab alone (audit findings #27/#28, ADR #85). Capping lives here now, so
+ * it cannot drift again. [onSwitch] null means there is nothing to switch to: plain label, no
+ * affordance promising a sheet that would not open.
+ */
+@Composable
+internal fun HabitLabelRow(text: String, onSwitch: (() -> Unit)?) {
+    val style = MaterialTheme.typography.labelLarge
+    val color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+    if (onSwitch == null) {
+        Text(text, style = style, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    } else {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .clickable(role = Role.Button, onClick = onSwitch),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text,
+                style = style,
+                color = color,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                Icons.Filled.ExpandMore,
+                contentDescription = stringResource(R.string.streaks_switch_habit),
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Live streak headline: days free (primary), the three milestones as a rung strip, best run
+ * (secondary). The label row doubles as the multi-habit switcher ([onSwitch] opens the picker
+ * sheet) — the sheet is also where "Add habit" lives, so the control shows whenever it's wired,
+ * not only at 2+ habits.
+ *
+ * Owner ruling 2026-09-23 (ADR #85): the rungs replaced a 293px `MilestoneLadderCard` whose
+ * first row restated this card's own caption verbatim ("Next milestone: Day 7 — 4 days to go").
+ * Transposing the ladder into the hero deletes the duplicate statement and the page's weight
+ * with it: at 360dp the whole tab now fits one screen, which is what puts the relapse action
+ * back above the fold (finding #27).
  */
 @Composable
 internal fun StreakSummaryCard(state: HabitState, onSwitch: (() -> Unit)? = null) {
     val days = habitDays(state.currentStreakElapsedMs)
     val best = habitDays(state.allTimeMaxElapsedMs)
-    val next = nextMilestone(state)
     Surface(
         color = MaterialTheme.colorScheme.primaryContainer,
         contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -50,33 +99,10 @@ internal fun StreakSummaryCard(state: HabitState, onSwitch: (() -> Unit)? = null
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(20.dp)) {
-            if (onSwitch != null) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 48.dp)
-                        .clickable(role = Role.Button, onClick = onSwitch),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Days free from ${state.targetLabel}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
-                        modifier = Modifier.weight(1f),
-                    )
-                    Icon(
-                        Icons.Filled.ExpandMore,
-                        contentDescription = "Switch habit",
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            } else {
-                Text(
-                    "Days free from ${state.targetLabel}",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
-                )
-            }
+            HabitLabelRow(
+                stringResource(R.string.streaks_days_free_from, state.targetLabel),
+                onSwitch,
+            )
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     "$days",
@@ -87,24 +113,19 @@ internal fun StreakSummaryCard(state: HabitState, onSwitch: (() -> Unit)? = null
                 )
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    if (days == 1) "day" else "days",
+                    stringResource(
+                        if (days == 1) R.string.streaks_day_singular else R.string.streaks_day_plural,
+                    ),
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(bottom = 10.dp),
                 )
             }
-            Spacer(Modifier.size(4.dp))
-            Text(
-                if (next != null) {
-                    "Next milestone: Day ${next.milestoneDay} — " +
-                        "${daysUntil(state, next.milestoneDay)} days to go."
-                } else {
-                    "Milestone ladder complete — 7, 30 and 90 all reached."
-                },
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            Spacer(Modifier.size(12.dp))
+            MilestoneRungStrip(state)
             if (best > days) {
+                Spacer(Modifier.size(8.dp))
                 Text(
-                    "Best run: $best days — that record stays with you.",
+                    stringResource(R.string.streaks_best_run, best),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
                 )
@@ -113,48 +134,51 @@ internal fun StreakSummaryCard(state: HabitState, onSwitch: (() -> Unit)? = null
     }
 }
 
-/** The 7/30/90 ladder for the active streak: reached date or countdown per row. */
+/**
+ * The 7/30/90 ladder as three equal rungs inside the hero, day-ordered. Reached rungs carry a
+ * filled check; the next unachieved rung is tinted gold — the same gold the numeral uses, and
+ * the same thing "Next milestone" said before, stated once instead of twice. The distance is
+ * always words, never a bare glyph, so the state never rests on colour alone.
+ */
 @Composable
-internal fun MilestoneLadderCard(state: HabitState) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Milestones", style = MaterialTheme.typography.titleMedium)
-            state.milestones.forEach { milestone ->
-                val achieved = milestone.achievedAt != null
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Icon(
-                        imageVector = if (achieved) Icons.Filled.CheckCircle else Icons.Outlined.Schedule,
-                        contentDescription = null,
-                        tint = if (achieved) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Text(
-                        "Day ${milestone.milestoneDay}",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        if (achieved) {
-                            "Reached"
-                        } else {
-                            "${daysUntil(state, milestone.milestoneDay)} days away"
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+private fun MilestoneRungStrip(state: HabitState) {
+    val next = nextMilestone(state)
+    val muted = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        MilestoneEvent.MILESTONE_DAYS.forEach { day ->
+            val achieved = state.milestones.firstOrNull { it.milestoneDay == day }?.achievedAt != null
+            val isNext = next?.milestoneDay == day
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier.weight(1f),
+            ) {
+                Icon(
+                    imageVector = if (achieved) Icons.Filled.CheckCircle else Icons.Outlined.Schedule,
+                    contentDescription = null,
+                    tint = if (achieved) MaterialTheme.colorScheme.tertiary else muted,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    stringResource(R.string.streaks_rung_day, day),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (achieved || isNext) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        muted
+                    },
+                    maxLines = 1,
+                )
+                Text(
+                    if (achieved) {
+                        stringResource(R.string.streaks_rung_reached)
+                    } else {
+                        stringResource(R.string.streaks_rung_days_away, daysUntil(state, day))
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isNext) MaterialTheme.colorScheme.tertiary else muted,
+                    maxLines = 1,
+                )
             }
         }
     }
@@ -178,22 +202,32 @@ internal fun RelapseCard(
     if (confirming) {
         AlertDialog(
             onDismissRequest = { confirming = false },
-            title = { Text("Log a relapse?") },
+            title = { Text(stringResource(R.string.streaks_relapse_confirm_title)) },
             text = {
                 Text(
-                    "Your current streak of $currentDays " +
-                        (if (currentDays == 1) "day" else "days") +
-                        " ends and a new one starts at Day 0. Your best run stays on record.",
+                    stringResource(
+                        R.string.streaks_relapse_confirm_body,
+                        currentDays,
+                        stringResource(
+                            if (currentDays == 1) {
+                                R.string.streaks_day_singular
+                            } else {
+                                R.string.streaks_day_plural
+                            },
+                        ),
+                    ),
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     confirming = false
                     onRelapse()
-                }) { Text("Log it") }
+                }) { Text(stringResource(R.string.streaks_relapse_confirm_action)) }
             },
             dismissButton = {
-                TextButton(onClick = { confirming = false }) { Text("Cancel") }
+                TextButton(onClick = { confirming = false }) {
+                    Text(stringResource(R.string.streaks_cancel))
+                }
             },
         )
     }
@@ -204,10 +238,12 @@ internal fun RelapseCard(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Had a slip?", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Logging a relapse ends the current count and starts a new one at Day 0. " +
-                    "Your best run stays on record — progress you've made isn't erased.",
+                stringResource(R.string.streaks_relapse_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                stringResource(R.string.streaks_relapse_body),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -223,7 +259,12 @@ internal fun RelapseCard(
                 enabled = !inFlight,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(if (inFlight) "Logging…" else "Log a relapse")
+                Text(
+                    stringResource(
+                        if (inFlight) R.string.streaks_relapse_in_flight
+                        else R.string.streaks_relapse_action,
+                    ),
+                )
             }
         }
     }

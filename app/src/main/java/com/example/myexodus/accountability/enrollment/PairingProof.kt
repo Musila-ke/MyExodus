@@ -23,6 +23,26 @@ data class PairingProof(
     val signingPublicKey: ByteArray,
     /** DER ECDSA (JCA) over [canonicalMessageOf] with the biometric-gated signing key. */
     val signature: ByteArray,
+    /**
+     * Own attestation chain, DER-encoded, leaf first ([signingPublicKey]'s certificate),
+     * up to the Google hardware root. Server-side attestation verification (owner
+     * directive 2026-09-27) validates it against the pinned roots and checks the leaf key
+     * equals [signingPublicKey]; not part of the signed message.
+     */
+    val attestationChain: List<ByteArray>,
+    /**
+     * The challenge embedded in the leaf KeyDescription. The server re-extracts it from
+     * the certificate and demands equality — a cheap tie between chain and proof.
+     */
+    val attestationChallenge: ByteArray,
+    /**
+     * §9 envelope field, not part of the signed message: the idempotency key the server
+     * caches a committed result under. A retry of the same logical submission must reuse
+     * the same requestId — the replay cache is what keeps a stale retry from re-executing
+     * a transition (notably: from resurrecting a since-terminated pairing). Reusing one
+     * with a different payload is rejected server-side (`REQUEST_ID_REUSED`).
+     */
+    val requestId: String,
 ) {
 
     /**

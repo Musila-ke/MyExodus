@@ -59,6 +59,11 @@ class OverlayController(
 
     private val useAddView = usesApplicationOverlay(applicationOverlayHost, isTranssion())
 
+    /** The daily wall's Close action exists only where the host can evict the app behind the
+     *  wall (see [dismissWall]) — i.e. the Accessibility host, whatever window mechanism it
+     *  ends up using on this OEM. */
+    private val canEvict: Boolean = !applicationOverlayHost
+
     /** §12 device-matrix fill-in: (manufacturer, sdkInt-or-null) entries whose non-focusable
      *  overlay routes touches through to the app beneath. Empty at launch; the §12 test suite
      *  populates it per the OEM touch-passthrough exception. */
@@ -218,6 +223,17 @@ class OverlayController(
         }
     }
 
+    /** The daily wall's Close action (user ruling 2026-09-27: the wall stays until the user
+     *  dismisses it). Only the Accessibility-host wall carries it: that host evicts the app
+     *  first, so lifting the wall only reveals what the user left behind. Path B's host
+     *  cannot evict (no accessibility token), so an in-place dismiss there would hand the
+     *  blocked app straight back — its wall still follows the foreground instead. */
+    private fun dismissWall(displayId: Int) {
+        if (shown[displayId] == true && contents[displayId] is OverlayContent.DailyLimitBlocked) {
+            hide(stateMachine.currentGeneration, displayId)
+        }
+    }
+
     /** Called from the service's onDestroy; overlay windows are system-owned once the
      *  accessibility service unbinds, this just releases our references promptly. */
     fun detachAll() {
@@ -282,7 +298,14 @@ class OverlayController(
         // then stalled drawn-but-transparent on the stock emulator (emulator-caught
         // 2026-09-13: WM said HAS_DRAWN + isVisible + topmost, zero pixels until window
         // animations were disabled). Attribute writes must come after this line.
-        val view = BlockOverlayView(displayContext, { }, onOpenRecovery, onDifferentSite) { dismissWarning(displayId) }
+        val view = BlockOverlayView(
+            displayContext,
+            { },
+            onOpenRecovery,
+            onDifferentSite,
+            onWallDismiss = if (canEvict) ({ dismissWall(displayId) }) else null,
+            onWarningDismiss = { dismissWarning(displayId) },
+        )
         dialog.setContentView(view)
         val window = dialog.window ?: return null
         val lp = window.attributes
@@ -380,7 +403,14 @@ class OverlayController(
         views[displayId]?.let { return it }
         val display = displayManager.getDisplay(displayId) ?: return null
         val displayContext = appContext.createDisplayContext(display)
-        val view = BlockOverlayView(displayContext, { profiler.presented(displayId) }, onOpenRecovery, onDifferentSite) { dismissWarning(displayId) }
+        val view = BlockOverlayView(
+            displayContext,
+            { profiler.presented(displayId) },
+            onOpenRecovery,
+            onDifferentSite,
+            onWallDismiss = if (canEvict) ({ dismissWall(displayId) }) else null,
+            onWarningDismiss = { dismissWarning(displayId) },
+        )
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -451,27 +481,35 @@ class OverlayController(
         private const val WARNING_BANNER_DP = 96
 
         /**
-         * Per-content window flags (§8 Steps 4/10; pure for direct testing). Blocks are
-         * touch-modal — `FLAG_NOT_TOUCH_MODAL` is never set, so input is intercepted. The
-         * daily-limit block is additionally focusable (no `FLAG_NOT_FOCUSABLE`) and carries
-         * `FLAG_SECURE` (Step 5: the block screen must not be screenshot-capturable) — except
-         * with [debugAllowsCapture], the debug-build-only visual-QA lift so the wall can be
-         * screencapped for review (user-approved 2026-09-15). The app/URL cover keeps its
-         * device-verified non-focusable flags untouched. Warnings are non-focusable and
-         * touch-transparent outside their own bounds so the app underneath stays usable,
-         * and the host auto-dismisses them.
+         * Per-content window flags (§8 Steps 4/10; pure for direct testing). Every card is
+         * `FLAG_NOT_TOUCH_MODAL`: a touch-modal window leaves the system bars dead wherever
+         * its region reaches — XOS sized the daily wall's input region to 3x the display, so
+         * the physical Home/Back/Recents buttons were swallowed whole with no dismiss
+         * affordance on the wall (device-caught 2026-09-27 on the X6532, user report: "I can't
+         * press my phone's Home or back to dismiss the block screen"). Not-touch-modal keeps
+         * every touch inside the card's bounds with the card, and hands the bar strips back to
+         * SystemUI. The daily-limit block is additionally focusable (no `FLAG_NOT_FOCUSABLE`)
+         * and carries `FLAG_SECURE` (Step 5: the block screen must not be
+         * screenshot-capturable) — except with [debugAllowsCapture], the debug-build-only
+         * visual-QA lift so the wall can be screencapped for review (user-approved 2026-09-15).
+         * The app/URL cover keeps its device-verified non-focusable flags. Warnings are
+         * non-focusable and touch-transparent outside their own bounds so the app underneath
+         * stays usable, and the host auto-dismisses them.
          */
         fun flagsForContent(content: OverlayContent, debugAllowsCapture: Boolean = false): Int =
             when (content) {
                 is OverlayContent.DailyLimitBlocked ->
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                         (if (debugAllowsCapture) 0 else WindowManager.LayoutParams.FLAG_SECURE)
                 is OverlayContent.Warning ->
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                         WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                 else ->
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
             }
 
         /** Transsion XOS rejects TYPE_ACCESSIBILITY_OVERLAY (2026-08-27); the OEM-keyed
