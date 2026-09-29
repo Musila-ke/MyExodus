@@ -160,6 +160,7 @@ fun AppShell(
     val habit by streaks.state.collectAsStateWithLifecycle()
     val habits by streaks.habits.collectAsStateWithLifecycle()
     val streakResolved by streaks.resolved.collectAsStateWithLifecycle()
+    val streakLoadFailed by streaks.loadFailed.collectAsStateWithLifecycle()
     val addingHabit by streaks.addingHabit.collectAsStateWithLifecycle()
     val setupError by streaks.setupError.collectAsStateWithLifecycle()
     val relapseInFlight by streaks.relapseInFlight.collectAsStateWithLifecycle()
@@ -238,6 +239,8 @@ fun AppShell(
                         onAcknowledgeMilestone = streaks::acknowledgeMilestones,
                         onSwitchHabit = { pickerOpen = true },
                         streakResolved = streakResolved,
+                        onRetryStreak = streaks::refresh,
+                        streakLoadFailed = streakLoadFailed,
                         encryptionPending = encryptionPending,
                         modifier = contentModifier,
                     )

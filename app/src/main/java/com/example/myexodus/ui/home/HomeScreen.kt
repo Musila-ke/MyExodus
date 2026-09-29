@@ -2,7 +2,6 @@ package com.example.myexodus.ui.home
 
 import android.content.Intent
 import android.provider.Settings
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -40,11 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
@@ -61,7 +56,6 @@ import com.example.myexodus.blocking.ProtectionDegradation
 import com.example.myexodus.blocking.usage.AccountingOutage
 import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.data.db.AppRulesStore
-import com.example.myexodus.data.db.entity.MilestoneEvent
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.streaks.HabitState
 import com.example.myexodus.ui.RuleRowState
@@ -111,6 +105,8 @@ fun HomeScreen(
     onAcknowledgeMilestone: (List<Int>) -> Unit,
     onSwitchHabit: () -> Unit,
     streakResolved: Boolean,
+    onRetryStreak: () -> Unit = {},
+    streakLoadFailed: Boolean = false,
     modifier: Modifier = Modifier,
     encryptionPending: Boolean = false,
 ) {
@@ -224,17 +220,17 @@ fun HomeScreen(
                 blocked = attemptCounts?.sumOf { it.count },
             )
         }
-        // Nothing to plot without a habit: the hero above already carries the fix, so the
-        // grid is absent rather than empty.
-        if (streakDays != null) {
-            item(key = "milestones") {
-                MilestoneGridCard(
-                    days = streakDays,
-                    achieved = habit?.milestones
-                        ?.mapNotNull { it.achievedAt?.let { _ -> it.milestoneDay } }
-                        .orEmpty(),
-                )
-            }
+        // A permanent section, not a data-dependent guest: loading, empty, error, and success
+        // each render their own card (product call 2026-09-29 — it used to pop in only after
+        // every other read had landed, which read as a missing-then-late section).
+        item(key = "milestones") {
+            MilestoneSectionCard(
+                habit = habit,
+                streakResolved = streakResolved,
+                loadFailed = streakLoadFailed,
+                onRetry = onRetryStreak,
+                onOpenStreaks = onOpenStreaks,
+            )
         }
         item(key = "blocks") {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -543,115 +539,6 @@ private fun StatTile(
                 maxLines = 1,
                 softWrap = false,
             )
-        }
-    }
-}
-
-/**
- * The milestone ladder as a grid: one cell per day of the top rung's window (7/30/90 in
- * [MilestoneEvent.MILESTONE_DAYS]), filled to the current day, with each rung ringed and gold
- * once the milestone row says it was actually reached. The reference's 30-day workout grid is
- * the same shape; its data was per-day history this app does not keep — every value here is
- * the same state the hero renders, so the two can never disagree.
- */
-@Composable
-private fun MilestoneGridCard(days: Int, achieved: List<Int>) {
-    val window = MilestoneEvent.MILESTONE_DAYS.last()
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.large,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(
-            Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    stringResource(R.string.home_grid_title),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    if (days > window) {
-                        stringResource(R.string.home_grid_all_days, window)
-                    } else {
-                        stringResource(R.string.home_grid_day_of, days, window)
-                    },
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    softWrap = false,
-                )
-            }
-            MilestoneGrid(
-                days = days,
-                achieved = achieved,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(GridCellHeight * GridRows + GridGap * (GridRows - 1)),
-            )
-            Text(
-                stringResource(
-                    R.string.home_grid_legend,
-                    MilestoneEvent.MILESTONE_DAYS.joinToString(", "),
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-/** Reading order is day order: day 1 is the first cell of the top row, day 31 opens the second.
- *  Declared before [GridRows] — top-level properties initialise in file order. */
-private val GridColumns = 30
-private val GridRows = MilestoneEvent.MILESTONE_DAYS.last() / GridColumns
-private val GridCellHeight = 12.dp
-private val GridGap = 2.dp
-
-@Composable
-private fun MilestoneGrid(days: Int, achieved: List<Int>, modifier: Modifier = Modifier) {
-    val filled = MaterialTheme.colorScheme.primary
-    val gold = MaterialTheme.colorScheme.tertiary
-    val track = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
-    val ring = MaterialTheme.colorScheme.outline
-    val achievedDays = remember(achieved) { achieved.toSet() }
-    val total = GridRows * GridColumns
-
-    Canvas(modifier) {
-        val gap = GridGap.toPx()
-        val cellHeight = GridCellHeight.toPx()
-        val cellWidth = (size.width - gap * (GridColumns - 1)) / GridColumns
-        val corner = CornerRadius(cellHeight / 2f)
-        repeat(total) { index ->
-            val day = index + 1
-            val topLeft = Offset(
-                x = (index % GridColumns) * (cellWidth + gap),
-                y = (index / GridColumns) * (cellHeight + gap),
-            )
-            val cellSize = Size(cellWidth, cellHeight)
-            val done = day <= days
-            when {
-                done && day in achievedDays -> drawRoundRect(gold, topLeft, cellSize, corner)
-                done -> drawRoundRect(filled, topLeft, cellSize, corner)
-                // A rung still ahead keeps its own mark, so the ladder is readable before
-                // the days are filled in.
-                MilestoneEvent.MILESTONE_DAYS.contains(day) -> {
-                    drawRoundRect(track, topLeft, cellSize, corner)
-                    drawRoundRect(
-                        color = ring,
-                        topLeft = topLeft,
-                        size = cellSize,
-                        cornerRadius = corner,
-                        style = Stroke(width = 1.dp.toPx()),
-                    )
-                }
-                else -> drawRoundRect(track, topLeft, cellSize, corner)
-            }
         }
     }
 }

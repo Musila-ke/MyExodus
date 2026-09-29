@@ -200,6 +200,46 @@ class HabitRepositoryTest {
         assertTrue(store.habitProgressDao().observeByProfile(PROFILE_ID).first().isEmpty())
     }
 
+    /**
+     * The Home milestone section's error state depends on this being observable: a read that
+     * cannot open the store must be distinguishable from one that has not finished yet
+     * ([resolved] stays false for both), and a later definite read must clear it.
+     */
+    @Test
+    fun refreshActive_storeUnavailable_reportsLoadFailed_whichTheNextResolvedReadClears() = runBlocking {
+        seedProfile()
+        onboard()
+        store.close()
+        // A directory where the database file belongs: the open fails with a cant-open
+        // SQLiteException (not corruption — that path rebuilds and recovers), which is exactly
+        // the factory's defined "null open" state.
+        val dbFile = context.getDatabasePath(AppRulesStoreFactory.DB_NAME)
+        deleteStoreFiles(dbFile)
+        assertTrue(dbFile.mkdirs())
+        val blockedFactory = AppRulesStoreFactory(context, recovery, healthStore)
+        val blocked = HabitRepository(
+            storeFactory = blockedFactory,
+            anomalyLog = StreakAnomalyLog(anomalyFile),
+            readings = { now },
+            scheduler = MilestoneScheduler(context, blockedFactory, readings = { now }),
+        )
+
+        assertNull(blocked.refreshActive())
+        assertTrue("a failed open is the error state, not a pending one", blocked.loadFailed.value)
+        assertTrue(!blocked.resolved.value)
+
+        // Heal: the next open builds a fresh store (no profile), which is a definite answer —
+        // the error clears and the repository resolves to "nothing set up".
+        deleteStoreFiles(dbFile)
+        assertNull(blocked.refreshActive())
+        assertTrue(blocked.resolved.value)
+        assertTrue(!blocked.loadFailed.value)
+    }
+
+    private fun deleteStoreFiles(dbFile: File) {
+        listOf("", "-journal", "-wal", "-shm").forEach { File(dbFile.path + it).deleteRecursively() }
+    }
+
     @Test
     fun secondOnboard_selectsTheNewHabit_andLeavesTheFirstUntouched() = runBlocking {
         seedProfile()

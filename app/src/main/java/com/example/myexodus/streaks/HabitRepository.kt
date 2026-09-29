@@ -82,10 +82,21 @@ class HabitRepository(
      */
     val resolved: StateFlow<Boolean> = _resolved.asStateFlow()
 
+    private val _loadFailed = MutableStateFlow(false)
+
+    /**
+     * True when the last read could not open the store (a defined recovery state, per
+     * [AppRulesStoreFactory]). Without it a failed read is indistinguishable from "still
+     * loading" — [resolved] never flips and the UI sits on its skeleton forever. Cleared by
+     * any definite read: every [publishState] proves the store opened.
+     */
+    val loadFailed: StateFlow<Boolean> = _loadFailed.asStateFlow()
+
     /** The only way [state] changes: every definite read marks the repository resolved. */
     private fun publishState(state: HabitState?) {
         _state.value = state
         _resolved.value = true
+        _loadFailed.value = false
     }
 
     sealed interface OnboardingResult {
@@ -240,7 +251,10 @@ class HabitRepository(
      * cannot have its write overtaken by this read.
      */
     suspend fun refreshActive(): HabitState? {
-        val db = storeFactory.open() ?: return _state.value
+        val db = storeFactory.open() ?: run {
+            _loadFailed.value = true
+            return _state.value
+        }
         val profile = db.userProfileDao().getActive() ?: run {
             publishState(null)
             return null

@@ -97,6 +97,11 @@
     <string name="home_grid_day_of">Day %1$d of %2$d</string>
     <string name="home_grid_all_days">%1$d days and counting</string>
     <string name="home_grid_legend">Rings mark days %1$s.</string>
+    <!-- The milestone section's empty/error states (2026-09-29): the section renders in every
+         load state, so both need copy — what happened, and what the user can do about it. -->
+    <string name="home_grid_empty_body">Your ladder fills in as each clean day passes.</string>
+    <string name="home_grid_error_body">Couldn\'t load your milestones. MyExodus can\'t reach its local database right now. Your data is safe.</string>
+    <string name="home_grid_retry">Try again</string>
     <string name="home_title">Home</string>
     <string name="home_streak_cta">Set up a habit</string>
     <string name="home_blocks_empty_title">No blocks yet</string>

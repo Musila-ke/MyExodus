@@ -10,6 +10,7 @@ import com.example.myexodus.streaks.MilestoneAlerter
 import com.example.myexodus.streaks.WithdrawalSeverity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,6 +41,13 @@ class StreaksViewModel @Inject constructor(
     /** False until the first [refresh] completes — Home must not claim "no habit tracked"
      *  while the encrypted store is still opening (slow cold starts made that visible). */
     val resolved: StateFlow<Boolean> = _resolved.asStateFlow()
+
+    private val _loadFailed = MutableStateFlow(false)
+
+    /** True when the last [refresh] could not read the streak state (store refused to open, or
+     *  the read threw): the Home milestone section's error state. Without it a failed read and
+     *  an unfinished one are the same picture — a skeleton that never resolves. */
+    val loadFailed: StateFlow<Boolean> = _loadFailed.asStateFlow()
 
     private val _habits = MutableStateFlow<List<HabitSummary>>(emptyList())
 
@@ -76,9 +84,21 @@ class StreaksViewModel @Inject constructor(
         // seconds behind another opener's lock — on Dispatchers.Main that is an ANR from a
         // plain app resume (device-caught 2026-09-19, whole-class fix: every launch below).
         viewModelScope.launch(Dispatchers.IO) {
-            repository.refreshActive()?.let { milestoneAlerter.deliverUnclaimed(it.habitId) }
-            _habits.value = repository.habits()
-            _resolved.value = true
+            try {
+                repository.refreshActive()?.let { milestoneAlerter.deliverUnclaimed(it.habitId) }
+                _habits.value = repository.habits()
+                // The repository's own truth, not an unconditional true: a store-open failure
+                // returns without a definite answer, and claiming resolved would show "no habit
+                // tracked" over data that was merely unreachable.
+                _resolved.value = repository.resolved.value
+                _loadFailed.value = repository.loadFailed.value
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // A read that threw (corrupt row, driver failure) is the same user-visible
+                // state as a store that refused to open: keep unresolved, surface the error.
+                _loadFailed.value = true
+            }
         }
     }
 

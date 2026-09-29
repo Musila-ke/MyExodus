@@ -207,6 +207,10 @@ equivalent on this screen).
   still shows no placeholder glyph; the no-habit path still carries its CTA in the hero. The
   redesign adds two absences rather than new empty states: the milestone grid is not rendered at
   all without a habit, and the stat tiles hold skeletons until their first emission.
+  **Superseded in part (2026-09-29, ADR #118):** the owner asked the milestone section back as a
+  permanent four-state section (loading/empty/success/error) rather than a data-gated absence —
+  the grid now renders always, with explicit copy and actions per state, and the error state
+  gained a real signal (`loadFailed`) at the repository and view-model layers.
 - **#19/#20/#22 — untouched** (row routing, 2-line subtitles, degradation-consistent row state
   all still live on the same rows, now under a "Your blocks" section label).
 
