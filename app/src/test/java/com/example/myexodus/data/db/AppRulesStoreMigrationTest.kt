@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -34,10 +35,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Rules-store migration chain 2→13 (recovery_state, attempt_log, is_enabled, streak tables,
+ * Rules-store migration chain 2→14 (recovery_state, attempt_log, is_enabled, streak tables,
  * daily-usage tracker day-identity reshape, recovery-session + risk-window tables, the
- * domain-usage `rule_usage_daily` table, the usage ledger, the per-pair mirror links, and the
- * partner-activity journal/link/projection tables).
+ * domain-usage `rule_usage_daily` table, the usage ledger, the per-pair mirror links, the
+ * partner-activity journal/link/projection tables, and the journal's message-addressing
+ * column).
  * The v2 baseline is the exact DDL Room generates
  * for version 2 (verbatim copies of the SQL emitted by AppRulesStore_Impl), so the test proves
  * the real upgrade path end to end, including Room's post-migration schema validation (the
@@ -71,7 +73,7 @@ class AppRulesStoreMigrationTest {
     }
 
     @Test
-    fun migration2to13_addsEveryTableAndRoomAcceptsTheSchema() {
+    fun migration2to14_addsEveryTableAndRoomAcceptsTheSchema() {
         val dbPath = context.getDatabasePath(AppRulesStoreFactory.DB_NAME).absolutePath
 
         AndroidSQLiteDriver().open(dbPath).use { conn ->
@@ -284,7 +286,118 @@ class AppRulesStoreMigrationTest {
             assertEquals(0, activity.deleteJournalOlderThan(1_700_000_000_000L, 10))
             assertEquals(1, activity.deleteJournalOlderThan(1_700_000_000_001L, 10))
             assertTrue(activity.pendingForPair("pair-b", 10).isEmpty())
+
+            // Message addressing 13→14 (#96): with the column in place, a row addressed to one
+            // pair pends only for that pair, while an untargeted row keeps fanning out.
+            activity.insertJournal(
+                PartnerActivityOutbox(
+                    eventId = "evt-msg",
+                    kind = EventPayload.TYPE_MOTIVATIONAL_MESSAGE,
+                    text = "For you only",
+                    occurredAtMs = 1_700_000_000_100L,
+                    daysFree = 0,
+                    relapseCount = 0,
+                    milestonesReached = encodeMilestoneDays(emptyList()),
+                    coachingProgress = 0,
+                    protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
+                    schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,
+                    createdAtMs = 1_700_000_000_100L,
+                    targetPairId = "pair-b",
+                ),
+            )
+            assertTrue(
+                "a row addressed to one pair must not pend for another",
+                activity.pendingForPair("pair-a", 10).isEmpty(),
+            )
+            assertEquals(listOf("evt-msg"), activity.pendingForPair("pair-b", 10).map { it.eventId })
         }
+    }
+
+    /**
+     * #96 message addressing, direct invocation (the MIGRATION_10_11 pattern, for the same
+     * reason: the full chain would mask the intermediate state): 13→14 is one additive ALTER —
+     * every pre-existing row reads back untargeted, which is exactly the pre-v14 fan-out
+     * semantics — and 14→13 must physically drop the column (Room validates unknown columns on
+     * open, so leaving it in place would fail a downgraded build's open) while recreating the
+     * table with every journal row and its index intact.
+     */
+    @Test
+    fun migration13to14AndBack_dropsTheTargetColumn_andKeepsTheJournalRows() {
+        val scratchPath = context.getDatabasePath("msg-addressing-test.db").absolutePath
+        AndroidSQLiteDriver().open(scratchPath).use { conn ->
+            conn.prepare(V13_DDL_ACTIVITY_OUTBOX).use { it.step() }
+            conn.prepare(V13_DDL_ACTIVITY_OUTBOX_INDEX).use { it.step() }
+            conn.prepare(
+                "INSERT INTO partner_activity_outbox (event_id, kind, text, occurred_at_ms, " +
+                    "days_free, relapse_count, milestones_reached, coaching_progress, " +
+                    "protocol_version, schema_version, created_at_ms) VALUES " +
+                    "('evt-legacy', 'streak_updated', '', 100, 5, 0, '7', 1, 1, 1, 100)",
+            ).use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_13_14.migrate(conn) }
+
+            assertTrue(
+                "13→14 must add the addressing column",
+                "target_pair_id" in columnNames(conn, "partner_activity_outbox"),
+            )
+            conn.prepare(
+                "SELECT target_pair_id FROM partner_activity_outbox WHERE event_id = 'evt-legacy'",
+            ).use { stmt ->
+                assertTrue(stmt.step())
+                assertTrue("a pre-v14 row must read back untargeted", stmt.isNull(0))
+            }
+            conn.prepare(
+                "INSERT INTO partner_activity_outbox (event_id, kind, text, occurred_at_ms, " +
+                    "days_free, relapse_count, milestones_reached, coaching_progress, " +
+                    "protocol_version, schema_version, created_at_ms, target_pair_id) VALUES " +
+                    "('evt-addressed', 'motivational_message', 'Keep going', 200, 5, 0, '7', 1, " +
+                    "1, 1, 200, 'pair-b')",
+            ).use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_14_13.migrate(conn) }
+
+            assertFalse(
+                "14→13 must physically drop the addressing column",
+                "target_pair_id" in columnNames(conn, "partner_activity_outbox"),
+            )
+            val rows = mutableMapOf<String, Pair<String, Long>>()
+            conn.prepare(
+                "SELECT event_id, kind, occurred_at_ms FROM partner_activity_outbox",
+            ).use { stmt ->
+                while (stmt.step()) {
+                    rows[stmt.getText(0)] = stmt.getText(1) to stmt.getLong(2)
+                }
+            }
+            assertEquals(
+                "both journal rows — targeted and untargeted — survive the recreate",
+                mapOf(
+                    "evt-legacy" to ("streak_updated" to 100L),
+                    "evt-addressed" to ("motivational_message" to 200L),
+                ),
+                rows,
+            )
+            assertTrue(
+                "the index the recreate dropped must be back — Room validates indices on open",
+                "index_partner_activity_outbox_created_at_ms" in
+                    conn.prepare(
+                        "SELECT name FROM sqlite_master WHERE type = 'index' " +
+                            "AND tbl_name = 'partner_activity_outbox'",
+                    ).use { stmt ->
+                        val names = mutableListOf<String>()
+                        while (stmt.step()) names.add(stmt.getText(0))
+                        names
+                    },
+            )
+        }
+        context.deleteDatabase("msg-addressing-test.db")
+    }
+
+    private fun columnNames(conn: androidx.sqlite.SQLiteConnection, table: String): List<String> {
+        val names = mutableListOf<String>()
+        conn.prepare("PRAGMA table_info($table)").use { stmt ->
+            while (stmt.step()) names.add(stmt.getText(1))
+        }
+        return names
     }
 
     /**
@@ -419,6 +532,19 @@ class AppRulesStoreMigrationTest {
         private const val V10_MINIMAL_DDL_PROFILE =
             "CREATE TABLE `user_profile` (`user_id` TEXT NOT NULL, `is_active` INTEGER NOT NULL, " +
                 "PRIMARY KEY(`user_id`))"
+
+        /** Verbatim v13 DDL for the journal table + its index (from 13.json), the only objects
+         *  the 13↔14 pair touches. */
+        private const val V13_DDL_ACTIVITY_OUTBOX =
+            "CREATE TABLE IF NOT EXISTS `partner_activity_outbox` (`event_id` TEXT NOT NULL, " +
+                "`kind` TEXT NOT NULL, `text` TEXT NOT NULL, `occurred_at_ms` INTEGER NOT NULL, " +
+                "`days_free` INTEGER NOT NULL, `relapse_count` INTEGER NOT NULL, " +
+                "`milestones_reached` TEXT NOT NULL, `coaching_progress` INTEGER NOT NULL, " +
+                "`protocol_version` INTEGER NOT NULL, `schema_version` INTEGER NOT NULL, " +
+                "`created_at_ms` INTEGER NOT NULL, PRIMARY KEY(`event_id`))"
+        private const val V13_DDL_ACTIVITY_OUTBOX_INDEX =
+            "CREATE INDEX IF NOT EXISTS `index_partner_activity_outbox_created_at_ms` " +
+                "ON `partner_activity_outbox` (`created_at_ms`)"
 
         /** Verbatim v2 schema DDL from Room's generated AppRulesStore_Impl (v3 minus recovery_state). */
         private val V2_DDL = listOf(

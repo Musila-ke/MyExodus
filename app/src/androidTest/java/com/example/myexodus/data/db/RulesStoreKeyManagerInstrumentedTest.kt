@@ -33,12 +33,12 @@ class RulesStoreKeyManagerInstrumentedTest {
     @Before
     fun setUp() {
         assumeEmulatorOnly()
-        recovery().resetAllData()
+        recovery().resetAllDataEmulatorOnly()
     }
 
     @After
     fun tearDown() {
-        recovery().resetAllData()
+        recovery().resetAllDataEmulatorOnly()
     }
 
     private fun recovery(health: DatabaseHealthStore = DatabaseHealthStore()): RecoveryManager =

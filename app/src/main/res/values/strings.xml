@@ -108,9 +108,12 @@
     <string name="home_blocks_empty_body">Blocks you create under Rules show up here with their live status.</string>
     <string name="home_blocks_add">Add a block</string>
 
-    <!-- Partner activity (AD-11/NFR2): deliberately generic — the tray never carries the
-         partner's alias or the event type; detail lives behind opening the app. -->
+    <!-- Partner activity (AD-11/NFR2). Owner ruling 2026-09-29: with N partners every partner
+         notification must name which partner it concerns — the `_named` forms are the
+         unlocked-tray copy (private content); the plain forms stay the lockscreen-safe public
+         version (FR-13) and the no-label fallback — never remove them. -->
     <string name="partner_event_title">New activity from your partner</string>
+    <string name="partner_event_title_named">New activity from %1$s</string>
     <string name="partner_event_text">Open MyExodus to see what changed.</string>
 
     <!-- Rule state labels and schedule summaries (shared by Home and Rules rows) -->
@@ -410,7 +413,7 @@
     <string name="partner_check_now">Check now</string>
     <string name="partner_check_now_running">Checking…</string>
     <string name="partner_check_now_failed">Couldn’t reach the server. Check your connection and try again.</string>
-    <string name="partner_activity_title">Recent activity</string>
+    <string name="partner_activity_title">Recent activity (%1$d)</string>
     <string name="partner_activity_today">Today</string>
     <string name="partner_activity_week">This week</string>
     <string name="partner_activity_empty">No shared activity in the last 7 days.</string>
@@ -441,6 +444,13 @@
     <string name="partner_compose_suggestion_2">Proud of you for keeping going.</string>
     <string name="partner_compose_suggestion_3">One day at a time — you\'re doing it.</string>
     <string name="partner_compose_characters">%1$d/%2$d</string>
+    <!-- #96: the composer and every partner subpage name which supported user they act on —
+         a device can hold several pairings, so "your partner" alone is ambiguous. -->
+    <string name="partner_compose_to">To: %1$s</string>
+    <string name="partner_context_label">Viewing</string>
+    <string name="partner_context_switch">Switch</string>
+    <string name="partner_switch_title">Switch partner</string>
+    <string name="partner_switch_close">Close</string>
     <string name="partner_alert_blocked">Blocked</string>
     <string name="partner_alert_override">Override used</string>
     <string name="partner_chain_catching_up_title">Catching up</string>
@@ -459,12 +469,16 @@
 
     <!-- Step 13 disable-approval (§8 Step 12, AD-07/AD-16): the responder decides with a
          hash-chain verification badge shown before the buttons; a blocked chain disables
-         responding rather than hiding the request. Tray copy stays generic (NFR2). -->
+         responding rather than hiding the request. Tray copy stays generic (NFR2) — the
+         `_named` forms (owner ruling 2026-09-29) are the private unlocked copy only; the plain
+         forms remain the lockscreen-safe public version. -->
     <string name="approval_request_title">Approval request from your partner</string>
+    <string name="approval_request_title_named">Approval request from %1$s</string>
     <string name="approval_request_text">Open MyExodus to review and respond.</string>
     <string name="approval_decision_title">Your partner responded</string>
+    <string name="approval_decision_title_named">%1$s responded</string>
     <string name="approval_decision_text">Open MyExodus to see the decision.</string>
-    <string name="partner_approvals_title">Requests awaiting your decision</string>
+    <string name="partner_approvals_title">Requests awaiting your decision (%1$d)</string>
     <string name="partner_approvals_expires">Expires in %1$s</string>
     <string name="partner_approvals_badge_ok">Verified against your partner’s chain</string>
     <string name="partner_approvals_badge_ok_catching_up">Verified — some earlier events are still coming in</string>
@@ -473,7 +487,7 @@
     <string name="partner_approvals_reject">Reject</string>
     <string name="partner_approvals_working">Waiting for your confirmation…</string>
     <string name="partner_approvals_failed">Couldn’t record your decision. The request is still open — try again.</string>
-    <string name="partner_my_requests_title">Your requests</string>
+    <string name="partner_my_requests_title">Your requests (%1$d)</string>
     <string name="partner_my_requests_requested">Awaiting your partner’s decision</string>
     <string name="partner_my_requests_approved">Approved</string>
     <string name="partner_my_requests_rejected">Rejected</string>

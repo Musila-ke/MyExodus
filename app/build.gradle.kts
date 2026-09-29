@@ -112,6 +112,16 @@ ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
 
+// The JVM guard tests read source files directly (DestructiveFixtureGuardTest scans
+// src/androidTest to keep destructive resets off handsets). androidTest sources are not inputs
+// of the unit-test tasks, so an edit there alone left the task UP-TO-DATE and the guard never
+// ran — register them so a violating edit actually re-runs the suite.
+tasks.withType<Test>().configureEach {
+    inputs.dir(layout.projectDirectory.dir("src/androidTest/java"))
+        .withPropertyName("androidTestSources")
+        .optional()
+}
+
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)

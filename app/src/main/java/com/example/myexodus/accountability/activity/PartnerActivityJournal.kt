@@ -46,6 +46,10 @@ object PartnerActivityJournal {
      * Profile-anchored kinds: coaching edits and the Req 15 composer's motivational message
      * ([text]). Resolves the profile's displayed habit for the snapshot — a profile with no
      * habit yet still emits a valid zero snapshot (habits-only kinds never take this path).
+     *
+     * [targetPairId] (#96) addresses the row to one enrolled pair — the composer sets it to
+     * the partner the user was looking at, because a message is written *to someone*. Null
+     * keeps the fan-out every other kind has.
      */
     suspend fun emitForProfile(
         db: AppRulesStore,
@@ -54,13 +58,14 @@ object PartnerActivityJournal {
         occurredAtMs: Long,
         createdAtMs: Long = occurredAtMs,
         text: String = "",
+        targetPairId: String? = null,
     ): Boolean {
         val habit = db.habitProgressDao().getSelected(profileId)
             ?: db.habitProgressDao().getFirstForProfile(profileId)
         // The Req 15 bound lives at this choke point, not only in the composer: every sender
         // routes here, and a body the partner's phone would refuse to pin must never be sent.
         val body = if (kind == EventPayload.TYPE_MOTIVATIONAL_MESSAGE) normalizeMessage(text) ?: return false else text
-        return write(db, profileId, habit, kind, body, occurredAtMs, createdAtMs)
+        return write(db, profileId, habit, kind, body, occurredAtMs, createdAtMs, targetPairId)
     }
 
     /**
@@ -80,6 +85,7 @@ object PartnerActivityJournal {
         text: String,
         occurredAtMs: Long,
         createdAtMs: Long,
+        targetPairId: String? = null,
     ): Boolean {
         if (!isShared(kind, habit)) return false
         val streak = habit?.let { db.recoveryStreakDao().getActiveStreak(it.progressId) }
@@ -92,6 +98,7 @@ object PartnerActivityJournal {
             PartnerActivityOutbox(
                 eventId = UUID.randomUUID().toString(),
                 kind = kind,
+                targetPairId = targetPairId,
                 text = text,
                 occurredAtMs = occurredAtMs,
                 daysFree = ((streak?.currentStreakElapsedMs ?: 0L) / StreakTimer.DAY_MS).toInt(),

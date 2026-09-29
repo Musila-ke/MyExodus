@@ -23,6 +23,10 @@ data class PartnerActivityOutbox(
     @PrimaryKey @ColumnInfo(name = "event_id") val eventId: String,
     /** The wire type — one of `EventPayload.ACTIVITY_TYPES`, stored verbatim. */
     @ColumnInfo(name = "kind") val kind: String,
+    /** Addressing (schema v14, #96): null = every enrolled pair (state snapshots fan out).
+     *  Non-null = this row concerns one pair only — a Req 15 message is written for the
+     *  selected partner, and only that partner must ever receive it. */
+    @ColumnInfo(name = "target_pair_id") val targetPairId: String? = null,
     /** Motivational message body; `""` for every state-snapshot kind. */
     @ColumnInfo(name = "text") val text: String,
     /** Sender wall-clock of the transition (the wire `eo`). */

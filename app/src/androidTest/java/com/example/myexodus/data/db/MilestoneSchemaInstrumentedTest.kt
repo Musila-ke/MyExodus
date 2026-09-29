@@ -36,12 +36,14 @@ class MilestoneSchemaInstrumentedTest {
         assumeEmulatorOnly()
         health = DatabaseHealthStore()
         recovery = RecoveryManager(context, legacyKeys, activityKeys, rulesKeys, health)
-        recovery.resetAllData()
+        recovery.resetAllDataEmulatorOnly()
     }
 
     @After
     fun tearDown() {
-        recovery.resetAllData()
+        // @After runs even when setUp aborted on the emulator assumption; recovery is only
+        // assigned after that assumption, so touching it here would throw on a handset.
+        if (::recovery.isInitialized) recovery.resetAllDataEmulatorOnly()
     }
 
     @Test

@@ -20,11 +20,16 @@ interface PartnerActivityDao {
     /**
      * Journal rows with no link for THIS pair yet, oldest first. Per-pair: a row pending for one
      * pair stays pending for every pair that has no link yet (§19.5 / ADR #111).
+     *
+     * Addressing (#96, schema v14): a row with a null target fans out (state snapshots); a
+     * targeted row — a Req 15 message the user composed for the selected partner — is pending
+     * for that pair alone, so no other supported partner can ever be handed it.
      */
     @Query(
         "SELECT * FROM partner_activity_outbox WHERE NOT EXISTS (" +
             "SELECT 1 FROM partner_activity_link l " +
             "WHERE l.event_id = partner_activity_outbox.event_id AND l.pair_id = :pairId) " +
+            "AND (target_pair_id IS NULL OR target_pair_id = :pairId) " +
             "ORDER BY created_at_ms ASC LIMIT :limit",
     )
     suspend fun pendingForPair(pairId: String, limit: Int): List<PartnerActivityOutbox>

@@ -3,6 +3,7 @@ package com.example.myexodus.accountability.approval
 import android.util.Log
 import com.example.myexodus.accountability.EventCreator
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
+import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ApprovalRequestDao
@@ -29,8 +30,10 @@ class ApprovalFlow(
     private val dao: ApprovalRequestDao,
     private val enrollmentDao: EnrollmentDao,
     private val creator: EventCreator,
-    private val notifyRequest: () -> Unit = {},
-    private val notifyDecision: () -> Unit = {},
+    /** Both carry the enrollment the notification concerns: with N pairs (§19.5) the copy must
+     *  name the other party, and the post is keyed per pair. */
+    private val notifyRequest: (EnrollmentRecord) -> Unit = {},
+    private val notifyDecision: (EnrollmentRecord) -> Unit = {},
     private val now: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -65,7 +68,7 @@ class ApprovalFlow(
         )
         return when (created) {
             is EventCreator.CreateResult.Created -> {
-                val requestEventId = ApprovalRequest.eventIdOf(enrollment.mySenderKeyId, created.sequence)
+                val requestEventId = ApprovalRequest.eventIdOf(pairId, enrollment.mySenderKeyId, created.sequence)
                 val at = now()
                 dao.insertIgnore(
                     ApprovalRequest(
@@ -149,9 +152,10 @@ class ApprovalFlow(
             return
         }
         val at = serverTsEpochMillis ?: now()
+        val requestEventId = ApprovalRequest.eventIdOf(pairId, senderKeyId, sequence)
         val inserted = dao.insertIgnore(
             ApprovalRequest(
-                requestEventId = ApprovalRequest.eventIdOf(senderKeyId, sequence),
+                requestEventId = requestEventId,
                 pairId = pairId,
                 role = ApprovalRequest.ROLE_RESPONDER,
                 status = ApprovalRequest.STATUS_REQUESTED,
@@ -161,7 +165,14 @@ class ApprovalFlow(
                 expiresAtEpochMillis = at + ApprovalRequest.TTL_MILLIS,
             ),
         )
-        if (inserted != -1L) notifyRequest()
+        // -1 is also the legitimate replay path (Step 11 re-delivery) — hence I, not W. It was
+        // silent until the cross-pair PK collision below hid a real request for a full day
+        // (ADR #120); a bare log line is the cheapest way this can never be invisible again.
+        if (inserted != -1L) {
+            notifyRequest(enrollment)
+        } else {
+            Log.i(TAG, "responder row already present request=$requestEventId (replay)")
+        }
     }
 
     /**
@@ -196,7 +207,7 @@ class ApprovalFlow(
             Log.w(TAG, "approval response not applied (already decided/expired/consumed) request=$requestEventId — rejected (§9 row 459)")
             return
         }
-        notifyDecision()
+        notifyDecision(enrollment)
     }
 
     /** 72h sweep: REQUESTED rows past their deadline go EXPIRED (called from the sync pass). */

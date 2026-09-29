@@ -416,6 +416,62 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * Message addressing (#96, schema v14): `target_pair_id` on the journal — null fans out
+         * to every enrolled pair (the existing behavior), a pair id means only that partner may
+         * receive the row. Additive column, defaulting to NULL on every existing row, which is
+         * exactly the pre-v14 semantics: a message journaled before this upgrade still reaches
+         * every pair once, and is addressed correctly from the next compose onward.
+         */
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE partner_activity_outbox ADD COLUMN target_pair_id TEXT",
+                ).use { it.step() }
+            }
+        }
+
+        /**
+         * The v14 rollback path, same rationale as [MIGRATION_13_12]: a v13 build reinstalled
+         * over a database that briefly ran at v14 must still open, and Room validates the table
+         * on open — an unknown column fails the open, so the column has to go, not just be
+         * ignored. `ALTER TABLE … DROP COLUMN` needs SQLite ≥ 3.35, which not every supported
+         * device has, so the table is recreated and its rows copied (journal rows are pending
+         * transport state; an unfinished message survives the downgrade and simply fans out
+         * again on the next re-upgrade).
+         */
+        val MIGRATION_14_13 = object : Migration(14, 13) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_activity_outbox_old (" +
+                        "event_id TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL, " +
+                        "occurred_at_ms INTEGER NOT NULL, days_free INTEGER NOT NULL, " +
+                        "relapse_count INTEGER NOT NULL, milestones_reached TEXT NOT NULL, " +
+                        "coaching_progress INTEGER NOT NULL, protocol_version INTEGER NOT NULL, " +
+                        "schema_version INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, " +
+                        "PRIMARY KEY(event_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO partner_activity_outbox_old (event_id, kind, text, " +
+                        "occurred_at_ms, days_free, relapse_count, milestones_reached, " +
+                        "coaching_progress, protocol_version, schema_version, created_at_ms) " +
+                        "SELECT event_id, kind, text, occurred_at_ms, days_free, relapse_count, " +
+                        "milestones_reached, coaching_progress, protocol_version, schema_version, " +
+                        "created_at_ms FROM partner_activity_outbox",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS partner_activity_outbox").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE partner_activity_outbox_old RENAME TO partner_activity_outbox",
+                ).use { it.step() }
+                // Dropping the old table dropped its index with it; recreate it explicitly —
+                // Room validates declared indices on open.
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_activity_outbox_created_at_ms " +
+                        "ON partner_activity_outbox (created_at_ms)",
+                ).use { it.step() }
+            }
+        }
+
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override suspend fun migrate(connection: SQLiteConnection) {
                 // Recovery resource UI (plan v3 W7): the urge/recovery session log and the
@@ -628,7 +684,8 @@ class AppRulesStoreFactory(
         val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_10_9, MIGRATION_12_11, MIGRATION_13_12,
+            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
+            MIGRATION_10_9, MIGRATION_12_11, MIGRATION_13_12, MIGRATION_14_13,
         )
     }
 }

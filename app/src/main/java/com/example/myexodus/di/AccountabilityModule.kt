@@ -37,6 +37,7 @@ import com.example.myexodus.accountability.sync.PartnerRolloutGate
 import com.example.myexodus.accountability.sync.PairingRegistration
 import com.example.myexodus.accountability.sync.PairUidResolver
 import com.example.myexodus.accountability.sync.PartnerNotifications
+import com.example.myexodus.accountability.sync.displayNameOf
 import com.example.myexodus.accountability.activity.PartnerActivityReceiver
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
 import com.example.myexodus.accountability.sync.PartnerSyncTelemetry
@@ -249,8 +250,14 @@ object AccountabilityModule {
         dao = dao,
         enrollmentDao = enrollmentDao,
         creator = creator,
-        notifyRequest = { PartnerNotifications.notifyApprovalRequest(context) },
-        notifyDecision = { PartnerNotifications.notifyApprovalDecision(context) },
+        // Copy names the other party (owner ruling 2026-09-29) — a supporter device can hold
+        // several users' requests at once, each under its own per-pair notification id.
+        notifyRequest = { enrollment ->
+            PartnerNotifications.notifyApprovalRequest(context, enrollment.pairId, displayNameOf(enrollment))
+        },
+        notifyDecision = { enrollment ->
+            PartnerNotifications.notifyApprovalDecision(context, enrollment.pairId, displayNameOf(enrollment))
+        },
     )
 
     @Provides @Singleton
@@ -570,6 +577,7 @@ object AccountabilityModule {
         approval: ApprovalFlow,
         deletion: BilateralDeletion,
         activityReceiver: PartnerActivityReceiver,
+        enrollmentDao: EnrollmentDao,
     ): MailboxMessageHandler {
         val processedDao = db.processedEventDao()
         val installationId = PushInstallationRegistrar.androidIdOf(context)
@@ -586,12 +594,15 @@ object AccountabilityModule {
                 }
             },
             // Step 13: approval messages own their notifications (ApprovalFlow posts them with
-            // the right channel); the generic partner-event post skips those types.
-            notify = { payloadType ->
+            // the right channel); the generic partner-event post skips those types. The other
+            // party's label is read per post so the tray names which partner it concerns.
+            notify = { pairId, payloadType ->
                 if (payloadType != EventPayload.TYPE_APPROVAL_REQUEST &&
                     payloadType != EventPayload.TYPE_APPROVAL_RESPONSE
                 ) {
-                    PartnerNotifications.notifyPartnerEvent(context)
+                    enrollmentDao.getByPairId(pairId)?.let { enrollment ->
+                        PartnerNotifications.notifyPartnerEvent(context, pairId, displayNameOf(enrollment))
+                    }
                 }
             },
             respondToRequest = { pairId, sequence, hash ->

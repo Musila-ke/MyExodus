@@ -24,6 +24,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -173,6 +174,35 @@ class PartnerActivityJournalTest {
         val row = journalRows().single()
         assertEquals("You've got this — day by day.", row.text)
         assertEquals("the message rides the sender's own snapshot", 3, row.daysFree)
+    }
+
+    // --- Addressing (#96, schema v14) ---------------------------------------------------------
+
+    @Test
+    fun targetedMessage_pendsOnlyForItsPair_whileSnapshotsStillFanOut() = runBlocking {
+        seedProfile()
+        val habitId = seedHabit(daysElapsed = 4, shareMilestones = true)
+
+        assertTrue(
+            PartnerActivityJournal.emitForProfile(
+                store, PROFILE_ID, EventPayload.TYPE_MOTIVATIONAL_MESSAGE, NOW,
+                text = "For you only", targetPairId = "pair-1",
+            ),
+        )
+        assertTrue(PartnerActivityJournal.emitForHabit(store, habitId, EventPayload.TYPE_STREAK_UPDATED, NOW))
+
+        val target = store.partnerActivityDao().pendingForPair("pair-1", 100)
+        val message = target.single { it.kind == EventPayload.TYPE_MOTIVATIONAL_MESSAGE }
+        assertEquals("the addressed row carries its recipient", "pair-1", message.targetPairId)
+        assertNull(
+            "the state snapshot stays untargeted — every pair receives it",
+            target.single { it.kind == EventPayload.TYPE_STREAK_UPDATED }.targetPairId,
+        )
+        assertEquals(
+            "another pair sees only the fan-out snapshot, never the message",
+            listOf(EventPayload.TYPE_STREAK_UPDATED),
+            store.partnerActivityDao().pendingForPair("pair-2", 100).map { it.kind },
+        )
     }
 
     // --- Atomicity (Step 5 validation) --------------------------------------------------------

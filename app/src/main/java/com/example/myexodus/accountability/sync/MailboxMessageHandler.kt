@@ -49,7 +49,11 @@ class MailboxMessageHandler(
      *  True = the local erase completed (the handler then owes nothing more; the ack rode the
      *  same call); false = it failed and the message must stay unacked and re-deliverable. */
     private val onDeletionRequest: suspend (pairId: String, messageId: String) -> Boolean = { _, _ -> false },
-    private val notify: (payloadType: String) -> Unit = {},
+    /** Fired for an appended event other than a repair request; carries the pair so the post
+     *  can resolve the partner and key its notification id (§19.5 multi-partner). Approval
+     *  types reach this hook too — the composition layer filters them, because the approval
+     *  flows post their own dedicated, named notifications (§8 Step 12). */
+    private val notify: suspend (pairId: String, payloadType: String) -> Unit = { _, _ -> },
     /** Step 11 responder: enqueue a replay of our chain after the requested anchor. */
     private val respondToRequest: suspend (pairId: String, expectedPreviousSequence: Long, expectedPreviousHash: ByteArray) -> Unit = { _, _, _ -> },
     /** Step 11 tamper correlation: true when a repair was in flight and is now blocked. */
@@ -182,7 +186,7 @@ class MailboxMessageHandler(
                     if (outcome.payloadType == EventPayload.TYPE_SYNC_REQUEST) {
                         answerRepairRequest(pairId, messageId, outcome.payload)
                     } else {
-                        runCatching { notify(outcome.payloadType) }
+                        runCatching { notify(pairId, outcome.payloadType) }
                             .onFailure { Log.w(TAG, "notify failed messageId=$messageId", it) }
                     }
                 }

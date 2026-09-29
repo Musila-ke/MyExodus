@@ -439,8 +439,10 @@ class MainActivity : FragmentActivity() {
                         },
                         // Req 15: journal-first, same as every other shared event — the message
                         // is written locally now and leaves on the next sync pass, so this call
-                        // touches no network and needs no signing window.
-                        onSendMessage = { text ->
+                        // touches no network and needs no signing window. Addressed to the
+                        // selected partner (#96): the row carries targetPairId, so no other
+                        // supported user's chain can ever be handed this message.
+                        onSendMessage = { pairId, text ->
                             val store = rulesStoreFactory.open()
                             val profileId = store?.userProfileDao()?.getActive()?.userId
                             profileId != null && PartnerActivityJournal.emitForProfile(
@@ -449,6 +451,7 @@ class MainActivity : FragmentActivity() {
                                 EventPayload.TYPE_MOTIVATIONAL_MESSAGE,
                                 occurredAtMs = System.currentTimeMillis(),
                                 text = text,
+                                targetPairId = pairId,
                             )
                         },
                         requestedTab = requestedTab,

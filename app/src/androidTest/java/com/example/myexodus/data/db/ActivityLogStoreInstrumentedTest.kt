@@ -42,7 +42,7 @@ class ActivityLogStoreInstrumentedTest {
             RulesStoreKeyManager(context),
             DatabaseHealthStore(),
         )
-        recovery.resetAllData()
+        recovery.resetAllDataEmulatorOnly()
     }
 
     private fun newStore(): ActivityLogStore = ActivityLogStore(context, keyManager)

@@ -13,12 +13,25 @@ import org.junit.Assume.assumeTrue
  * They are emulator-only fixtures. Device-side verification is served by
  * [AppRulesStoreMigrationInstrumentedTest] (its own throwaway database file, safe anywhere) and
  * by the debug seams on the real install.
+ *
+ * **The assumption alone does not protect the device.** JUnit runs `@After` even when `@Before`
+ * aborted on it, so a `tearDown { resetAllData() }` wipes the handset anyway — which is exactly
+ * what happened on 2026-09-29 (12 production wipes logged on the X6532 during a full-suite run
+ * whose test bodies were all skipped). Put [assumeEmulatorOnly] in `@Before` for the skip
+ * signal, and route every destructive call — `@Before`, `@After`, helpers, seeding — through
+ * [resetAllDataEmulatorOnly], which cannot fire on a handset no matter where it is called from.
+ * `DestructiveFixtureGuardTest` (JVM) fails the build if a raw `resetAllData()` reappears.
  */
 internal fun assumeEmulatorOnly() = assumeTrue(
     "destructive rules-store fixture: emulator only — it deletes the production store, keys " +
         "and legacy files of whatever device it runs on (DeviceSafety.kt)",
     IS_EMULATOR,
 )
+
+/** [RecoveryManager.resetAllData] that is a no-op off-emulator; safe to call from `@After`. */
+internal fun RecoveryManager.resetAllDataEmulatorOnly() {
+    if (IS_EMULATOR) resetAllData()
+}
 
 private val IS_EMULATOR =
     Build.FINGERPRINT.contains("generic", ignoreCase = true) ||

@@ -11,14 +11,19 @@ import androidx.core.app.NotificationManagerCompat
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.MainActivity
 import com.example.myexodus.R
+import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.notifications.NotificationAccess
+import com.example.myexodus.ui.partner.shortKeyId
 
 /**
  * Partner-event notification surface (AD-11/NFR2): rendered locally only AFTER the mailbox
- * envelope was verified and appended — the tray text is deliberately generic (no alias, no
- * event type; detail lives behind opening the app, and the alias arrives with the Step 12
- * dashboard). Channels are created lazily at post time (creation is idempotent); denied
- * POST_NOTIFICATIONS skips silently (Step 16 owns the permission flow + banner).
+ * envelope was verified and appended. Every post names the partner it concerns (owner ruling
+ * 2026-09-29 — a device can hold several pairs, so "your partner" is not an answer): the
+ * unlocked tray copy carries the pairing label, while the lockscreen public version keeps the
+ * generic copy (FR-13's redaction contract). Each pair posts under its own notification id,
+ * so one partner's entry can never silently replace another's pending item. Channels are
+ * created lazily at post time (creation is idempotent); denied POST_NOTIFICATIONS skips
+ * silently (Step 16 owns the permission flow + banner).
  */
 object PartnerNotifications {
 
@@ -36,6 +41,11 @@ object PartnerNotifications {
      *  only in debug builds. No production surface posts to it by design. */
     const val CHANNEL_SYNC_STATUS = "sync_status"
 
+    /** Per-pair notification id (§19.5 multi-partner): base + pairId hash, so N partners'
+     *  entries coexist in the tray. A hash collision only degrades to the old
+     *  replace-in-place behavior — never a lost alert for a different pair's item. */
+    internal fun idFor(base: Int, pairId: String): Int = base + pairId.hashCode()
+
     fun ensureSyncStatusChannel(context: Context) {
         if (!BuildConfig.DEBUG) return
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(
@@ -47,21 +57,22 @@ object PartnerNotifications {
         )
     }
 
-    /** Partner-activity alert. One fixed ID already collapses a burst into a single tray entry;
-     *  `onlyAlertOnce` additionally keeps that burst to one alert (a partner-activity pull can
-     *  append several events at once) — the trade is that further updates while the user leaves
-     *  the notification untouched are silent, which is the non-spammy side of §11.7. */
-    fun notifyPartnerEvent(context: Context) =
-        post(context, CHANNEL_PARTNER_ALERTS, context.getString(R.string.partner_channel_activity_name), NotificationManager.IMPORTANCE_HIGH, NOTIF_PARTNER_EVENT, R.string.partner_event_title, R.string.partner_event_text, onlyAlertOnce = true)
+    /** Partner-activity alert. The per-pair id collapses one partner's burst into a single
+     *  tray entry; `onlyAlertOnce` additionally keeps that burst to one alert (a
+     *  partner-activity pull can append several events at once) — the trade is that further
+     *  updates while the user leaves the notification untouched are silent, which is the
+     *  non-spammy side of §11.7. */
+    fun notifyPartnerEvent(context: Context, pairId: String, partnerName: String) =
+        post(context, CHANNEL_PARTNER_ALERTS, context.getString(R.string.partner_channel_activity_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_PARTNER_EVENT, pairId), R.string.partner_event_title, R.string.partner_event_text, onlyAlertOnce = true, namedTitle = context.getString(R.string.partner_event_title_named, partnerName))
 
     /** A verified disable-approval request arrived — the responder's actionable item.
      *  Plan Step 16 channel spec: `approval_requests` is HIGH importance. */
-    fun notifyApprovalRequest(context: Context) =
-        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, NOTIF_APPROVAL_REQUEST, R.string.approval_request_title, R.string.approval_request_text)
+    fun notifyApprovalRequest(context: Context, pairId: String, partnerName: String) =
+        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_APPROVAL_REQUEST, pairId), R.string.approval_request_title, R.string.approval_request_text, namedTitle = context.getString(R.string.approval_request_title_named, partnerName))
 
     /** The partner answered our request — informational. */
-    fun notifyApprovalDecision(context: Context) =
-        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, NOTIF_APPROVAL_DECISION, R.string.approval_decision_title, R.string.approval_decision_text)
+    fun notifyApprovalDecision(context: Context, pairId: String, partnerName: String) =
+        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_APPROVAL_DECISION, pairId), R.string.approval_decision_title, R.string.approval_decision_text, namedTitle = context.getString(R.string.approval_decision_title_named, partnerName))
 
     // Suppressed: the gate is NotificationAccess.canPost (the only way in), which lint can't
     // trace through a helper.
@@ -74,6 +85,7 @@ object PartnerNotifications {
         notificationId: Int,
         titleRes: Int,
         textRes: Int,
+        namedTitle: String? = null,
         onlyAlertOnce: Boolean = false,
     ) {
         if (!NotificationAccess.canPost(context)) return
@@ -86,11 +98,13 @@ object PartnerNotifications {
             Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        // FR-13: the tray text is generic by construction (no alias, event type, count, or
-        // coaching/motivational content anywhere in the payload), so the lockscreen redaction
-        // shows the same generic copy rather than hiding the notification entirely.
-        val title = context.getString(titleRes)
+        // FR-13: the lockscreen public version stays generic by construction (no alias, event
+        // type, count, or coaching/motivational content), so the redaction shows generic copy
+        // rather than hiding the notification entirely. The unlocked content may name the
+        // partner (owner ruling 2026-09-29) — it never carries anything beyond the label.
+        val title = namedTitle ?: context.getString(titleRes)
         val text = context.getString(textRes)
+        val publicTitle = context.getString(titleRes)
         NotificationManagerCompat.from(context).notify(
             notificationId,
             NotificationCompat.Builder(context, channelId)
@@ -103,7 +117,7 @@ object PartnerNotifications {
                 .setPublicVersion(
                     NotificationCompat.Builder(context, channelId)
                         .setSmallIcon(R.mipmap.ic_launcher)
-                        .setContentTitle(title)
+                        .setContentTitle(publicTitle)
                         .setContentText(text)
                         .build(),
                 )
@@ -113,3 +127,8 @@ object PartnerNotifications {
         )
     }
 }
+
+/** The name a partner is shown under in notification copy — the pairing label, else the short
+ *  key id (the Partner tab's #63 convention), never a fabricated name. */
+fun displayNameOf(enrollment: EnrollmentRecord): String =
+    enrollment.partnerLabel ?: shortKeyId(enrollment.partnerSigningKeyId)

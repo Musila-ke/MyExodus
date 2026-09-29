@@ -31,7 +31,7 @@ class AppRulesStoreInstrumentedTest {
     private fun newFactory(): Triple<AppRulesStoreFactory, DatabaseHealthStore, RecoveryManager> {
         val healthStore = DatabaseHealthStore()
         val recovery = RecoveryManager(context, legacyKeys, activityKeys, RulesStoreKeyManager(context), healthStore)
-        recovery.resetAllData()
+        recovery.resetAllDataEmulatorOnly()
         val factory = AppRulesStoreFactory(context, recovery, healthStore)
         return Triple(factory, healthStore, recovery)
     }
@@ -95,7 +95,7 @@ class AppRulesStoreInstrumentedTest {
     fun corruptFileOnDisk_surfacesRecoverableDataFound() = runTest {
         val healthStore = DatabaseHealthStore()
         val recovery = RecoveryManager(context, legacyKeys, activityKeys, RulesStoreKeyManager(context), healthStore)
-        recovery.resetAllData()
+        recovery.resetAllDataEmulatorOnly()
         // Place a corrupt orphan BEFORE the open, as a crashed recovery would.
         val corrupt = java.io.File(context.getDatabasePath("myexodus_rules.db").absolutePath + ".corrupt")
         corrupt.writeText("partial")

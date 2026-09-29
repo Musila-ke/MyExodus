@@ -41,7 +41,7 @@ import com.example.myexodus.domainusage.RuleUsageDao
 
 /**
  * Room database holding the rule and V1 data model plus the habit-streak tables and the
- * partner-activity journal/projection (v13) — encrypted with SQLCipher since habit-streaks
+ * partner-activity journal/projection (v13/v14) — encrypted with SQLCipher since habit-streaks
  * plan §8 Step 1, opened through [AppRulesStoreFactory] with a Keystore-wrapped DEK. Raw
  * behavioral telemetry lives in [ActivityLogStore] (SQLCipher); block/attempt history
  * (blocking-core plan §6) is the [AttemptLog] table here — Room is its system of record.
@@ -70,7 +70,7 @@ import com.example.myexodus.domainusage.RuleUsageDao
         PartnerActivityLink::class,
         PartnerActivityProjection::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = true,
 )
 abstract class AppRulesStore : RoomDatabase() {

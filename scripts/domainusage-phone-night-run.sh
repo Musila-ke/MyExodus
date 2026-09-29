@@ -75,12 +75,18 @@ RUNS_FLAG="${DU_RUNS:+--runs $DU_RUNS}"
 say "PF re-run: $ONLY_PF $RUNS_FLAG — builds and installs the current tree (pf-run's own build step)"
 if [[ ",$ONLY_PF," == *,PF-5,* ]]; then
   say "UNPLUG the phone now — PF-5 legs are skipped while charging; run continues over wireless adb"
-  deadline=$((SECONDS + 900))
-  while [[ $SECONDS -lt $deadline ]]; do
-    s=$(pick_serial)
-    if [[ -n "$s" && "$s" != "$SERIAL" ]]; then SERIAL="$s"; break; fi
-    sleep 10
-  done
+  if [[ "$SERIAL" == *:* ]]; then
+    # Already on wireless adb (phone was prepped before this script started): the 15-min wait
+    # below exists only to catch the USB→wireless serial swap, so there is nothing to wait for.
+    say "already on wireless adb — no unplug swap to wait for"
+  else
+    deadline=$((SECONDS + 900))
+    while [[ $SECONDS -lt $deadline ]]; do
+      s=$(pick_serial)
+      if [[ -n "$s" && "$s" != "$SERIAL" ]]; then SERIAL="$s"; break; fi
+      sleep 10
+    done
+  fi
 fi
 say "PF serial=$SERIAL"
 bash scripts/domainusage-pf-run.sh --serial "$SERIAL" --host "$HOST" \

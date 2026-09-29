@@ -49,7 +49,7 @@ class MailboxMessageHandlerTest {
         val loads = mutableListOf<String>()
         val appended = mutableListOf<Triple<String, String, Long>>()
         val acks = mutableListOf<Pair<String, String>>()
-        val notified = mutableListOf<String>()
+        val notified = mutableListOf<Pair<String, String>>()
         val repairResponses = mutableListOf<Triple<String, Long, ByteArray>>()
         val deletionRequests = mutableListOf<Pair<String, String>>()
         var tamperChecks = 0
@@ -69,9 +69,9 @@ class MailboxMessageHandlerTest {
                 deletionRequests += pairId to messageId
                 deletionShredded
             },
-            notify = { payloadType ->
+            notify = { pairId, payloadType ->
                 notifyError?.let { throw it }
-                notified += payloadType
+                notified += pairId to payloadType
             },
             respondToRequest = { pairId, sequence, hash -> repairResponses += Triple(pairId, sequence, hash) },
             flagTamperIfRepairing = { tamperChecks++; tamperRepairing },
@@ -118,7 +118,7 @@ class MailboxMessageHandlerTest {
         assertEquals("AD-10b: the dedup check precedes the fetch", emptyList<String>(), fake.loads)
         assertEquals(emptyList<Triple<String, String, Long>>(), fake.appended)
         assertEquals(emptyList<Pair<String, String>>(), fake.acks)
-        assertEquals(emptyList<String>(), fake.notified)
+        assertEquals(emptyList<Pair<String, String>>(), fake.notified)
     }
 
     @Test
@@ -130,7 +130,7 @@ class MailboxMessageHandlerTest {
         assertEquals(MailboxMessageHandler.Kind.MISSING, result.kind)
         assertEquals(listOf("m1"), fake.processedChecks)
         assertEquals(emptyList<Triple<String, String, Long>>(), fake.appended)
-        assertEquals(emptyList<String>(), fake.notified)
+        assertEquals(emptyList<Pair<String, String>>(), fake.notified)
     }
 
     @Test
@@ -163,7 +163,7 @@ class MailboxMessageHandlerTest {
         // Not acked and no chain write: the message stays subject to re-delivery.
         assertEquals(emptyList<Triple<String, String, Long>>(), fake.appended)
         assertEquals(emptyList<Pair<String, String>>(), fake.acks)
-        assertEquals(emptyList<String>(), fake.notified)
+        assertEquals(emptyList<Pair<String, String>>(), fake.notified)
     }
 
     @Test
@@ -186,7 +186,7 @@ class MailboxMessageHandlerTest {
         assertEquals(EventPayload.TYPE_ACTIVITY, result.payloadType)
         assertEquals(listOf(Triple("pair-1", "m1", 42L)), fake.appended)
         assertEquals(listOf("uid-me" to "m1"), fake.acks)
-        assertEquals(listOf(EventPayload.TYPE_ACTIVITY), fake.notified)
+        assertEquals(listOf("pair-1" to EventPayload.TYPE_ACTIVITY), fake.notified)
     }
 
     @Test
@@ -194,12 +194,12 @@ class MailboxMessageHandlerTest {
         val duplicate = Fake().apply { appendResult = ChainStateStore.AppendResult.Duplicate }
         assertEquals(MailboxMessageHandler.Kind.DUPLICATE, on(duplicate, doc()).kind)
         assertEquals(listOf("uid-me" to "m1"), duplicate.acks)
-        assertEquals(emptyList<String>(), duplicate.notified)
+        assertEquals(emptyList<Pair<String, String>>(), duplicate.notified)
 
         val gap = Fake().apply { appendResult = ChainStateStore.AppendResult.Gap }
         assertEquals(MailboxMessageHandler.Kind.GAP, on(gap, doc()).kind)
         assertEquals(listOf("uid-me" to "m1"), gap.acks)
-        assertEquals(emptyList<String>(), gap.notified)
+        assertEquals(emptyList<Pair<String, String>>(), gap.notified)
     }
 
     @Test
@@ -217,7 +217,7 @@ class MailboxMessageHandlerTest {
     fun failingAckOrNotify_neverEscapes() {
         val ackFails = Fake().apply { ackError = IllegalStateException("offline") }
         assertEquals(MailboxMessageHandler.Kind.APPENDED, on(ackFails, doc()).kind)
-        assertEquals("notify still ran after the ack failure", listOf(EventPayload.TYPE_ACTIVITY), ackFails.notified)
+        assertEquals("notify still ran after the ack failure", listOf("pair-1" to EventPayload.TYPE_ACTIVITY), ackFails.notified)
 
         val notifyFails = Fake().apply { notifyError = IllegalStateException("channel gone") }
         assertEquals(MailboxMessageHandler.Kind.APPENDED, on(notifyFails, doc()).kind)
@@ -245,7 +245,7 @@ class MailboxMessageHandlerTest {
         assertEquals(listOf("pair-1" to "m1"), fake.deletionRequests)
         assertEquals(emptyList<Triple<String, String, Long>>(), fake.appended)
         assertEquals(emptyList<Pair<String, String>>(), fake.acks)
-        assertEquals(emptyList<String>(), fake.notified)
+        assertEquals(emptyList<Pair<String, String>>(), fake.notified)
     }
 
     @Test
@@ -290,7 +290,7 @@ class MailboxMessageHandlerTest {
         assertEquals(Triple("pair-1", 7L, ByteArray(32) { 4 }.toList()), fake.repairResponses.single().let {
             Triple(it.first, it.second, it.third.toList())
         })
-        assertEquals(emptyList<String>(), fake.notified)
+        assertEquals(emptyList<Pair<String, String>>(), fake.notified)
         assertEquals(listOf("uid-me" to "m1"), fake.acks)
     }
 

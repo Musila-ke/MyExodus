@@ -12,8 +12,12 @@ import androidx.room3.PrimaryKey
  * ```
  *
  * One row per request event, keyed by the request's canonical event id
- * (`<senderKeyId>:<sequence>` — the envelope's chain position, stable across mailbox re-drains
- * and repair replays, unlike the messageId). [role] says which side of the pair this device is
+ * (`<pairId>:<senderKeyId>:<sequence>` — the envelope's chain position, stable across mailbox
+ * re-drains and repair replays, unlike the messageId). The pairId is load-bearing, not cosmetic:
+ * the signing key is device-level (shared by every pair) and every pair's chain starts at
+ * sequence 1, so a pair-less id collides across pairs on this primary key — the second pair's
+ * RESPONDER row would hit the IGNORE path and silently never appear (found on-device 2026-09-29,
+ * ADR #120). [role] says which side of the pair this device is
  * on: the REQUESTER row is created when its request event is chained, the RESPONDER row when
  * the request is received and verified. Every transition is a compare-and-set guarded on
  * `status = 'REQUESTED'` (the plan's exactly-once rule), so a replayed or racing response can
@@ -51,7 +55,10 @@ data class ApprovalRequest(
         /** §8 Step 12: expiry after 72h (server-timestamp-anchored on the responder, AD-16). */
         const val TTL_MILLIS = 72L * 60 * 60 * 1000
 
-        /** Canonical id of the request's chain event — both sides derive it from the envelope. */
-        fun eventIdOf(senderKeyId: String, sequence: Long): String = "$senderKeyId:$sequence"
+        /** Canonical id of the request's chain event — both sides derive it from the envelope.
+         *  pairId scopes it: device-level signing keys + per-pair chains starting at sequence 1
+         *  make (senderKeyId, sequence) non-unique across a device's pairs. */
+        fun eventIdOf(pairId: String, senderKeyId: String, sequence: Long): String =
+            "$pairId:$senderKeyId:$sequence"
     }
 }

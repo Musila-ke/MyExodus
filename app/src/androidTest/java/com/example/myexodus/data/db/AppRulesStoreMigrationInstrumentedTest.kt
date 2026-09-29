@@ -512,6 +512,118 @@ class AppRulesStoreMigrationInstrumentedTest {
         assertPreExistingDataSurvives(up, "after the re-upgrade")
     }
 
+    /**
+     * #96 message addressing: the v13 → v14 additive column. Pre-existing journal rows must read
+     * back untargeted (they fan out — the pre-v14 semantics), and the transformed predicate is
+     * live, not just the DDL: an addressed row is invisible to every other pair.
+     */
+    @Test
+    fun migrate13To14_addsTargetPairId_andPreservesJournalRows() = runTest {
+        val v13 = helper.createDatabase(13)
+        seedProfileAndHabit(v13)
+        seedCoachingStep(v13)
+        exec(
+            v13,
+            "INSERT INTO partner_activity_outbox (event_id, kind, text, occurred_at_ms, days_free, " +
+                "relapse_count, milestones_reached, coaching_progress, protocol_version, " +
+                "schema_version, created_at_ms) VALUES " +
+                "('evt-legacy', 'streak_updated', '', 100, 4, 1, '7,30', 2, 1, 1, 100)",
+        )
+
+        val v14 = helper.runMigrationsAndValidate(14, listOf(AppRulesStoreFactory.MIGRATION_13_14))
+
+        assertEquals("the pre-v14 row survives", 1L, count(v14, "partner_activity_outbox"))
+        v14.prepare(
+            "SELECT kind, target_pair_id FROM partner_activity_outbox WHERE event_id = 'evt-legacy'",
+        ).use { stmt ->
+            assertTrue(stmt.step())
+            assertEquals("streak_updated", stmt.getText(0))
+            assertTrue("a pre-v14 row must read back untargeted", stmt.isNull(1))
+        }
+        exec(
+            v14,
+            "INSERT INTO partner_activity_outbox (event_id, kind, text, occurred_at_ms, days_free, " +
+                "relapse_count, milestones_reached, coaching_progress, protocol_version, " +
+                "schema_version, created_at_ms, target_pair_id) VALUES " +
+                "('evt-addressed', 'motivational_message', 'Keep going', 200, 4, 1, '7,30', 2, 1, 1, 200, 'pair-b')",
+        )
+        assertEquals(
+            "pair-b pends on the untargeted fan-out row and its own addressed row",
+            2L,
+            v14.prepare(
+                "SELECT count(*) FROM partner_activity_outbox WHERE target_pair_id IS NULL " +
+                    "OR target_pair_id = 'pair-b'",
+            ).use { it.step(); it.getLong(0) },
+        )
+        assertEquals(
+            "pair-a pends on the fan-out row only, never pair-b's addressed row",
+            1L,
+            v14.prepare(
+                "SELECT count(*) FROM partner_activity_outbox WHERE target_pair_id IS NULL " +
+                    "OR target_pair_id = 'pair-a'",
+            ).use { it.step(); it.getLong(0) },
+        )
+        assertPreExistingDataSurvives(v14, "after the addressing upgrade")
+    }
+
+    /**
+     * The v14 rollback: a v13 build reinstalled over a database that briefly ran at v14 must
+     * open, and Room rejects unknown columns — so the addressing column is physically dropped
+     * by recreating the table, keeping every journal row and the declared index.
+     */
+    @Test
+    fun migrate14To13_dropsOnlyTheTargetColumn_andKeepsJournalRows() = runTest {
+        val v13 = helper.createDatabase(13)
+        seedProfileAndHabit(v13)
+        seedCoachingStep(v13)
+
+        val v14 = helper.runMigrationsAndValidate(14, listOf(AppRulesStoreFactory.MIGRATION_13_14))
+        exec(
+            v14,
+            "INSERT INTO partner_activity_outbox (event_id, kind, text, occurred_at_ms, days_free, " +
+                "relapse_count, milestones_reached, coaching_progress, protocol_version, " +
+                "schema_version, created_at_ms, target_pair_id) VALUES " +
+                "('evt-addressed', 'motivational_message', 'Keep going', 200, 4, 1, '7,30', 2, 1, 1, 200, 'pair-b')",
+        )
+
+        val down = helper.runMigrationsAndValidate(13, listOf(AppRulesStoreFactory.MIGRATION_14_13))
+
+        assertTrue(
+            "the downgrade must drop the addressing column",
+            runCatching {
+                down.prepare("SELECT target_pair_id FROM partner_activity_outbox LIMIT 1")
+                    .use { it.step() }
+            }.isFailure,
+        )
+        down.prepare(
+            "SELECT text FROM partner_activity_outbox WHERE event_id = 'evt-addressed'",
+        ).use { stmt ->
+            assertTrue("the journal row survives the recreate", stmt.step())
+            assertEquals("Keep going", stmt.getText(0))
+        }
+        // By name, not by count: the TEXT primary key also leaves a `sqlite_autoindex_…` row in
+        // sqlite_master, so counting every index on the table would admit the wrong one.
+        assertEquals(
+            "the index the recreate dropped must be back (Room validates indices on open)",
+            1L,
+            down.prepare(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'index' " +
+                    "AND name = 'index_partner_activity_outbox_created_at_ms'",
+            ).use { it.step(); it.getLong(0) },
+        )
+        assertPreExistingDataSurvives(down, "after the addressing downgrade")
+
+        // The re-upgrade restores the v14 shape with the surviving row intact and untargeted.
+        val up = helper.runMigrationsAndValidate(14, listOf(AppRulesStoreFactory.MIGRATION_13_14))
+        assertEquals(1L, count(up, "partner_activity_outbox"))
+        up.prepare(
+            "SELECT target_pair_id FROM partner_activity_outbox WHERE event_id = 'evt-addressed'",
+        ).use { stmt ->
+            assertTrue(stmt.step())
+            assertTrue("the re-added column defaults the surviving row to fan-out", stmt.isNull(0))
+        }
+    }
+
     @Test
     fun migrate10To9_dropsOnlyTheUsageTable_leavingAValidV9Database() = runTest {
         val v10 = helper.createDatabase(10)

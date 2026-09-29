@@ -1,9 +1,16 @@
 package com.example.myexodus.accountability.sync
 
+import android.Manifest
+import android.app.Notification
+import android.app.NotificationManager
 import android.content.Context
+import android.os.ParcelFileDescriptor
 import android.util.Log
+import androidx.core.app.NotificationManagerCompat
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import com.example.myexodus.R
 import com.example.myexodus.accountability.PartnerTestIdentity
 import com.example.myexodus.accountability.RoundTripTestEntryPoint
 import com.example.myexodus.accountability.approval.ApprovalFlow
@@ -12,6 +19,7 @@ import com.example.myexodus.accountability.enrollment.EnrollmentTranscript
 import com.example.myexodus.accountability.enrollment.PairingFlow
 import com.example.myexodus.accountability.enrollment.PairingToken
 import com.example.myexodus.accountability.state.ApprovalRequest
+import com.example.myexodus.accountability.sync.PartnerNotifications
 import com.example.myexodus.ui.partner.PartnerDashboardUi
 import com.example.myexodus.ui.partner.canRespondToApprovals
 import com.google.firebase.FirebaseApp
@@ -44,7 +52,10 @@ import org.junit.runner.RunWith
  * both approval event types, the responder deadline really is anchored on the mailbox document's
  * Firestore server timestamp, the canonical request id derives from the chain position the
  * sender cannot spoof, and the whole exchange runs under real attestation and a real warm
- * biometric window.
+ * biometric window. The pairing also walks the name exchange PairingCeremonyScreen performs
+ * (owner ask 2026-09-29: pair users the way a real user pairs), and the resulting responder
+ * notification is read back out of the system tray — named for the partner, keyed per pair,
+ * generic on the lockscreen (FR-13).
  *
  * Preconditions: the app's anonymous user is signed in, and the biometric signing window is
  * warm — tap "Warm signing window" in PairingTestActivity first (one tap covers A's and B's
@@ -78,6 +89,15 @@ class PartnerApprovalInstrumentedTest {
         assertWarmSigningWindow(ep.signer(), "A")
         assertWarmSigningWindow(identity.signer, "B")
 
+        // A real responder granted this through the system dialog when they first used the app;
+        // the test grants it over shell so the tray assertion below never depends on whichever
+        // manual grant the device happens to carry.
+        grantPostNotifications(context)
+        assertTrue(
+            "POST_NOTIFICATIONS must be granted for the tray assertion",
+            NotificationManagerCompat.from(context).areNotificationsEnabled(),
+        )
+
         AppCheckTestSupport.useDebugProviderIfRequested(FirebaseApp.getInstance(), identity.app)
         val uidB = identity.signIn()
         val pairId = EnrollmentTranscript.durablePairIdOf(uidA, uidB)
@@ -86,6 +106,11 @@ class PartnerApprovalInstrumentedTest {
 
         val aRecord = ep.enrollmentDao().getByPairId(pairId) ?: error("A enrollment missing")
         val bRecord = identity.enrollmentDao.getByPairId(pairId) ?: error("B enrollment missing")
+        // The name exchange production's ceremony screens perform: each side typed a label and
+        // the pairing carried it across — asserted on the persisted rows, not just the args.
+        assertEquals("A must see B's chosen label", PARTNER_LABEL_B, aRecord.partnerLabel)
+        assertEquals("B must see A's chosen label", MY_LABEL_A, bRecord.partnerLabel)
+        log("labels: A sees '${aRecord.partnerLabel}', B sees '${bRecord.partnerLabel}'")
 
         // Stage 1 — B requests through the production requester half: the request is a chain
         // event, the row is keyed by the canonical id derived from B's own chain position.
@@ -93,7 +118,7 @@ class PartnerApprovalInstrumentedTest {
             .requestApproval(pairId, REQUEST_MESSAGE, identity.signer.beginSign())
         assertTrue("request not chained: $request", request is ApprovalFlow.RequestResult.Submitted)
         val sequence = identity.store.localHead(pairId, bRecord.mySenderKeyId)!!.lastSequence
-        val requestId = "${bRecord.mySenderKeyId}:$sequence"
+        val requestId = ApprovalRequest.eventIdOf(pairId, bRecord.mySenderKeyId, sequence)
         assertEquals(
             "canonical request id must derive from the chain position",
             requestId,
@@ -105,7 +130,12 @@ class PartnerApprovalInstrumentedTest {
         // RESPONDER row, expiry anchored on the mailbox document's SERVER timestamp (AD-16).
         val pull = ep.partnerSyncCoordinator().syncOnce(null)
         log("A pull: $pull")
-        assertEquals("A must append B's approval request", 1, pull.pulledCount)
+        // pull.pulledCount sums appends across EVERY enrollment on this device (repeated harness
+        // runs leave old pairs behind) and only counts what actually appended — so the strict
+        // "exactly 1" this line used to assert tested something the app never promised. The
+        // requirement is that B's request arrived, which the responder-row asserts right below
+        // prove directly (row present, canonical id, server-anchored deadline).
+        assertTrue("A must append B's approval request (pulled=${pull.pulledCount})", pull.pulledCount >= 1)
         val responderRow = ep.approvalFlow().pendingFor(pairId, ApprovalRequest.ROLE_RESPONDER)
             .singleOrNull() ?: error("A has no pending RESPONDER row after the pull")
         assertEquals(requestId, responderRow.requestEventId)
@@ -121,6 +151,26 @@ class PartnerApprovalInstrumentedTest {
             "responder row must be anchored on the mailbox server timestamp (delta=${serverClockDelta}ms)",
             abs(serverClockDelta) < SERVER_CLOCK_SANITY_MILLIS,
         )
+
+        // Stage 2b — the tray copy a real responder reads: named for the partner, keyed to
+        // this pair (§19.5), and generic on the lockscreen (FR-13 redaction).
+        val posted = context.getSystemService(NotificationManager::class.java)
+            .activeNotifications
+            .firstOrNull { it.id == PartnerNotifications.idFor(PartnerNotifications.NOTIF_APPROVAL_REQUEST, pairId) }
+        assertNotNull("A must post an approval-request notification for pair=$pairId", posted)
+        assertEquals(
+            "the tray copy must name the partner",
+            context.getString(R.string.approval_request_title_named, PARTNER_LABEL_B),
+            posted!!.notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        val publicVersion = posted.notification.publicVersion
+        assertNotNull("lockscreen public version must exist (FR-13)", publicVersion)
+        assertEquals(
+            "the lockscreen public copy must stay generic",
+            context.getString(R.string.approval_request_title),
+            publicVersion!!.extras.getString(Notification.EXTRA_TITLE),
+        )
+        log("tray: '${posted.notification.extras.getString(Notification.EXTRA_TITLE)}' (public: generic)")
 
         // Stage 3 — the exact read model the Partner tab renders: the pending row reaches the
         // §6 line 240 card position and the badge gate reads verified (buttons enabled).
@@ -149,16 +199,21 @@ class PartnerApprovalInstrumentedTest {
         val drain = ep.partnerSyncCoordinator().syncOnce(null)
         log("A decision drain: $drain")
         assertTrue("A must deliver the response event", drain.drained)
+        val aHeadAfterDecision = ep.chainStateStore().localHead(pairId, aRecord.mySenderKeyId)!!.lastSequence
 
         // Stage 5 — B's production receive pipeline pulls the response and applies it: the
         // REQUESTER row moves, no earlier than the responder's decision.
         val bPull = identity.receiver().pull(pairId, uidB)
         log("B pull: $bPull")
-        assertEquals("B must append A's approval response", 1, bPull.appended)
-        assertEquals(
-            "B's view of A's chain must hold the response event",
-            1L,
-            identity.store.localHead(pairId, aRecord.mySenderKeyId)!!.lastSequence,
+        // A's own activity fans out to every enrollment (ADR #115) — this fresh test pair
+        // inherits A's pending journal rows, so A's chain slice here is activity + response,
+        // not exactly one event. What must hold: the pull appended A's events, and B's view
+        // of A's chain reached the head A had when it chained the response.
+        assertTrue("B must append A's approval response (appended=${bPull.appended})", bPull.appended >= 1)
+        val bHeadOfA = identity.store.localHead(pairId, aRecord.mySenderKeyId)!!.lastSequence
+        assertTrue(
+            "B's view of A's chain must hold the response event (B=$bHeadOfA, A=$aHeadAfterDecision)",
+            bHeadOfA >= aHeadAfterDecision,
         )
         val requesterRow = identity.approvalFlow().recentFor(pairId).single { it.requestEventId == requestId }
         assertEquals(ApprovalRequest.STATUS_APPROVED, requesterRow.status)
@@ -188,11 +243,16 @@ class PartnerApprovalInstrumentedTest {
         uidA: String,
         uidB: String,
     ) {
-        log("pairing: A initiates, B redeems, A confirms")
-        val initiation = ep.pairingFlow().initiate(uidA)
+        log("pairing: A initiates, B redeems, A confirms — with the name exchange a real user walks")
+        val initiation = ep.pairingFlow().initiate(uidA, MY_LABEL_A)
         coroutineScope {
             val partnerOutcome = async(Dispatchers.IO) {
-                identity.pairingFlow().complete(initiation.qrBytes, uidB, identity.signer.beginSign())
+                identity.pairingFlow().complete(
+                    initiation.qrBytes,
+                    uidB,
+                    identity.signer.beginSign(),
+                    myLabel = PARTNER_LABEL_B,
+                )
             }
             val await = ep.pairingFlow().awaitPartner(initiation.token, PairingToken.TTL_MILLIS)
             assertNotNull("partner material not verified (initiator rejected — see MyExodusPairing log)", await)
@@ -208,6 +268,16 @@ class PartnerApprovalInstrumentedTest {
                 (outcomeB as PairingFlow.Outcome.Paired).sas,
             )
         }
+    }
+
+    /** POST_NOTIFICATIONS over shell — GrantPermissionRule lives in androidx.test:rules, which
+     *  this module does not carry, and a real user grants the same permission in the system
+     *  dialog. Output is read to EOF so the command has really completed before the assertion. */
+    private fun grantPostNotifications(context: Context) {
+        val ui = InstrumentationRegistry.getInstrumentation().uiAutomation
+        ParcelFileDescriptor.AutoCloseInputStream(
+            ui.executeShellCommand("pm grant ${context.packageName} ${Manifest.permission.POST_NOTIFICATIONS}"),
+        ).use { it.readBytes() }
     }
 
     private fun assertWarmSigningWindow(signer: AccountabilitySigner, who: String) {
@@ -230,6 +300,12 @@ class PartnerApprovalInstrumentedTest {
         const val TAG = "MyExodusPartnerTest"
         const val REQUEST_MESSAGE = "Let me disable Strict Mode for a trip"
         const val PARTNER_OUTCOME_TIMEOUT_MILLIS = 60_000L
+
+        /** The name exchange a real user walks (owner ask 2026-09-29): the harness passes the
+         *  same labels PairingCeremonyScreen collects, so the device ends up holding
+         *  real-shaped enrollment data and every notification names its partner. */
+        const val MY_LABEL_A = "Musila"
+        const val PARTNER_LABEL_B = "Mama"
 
         /** Server-anchored creation should sit within this of the device clock; a larger gap
          *  means the anchor is not the mailbox timestamp (or the device clock is far off). */

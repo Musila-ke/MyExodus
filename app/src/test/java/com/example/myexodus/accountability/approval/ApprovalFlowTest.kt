@@ -122,14 +122,18 @@ class ApprovalFlowTest {
     @Test
     fun requestApproval_chainsEventAndPersistsRequesterRow() = runTest {
         val result = flow.requestApproval(pairId, "please disable strict mode", signing())
-        assertEquals(ApprovalFlow.RequestResult.Submitted("$mySenderKeyId:1"), result)
+        assertEquals(
+            ApprovalFlow.RequestResult.Submitted(ApprovalRequest.eventIdOf(pairId, mySenderKeyId, 1L)),
+            result,
+        )
 
         val payload = payloadAt(0)
         assertEquals(EventPayload.TYPE_APPROVAL_REQUEST, payload.type)
         assertEquals("please disable strict mode", payload.text)
         assertEquals(epoch, payload.pairingEpoch)
 
-        val row = db.approvalRequestDao().byId("$mySenderKeyId:1")!!
+        val row = db.approvalRequestDao()
+            .byId(ApprovalRequest.eventIdOf(pairId, mySenderKeyId, 1L))!!
         assertEquals(ApprovalRequest.ROLE_REQUESTER, row.role)
         assertEquals(ApprovalRequest.STATUS_REQUESTED, row.status)
         assertEquals(epoch, row.pairingEpoch)
@@ -153,7 +157,8 @@ class ApprovalFlowTest {
         val serverTs = now0 + 5_000
         flow.onRequestAppended(pairId, "partnerKey", 4L, requestPayload("help"), serverTs)
 
-        val row = db.approvalRequestDao().byId("partnerKey:4")!!
+        val row = db.approvalRequestDao()
+            .byId(ApprovalRequest.eventIdOf(pairId, "partnerKey", 4L))!!
         assertEquals(ApprovalRequest.ROLE_RESPONDER, row.role)
         assertEquals(ApprovalRequest.STATUS_REQUESTED, row.status)
         assertEquals("help", row.message)
@@ -167,13 +172,49 @@ class ApprovalFlowTest {
         assertEquals(1, requestNotifies)
     }
 
+    /**
+     * ADR #120 regression: the signing key is device-level and every pair's chain starts at
+     * sequence 1, so (senderKeyId, sequence) identifies a request only WITH its pair. The old
+     * pair-less canonical id made a second pair's RESPONDER row collide with the first pair's on
+     * the request_event_id primary key — insertIgnore no-op'd and the request silently never
+     * appeared (found on-device 2026-09-29, task #94).
+     */
+    @Test
+    fun onRequestAppended_sameChainPositionInTwoPairs_producesTwoRows() = runTest {
+        val otherPairId = "pair-approval-test-2"
+        db.enrollmentDao().upsert(
+            EnrollmentRecord(
+                pairId = otherPairId,
+                mySenderKeyId = mySenderKeyId,
+                partnerSigningKeyId = sha256Hex(partnerSigning.public.encoded),
+                partnerSigningPubKey = partnerSigning.public.encoded,
+                partnerAgreementPubKey = partnerAgreement.public.encoded,
+                createdAtEpochMillis = now0,
+                pairingEpoch = epoch,
+            ),
+        )
+
+        flow.onRequestAppended(pairId, "partnerKey", 1L, requestPayload("first pair"), now0)
+        flow.onRequestAppended(otherPairId, "partnerKey", 1L, requestPayload("second pair"), now0)
+
+        val first = db.approvalRequestDao()
+            .byId(ApprovalRequest.eventIdOf(pairId, "partnerKey", 1L))!!
+        val second = db.approvalRequestDao()
+            .byId(ApprovalRequest.eventIdOf(otherPairId, "partnerKey", 1L))!!
+        assertEquals(pairId, first.pairId)
+        assertEquals(otherPairId, second.pairId)
+        assertEquals("first pair", first.message)
+        assertEquals("second pair", second.message)
+        assertEquals("each pair's request must notify its own post", 2, requestNotifies)
+    }
+
     @Test
     fun onRequestAppended_wrongOrMissingEpoch_isDroppedSilently() = runTest {
         flow.onRequestAppended(pairId, "partnerKey", 1L, requestPayload("x", epoch = epoch + 1), now0)
         flow.onRequestAppended(pairId, "partnerKey", 2L, requestPayload("x", epoch = null), now0)
 
-        assertNull(db.approvalRequestDao().byId("partnerKey:1"))
-        assertNull(db.approvalRequestDao().byId("partnerKey:2"))
+        assertNull(db.approvalRequestDao().byId(ApprovalRequest.eventIdOf(pairId, "partnerKey", 1L)))
+        assertNull(db.approvalRequestDao().byId(ApprovalRequest.eventIdOf(pairId, "partnerKey", 2L)))
         assertEquals(0, requestNotifies)
     }
 

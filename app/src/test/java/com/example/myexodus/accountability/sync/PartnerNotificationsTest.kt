@@ -6,6 +6,7 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.myexodus.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -21,6 +22,8 @@ import org.robolectric.annotation.Config
  * notification is attempted while denied) and §8 Step 16's channel spec: `partner_alerts`
  * HIGH, `approval_requests` HIGH, `sync_status` LOW + debug-only. The banner itself is a
  * composition; the device leg covers it — this pins the posting gate and channel shape.
+ * Owner ruling 2026-09-29: every post names the partner it concerns and is keyed per pair
+ * (§19.5), while the lockscreen public copy stays generic (FR-13) — all pinned here.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
@@ -38,7 +41,7 @@ class PartnerNotificationsTest {
     @Test
     fun deniedPermission_postIsSilentNoOp() {
         shadowOf(context as Application).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
-        PartnerNotifications.notifyPartnerEvent(context)
+        PartnerNotifications.notifyPartnerEvent(context, PAIR_ID, PARTNER_NAME)
         assertTrue(manager.activeNotifications.isEmpty())
         assertNull(manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_ALERTS))
     }
@@ -46,7 +49,7 @@ class PartnerNotificationsTest {
     @Test
     fun granted_partnerAlertsChannelIsHighImportance() {
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
-        PartnerNotifications.notifyPartnerEvent(context)
+        PartnerNotifications.notifyPartnerEvent(context, PAIR_ID, PARTNER_NAME)
         assertEquals(
             NotificationManager.IMPORTANCE_HIGH,
             manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_ALERTS)!!.importance,
@@ -57,8 +60,8 @@ class PartnerNotificationsTest {
     @Test
     fun granted_approvalRequestsChannelIsHighImportance() {
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
-        PartnerNotifications.notifyApprovalRequest(context)
-        PartnerNotifications.notifyApprovalDecision(context)
+        PartnerNotifications.notifyApprovalRequest(context, PAIR_ID, PARTNER_NAME)
+        PartnerNotifications.notifyApprovalDecision(context, PAIR_ID, PARTNER_NAME)
         assertEquals(
             NotificationManager.IMPORTANCE_HIGH,
             manager.getNotificationChannel(PartnerNotifications.CHANNEL_APPROVAL_REQUESTS)!!.importance,
@@ -76,15 +79,19 @@ class PartnerNotificationsTest {
     fun partnerEvent_alertOnceDuringABurst_butApprovalAlwaysAlerts() {
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
 
-        PartnerNotifications.notifyPartnerEvent(context)
-        PartnerNotifications.notifyApprovalRequest(context)
+        PartnerNotifications.notifyPartnerEvent(context, PAIR_ID, PARTNER_NAME)
+        PartnerNotifications.notifyApprovalRequest(context, PAIR_ID, PARTNER_NAME)
 
-        val partnerEvent = manager.activeNotifications.first { it.id == PartnerNotifications.NOTIF_PARTNER_EVENT }
+        val partnerEvent = manager.activeNotifications.first {
+            it.id == PartnerNotifications.idFor(PartnerNotifications.NOTIF_PARTNER_EVENT, PAIR_ID)
+        }
         assertTrue(
             "partner-activity bursts alert once",
             partnerEvent.notification.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0,
         )
-        val approval = manager.activeNotifications.first { it.id == PartnerNotifications.NOTIF_APPROVAL_REQUEST }
+        val approval = manager.activeNotifications.first {
+            it.id == PartnerNotifications.idFor(PartnerNotifications.NOTIF_APPROVAL_REQUEST, PAIR_ID)
+        }
         assertEquals(
             "approval requests never suppress the alert",
             0,
@@ -98,11 +105,50 @@ class PartnerNotificationsTest {
     fun partnerEvent_isPrivateWithAGenericPublicVersion() {
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
 
-        PartnerNotifications.notifyPartnerEvent(context)
+        PartnerNotifications.notifyPartnerEvent(context, PAIR_ID, PARTNER_NAME)
 
         val notification = manager.activeNotifications.single().notification
         assertEquals(Notification.VISIBILITY_PRIVATE, notification.visibility)
-        assertTrue("lockscreen renders the generic public copy", notification.publicVersion != null)
+        assertEquals(
+            "the unlocked tray copy names the partner",
+            context.getString(R.string.partner_event_title_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        val publicVersion = notification.publicVersion
+        assertTrue("lockscreen renders the generic public copy", publicVersion != null)
+        assertEquals(
+            "the lockscreen copy stays generic (FR-13)",
+            context.getString(R.string.partner_event_title),
+            publicVersion!!.extras.getString(Notification.EXTRA_TITLE),
+        )
+    }
+
+    /** §19.5 multi-partner (owner ruling 2026-09-29): N pairs' items coexist in the tray, each
+     *  named for its own partner and keyed by its own id — one partner's entry can never
+     *  silently replace another's. */
+    @Test
+    fun twoPairs_coexist_eachNamedForItsOwnPartner() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyApprovalRequest(context, "pair-alpha", "Mama")
+        PartnerNotifications.notifyApprovalRequest(context, "pair-beta", "Ada")
+
+        val posted = manager.activeNotifications
+        assertEquals(2, posted.size)
+        assertEquals(
+            setOf(
+                PartnerNotifications.idFor(PartnerNotifications.NOTIF_APPROVAL_REQUEST, "pair-alpha"),
+                PartnerNotifications.idFor(PartnerNotifications.NOTIF_APPROVAL_REQUEST, "pair-beta"),
+            ),
+            posted.map { it.id }.toSet(),
+        )
+        assertEquals(
+            setOf(
+                context.getString(R.string.approval_request_title_named, "Mama"),
+                context.getString(R.string.approval_request_title_named, "Ada"),
+            ),
+            posted.map { it.notification.extras.getString(Notification.EXTRA_TITLE) }.toSet(),
+        )
     }
 
     @Test
@@ -115,5 +161,10 @@ class PartnerNotificationsTest {
             manager.getNotificationChannel(PartnerNotifications.CHANNEL_SYNC_STATUS)!!.importance,
         )
         assertTrue(manager.activeNotifications.isEmpty())
+    }
+
+    private companion object {
+        const val PAIR_ID = "pair-alpha"
+        const val PARTNER_NAME = "Mama"
     }
 }

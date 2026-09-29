@@ -216,9 +216,10 @@ fun PartnerScreen(
      *  to a key-id fragment — useless for telling people apart. The partner captions a row
      *  locally; the label never leaves this phone. */
     onRenameUser: suspend (pairId: String, label: String?) -> Unit = { _, _ -> },
-    /** Req 15: journals a motivational message for this profile. False = nothing was written
-     *  (blank/oversized body, or the store refused) — the dialog stays open and says so. */
-    onSendMessage: suspend (text: String) -> Boolean = { false },
+    /** Req 15: journals a motivational message for this profile, addressed to [pairId] — the
+     *  partner the composer names (#96). False = nothing was written (blank/oversized body, or
+     *  the store refused) — the dialog stays open and says so. */
+    onSendMessage: suspend (pairId: String, text: String) -> Boolean = { _, _ -> false },
 ) {
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<PartnerDashboardUi?>(null) }
@@ -236,6 +237,7 @@ fun PartnerScreen(
     var unpairFailed by remember { mutableStateOf(false) }
     var dismissing by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<PartnerUserUi?>(null) }
+    var switching by remember { mutableStateOf(false) }
     var composing by remember { mutableStateOf(false) }
     var messageSending by remember { mutableStateOf(false) }
     var messageFailed by remember { mutableStateOf(false) }
@@ -255,11 +257,12 @@ fun PartnerScreen(
         }
     }
 
-    /** §19.5: bring another supported user's dashboard forward — persisted, then reloaded. */
+    /** §19.5: bring another supported user's dashboard forward — persisted, then reloaded.
+     *  The subpage stays open (#96): switching who you are looking at must not also navigate
+     *  you away — the reload re-scopes every stream this page renders to the new pair. */
     fun selectUser(pairId: String) {
         selectedPairId = pairId
         selection?.selectedPairId = pairId
-        view = null
         scope.launch(Dispatchers.IO) { reload() }
     }
 
@@ -448,6 +451,10 @@ fun PartnerScreen(
                     ),
                     onBack = { view = null },
                 )
+                // #96 (owner ruling): every subpage acts on one partner, so every subpage says
+                // which one, and the ones with a roster let the viewer switch right there —
+                // without leaving the page they are on.
+                PartnerContextBar(current, onSwitch = { switching = true })
                 when (view) {
                     VIEW_REQUESTS -> RequestsView(
                         state = current,
@@ -608,22 +615,59 @@ fun PartnerScreen(
         )
     }
 
+    // #96: the roster switcher, offered from every subpage's context bar. Same hoisting reason
+    // as the other dialogs — the selection must survive the reload that swaps the dashboard.
+    if (switching) {
+        val users = paired?.users.orEmpty()
+        AlertDialog(
+            onDismissRequest = { switching = false },
+            title = { Text(stringResource(R.string.partner_switch_title)) },
+            text = {
+                Column {
+                    users.forEach { user ->
+                        PartnerUserRow(
+                            user = user,
+                            selected = user.pairId == paired?.pairId,
+                            onSelect = {
+                                switching = false
+                                selectUser(user.pairId)
+                            },
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { switching = false }) {
+                    Text(stringResource(R.string.partner_switch_close))
+                }
+            },
+        )
+    }
+
     // Req 15 composer. Hoisted for the same reason as the other dialogs: the send is a suspend
     // write, and the dashboard reload that follows it must not close the sheet mid-flight.
     if (composing) {
         ComposeMessageDialog(
             sending = messageSending,
             failed = messageFailed,
+            // #96: the message names its recipient, and goes to the pair it names — the
+            // selected partner at the moment Send is tapped.
+            toName = paired?.let { it.partnerLabel ?: shortKeyId(it.partnerKeyId) }.orEmpty(),
             onSend = { text ->
-                scope.launch(Dispatchers.IO) {
-                    messageSending = true
-                    messageFailed = false
-                    val ok = runCatching { onSendMessage(text) }
-                        .onFailure { Log.w(TAG, "message send threw", it) }
-                        .getOrDefault(false)
-                    messageSending = false
-                    messageFailed = !ok
-                    if (ok) composing = false
+                val target = paired?.pairId
+                if (target == null) {
+                    messageFailed = true
+                } else {
+                    scope.launch(Dispatchers.IO) {
+                        messageSending = true
+                        messageFailed = false
+                        val ok = runCatching { onSendMessage(target, text) }
+                            .onFailure { Log.w(TAG, "message send threw", it) }
+                            .getOrDefault(false)
+                        messageSending = false
+                        messageFailed = !ok
+                        if (ok) composing = false
+                    }
                 }
             },
             onDismiss = {
@@ -763,6 +807,8 @@ private fun PartnerSummaryCard(activity: PartnerActivityUi?, chainStatus: Partne
 private fun ComposeMessageDialog(
     sending: Boolean,
     failed: Boolean,
+    /** #96: who this message is addressed to — the selected partner, named verbatim. */
+    toName: String,
     onSend: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -779,6 +825,10 @@ private fun ComposeMessageDialog(
         title = { Text(stringResource(R.string.partner_compose_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(R.string.partner_compose_to, toName),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
                 Text(
                     stringResource(R.string.partner_compose_body),
                     style = MaterialTheme.typography.bodySmall,
@@ -883,7 +933,7 @@ private fun ApprovalRequestCard(
     val canRespond = canRespondToApprovals(chainStatus)
     PartnerSurface(spacing = 12.dp) {
         Text(
-            stringResource(R.string.partner_approvals_title),
+            stringResource(R.string.partner_approvals_title, requests.size),
             style = MaterialTheme.typography.titleMedium,
         )
         requests.forEachIndexed { index, request ->
@@ -962,7 +1012,7 @@ private fun ApprovalRequestCard(
 private fun MyRequestsCard(requests: List<ApprovalUi>) {
     PartnerSurface {
         Text(
-            stringResource(R.string.partner_my_requests_title),
+            stringResource(R.string.partner_my_requests_title, requests.size),
             style = MaterialTheme.typography.titleMedium,
         )
         requests.forEach { request ->
@@ -1162,39 +1212,15 @@ private fun PartnerIdentityCard(state: PartnerDashboardUi.Paired) {
     }
 }
 
-@Composable
-private fun PartnerCard(state: PartnerDashboardUi.Paired) {
-    PartnerSurface(spacing = 4.dp) {
-        Text(
-            stringResource(
-                R.string.partner_paired_with,
-                state.partnerLabel ?: shortKeyId(state.partnerKeyId),
-            ),
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Text(
-            stringResource(R.string.partner_paired_since, pairedOnText(state.pairedAtEpochMillis)),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        // Finding #6: the key-id fragment was a bare mystery string to a first-time
-        // user. With no §19.5 label the card explains the code instead of inventing a
-        // name; with one, the name itself is the explanation and the code is not shown.
-        if (state.partnerLabel == null) {
-            Text(
-                stringResource(R.string.partner_paired_explainer),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
 /**
  * Sync detail. The same card serves two jobs, so it takes its emphasis from the caller: on the
  * Pairing page it is the mechanism the user came for, with a filled action; on the hub it is
  * there only because something needs attention, and there a filled button would make a routine
  * resync the loudest control on a page whose real subject is the partner.
+ *
+ * [showIdentity] (#97 cognitive-load pass): the Pairing page used to stack a separate
+ * identity card above this one — two cards, one subject ("who is this and is it healthy?").
+ * With the header folded in, the page answers that in one card and the hero.
  */
 @Composable
 private fun SyncCard(
@@ -1204,8 +1230,46 @@ private fun SyncCard(
     onCheckNow: () -> Unit,
     tone: CardTone = CardTone.CALM,
     prominentAction: Boolean = true,
+    showIdentity: Boolean = false,
 ) {
     PartnerSurface(tone = tone) {
+        if (showIdentity) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                ChainVerdictMark(state.chainStatus)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        stringResource(
+                            R.string.partner_paired_with,
+                            state.partnerLabel ?: shortKeyId(state.partnerKeyId),
+                        ),
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        stringResource(
+                            R.string.partner_paired_since,
+                            pairedOnText(state.pairedAtEpochMillis),
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            // Finding #6: the key-id fragment was a bare mystery string to a first-time user.
+            // With no §19.5 label the card explains the code instead of inventing a name.
+            if (state.partnerLabel == null) {
+                Text(
+                    stringResource(R.string.partner_paired_explainer),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            HorizontalDivider()
+        }
         Text(
             stringResource(
                 if (state.lastSyncedAtEpochMillis == null) R.string.partner_never_synced
@@ -1267,7 +1331,7 @@ private fun SyncCard(
 private fun ActivityCard(summary: AlertSummary) {
     PartnerSurface {
         Text(
-            stringResource(R.string.partner_activity_title),
+            stringResource(R.string.partner_activity_title, summary.recent.size),
             style = MaterialTheme.typography.titleMedium,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -1403,9 +1467,14 @@ private fun PairingView(
     onStartUnpair: () -> Unit,
     onAddUser: ((CeremonyMode) -> Unit)?,
 ) {
-    PartnerCard(state)
+    SyncCard(
+        state = state,
+        checking = checking,
+        checkFailed = checkFailed,
+        onCheckNow = onCheckNow,
+        showIdentity = true,
+    )
     if (onAddUser != null) AddUserCard(onAddUser)
-    SyncCard(state = state, checking = checking, checkFailed = checkFailed, onCheckNow = onCheckNow)
     UnpairCard(working = unpairing, failed = unpairFailed, onStart = onStartUnpair)
 }
 
@@ -1456,49 +1525,108 @@ private fun PartnerUsersCard(
             modifier = Modifier.padding(bottom = 4.dp),
         )
         users.forEach { user ->
-            val selected = user.pairId == selectedPairId
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .selectable(
-                        selected = selected,
-                        role = Role.RadioButton,
-                        onClick = { onSelect(user.pairId) },
-                    )
-                    .padding(vertical = 4.dp),
+            PartnerUserRow(
+                user = user,
+                selected = user.pairId == selectedPairId,
+                onSelect = { onSelect(user.pairId) },
+                trailing = {
+                    IconButton(onClick = { onRename(user) }) {
+                        Icon(
+                            Icons.Outlined.Edit,
+                            contentDescription = stringResource(
+                                R.string.partner_users_rename_action,
+                                user.label ?: shortKeyId(user.keyId),
+                            ),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                },
+            )
+        }
+    }
+}
+
+/**
+ * One roster row: radio, name, paired-since. Shared by the hub's roster card and the subpage
+ * switcher dialog (#96), so "which partner is selected" looks the same wherever it is asked.
+ */
+@Composable
+private fun PartnerUserRow(
+    user: PartnerUserUi,
+    selected: Boolean,
+    onSelect: () -> Unit,
+    trailing: @Composable (() -> Unit)? = null,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .padding(vertical = 4.dp),
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Column(
+            Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                user.label ?: shortKeyId(user.keyId),
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                stringResource(
+                    R.string.partner_users_since,
+                    pairedOnText(user.partneredAtEpochMillis),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        trailing?.invoke()
+    }
+}
+
+/**
+ * #96 (owner ruling): *"as we do them and move on … the partner needs to be able to see or
+ * change the partner"*. Every partner subpage acts on exactly one supported user, so the page
+ * names which one — and when there is a roster, switching happens right here (a dialog over the
+ * page, not a trip back to the hub), keeping the viewer where they were.
+ */
+@Composable
+private fun PartnerContextBar(state: PartnerDashboardUi.Paired, onSwitch: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+        ) {
+            Column(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                RadioButton(selected = selected, onClick = null)
-                Column(
-                    Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    Text(
-                        user.label ?: shortKeyId(user.keyId),
-                        style = MaterialTheme.typography.bodyLarge,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        stringResource(
-                            R.string.partner_users_since,
-                            pairedOnText(user.partneredAtEpochMillis),
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                IconButton(onClick = { onRename(user) }) {
-                    Icon(
-                        Icons.Outlined.Edit,
-                        contentDescription = stringResource(
-                            R.string.partner_users_rename_action,
-                            user.label ?: shortKeyId(user.keyId),
-                        ),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp),
-                    )
+                Text(
+                    stringResource(R.string.partner_context_label),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+                Text(
+                    state.partnerLabel ?: shortKeyId(state.partnerKeyId),
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (state.users.size > 1) {
+                TextButton(onClick = onSwitch) {
+                    Text(stringResource(R.string.partner_context_switch))
                 }
             }
         }
