@@ -75,7 +75,7 @@ class AttemptLogTest {
         val dao = factory.open()!!.attemptLogDao()
         dao.linkEvent(dao.recent(10)[1].id, pairId = "pair-a", sequence = 7L)
 
-        val pending = dao.pendingEventCreation("pair-a", 10)
+        val pending = dao.pendingEventCreation("pair-a", sinceMs = 0L, limit = 10)
         assertEquals(1, pending.size)
         assertEquals("com.b", pending[0].blockedTarget)
     }
@@ -91,11 +91,11 @@ class AttemptLogTest {
         dao.linkEvent(row.id, pairId = "pair-a", sequence = 3L)
 
         assertEquals(3L, dao.linkSequence(row.id, "pair-a"))
-        assertTrue(dao.pendingEventCreation("pair-a", 10).isEmpty())
+        assertTrue(dao.pendingEventCreation("pair-a", sinceMs = 0L, limit = 10).isEmpty())
         assertEquals(
             "pair-b must still see the row pending",
             listOf(row.id),
-            dao.pendingEventCreation("pair-b", 10).map { it.id },
+            dao.pendingEventCreation("pair-b", sinceMs = 0L, limit = 10).map { it.id },
         )
         assertNull(dao.linkSequence(row.id, "pair-b"))
 
@@ -120,9 +120,38 @@ class AttemptLogTest {
             ),
         )
 
-        assertTrue(dao.pendingEventCreation("pair-a", 10).isEmpty())
-        assertTrue(dao.pendingEventCreation("pair-b", 10).isEmpty())
+        assertTrue(dao.pendingEventCreation("pair-a", sinceMs = 0L, limit = 10).isEmpty())
+        assertTrue(dao.pendingEventCreation("pair-b", sinceMs = 0L, limit = 10).isEmpty())
     }
+
+    /**
+     * Owner ruling 2026-09-29: the fan-out bound is the queried pair's enrollment time — a
+     * newcomer is never handed pre-pairing history. [sinceMs] is inclusive: a row stamped
+     * exactly at pairing time is part of the newly paired world.
+     */
+    @Test
+    fun pendingEventCreation_boundsToThePairingMoment() = runTest {
+        val dao = factory.open()!!.attemptLogDao()
+        dao.insert(attempt(at = 1_000L, target = "com.before"))
+        dao.insert(attempt(at = 2_000L, target = "com.at-pairing"))
+        dao.insert(attempt(at = 3_000L, target = "com.after"))
+
+        val pending = dao.pendingEventCreation("pair-a", sinceMs = 2_000L, limit = 10)
+
+        assertEquals(
+            "pre-pairing history is not the newcomer's to see; the pairing-moment row is",
+            listOf("com.at-pairing", "com.after"),
+            pending.map { it.blockedTarget },
+        )
+    }
+
+    private fun attempt(at: Long, target: String) = AttemptLog(
+        occurredAtEpochMillis = at,
+        ruleId = "r-1",
+        blockedTarget = target,
+        outcome = AttemptLog.OUTCOME_BLOCKED,
+        eventSequence = null,
+    )
 
     private class FakeKeyManager : DatabaseKeyManager {
         override fun getOrCreateDek(): ByteArray = ByteArray(32)

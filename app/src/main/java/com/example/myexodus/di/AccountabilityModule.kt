@@ -38,6 +38,7 @@ import com.example.myexodus.accountability.sync.PairingRegistration
 import com.example.myexodus.accountability.sync.PairUidResolver
 import com.example.myexodus.accountability.sync.PartnerNotifications
 import com.example.myexodus.accountability.sync.displayNameOf
+import com.example.myexodus.accountability.activity.PartnerActivityJournal
 import com.example.myexodus.accountability.activity.PartnerActivityReceiver
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
 import com.example.myexodus.accountability.sync.PartnerSyncTelemetry
@@ -401,6 +402,7 @@ object AccountabilityModule {
         exchange: PairingExchange,
         registration: PairingRegistration,
         secretsRepository: SecretsRepository,
+        storeFactory: AppRulesStoreFactory,
     ): PairingFlow = PairingFlow(
         enrollmentFlow = enrollmentFlow,
         enrollmentDao = enrollmentDao,
@@ -415,6 +417,13 @@ object AccountabilityModule {
         agreementPublicKey = keystore::pairAgreementPublicKey,
         agreementPrivateKey = keystore::pairAgreementPrivateKey,
         destroyAgreementKey = keystore::destroyPairAgreementKey,
+        // Owner ruling 2026-09-29: the newcomer gets one fresh snapshot at pair-complete
+        // (reconcile no longer hands them the pre-pairing backlog).
+        onEnrolled = { pairId ->
+            storeFactory.open()?.let {
+                PartnerActivityJournal.emitPairingSnapshot(it, pairId, System.currentTimeMillis())
+            }
+        },
     )
 
     @Provides @Singleton

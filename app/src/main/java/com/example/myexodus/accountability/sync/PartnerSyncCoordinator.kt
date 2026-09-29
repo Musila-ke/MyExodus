@@ -123,7 +123,7 @@ class PartnerSyncCoordinator(
             .getOrNull()
         if (rotated != null) Log.i(TAG, "session key rotated to epoch $rotated")
 
-        val linked = reconcileEvents(enrollment.pairId)
+        val linked = reconcileEvents(enrollment.pairId, enrollment.createdAtEpochMillis)
 
         // Step 11 before the drain: a request created now is delivered by this same pass.
         val repairs = runCatching { repairPass(enrollment.pairId) }
@@ -177,12 +177,16 @@ class PartnerSyncCoordinator(
      *  activity journal rows (partner-activity plan §7 Step 6), each linked in its own table.
      *  §19.5 multi-pair: pending is per pair (ADR #111) — own activity fans out to every
      *  enrollment, one delivery per pair, and one pair's delivery never hides the row from the
-     *  rest. */
-    private suspend fun reconcileEvents(pairId: String): Int {
+     *  rest.
+     *
+     *  [sinceMs] is this pair's enrollment time (owner ruling 2026-09-29): a newcomer must not
+     *  inherit history that predates them. Pairing itself writes a targeted state snapshot, so
+     *  the newcomer starts with one fresh row instead of up to 30 days of backlog. */
+    private suspend fun reconcileEvents(pairId: String, sinceMs: Long): Int {
         val store = storeFactory.open() ?: return 0
         val attempts = store.attemptLogDao()
         var linked = 0
-        for (attempt in attempts.pendingEventCreation(pairId, RECONCILE_BATCH)) {
+        for (attempt in attempts.pendingEventCreation(pairId, sinceMs, RECONCILE_BATCH)) {
             when (val emit = emitActivity(pairId, "attempt ${attempt.id}", eventText(attempt))) {
                 is Emit.Created -> { attempts.linkEvent(attempt.id, pairId, emit.sequence); linked++ }
                 Emit.Skip -> Unit
@@ -190,7 +194,7 @@ class PartnerSyncCoordinator(
             }
         }
         val sessions = store.recoverySessionDao()
-        for (session in sessions.pendingMirror(pairId, RECONCILE_BATCH)) {
+        for (session in sessions.pendingMirror(pairId, sinceMs, RECONCILE_BATCH)) {
             when (val emit = emitActivity(pairId, "session ${session.id}", RecoveryMirror.text(session.technique, session.state))) {
                 is Emit.Created -> { sessions.linkEvent(session.id, pairId, emit.sequence); linked++ }
                 Emit.Skip -> Unit
@@ -198,7 +202,7 @@ class PartnerSyncCoordinator(
             }
         }
         val activity = store.partnerActivityDao()
-        for (row in activity.pendingForPair(pairId, RECONCILE_BATCH)) {
+        for (row in activity.pendingForPair(pairId, sinceMs, RECONCILE_BATCH)) {
             when (val emit = emitPayload(pairId, "activity ${row.eventId}", row.toActivityPayload())) {
                 is Emit.Created -> { activity.linkEvent(row.eventId, pairId, emit.sequence); linked++ }
                 Emit.Skip -> Unit

@@ -144,7 +144,7 @@ class RecoveryPlanRepositoryTest {
         repository.deleteItem(checkNotNull(repository.items(profileId).find { it.actionText == "call Sam" }))
 
         val rows = checkNotNull(factory.open()).partnerActivityDao()
-            .pendingForPair("pair-1", 10)
+            .pendingForPair("pair-1", sinceMs = 0L, limit = 10)
             .filter { it.kind == EventPayload.TYPE_COACHING_STEP_UPDATED }
 
         assertEquals(listOf(1, 1, 2), rows.map { it.coachingProgress }.sorted())

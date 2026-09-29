@@ -54,15 +54,18 @@ interface RecoverySessionDao {
 
     /** Mirror queue (W5): terminal rows with no chain event for THIS pair yet, oldest first
      *  (ADR #111). STARTED rows and technique-less logs are excluded by construction — never
-     *  mirrored. `event_sequence` is the pre-v12 single-link marker (see [AttemptLogDao]). */
+     *  mirrored. `event_sequence` is the pre-v12 single-link marker (see [AttemptLogDao]).
+     *  [sinceMs] is the pair's enrollment time (owner ruling 2026-09-29) — see
+     *  [AttemptLogDao.pendingEventCreation]. */
     @Query(
         "SELECT * FROM recovery_session " +
             "WHERE event_sequence IS NULL AND state != 'STARTED' AND technique != 'none' " +
+            "AND started_at_epoch_ms >= :sinceMs " +
             "AND NOT EXISTS (SELECT 1 FROM recovery_mirror_link l " +
             "WHERE l.session_id = recovery_session.id AND l.pair_id = :pairId) " +
             "ORDER BY started_at_epoch_ms ASC LIMIT :limit",
     )
-    suspend fun pendingMirror(pairId: String, limit: Int): List<RecoverySession>
+    suspend fun pendingMirror(pairId: String, sinceMs: Long, limit: Int): List<RecoverySession>
 
     /** Exactly-once per (session, pair): re-linking the same pair is a no-op (ADR #111). */
     @Query(

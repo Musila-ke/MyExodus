@@ -26,6 +26,7 @@ import com.example.myexodus.data.db.DatabaseKeyManager
 import com.example.myexodus.data.db.KeyFailure
 import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.data.db.RulesStoreKeyManager
+import com.example.myexodus.data.db.entity.AttemptLog
 import com.example.myexodus.data.db.entity.PartnerActivityOutbox
 import com.example.myexodus.data.db.entity.RecoverySession
 import java.security.KeyPair
@@ -39,6 +40,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -409,7 +411,7 @@ class PartnerSyncCoordinatorTest {
         val dao = factory.open()!!.partnerActivityDao()
         for ((pId, cekForPair) in listOf(pairId to cek, secondPair to secondCek)) {
             assertEquals(1L, dao.linkSequence("ev-1", pId))
-            assertTrue("pending for $pId is drained", dao.pendingForPair(pId, 10).isEmpty())
+            assertTrue("pending for $pId is drained", dao.pendingForPair(pId, sinceMs = 0L, limit = 10).isEmpty())
             val payload = decodePayload(
                 cipher.decrypt(cekForPair, 1L, decodeSigned(store.chainFor(pId).single().envelope).unsigned.ciphertext),
             )
@@ -451,8 +453,57 @@ class PartnerSyncCoordinatorTest {
         val report = coordinator.syncOnce()
 
         assertEquals(0, report.eventsLinked)
-        assertEquals(1, factory.open()!!.partnerActivityDao().pendingForPair(pairId, 10).size)
+        assertEquals(1, factory.open()!!.partnerActivityDao().pendingForPair(pairId, sinceMs = 0L, limit = 10).size)
         assertNull(factory.open()!!.partnerActivityDao().linkSequence("ev-cold", pairId))
+    }
+
+    /**
+     * Owner ruling 2026-09-29 (backlog boundary): a pair's fan-out starts at its enrollment
+     * time, so a newcomer is never handed the pairing's pre-history — and the bound holds on
+     * every queue, not just the journal. Rows stamped at the pairing moment itself are part of
+     * the newly paired world (the bound is inclusive), and the excluded rows stay pending
+     * locally: bounded, not lost.
+     *
+     * Times are relative to *now*, not the fixture constant: a backdated row would fall outside
+     * the 30-day retention window and the sweep would delete it before reconcile ever ran, which
+     * would make this pass for the wrong reason.
+     */
+    @Test
+    fun reconcile_boundsEveryQueueToThePairingMoment() = runTest {
+        val pairedAt = System.currentTimeMillis()
+        enroll(enrolledAt = pairedAt)
+        val store = factory.open()!!
+        val attempts = store.attemptLogDao()
+        val beforeAttempt = attempts.insert(attemptAt(pairedAt - 1_000L))
+        val atAttempt = attempts.insert(attemptAt(pairedAt))
+        insertActivity(
+            eventId = "ev-before", kind = EventPayload.TYPE_STREAK_UPDATED,
+            occurredAtMs = pairedAt - 1_000L, createdAtMs = pairedAt - 1_000L,
+        )
+        insertActivity(
+            eventId = "ev-at", kind = EventPayload.TYPE_STREAK_UPDATED,
+            occurredAtMs = pairedAt, createdAtMs = pairedAt,
+        )
+        insertSession(id = "s-before", startedAt = pairedAt - 1_000L)
+        insertSession(id = "s-at", startedAt = pairedAt)
+
+        val report = coordinator.syncOnce()
+
+        assertEquals("exactly the three at-or-after rows are delivered", 3, report.eventsLinked)
+        assertNull("pre-pairing attempt is never turned into a chain event", linkSequence(beforeAttempt, pairId))
+        assertNotNull("paired-moment attempt is delivered", linkSequence(atAttempt, pairId))
+        assertNull(
+            "pre-pairing session is never mirrored",
+            store.recoverySessionDao().linkSequence("s-before", pairId),
+        )
+        assertNotNull(store.recoverySessionDao().linkSequence("s-at", pairId))
+        assertNull(store.partnerActivityDao().linkSequence("ev-before", pairId))
+        assertNotNull(store.partnerActivityDao().linkSequence("ev-at", pairId))
+        assertEquals(
+            "the excluded rows stay pending locally — bounded, never dropped",
+            listOf("ev-before"),
+            store.partnerActivityDao().pendingForPair(pairId, sinceMs = 0L, limit = 10).map { it.eventId },
+        )
     }
 
     /** §19.5: with no enrollment there is no partner to carry the row to — it stays local and
@@ -492,7 +543,7 @@ class PartnerSyncCoordinatorTest {
         assertEquals(
             "expired row swept, fresh row survives",
             listOf("ev-fresh"),
-            dao.pendingForPair("pair-never", 10).map { it.eventId },
+            dao.pendingForPair("pair-never", sinceMs = 0L, limit = 10).map { it.eventId },
         )
         assertEquals("live pair's card kept", 7, dao.projection(pairId)!!.daysFree)
         assertNull("orphan link pruned", dao.linkSequence("ev-old", "pair-gone"))
@@ -582,6 +633,7 @@ class PartnerSyncCoordinatorTest {
         pairId: String = this.pairId,
         partnerSigningKey: PublicKey = partnerSigning.public,
         partnerAgreementKey: PublicKey = partnerAgreement.public,
+        enrolledAt: Long = ENROLLMENT_AT,
     ) = runBlocking {
         db.enrollmentDao().upsert(
             EnrollmentRecord(
@@ -590,7 +642,7 @@ class PartnerSyncCoordinatorTest {
                 partnerSigningKeyId = sha256Hex(partnerSigningKey.encoded),
                 partnerSigningPubKey = partnerSigningKey.encoded,
                 partnerAgreementPubKey = partnerAgreementKey.encoded,
-                createdAtEpochMillis = 1_700_000_000_000L,
+                createdAtEpochMillis = enrolledAt,
             ),
         )
     }
@@ -602,7 +654,7 @@ class PartnerSyncCoordinatorTest {
     private val signer = warmSigner()
 
     private suspend fun pending(pairId: String) =
-        factory.open()!!.attemptLogDao().pendingEventCreation(pairId, 10)
+        factory.open()!!.attemptLogDao().pendingEventCreation(pairId, ENROLLMENT_AT, 10)
 
     private suspend fun linkSequence(attemptId: Long, pairId: String) =
         factory.open()!!.attemptLogDao().linkSequence(attemptId, pairId)
@@ -611,7 +663,7 @@ class PartnerSyncCoordinatorTest {
         id: String = "s-1",
         technique: String = "urge_surfing",
         state: String = RecoverySession.STATE_COMPLETED,
-        startedAt: Long = 1_700_000_000_000L,
+        startedAt: Long = ENROLLMENT_AT,
     ) = factory.open()!!.recoverySessionDao().insert(
         RecoverySession(
             id = id,
@@ -626,6 +678,13 @@ class PartnerSyncCoordinatorTest {
     )
 
     private suspend fun recent() = factory.open()!!.attemptLogDao().recent(1)
+
+    private fun attemptAt(at: Long) = AttemptLog(
+        occurredAtEpochMillis = at,
+        ruleId = "r-1",
+        blockedTarget = "com.instagram.android",
+        outcome = AttemptLog.OUTCOME_BLOCKED,
+    )
 
     /** Stands in for the Keystore boundary: warm returns a plain JCA Signature over the test
      *  keypair; cold throws exactly what AndroidKeyStore throws after the 900s window lapses. */
@@ -646,6 +705,10 @@ class PartnerSyncCoordinatorTest {
     }
 
     companion object {
+        /** Fixture pairing time: every hand-built row is stamped at or after it, so the
+         *  enrollment bound is exercised rather than bypassed. */
+        private const val ENROLLMENT_AT = 1_700_000_000_000L
+
         private fun ecKeyPair(): KeyPair = KeyPairGenerator.getInstance("EC").apply {
             initialize(ECGenParameterSpec("secp256r1"))
         }.generateKeyPair()

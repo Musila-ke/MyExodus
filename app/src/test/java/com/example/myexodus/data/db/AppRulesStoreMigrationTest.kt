@@ -162,7 +162,7 @@ class AppRulesStoreMigrationTest {
             assertEquals(
                 "a STARTED row is not mirrorable",
                 0,
-                sessions.pendingMirror("pair-a", 10).size,
+                sessions.pendingMirror("pair-a", sinceMs = 0L, limit = 10).size,
             )
 
             val windows = store.riskWindowDao()
@@ -204,15 +204,15 @@ class AppRulesStoreMigrationTest {
 
             // Per-pair mirror links 11→12 (ADR #111): the attempt inserted above pends for
             // EVERY pair until each is linked; one pair's delivery never hides it from others.
-            assertEquals(listOf(id), dao.pendingEventCreation("pair-a", 10).map { it.id })
-            assertEquals(listOf(id), dao.pendingEventCreation("pair-b", 10).map { it.id })
+            assertEquals(listOf(id), dao.pendingEventCreation("pair-a", sinceMs = 0L, limit = 10).map { it.id })
+            assertEquals(listOf(id), dao.pendingEventCreation("pair-b", sinceMs = 0L, limit = 10).map { it.id })
             dao.linkEvent(id, "pair-a", sequence = 11L)
             assertEquals(11L, dao.linkSequence(id, "pair-a"))
-            assertTrue(dao.pendingEventCreation("pair-a", 10).isEmpty())
+            assertTrue(dao.pendingEventCreation("pair-a", sinceMs = 0L, limit = 10).isEmpty())
             assertEquals(
                 "the second pair still sees the row pending",
                 listOf(id),
-                dao.pendingEventCreation("pair-b", 10).map { it.id },
+                dao.pendingEventCreation("pair-b", sinceMs = 0L, limit = 10).map { it.id },
             )
 
             // Partner-activity layer 12→13: journal + per-pair links + received-state
@@ -235,15 +235,15 @@ class AppRulesStoreMigrationTest {
                     createdAtMs = 1_700_000_000_000L,
                 ),
             )
-            assertEquals(listOf("evt-1"), activity.pendingForPair("pair-a", 10).map { it.eventId })
-            assertEquals(listOf("evt-1"), activity.pendingForPair("pair-b", 10).map { it.eventId })
+            assertEquals(listOf("evt-1"), activity.pendingForPair("pair-a", sinceMs = 0L, limit = 10).map { it.eventId })
+            assertEquals(listOf("evt-1"), activity.pendingForPair("pair-b", sinceMs = 0L, limit = 10).map { it.eventId })
             activity.linkEvent("evt-1", "pair-a", sequence = 7L)
             assertEquals(7L, activity.linkSequence("evt-1", "pair-a"))
-            assertTrue(activity.pendingForPair("pair-a", 10).isEmpty())
+            assertTrue(activity.pendingForPair("pair-a", sinceMs = 0L, limit = 10).isEmpty())
             assertEquals(
                 "the second pair still sees the journal row pending",
                 listOf("evt-1"),
-                activity.pendingForPair("pair-b", 10).map { it.eventId },
+                activity.pendingForPair("pair-b", sinceMs = 0L, limit = 10).map { it.eventId },
             )
 
             // Projection: wholesale apply, then the monotonic guard rejects a late replay.
@@ -285,7 +285,7 @@ class AppRulesStoreMigrationTest {
             // row stops pending for the pair that never got a link).
             assertEquals(0, activity.deleteJournalOlderThan(1_700_000_000_000L, 10))
             assertEquals(1, activity.deleteJournalOlderThan(1_700_000_000_001L, 10))
-            assertTrue(activity.pendingForPair("pair-b", 10).isEmpty())
+            assertTrue(activity.pendingForPair("pair-b", sinceMs = 0L, limit = 10).isEmpty())
 
             // Message addressing 13→14 (#96): with the column in place, a row addressed to one
             // pair pends only for that pair, while an untargeted row keeps fanning out.
@@ -307,9 +307,12 @@ class AppRulesStoreMigrationTest {
             )
             assertTrue(
                 "a row addressed to one pair must not pend for another",
-                activity.pendingForPair("pair-a", 10).isEmpty(),
+                activity.pendingForPair("pair-a", sinceMs = 0L, limit = 10).isEmpty(),
             )
-            assertEquals(listOf("evt-msg"), activity.pendingForPair("pair-b", 10).map { it.eventId })
+            assertEquals(
+                listOf("evt-msg"),
+                activity.pendingForPair("pair-b", sinceMs = 0L, limit = 10).map { it.eventId },
+            )
         }
     }
 

@@ -59,6 +59,11 @@ class PairingFlow(
     private val agreementPublicKey: (alias: String) -> PublicKey,
     private val agreementPrivateKey: (alias: String) -> PrivateKey,
     private val destroyAgreementKey: (alias: String) -> Unit,
+    // Owner ruling 2026-09-29: fan-out is bounded to the pairing moment, so the newcomer needs
+    // one fresh state snapshot at pair-complete or their dashboard waits for the first
+    // transition. Defaulted: the debug harness has no rules store to snapshot from, and the
+    // emission must never be able to fail a pairing that is already durable.
+    private val onEnrolled: suspend (pairId: String) -> Unit = {},
 ) {
 
     sealed interface Outcome {
@@ -612,6 +617,10 @@ class PairingFlow(
             ),
         )
         secretsRepository.storePairingKey(enrollmentFlow.derivePairingKey(cek))
+        // Post-durable: the enrollment and key are already committed, so a snapshot failure is
+        // logged and swallowed — the pairing outcome must reflect the pairing, not the extra.
+        runCatching { onEnrolled(durablePairId) }
+            .onFailure { Log.w(TAG, "pairing snapshot emission failed for $durablePairId", it) }
         return enrollmentFlow.deriveSas(sessionId, agreementPublicKey(aliasOf(sessionId)), partnerAgreementPublicKey)
     }
 

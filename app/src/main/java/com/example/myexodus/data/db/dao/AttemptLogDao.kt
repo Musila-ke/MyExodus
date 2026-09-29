@@ -27,14 +27,19 @@ interface AttemptLogDao {
      * delivery never hides the row from another. `event_sequence` stays only as the pre-v12
      * single-link marker: a row carrying it was delivered before per-pair links existed and is
      * excluded for every pair (never re-mirrored, so no duplicates).
+     *
+     * [sinceMs] is the pair's enrollment time (owner ruling 2026-09-29): history that predates
+     * the pairing is never handed to the newcomer. A row recorded before the pairing already
+     * has no audience — it happened when this partner did not exist.
      */
     @Query(
         "SELECT * FROM attempt_log WHERE event_sequence IS NULL " +
+            "AND occurred_at_epoch_millis >= :sinceMs " +
             "AND NOT EXISTS (SELECT 1 FROM attempt_mirror_link l " +
             "WHERE l.attempt_id = attempt_log.id AND l.pair_id = :pairId) " +
             "ORDER BY occurred_at_epoch_millis ASC LIMIT :limit",
     )
-    suspend fun pendingEventCreation(pairId: String, limit: Int): List<AttemptLog>
+    suspend fun pendingEventCreation(pairId: String, sinceMs: Long, limit: Int): List<AttemptLog>
 
     /** Exactly-once per (attempt, pair): re-linking the same pair is a no-op (ADR #111). */
     @Query(

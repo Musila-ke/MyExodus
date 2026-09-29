@@ -24,15 +24,20 @@ interface PartnerActivityDao {
      * Addressing (#96, schema v14): a row with a null target fans out (state snapshots); a
      * targeted row — a Req 15 message the user composed for the selected partner — is pending
      * for that pair alone, so no other supported partner can ever be handed it.
+     *
+     * [sinceMs] is the pair's enrollment time (owner ruling 2026-09-29): a newcomer gets the
+     * pairing-time snapshot (written at pair-complete, so on or after this bound) and
+     * everything after it — never the pre-pairing backlog.
      */
     @Query(
-        "SELECT * FROM partner_activity_outbox WHERE NOT EXISTS (" +
+        "SELECT * FROM partner_activity_outbox WHERE created_at_ms >= :sinceMs " +
+            "AND NOT EXISTS (" +
             "SELECT 1 FROM partner_activity_link l " +
             "WHERE l.event_id = partner_activity_outbox.event_id AND l.pair_id = :pairId) " +
             "AND (target_pair_id IS NULL OR target_pair_id = :pairId) " +
             "ORDER BY created_at_ms ASC LIMIT :limit",
     )
-    suspend fun pendingForPair(pairId: String, limit: Int): List<PartnerActivityOutbox>
+    suspend fun pendingForPair(pairId: String, sinceMs: Long, limit: Int): List<PartnerActivityOutbox>
 
     /** Exactly-once per (event, pair): re-linking the same pair is a no-op (ADR #111). */
     @Query(

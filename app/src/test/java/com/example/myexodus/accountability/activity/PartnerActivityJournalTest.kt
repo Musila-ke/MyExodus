@@ -191,7 +191,7 @@ class PartnerActivityJournalTest {
         )
         assertTrue(PartnerActivityJournal.emitForHabit(store, habitId, EventPayload.TYPE_STREAK_UPDATED, NOW))
 
-        val target = store.partnerActivityDao().pendingForPair("pair-1", 100)
+        val target = store.partnerActivityDao().pendingForPair("pair-1", sinceMs = 0L, limit = 100)
         val message = target.single { it.kind == EventPayload.TYPE_MOTIVATIONAL_MESSAGE }
         assertEquals("the addressed row carries its recipient", "pair-1", message.targetPairId)
         assertNull(
@@ -201,8 +201,51 @@ class PartnerActivityJournalTest {
         assertEquals(
             "another pair sees only the fan-out snapshot, never the message",
             listOf(EventPayload.TYPE_STREAK_UPDATED),
-            store.partnerActivityDao().pendingForPair("pair-2", 100).map { it.kind },
+            store.partnerActivityDao().pendingForPair("pair-2", sinceMs = 0L, limit = 100).map { it.kind },
         )
+    }
+
+    // --- Pairing snapshot (owner ruling 2026-09-29) -------------------------------------------
+
+    /**
+     * The newcomer's dashboard starts populated: one targeted STREAK_UPDATED row at
+     * pair-complete carrying the sender's committed state, addressed to the new pair alone so
+     * an existing partner is never handed a duplicate of it.
+     */
+    @Test
+    fun pairingSnapshot_isOneTargetedStreakUpdate_carryingTheCurrentState() = runBlocking {
+        seedProfile()
+        seedHabit(daysElapsed = 12, relapses = 1, shareMilestones = true)
+
+        assertTrue(PartnerActivityJournal.emitPairingSnapshot(store, "pair-new", atMs = NOW))
+
+        val row = store.partnerActivityDao().pendingForPair("pair-new", sinceMs = 0L, limit = 10).single()
+        assertEquals(EventPayload.TYPE_STREAK_UPDATED, row.kind)
+        assertEquals("pair-new", row.targetPairId)
+        assertEquals(12, row.daysFree)
+        assertEquals(1, row.relapseCount)
+        assertEquals("7", row.milestonesReached)
+        assertEquals(
+            "written at pair-complete, so the enrollment bound cannot exclude it",
+            NOW, row.createdAtMs,
+        )
+        assertEquals(NOW, row.occurredAtMs)
+        assertTrue(
+            "addressed to the new pair: an existing partner is never handed the same snapshot",
+            store.partnerActivityDao().pendingForPair("pair-existing", sinceMs = 0L, limit = 10).isEmpty(),
+        )
+    }
+
+    /** Appendix A.3: no consent, no snapshot — the ruling adds a delivery, never a share the
+     *  user withheld, and an unresolvable habit cannot have consented. */
+    @Test
+    fun pairingSnapshot_isGatedByTheShippedConsentFlag_andNeedsAProfile() = runBlocking {
+        assertFalse("no profile yet — nothing to snapshot", PartnerActivityJournal.emitPairingSnapshot(store, "pair-new", NOW))
+        seedProfile()
+        seedHabit(daysElapsed = 5, shareMilestones = false)
+
+        assertFalse(PartnerActivityJournal.emitPairingSnapshot(store, "pair-new", NOW))
+        assertTrue("a refused snapshot must write nothing", journalRows().isEmpty())
     }
 
     // --- Atomicity (Step 5 validation) --------------------------------------------------------
@@ -226,7 +269,7 @@ class PartnerActivityJournalTest {
     // --- Harness ------------------------------------------------------------------------------
 
     private suspend fun journalRows(): List<PartnerActivityOutbox> =
-        store.partnerActivityDao().pendingForPair("pair-1", 100)
+        store.partnerActivityDao().pendingForPair("pair-1", sinceMs = 0L, limit = 100)
 
     private suspend fun seedProfile() {
         store.userProfileDao().insert(

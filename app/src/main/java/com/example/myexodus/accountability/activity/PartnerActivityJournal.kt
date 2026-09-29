@@ -76,6 +76,28 @@ object PartnerActivityJournal {
         Normalizer.normalize(text, Normalizer.Form.NFC).trim()
             .takeIf { it.isNotEmpty() && it.length <= EventPayload.MAX_ACTIVITY_TEXT_LENGTH }
 
+    /**
+     * Pair-complete state snapshot (owner ruling 2026-09-29): reconcile now bounds a newcomer's
+     * fan-out to their pairing time, so without this the new partner's dashboard would sit on
+     * "waiting for first update" until the next real transition. One targeted STREAK_UPDATED
+     * row — the shipped kind, so consent ([HabitProgress.shareMilestones]), projection, and
+     * notification all flow through the existing rails; no new event type, no protocol change.
+     *
+     * A profile with no resolvable habit, or one that never consented, emits nothing: an
+     * unresolvable habit cannot have consented (Appendix A.3), and inventing a snapshot would
+     * be exactly the share the user withheld. Returns whether a row was written.
+     */
+    suspend fun emitPairingSnapshot(db: AppRulesStore, pairId: String, atMs: Long): Boolean {
+        val profile = db.userProfileDao().getActive() ?: return false
+        return emitForProfile(
+            db = db,
+            profileId = profile.userId,
+            kind = EventPayload.TYPE_STREAK_UPDATED,
+            occurredAtMs = atMs,
+            targetPairId = pairId,
+        )
+    }
+
     /** Caller must be inside the domain write transaction — see the class doc. */
     private suspend fun write(
         db: AppRulesStore,

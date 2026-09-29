@@ -105,7 +105,10 @@ class RecoverySessionRepositoryTest {
         assertEquals(RecoverySession.TECHNIQUE_NONE, logged.technique)
         assertEquals(RecoverySession.STATE_COMPLETED, logged.state)
         assertEquals(0, logged.durationSec)
-        assertTrue("no technique practised — nothing to mirror", sessions.pendingMirror("pair-a", 10).isEmpty())
+        assertTrue(
+            "no technique practised — nothing to mirror",
+            sessions.pendingMirror("pair-a", sinceMs = 0L, limit = 10).isEmpty(),
+        )
     }
 
     @Test
@@ -140,17 +143,17 @@ class RecoverySessionRepositoryTest {
         sessions.start("values_card", null, RecoverySession.ENTRY_TAB, "UTC", now)
         sessions.logOnly(4, RecoverySession.ENTRY_TAB, "UTC", now)
 
-        val queued = sessions.pendingMirror("pair-a", 10)
+        val queued = sessions.pendingMirror("pair-a", sinceMs = 0L, limit = 10)
 
         assertEquals("live and log-only rows stay out of the mirror queue", listOf(older, newer), queued.map { it.id })
 
         sessions.linkEvent(older, "pair-a", 42L)
 
-        assertEquals(listOf(newer), sessions.pendingMirror("pair-a", 10).map { it.id })
+        assertEquals(listOf(newer), sessions.pendingMirror("pair-a", sinceMs = 0L, limit = 10).map { it.id })
         assertEquals(
             "ADR #111: the same row is still pending for another pair",
             listOf(older, newer),
-            sessions.pendingMirror("pair-b", 10).map { it.id },
+            sessions.pendingMirror("pair-b", sinceMs = 0L, limit = 10).map { it.id },
         )
         assertEquals(
             42L,
@@ -180,8 +183,25 @@ class RecoverySessionRepositoryTest {
             ),
         )
 
-        assertTrue(sessions.pendingMirror("pair-a", 10).isEmpty())
-        assertTrue(sessions.pendingMirror("pair-b", 10).isEmpty())
+        assertTrue(sessions.pendingMirror("pair-a", sinceMs = 0L, limit = 10).isEmpty())
+        assertTrue(sessions.pendingMirror("pair-b", sinceMs = 0L, limit = 10).isEmpty())
+    }
+
+    /**
+     * Owner ruling 2026-09-29: the mirror queue is bounded to the pair's enrollment time — a
+     * session practised before the pairing is not mirrored to the newcomer.
+     */
+    @Test
+    fun pendingMirror_boundsToThePairingMoment() = runTest {
+        val before = sessions.start("sober", null, RecoverySession.ENTRY_TAB, "UTC", now - 120_000)
+        sessions.finish(before, RecoverySession.STATE_COMPLETED, 30, now - 90_000)
+        val after = sessions.start("delay_timer", null, RecoverySession.ENTRY_TAB, "UTC", now)
+        sessions.finish(after, RecoverySession.STATE_COMPLETED, 10, now + 10_000)
+
+        assertEquals(
+            listOf(after),
+            sessions.pendingMirror("pair-new", sinceMs = now - 60_000, limit = 10).map { it.id },
+        )
     }
 
     private suspend fun session(id: String): RecoverySession =

@@ -5,11 +5,14 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.myexodus.accountability.EventCreator
 import com.example.myexodus.accountability.PartnerTestIdentity
+import com.example.myexodus.accountability.PartnerTestKeys
 import com.example.myexodus.accountability.RoundTripTestEntryPoint
 import com.example.myexodus.accountability.activity.PartnerActivityJournal
 import com.example.myexodus.accountability.enrollment.EnrollmentTranscript
 import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.decodePayload
+import com.example.myexodus.accountability.serialization.decodeSigned
 import com.example.myexodus.blocking.EnhancedModeTestEntryPoint
 import com.example.myexodus.ui.partner.PartnerDashboardUi
 import com.google.firebase.FirebaseApp
@@ -140,7 +143,7 @@ class PartnerActivityLayerInstrumentedTest {
                 profileId = "activity-leg-profile",
                 kind = EventPayload.TYPE_MOTIVATIONAL_MESSAGE,
                 occurredAtMs = sentAt,
-                text = "From A through the production journal",
+                text = SENT_MESSAGE,
             )
             assertTrue("A journal emission must be accepted", sent)
             val report2 = ep.partnerSyncCoordinator().syncOnce(null)
@@ -148,20 +151,50 @@ class PartnerActivityLayerInstrumentedTest {
             assertTrue("A's journal row must link + sign", report2.eventsLinked >= 1)
             assertTrue("A's outbox must drain", report2.drained)
 
+            val aSenderKeyId = identity.enrollmentDao.getByPairId(pairId)?.partnerSigningKeyId
+                ?: error("B enrollment missing")
+            // Chain length is not the assertion: the app's own PartnerSyncWorker runs alongside
+            // this harness, so "B's chain is exactly 1 long" was true only on a device where
+            // nothing else ever fired. Assert the state-independent invariants instead — the
+            // pull's appends show up as exactly that much chain growth, and A's body is in it.
+            val headBefore = identity.store.localHead(pairId, aSenderKeyId)
             val pull = identity.receiver().pull(pairId, uidB)
             harnessLog("B pull: $pull")
             assertTrue("B must ingest A's activity event: $pull", pull.appended >= 1)
-            val aSenderKeyId = identity.enrollmentDao.getByPairId(pairId)?.partnerSigningKeyId
-                ?: error("B enrollment missing")
             val head = identity.store.localHead(pairId, aSenderKeyId)
             assertNotNull("B must hold A's received chain head", head)
-            assertEquals("A's single event must be B's whole received chain", 1L, head!!.lastSequence)
+            assertEquals(
+                "every appended message must be a chain row (contiguous ingest)",
+                pull.appended.toLong(),
+                head!!.lastSequence - (headBefore?.lastSequence ?: 0L),
+            )
+            val enrollmentB = identity.enrollmentDao.getByPairId(pairId) ?: error("B enrollment missing")
+            val bCek = ep.cekDerivation().deriveCek(
+                pairId,
+                PartnerTestKeys.agreementPrivateKey(),
+                EnrollmentTranscript.parsePublicKey(enrollmentB.partnerAgreementPubKey),
+            )
+            val receivedTexts = identity.store.chainFor(pairId).mapNotNull { chainRow ->
+                val unsigned = decodeSigned(chainRow.envelope).unsigned
+                val sessionKey = ep.cekDerivation().deriveSessionKey(bCek, unsigned.keyEpoch)
+                decodePayload(ep.eventCipher().decrypt(sessionKey, unsigned.sequence, unsigned.ciphertext)).text
+            }
+            assertTrue(
+                "A's journal emission must reach B decoded, body intact: $receivedTexts",
+                SENT_MESSAGE in receivedTexts,
+            )
 
             harnessLog(
                 "RESULT activityLayer=PASS pair=$pairId lastSequence=5 daysFree=30 relapses=1 " +
                     "milestones=[7,30] coaching=3 pinned=\"$message\" bIngestedA=1",
             )
         }
+
+    private companion object {
+        /** Stage 4's body — a literal only this leg knows, so finding it in B's decrypted chain
+         *  proves the event travelled, not that some other emission happened to land. */
+        const val SENT_MESSAGE = "From A through the production journal"
+    }
 
     private fun activity(
         type: String,

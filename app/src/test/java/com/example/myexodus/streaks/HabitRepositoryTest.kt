@@ -579,7 +579,8 @@ class HabitRepositoryTest {
         assertTrue(journalRows().none { it.kind == EventPayload.TYPE_RELAPSE_RECORDED })
     }
 
-    private suspend fun journalRows() = store.partnerActivityDao().pendingForPair("pair-1", 100)
+    private suspend fun journalRows() =
+        store.partnerActivityDao().pendingForPair("pair-1", sinceMs = 0L, limit = 100)
 
     private suspend fun habitIdOf(): String =
         checkNotNull(repository.state.value).habitId
