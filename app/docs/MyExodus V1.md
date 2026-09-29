@@ -1250,3 +1250,35 @@ recorded in `Obsidian/MyExodus/Open Product Decisions.md` (#6, #7, #12, #14, #15
 status paragraphs — where the two disagreed, the status paragraph is what got corrected. This
 table is the review artifact; individual requirement paragraphs above remain the detailed
 history.
+
+# V1 UI Pass — Reference Grammar: Status Pill, Stat Scale, Row Grammar (2026-09-29, ADR #124)
+
+Owner-directed pass over the partner Activity/Requests/Pairing views, Recovery and Streaks, with
+the local reference folder as the only source (`204def2b` stat row, `11.54.23` stat tiles,
+`c5335b01` code entry — no web research). Three grammars the app had been rendering three
+different ways each are now single:
+
+- **Status** — `ui/StatusPill.kt` (`PillTone.QUIET/POSITIVE/NEGATIVE`, tint + word never tint
+  alone) is the only chip: partner request rows (trailing edge, `requestStatusTone` from
+  `PartnerPresentation.kt` so word and weight cannot disagree), Recovery technique effort, the
+  withdrawal timeline's live-week marker.
+- **Counts** — `StatColumn` (value over label) for peer counts; `HeroStatRow` (label + freshness
+  caption left, display-size value with its unit on the baseline right) for the summary card's
+  one dominant metric; section dividers between card zones. The partner summary's "Milestones
+  met" line lost its flattened "Milestones met: 3, 7" prose for the same stat scale, keeping the
+  day values (`partner_summary_milestones_label` + the `partner_summary_days_unit` plural).
+- **Rows** — request rows carry the status on the trailing edge with dividers between;
+  `ComposeMessageCard` leads with a primary-tinted mark and a full-width CTA; the Recovery crisis
+  card (a hand-rolled `LinkRow` copy without the chevron) now uses the shared `LinkRow`.
+
+**Owner ruling (live review, 2026-09-29, verbatim: *"well requests doesnt need viewing section ie
+viewing mama switch"*):** the Requests subpage renders **without** the `PartnerContextBar`;
+Activity and Pairing keep it. Narrows ADR #121.
+
+**Evidence.** JVM `PartnerPresentationTest` 13/13 (+ the new tone mapping case), copy/type guards
+green, compile clean. Device X6532 (`install -r`): Activity subpage = bar + mark/CTA card +
+divider/stat card; Requests = no bar (screenshot `10-requests.png`); Activity bar re-checked
+present after the change; Recovery pill + crisis `LinkRow` proven via the semantics tree (pixels
+are FLAG_SECURE by design, ADR #80); Streaks setup state renders. Honest limits in ADR #124 §(a)-(c):
+the hero row's populated state and the Streaks hero were not re-captured (no live data / owner's
+habit not seeded).

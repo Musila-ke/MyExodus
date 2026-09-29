@@ -15,6 +15,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
 import com.example.myexodus.streaks.HabitState
+import com.example.myexodus.ui.PillTone
+import com.example.myexodus.ui.StatusPill
 
 /**
  * REQ-18 timeline: the four weekly buckets as relative-intensity bars (bar length orders the
@@ -50,10 +52,11 @@ internal fun WithdrawalTimelineCard(state: HabitState) {
                     ) {
                         Text(weekLabel(week), style = MaterialTheme.typography.labelLarge)
                         if (week.weekNumber == currentWeek) {
-                            Text(
+                            // The live week is this card's one status, so it wears the same chip
+                            // as every other status in the app rather than a fourth treatment.
+                            StatusPill(
                                 stringResource(R.string.streaks_timeline_here),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
+                                PillTone.POSITIVE,
                             )
                         }
                     }

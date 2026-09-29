@@ -1,8 +1,10 @@
 package com.example.myexodus.ui.partner
 
+import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.recovery.RecoveryMirror
+import com.example.myexodus.ui.PillTone
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -105,5 +107,17 @@ class PartnerPresentationTest {
         // 2023-11-14T21:30Z → midnight UTC of 2023-11-14.
         val expected = 1_699_920_000_000L
         assertEquals(expected, startOfLocalDay(1_700_000_000_000L, ZoneOffset.UTC))
+    }
+
+    @Test
+    fun requestStatusTone_onlyRejectionEscalates_andDecisionOutcomesTint() {
+        assertEquals(PillTone.POSITIVE, requestStatusTone(ApprovalRequest.STATUS_APPROVED))
+        assertEquals(PillTone.NEGATIVE, requestStatusTone(ApprovalRequest.STATUS_REJECTED))
+        // A pending request is a fact, not a problem — and an unknown status must never
+        // inherit another status's weight.
+        assertEquals(PillTone.QUIET, requestStatusTone(ApprovalRequest.STATUS_REQUESTED))
+        assertEquals(PillTone.QUIET, requestStatusTone(ApprovalRequest.STATUS_EXPIRED))
+        assertEquals(PillTone.QUIET, requestStatusTone(ApprovalRequest.STATUS_CONSUMED))
+        assertEquals(PillTone.QUIET, requestStatusTone("SOMETHING_NEW"))
     }
 }

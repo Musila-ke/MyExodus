@@ -796,3 +796,17 @@ not in conflict — the layout is well-formed *and* the page carries the most de
 ## Deliverable
 
 Per-screen before/after screenshots + a summary entry in `Obsidian/MyExodus/MyExodus Progress.md`; any resulting ADR-worthy decision recorded in `app/docs/MyExodus Architecture Decisions.md`.
+
+## 2026-09-29 — Reference-driven visual pass redo (#102, ADR #124)
+
+Owner correction the same day the #97/#99 tasks were closed: those shipped the **declutter**
+(ADR #121) but not the reference-driven visual port, so #102 re-ran the pass against
+`/Users/musila/Documents/ReferenceInspirationUI` only (no web research). Landed: the shared
+`StatusPill`/`PillTone` atom (`ui/StatusPill.kt`) adopted by partner request rows, Recovery
+technique effort and the withdrawal timeline marker; `StatColumn` + `HeroStatRow` replacing
+`StatBlock` on the partner summary and Activity cards, with the days unit as a plural riding the
+hero number; `ComposeMessageCard` mark + full-width CTA; the Recovery crisis card folded onto the
+shared `LinkRow` (it was a copy without the chevron); request-row dividers. **Owner ruling on the
+device (live):** the Requests subpage keeps no `PartnerContextBar` — "requests doesnt need viewing
+section ie viewing mama switch" — Activity/Pairing keep theirs (narrows ADR #121). Evidence and
+honest limits in ADR #124; V1 doc has the matching section.

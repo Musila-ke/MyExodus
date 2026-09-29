@@ -1,7 +1,9 @@
 package com.example.myexodus.ui.partner
 
+import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.recovery.RecoveryMirror
+import com.example.myexodus.ui.PillTone
 import java.time.Instant
 import java.time.ZoneId
 
@@ -151,5 +153,15 @@ data class ApprovalUi(
  * block, since the gap it reflects is elsewhere in the chain, not in this event.
  */
 fun canRespondToApprovals(status: PartnerChainStatus): Boolean = status != PartnerChainStatus.UNVERIFIED
+
+/**
+ * The one place a request status becomes a [PillTone] — with [requestStatusText] in the screen
+ * this keeps the two halves of the pill (word and weight) from ever disagreeing.
+ */
+fun requestStatusTone(status: String): PillTone = when (status) {
+    ApprovalRequest.STATUS_APPROVED -> PillTone.POSITIVE
+    ApprovalRequest.STATUS_REJECTED -> PillTone.NEGATIVE
+    else -> PillTone.QUIET
+}
 
 private const val RECENT_LIMIT = 5

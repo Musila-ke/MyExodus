@@ -58,8 +58,10 @@ import com.example.myexodus.recovery.RecoveryResourceCatalog
 import com.example.myexodus.recovery.RecoverySessionRepository
 import com.example.myexodus.recovery.RecoveryTechnique
 import com.example.myexodus.ui.BackRow
+import com.example.myexodus.ui.LinkRow
 import com.example.myexodus.ui.NavTile
 import com.example.myexodus.ui.SecureSurface
+import com.example.myexodus.ui.StatusPill
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.rememberWindowWidth
@@ -468,23 +470,13 @@ private fun HomeView(
                 modifier = Modifier.weight(1f),
             )
         }
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenCrisis),
-        ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    stringResource(R.string.recovery_crisis_link),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Text(
-                    stringResource(R.string.recovery_crisis_link_body),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        // Was a hand-rolled copy of the LinkRow shape without its chevron — the one row on this
+        // page that navigated nowhere, visually. Third consumer, so it uses the shared row.
+        LinkRow(
+            title = stringResource(R.string.recovery_crisis_link),
+            body = stringResource(R.string.recovery_crisis_link_body),
+            onClick = onOpenCrisis,
+        )
     }
 
     if (logging) {
@@ -506,17 +498,19 @@ private fun TechniqueCard(technique: RecoveryTechnique, onOpen: () -> Unit) {
         modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text(
                     stringResource(techniqueTitle(technique.id)),
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f),
                 )
-                Text(
-                    stringResource(effortLabel(technique.effort.name)),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                // The effort was a grey caption doing the same job as the title; as a pill it
+                // becomes the thing a scanning user actually sorts these by (the reference row
+                // geometry: content left, the one label that differs on the trailing edge).
+                StatusPill(stringResource(effortLabel(technique.effort.name)))
             }
             Text(
                 stringResource(techniqueDescription(technique.id)),

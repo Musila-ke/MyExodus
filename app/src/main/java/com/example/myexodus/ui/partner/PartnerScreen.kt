@@ -51,6 +51,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -68,6 +69,7 @@ import com.example.myexodus.accountability.state.UnpairState
 import com.example.myexodus.ui.AppMark
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.NavTile
+import com.example.myexodus.ui.StatusPill
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.recovery.outcomeLabel
 import com.example.myexodus.ui.recovery.techniqueTitle
@@ -451,10 +453,14 @@ fun PartnerScreen(
                     ),
                     onBack = { view = null },
                 )
-                // #96 (owner ruling): every subpage acts on one partner, so every subpage says
-                // which one, and the ones with a roster let the viewer switch right there —
-                // without leaving the page they are on.
-                PartnerContextBar(current, onSwitch = { switching = true })
+                // #96 (owner ruling): a subpage acts on one partner, so it says which one, and
+                // lets the viewer switch right there. Owner ruling 2026-09-29 (live review): the
+                // Requests queue is the exception — "Viewing / Switch" above a decision list read
+                // as a control to fiddle with instead of a queue to clear, so the bar is gone
+                // there; the hub's roster is one tap back.
+                if (view != VIEW_REQUESTS) {
+                    PartnerContextBar(current, onSwitch = { switching = true })
+                }
                 when (view) {
                     VIEW_REQUESTS -> RequestsView(
                         state = current,
@@ -749,30 +755,35 @@ private fun PartnerSummaryCard(activity: PartnerActivityUi?, chainStatus: Partne
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                // Days free is the one number the tab exists to answer, so it takes the
-                // headline weight the reference cards give their single dominant metric.
-                StatBlock(stringResource(R.string.partner_summary_days), activity.daysFree)
-                StatBlock(stringResource(R.string.partner_summary_relapses), activity.relapseCount)
-            }
-            Text(
-                stringResource(
-                    R.string.partner_summary_milestones,
-                    activity.milestonesReached.joinToString(", ").ifEmpty {
-                        stringResource(R.string.partner_summary_milestones_none)
-                    },
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            activity.lastEventOccurredAtEpochMillis?.let { at ->
-                Text(
+            HorizontalDivider()
+            // Days free is the one number the tab exists to answer, so it takes the reference's
+            // hero slot — and its freshness note rides under the label rather than in a third
+            // line, which is what made the old card read as a wall of equal-weight text.
+            HeroStatRow(
+                label = stringResource(R.string.partner_summary_days),
+                caption = activity.lastEventOccurredAtEpochMillis?.let { at ->
                     stringResource(
                         R.string.partner_summary_last_event,
                         relativeTimeText(System.currentTimeMillis(), at),
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                value = activity.daysFree,
+                unit = pluralStringResource(
+                    R.plurals.partner_summary_days_unit,
+                    activity.daysFree,
+                    activity.daysFree,
+                ),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+                StatColumn(
+                    stringResource(R.string.partner_summary_relapses),
+                    activity.relapseCount.toString(),
+                )
+                StatColumn(
+                    stringResource(R.string.partner_summary_milestones_label),
+                    activity.milestonesReached.joinToString(", ").ifEmpty {
+                        stringResource(R.string.partner_summary_milestones_none)
+                    },
                 )
             }
         }
@@ -899,20 +910,37 @@ private fun ComposeMessageDialog(
     )
 }
 
-/** The Activity subpage's leading card: the one action this page owns. */
+/**
+ * The Activity subpage's leading card: the one action this page owns. The reference's action
+ * tile (a mark, the ask, then a full-width primary) — the button spans because on this page
+ * there is nothing else to press.
+ */
 @Composable
 private fun ComposeMessageCard(onCompose: () -> Unit) {
-    PartnerSurface(spacing = 4.dp) {
-        Text(
-            stringResource(R.string.partner_compose_title),
-            style = MaterialTheme.typography.titleMedium,
-        )
+    PartnerSurface(spacing = 8.dp) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Outlined.Edit,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
+            Text(
+                stringResource(R.string.partner_compose_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
         Text(
             stringResource(R.string.partner_compose_body),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Button(onClick = onCompose) { Text(stringResource(R.string.partner_compose_action)) }
+        Button(onClick = onCompose, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.partner_compose_action))
+        }
     }
 }
 
@@ -1015,16 +1043,29 @@ private fun MyRequestsCard(requests: List<ApprovalUi>) {
             stringResource(R.string.partner_my_requests_title, requests.size),
             style = MaterialTheme.typography.titleMedium,
         )
-        requests.forEach { request ->
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(request.message, style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    requestStatusText(request.status) + " · " +
+        // The outcome is what a requester scans this list for, so it moves out of the caption
+        // sentence and into the row's trailing edge — the reference's row geometry, and the
+        // reason the five statuses no longer arrive as one grey line of prose.
+        requests.forEachIndexed { index, request ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(request.message, style = MaterialTheme.typography.bodyMedium)
+                    Text(
                         relativeTimeText(System.currentTimeMillis(), request.createdAtEpochMillis),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                StatusPill(requestStatusText(request.status), requestStatusTone(request.status))
             }
+            if (index < requests.lastIndex) HorizontalDivider()
         }
     }
 }
@@ -1334,9 +1375,10 @@ private fun ActivityCard(summary: AlertSummary) {
             stringResource(R.string.partner_activity_title, summary.recent.size),
             style = MaterialTheme.typography.titleMedium,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-            StatBlock(stringResource(R.string.partner_activity_today), summary.todayCount)
-            StatBlock(stringResource(R.string.partner_activity_week), summary.weekCount)
+        HorizontalDivider()
+        Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+            StatColumn(stringResource(R.string.partner_activity_today), summary.todayCount.toString())
+            StatColumn(stringResource(R.string.partner_activity_week), summary.weekCount.toString())
         }
         if (summary.recent.isEmpty()) {
             Text(
@@ -1351,11 +1393,62 @@ private fun ActivityCard(summary: AlertSummary) {
     }
 }
 
+/**
+ * The reference's dominant card geometry (ref `204def2b`): the question on the left with its
+ * freshness note under it, the answer on the right at display weight, the unit riding the
+ * number's baseline — "30 days" is one quantity, which a stacked label cannot say.
+ */
 @Composable
-private fun StatBlock(label: String, value: Int) {
-    Column {
+private fun HeroStatRow(label: String, caption: String?, value: Int, unit: String?) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                label,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            caption?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                value.toString(),
+                style = MaterialTheme.typography.displaySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            unit?.let {
+                Text(
+                    " $it",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A peer count beside the hero (ref `11.54.23`'s stat tiles at card scale). The value leads and
+ * the label names it — the same order the hero uses, so the card reads top-down as one scale.
+ * A non-numeric value is allowed on purpose: "Milestones met: 7, 30" loses the days if it is
+ * flattened to a count, and those days are the whole point of the row.
+ */
+@Composable
+private fun StatColumn(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier) {
         Text(
-            value.toString(),
+            value,
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.primary,
@@ -1592,9 +1685,10 @@ private fun PartnerUserRow(
 
 /**
  * #96 (owner ruling): *"as we do them and move on … the partner needs to be able to see or
- * change the partner"*. Every partner subpage acts on exactly one supported user, so the page
- * names which one — and when there is a roster, switching happens right here (a dialog over the
- * page, not a trip back to the hub), keeping the viewer where they were.
+ * change the partner"*. On the Activity and Pairing subpages — which act on exactly one
+ * supported user — the page names which one, and when there is a roster, switching happens
+ * right here (a dialog over the page, not a trip back to the hub), keeping the viewer where
+ * they were. The Requests queue deliberately does not carry it (owner ruling 2026-09-29).
  */
 @Composable
 private fun PartnerContextBar(state: PartnerDashboardUi.Paired, onSwitch: () -> Unit) {

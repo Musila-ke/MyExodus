@@ -422,7 +422,11 @@
          a broken sync. -->
     <string name="partner_summary_title">How they\'re doing</string>
     <string name="partner_summary_days">Days free</string>
-    <string name="partner_summary_milestones">Milestones met: %1$s</string>
+    <plurals name="partner_summary_days_unit">
+        <item quantity="one">day</item>
+        <item quantity="other">days</item>
+    </plurals>
+    <string name="partner_summary_milestones_label">Milestones met</string>
     <string name="partner_summary_milestones_none">None yet</string>
     <string name="partner_summary_relapses">Relapses logged</string>
     <string name="partner_summary_last_event">Last shared %1$s</string>
