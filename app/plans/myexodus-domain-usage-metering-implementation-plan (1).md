@@ -843,20 +843,22 @@ Every item is marked **Resolved** (with the source used) or **Open** (with the r
 
 ## 18. Definition of Done
 
-- [ ] S0 report committed; all Baseline Contract items P1–P10 `PASS`.
-- [ ] All components in §4.1 implemented; no code outside §3.3's modify list changed.
-- [ ] Invariants INV-1…INV-16 each have a passing test or CI check.
-- [ ] Unit tests U-1…U-14 pass in CI.
-- [ ] Instrumented tests I-1…I-23 (including the `b`-suffixed regression tests) pass on all three reference devices; report committed.
-- [ ] PF-1…PF-8 pass; numbers recorded in the test report.
-- [ ] Room schema exported; both the upgrade and downgrade migrations tested (I-21, I-21b).
-- [ ] RuleEditor validation (including uniqueness and limit bounds), notices (scope + connection-level), usage display and status banner shipped with string resources.
-- [ ] VPN builder: `addDisallowedApplication(APPLICATION_ID)` present, `allowBypass()` absent, no IPv6 config added.
-- [ ] `DOMAIN_USAGE_MODE` configured per §13; release default `OFF`.
-- [ ] No hostnames, IPs or DNS names in logs, storage, notifications or exceptions (code review).
-- [ ] Usage data absent from every sync/relay payload (code review).
-- [ ] `UsageAccountingEngine`, escape-hatch, pairing, and Recovery UI code unchanged (diff check).
-- [ ] Rollback verified: mode `OFF` build removes all shaping and enforcement; Room downgrade migration verified against the actual SQLCipher setup in this project.
-- [ ] PSL asset provenance recorded and checksummed; CI enforces it.
-- [ ] `ACCOUNT` mode independently verified to perform zero shaping/blocking/dropping across the full instrumented suite (AC-19).
-- [ ] §16 items reviewed; every "Open" item has an owner; every "Resolved" item's cited source has been spot-checked against the actual project code where the resolution depends on Baseline behavior (items 2, 3, 6, 12, 18).
+**Resolution (2026-09-29).** Reconciled against `app/docs/domainusage-test-report.md` (§9 carries the same cross-check; this list is the plan-side mirror). The shipped work is committed (913b858). Two items stay **open**, each with its blocking condition named — nothing ticked that isn't true, nothing dropped.
+
+- [x] S0 report committed; all Baseline Contract items P1–P10 `PASS`. — `app/docs/domainusage-baseline-check.md`; P6 deviation ruled in ADR #70; committed.
+- [x] All components in §4.1 implemented; no code outside §3.3's modify list changed. — report §9.1 diff-check against `cc7a13b`: zero diff under `accountability/`, `recovery/`, pairing, Tink/DataStore, Firebase paths and `UsageAccountingEngine`.
+- [x] Invariants INV-1…INV-16 each have a passing test or CI check. — report §8 invariant→evidence map (16/16).
+- [x] Unit tests U-1…U-14 pass in CI. — 1020/0/0/0 at S10 close (report §2); domainusage package 232 tests; every U-item mapped to a shipped class.
+- [ ] Instrumented tests I-1…I-23 (including the `b`-suffixed regression tests) pass on all three reference devices; report committed. — **OPEN, environment-gated:** report committed; X6532 **21 PASS / 3 SKIP** (closed 2026-09-22, AC-12/AC-19 among them) and the emulator legs PASS (8/8 migrations, I-9/I-10). The third reference target — API 37 (ECH-by-default, I-12b + Fixture D, AC-9's remaining half) — is not available in this environment (report §7 item 3; task #17).
+- [ ] PF-1…PF-8 pass; numbers recorded in the test report. — **OPEN on PF-5 alone (task #6):** PF-1, PF-2, PF-3, PF-4, PF-6, PF-7, PF-8 all PASS on the X6532 (report §4.2, numbers recorded; PF-4 under the re-ruled +10 thread tolerance, PF-7 on idle runs with the in-batch sample preserved). PF-5 (battery drain, ≤ OFF+2 pp) needs the X6532 **unplugged** for 2 h (`--runs 1`, one calibrated hour per arm); checked again 2026-09-29 — phone at 100%, **AC powered**, so the leg self-skips. Runner `scripts/domainusage-phone-night-run.sh` is trimmed to exactly `DU_ONLY=PF-5`.
+- [x] Room schema exported; both the upgrade and downgrade migrations tested (I-21, I-21b). — `app/schemas/…/10.json`; emulator 8/8 incl. repeated 9↔10 cycles and interrupted-migration rollback, on the real SQLCipher path.
+- [x] RuleEditor validation (including uniqueness and limit bounds), notices (scope + connection-level), usage display and status banner shipped with string resources. — S9; device-verified in the S9 close (report §9).
+- [x] VPN builder: `addDisallowedApplication(APPLICATION_ID)` present, `allowBypass()` absent, no IPv6 config added. — CI checks INV-9/INV-10; S0 P6 note.
+- [x] `DOMAIN_USAGE_MODE` configured per §13; release default `OFF`. — `app/build.gradle.kts` (debug `ENFORCE`, release `OFF`); report §9.
+- [x] No hostnames, IPs or DNS names in logs, storage, notifications or exceptions (code review). — CI INV-7 + review; the baseline service's pre-existing diagnostic logs are outside this feature's §3.3 authority and recorded as a separate-hardening caveat (report §9), not silently changed.
+- [x] Usage data absent from every sync/relay payload (code review). — no domainusage types referenced from accountability/Firebase paths (report §9.1).
+- [x] `UsageAccountingEngine`, escape-hatch, pairing, and Recovery UI code unchanged (diff check). — report §9.1: zero diff under those trees.
+- [x] Rollback verified: mode `OFF` build removes all shaping and enforcement; Room downgrade migration verified against the actual SQLCipher setup in this project. — mode-gated engine (`EngineModeTest`); I-21b downgrade on the SQLCipher path.
+- [x] PSL asset provenance recorded and checksummed; CI enforces it. — S1.6; `PublicSuffixListAssetTest` + the shipped CI script.
+- [x] `ACCOUNT` mode independently verified to perform zero shaping/blocking/dropping across the full instrumented suite (AC-19). — JVM full table (U-6/`DnsShaperTest`) + device halves `I-11b`/`I-13b` PASS 2026-09-22 with the engine verifiably in `ACCOUNT` and the rule exhausted (report §4.2, §5.1 item 12).
+- [x] §16 items reviewed; every "Open" item has an owner; every "Resolved" item's cited source has been spot-checked against the actual project code where the resolution depends on Baseline behavior (items 2, 3, 6, 12, 18). — report §10: resolved-in-code (spot-checked), device-verified, open-by-design (owners named), or dead by product decision (ADR #15).

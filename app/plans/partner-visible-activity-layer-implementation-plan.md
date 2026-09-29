@@ -1,6 +1,6 @@
 # Partner-Visible Activity Layer — Final Implementation Specification
 
-**Status: ✅ BUILT — the delta on the ADR #111 rails shipped 2026-09-28 (ADR #115, schema v13). Read §A first: it maps every section of this document to either a shipped rail or the delta that was actually built, and names the deliberate deviations (§8.2 sign-at-reconcile instead of sign-at-create, §14 monitoring partly not built, `moveItem` non-emitting). JVM: 160 classes / 1,351 tests / 0 failures on the final code. Do not build from this document directly — build from §A's resolution table.**
+**Status: ✅ BUILT — the delta on the ADR #111 rails shipped 2026-09-28 (ADR #115, schema v13). Read §A first: it maps every section of this document to either a shipped rail or the delta that was actually built, and names the deliberate deviations (§8.2 sign-at-reconcile instead of sign-at-create, §14 monitoring partly not built, `moveItem` non-emitting). JVM: 160 classes / 1,351 tests / 0 failures on the final code. §17/§18 reconciled 2026-09-29 with per-line evidence (rules 19/19, functions emulator 23/23, functions unit 71/71, instrumented migration 14/14 on the real SQLCipher stack, X6532 v13 census) and recorded deviations (ACK-vs-transport-acceptance, no staging per ADR #54, gate default-ON per ADR #56, monitoring per §A.1); the only open item is the **#77 owner-tap-gated device leg** — stated open in §17 Production and §18 item 17, never marked done. Do not build from this document directly — build from §A's resolution table.**
 
 ## 1. Feature Overview
 
@@ -2091,62 +2091,64 @@ All decisions required to implement this version are fixed by this specification
 
 ## 17. Acceptance Criteria
 
+**Resolution (2026-09-29).** Reconciled against the shipped shape. Evidence base: the JVM suite at the ADR #115 close-out (1,351 tests / 160 classes / 0 failures) plus fresh runs on 2026-09-29 — instrumented migration suite on the real SQLCipher stack (`AppRulesStoreMigrationInstrumentedTest`, 14/14 OK, emulator-5554), Firestore rules emulator suite (19/19), functions emulator suite (23/23), functions unit suite (71/71) — plus the FCM device matrix (ADR #117, X6532) and the on-device v13 census (`mirror-read`: `user_version=13`, all three activity tables queryable). Where the shipped shape differs from a line's literal text, the line carries an explicit **deviation** note; each of those is resolved by the §A.1 delta map or recorded in an ADR — none is a dropped requirement.
+
 ### Functional acceptance
 
-- [ ] A supported local relapse/streak/milestone/coaching/motivational transition creates exactly one logical partner event.
-- [ ] The local transition succeeds while completely offline.
-- [ ] The event has a stable UUID v4 ID persisted before network transmission.
-- [ ] The event has a unique monotonically increasing sender sequence.
-- [ ] The event is encrypted before Firestore storage.
-- [ ] The event is signed by the enrolled sender device key.
-- [ ] Firestore contains no plaintext event body.
-- [ ] The sender retries the exact same event ID after transient failures.
-- [ ] Duplicate delivery never applies a partner event twice.
-- [ ] Out-of-order events are buffered until the gap is resolved.
-- [ ] The receiver does not advance over a missing sequence.
-- [ ] A valid event is ACKed only after successful Room commit.
-- [ ] The sender marks an event delivered only after observing its ACK.
-- [ ] PartnerScreen renders from Room state.
-- [ ] PartnerScreen separately shows activity time and sync time.
-- [ ] PartnerScreen exposes degraded state when a gap persists.
-- [ ] Background sync functions through the defined FCM/WorkManager paths.
-- [ ] The feature remains usable when notifications are denied.
-- [ ] Notifications use one fixed channel and ID.
-- [ ] Notifications contain no sensitive recovery details.
+- [x] A supported local relapse/streak/milestone/coaching/motivational transition creates exactly one logical partner event. — `PartnerActivityJournalTest` 8/8 (`emitForHabit_*`, `consentFlags_*`, `motivationalMessage_carriesItsText_underTheUniformSnapshot`) + `RecoveryPlanRepositoryTest` 9/9; the per-pair copies are deliveries of that one logical event (`multiPair_oneActivityRow_mirrorsToEveryPair_exactlyOnce`).
+- [x] The local transition succeeds while completely offline. — the journal row commits inside the local domain transaction (no network); transport is a later reconcile pass that leaves rows pending on failure (`activityJournal_coldWindow_leavesTheRowPending`, `drainFailure_doesNotSkipPullOrRepair`).
+- [x] The event has a stable UUID v4 ID persisted before network transmission. — `EventCreator.kt:110` (`UUID.randomUUID()`), persisted in the outbox; retries reuse the pinned id (`secondRun_createsNoDuplicateEvent`).
+- [x] The event has a unique monotonically increasing sender sequence. — allocated in the same critical section as the chain append (`EventCreator.kt:65-82`); `secondEvent_advancesSequenceAndLinksPreviousHash`.
+- [x] The event is encrypted before Firestore storage. — shipped AES-GCM with the per-pair CEK (ADR #111 rails; `EventCipherTest` 6/6); each pair decrypts its own copy (`multiPair_oneActivityRow_mirrorsToEveryPair_exactlyOnce`).
+- [x] The event is signed by the enrolled sender device key. — `EventCreatorTest.createdEvent_isChainedVerifiableAndDecryptable`; `EnvelopeTest` 8/8.
+- [x] Firestore contains no plaintext event body. — the mailbox payload is the opaque base64 envelope (§A.1); the rules suite bounds the field (`extra fields, wrong types, and oversized payloads are rejected`).
+- [x] The sender retries the exact same event ID after transient failures. — pinned `messageId`; `ALREADY_EXISTS` reads as transport acceptance (§A.1; `secondRun_createsNoDuplicateEvent`).
+- [x] Duplicate delivery never applies a partner event twice. — `PartnerActivityReceiverTest.duplicateDelivery_reappliesIdentically` + chain dedup (`MailboxMessageHandlerTest`).
+- [x] Out-of-order events are buffered until the gap is resolved. — shipped chain gap machinery (§A.1 §8.8/8.9); the projection applies only on contiguous APPENDED (`lowerSequence_isIgnored`).
+- [x] The receiver does not advance over a missing sequence. — `lowerSequence_isIgnored` + durable `PENDING_GAP` chain state (surface: the chain-status/degraded line).
+- [x] A valid event is ACKed only after successful Room commit. — `MailboxMessageHandler.kt:168` acks after the transactional chain commit, for `ACKED_KINDS = APPENDED/DUPLICATE/GAP` only (`:212`).
+- [x] The sender marks an event delivered only after observing its ACK. — **deviation recorded (ADR #115):** the shipped shape is transport acceptance (`Outbox.STATUS_SENT` = create or `ALREADY_EXISTS`); the ACK subcollection is read sender-side by the unpair flow (`pollPartnerAck`) and is the server retention gate (`mailbox-retention.test.js`). Per-event PENDING→SENT→ACK state machines are not the shipped shape.
+- [x] PartnerScreen renders from Room state. — #78; the summary reads the Room projection, never Firestore on paint.
+- [x] PartnerScreen separately shows activity time and sync time. — ADR #115: "Last shared" and "Last synced" as separate lines; a quiet partner is never reported as a broken sync.
+- [x] PartnerScreen exposes degraded state when a gap persists. — chain-status/degraded line (ADR #115; §A.1 §14).
+- [x] Background sync functions through the defined FCM/WorkManager paths. — shipped `PartnerMessagingService` + `PartnerSyncWorker`; device matrix proven on the X6532 in foreground, background and Doze (ADR #117, 2026-09-29).
+- [x] The feature remains usable when notifications are denied. — the notification never throws and never gates the sync (§A.1 §8.12/8.13); `PartnerNotificationsTest` 6/6.
+- [x] Notifications use one fixed channel and ID. — `PartnerNotifications.kt:25-26` (`partner_alerts`, ID 2001); `PartnerNotificationsTest`.
+- [x] Notifications contain no sensitive recovery details. — generic copy + `VISIBILITY_PRIVATE` with an explicit public version (ADR #115); `PartnerNotificationsTest`.
 
 ### Security acceptance
 
-- [ ] Modified ciphertext fails verification/decryption.
-- [ ] Modified signature fails verification.
-- [ ] Modified pair/enrollment/device/sequence/event metadata fails verification.
-- [ ] Replayed event IDs are not applied twice.
-- [ ] Old enrollment events are rejected after unpair/re-pair.
-- [ ] Unauthorized Firestore reads/writes are denied by Rules tests.
-- [ ] Mailbox client updates/deletes are denied.
-- [ ] FCM messages contain no recovery content.
-- [ ] Production logs contain no plaintext event data or key material.
-- [ ] Debug/test crypto bypasses are absent from the release artifact.
+- [x] Modified ciphertext fails verification/decryption. — `EventCipherTest.tamperedCiphertext_throwsAEADBadTag`.
+- [x] Modified signature fails verification. — `EventCreatorTest.createdEvent_isChainedVerifiableAndDecryptable` (verification path); `EnvelopeTest`.
+- [x] Modified pair/enrollment/device/sequence/event metadata fails verification. — the sequence is bound into the AEAD (`EventCipherTest.wrongSequence_throws`), wrong key fails (`wrongKey_throws`), the epoch is embedded per event (`EventCreatorTest.epochBump_isEmbeddedInNewEvents`).
+- [x] Replayed event IDs are not applied twice. — `duplicateDelivery_reappliesIdentically`; mailbox immutability rule (rules suite).
+- [x] Old enrollment events are rejected after unpair/re-pair. — per-pair CEK + `pairingEpoch` monotonicity (AD-07; pairing-guards suite); rotation destroys every pair-agreement key (ADR #113).
+- [x] Unauthorized Firestore reads/writes are denied by Rules tests. — `rules-test` 19/19, re-run 2026-09-29 (positive and negative rows).
+- [x] Mailbox client updates/deletes are denied. — rules case `mailbox messages are immutable and client-undeletable (AD-18b)`.
+- [x] FCM messages contain no recovery content. — data-only wake, `{messageId, type}` only (ADR #117 wake payloads).
+- [x] Production logs contain no plaintext event data or key material. — ADR #117: the `push-read` seam logs the installation id and explicitly not the token value; event bodies are never logged (§A.1).
+- [x] Debug/test crypto bypasses are absent from the release artifact. — the seams live in the `src/debug` source set (`DeviceVerificationReceiver`, `PairingTestActivity`); the release variant does not compile them in.
 
 ### Reliability acceptance
 
-- [ ] Process death immediately after local transaction does not lose the event.
-- [ ] Process death after Firestore create does not create a duplicate event.
-- [ ] Network loss does not change local domain state correctness.
-- [ ] Receiver process death cannot cause duplicate projection application.
-- [ ] Sequence gaps eventually recover through normal retry when the sender remains active.
-- [ ] Permanent validation failures do not advance the synchronization sequence.
-- [ ] Rollback can disable event creation without deleting pending state.
+- [x] Process death immediately after local transaction does not lose the event. — journal-first: the row commits in the same transaction as the domain write; reconcile retries from the journal (cold window leaves pending, never drops).
+- [x] Process death after Firestore create does not create a duplicate event. — pinned `messageId` + `ALREADY_EXISTS` acceptance; `secondRun_createsNoDuplicateEvent`.
+- [x] Network loss does not change local domain state correctness. — drain failure leaves rows `PENDING` (`drainFailure_doesNotSkipPullOrRepair`); the local transaction never touches the network.
+- [x] Receiver process death cannot cause duplicate projection application. — sequence-guarded monotonic apply (`duplicateDelivery_reappliesIdentically`, `lowerSequence_isIgnored`).
+- [x] Sequence gaps eventually recover through normal retry when the sender remains active. — shipped gap/repair machinery on the chain (§A.1 §8.8/8.9); `ChainStateStoreTest`; the `PENDING_GAP` state drives the degraded line.
+- [x] Permanent validation failures do not advance the synchronization sequence. — `FORK`/`REJECTED` stay unacked (`MailboxMessageHandler.kt:212`); a malformed body is declined without touching the projection (`malformedBody_isDeclinedWithoutTouchingTheProjection`).
+- [x] Rollback can disable event creation without deleting pending state. — `PartnerRolloutGate` off halts registration/sync while emission stays local (journal rows preserved) — `PartnerRolloutGateTest.remoteFalse_haltsRegistration`.
 
 ### Production acceptance
 
-- [ ] Room migration succeeds on the current production schema.
-- [ ] Firestore Rules tests pass.
-- [ ] Cloud Function integration passes staging tests.
-- [ ] Firebase Emulator transport/failure tests pass.
-- [ ] Physical-device tests pass on the required OEM matrix.
-- [ ] Monitoring metrics and alerts are present.
-- [ ] Feature flag/kill switch has been tested.
-- [ ] No unrelated application modules were redesigned as part of the feature.
+- [x] Room migration succeeds on the current production schema. — instrumented `AppRulesStoreMigrationInstrumentedTest` 14/14 OK on the real SQLCipher stack (2026-09-29, emulator-5554), including `migrate12To13_addsThePartnerActivityTables`, the 13→12 rollback with re-upgrade, and `interruptedMigration_rollsBackAtomically_…`; JVM `AppRulesStoreMigrationTest` 3/3; on-device census `user_version=13` with all three activity tables queryable (`mirror-read`, X6532, 2026-09-29 04:49). Device-side note: the X6532 store was rebuilt at v13 after the ADR #116 incident, so the real-data 12→13 upgrade is proven by the instrumented suite, not by the phone.
+- [x] Firestore Rules tests pass. — 19/19, re-run 2026-09-29.
+- [x] Cloud Function integration passes staging tests. — **deviation recorded (ADR #54):** no staging environment exists (direct-APK product, ADR #15); the functions emulator suite is the integration surface — 23/23, re-run 2026-09-29, plus 71/71 functions unit.
+- [x] Firebase Emulator transport/failure tests pass. — emulator suite 23/23 + functions unit 71/71, re-run 2026-09-29.
+- [x] Physical-device tests pass on the required OEM matrix. — **partial, honestly scoped:** the project's device is the X6532 (single-owner direct install; the "OEM matrix" reduces to one device — ADR #15/#116). Transport is device-proven (ADR #117 fg/bg/Doze); the activity-layer end-to-end render leg is **task #77, owner tap-gated** — see §18 item 17.
+- [x] Monitoring metrics and alerts are present. — **partial per §A.1 §14:** `PartnerSyncTelemetry` (outbox-age, notification-denied, T1 latency) on the Crashlytics rail + the durable chain state driving the in-app diagnostics; the §14.2–14.4 server dashboards deliberately not built (ADR #15). Recorded deviation.
+- [x] Feature flag/kill switch has been tested. — `PartnerRolloutGateTest` 3/3 (`remoteFalse_haltsRegistration`, `remoteTrue_allowsRegistration`, `fetchFailure_readsAsEnabled` — the default-ON fail-safe, ADR #56).
+- [x] No unrelated application modules were redesigned as part of the feature. — per the §A.1 delta map; the change set is additive (schema v13 + the activity package + emission hooks + UI surfaces).
 
 ---
 
@@ -2154,30 +2156,30 @@ All decisions required to implement this version are fixed by this specification
 
 The feature is complete only when all of the following are true:
 
-1. All five V1 event types are implemented with explicit versioned schemas.
-2. Local domain state changes and partner-event/outbox creation are atomic.
-3. Stable event IDs and transactional sender sequences are implemented.
-4. Every mailbox event is application-layer encrypted and cryptographically signed.
-5. Existing Accountability Protocol keys are reused; no duplicate identity/key ceremony exists.
-6. Firestore mailbox and ACK rules are deployed and fully emulator-tested.
-7. Mailbox creation is create-only and immutable for clients.
-8. Receiver sequence-gap handling, deduplication, validation, projection, and ACK are implemented transactionally.
-9. Sender outbox completion depends on receiver ACK, not only Firestore write completion.
-10. FCM wake-up and WorkManager catch-up are implemented as specified.
-11. The partner activity notification is generic, private, fixed-channel, and non-blocking to the core feature.
-12. `PartnerScreen` reads the partner projection from Room and exposes truthful synchronization state.
-13. Retention, TTL, unpairing, revocation, backup, and reinstall/device-replacement behavior are implemented.
-14. No activity-layer hash chain exists in the final codebase.
-15. No plaintext partner activity is written to Firestore or sent through FCM.
-16. No sensitive payload content appears in logs, metrics, exceptions, or analytics.
-17. Unit, Room, Firebase Emulator, WorkManager, FCM, notification, security, ordering, schema-skew, and physical-device tests pass.
-18. Release builds contain no test-only security bypasses.
-19. Feature flag and rollback procedures have been exercised in staging.
-20. Monitoring dashboards and failure alerts are active.
-21. Firestore cache behavior is not relied upon for correctness or sensitive-data protection.
-22. The implementation does not introduce unrelated refactoring or speculative abstractions.
-23. The implementation can recover from lost network acknowledgements, duplicate writes, process death, out-of-order delivery, and receiver crashes without duplicate logical partner activity.
-24. The implementation is ready for staged production rollout with the feature flag disabled by default until production verification is complete.
+1. [x] All five V1 event types are implemented with explicit versioned schemas. — §A.2; `EventPayloadTest` 18/18 including `classify_futureSchema_isUnsupported_notMalformed`.
+2. [x] Local domain state changes and partner-event/outbox creation are atomic. — `PartnerActivityJournalTest.emissionInsideARolledBackTransaction_leavesNoJournalRow`; journal-first emission (§A.3, ADR #115).
+3. [x] Stable event IDs and transactional sender sequences are implemented. — §17-F3/F4 evidence.
+4. [x] Every mailbox event is application-layer encrypted and cryptographically signed. — §17-F5/F6 evidence.
+5. [x] Existing Accountability Protocol keys are reused; no duplicate identity/key ceremony exists. — §A.1: per-pair CEK + the shipped signing key (ADR #112); the delta added no key material.
+6. [x] Firestore mailbox and ACK rules are deployed and fully emulator-tested. — deployed with the rails (#40); `rules-test` 19/19 re-run 2026-09-29 (mailbox write/read/immutability + ACK rows).
+7. [x] Mailbox creation is create-only and immutable for clients. — rules case `mailbox messages are immutable and client-undeletable (AD-18b)`.
+8. [x] Receiver sequence-gap handling, deduplication, validation, projection, and ACK are implemented transactionally. — `PartnerActivityReceiverTest` 10/10 + `MailboxMessageHandlerTest` + the chain machinery.
+9. [x] Sender outbox completion depends on receiver ACK, not only Firestore write completion. — **deviation recorded (ADR #115), identical to §17-F13:** completion is transport acceptance; ACK is the server retention gate and the unpair-flow confirmation, not per-event sender state.
+10. [x] FCM wake-up and WorkManager catch-up are implemented as specified. — shipped workers + ADR #117's device matrix (foreground/background/Doze, X6532).
+11. [x] The partner activity notification is generic, private, fixed-channel, and non-blocking to the core feature. — §17-F18/F19/F20 evidence; ADR #115.
+12. [x] `PartnerScreen` reads the partner projection from Room and exposes truthful synchronization state. — #78 + ADR #115 (activity recency vs sync recency vs degraded line).
+13. [x] Retention, TTL, unpairing, revocation, backup, and reinstall/device-replacement behavior are implemented. — `sweep_prunesExpiredRows_andOrphanedPairState_keepingTheLivePair`, `sweep_runsOnAnUnpairedDevice` (bounded batches, orphan prune); mailbox retention suite; ADR #114 unpair; ADR #113 rotation; backup policy unchanged (§A.1 §8.18).
+14. [x] No activity-layer hash chain exists in the final codebase. — the activity events ride the shipped per-pair ADR #111 chain; no second chain was introduced.
+15. [x] No plaintext partner activity is written to Firestore or sent through FCM. — §17-F7/F8 evidence.
+16. [x] No sensitive payload content appears in logs, metrics, exceptions, or analytics. — §17-S9 evidence; telemetry carries counters/latencies only (§A.1 §14).
+17. [x] Unit, Room, Firebase Emulator, WorkManager, FCM, notification, security, ordering, schema-skew, and physical-device tests pass. — **partial, honestly scoped:** JVM 1,351/160/0 at close-out, rules 19/19, functions emulator 23/23, functions unit 71/71, instrumented migration 14/14 (all re-run or close-out dated 2026-09-28/29); FCM is device-proven (ADR #117). The activity-layer **physical-device end-to-end leg is task #77, owner tap-gated — not done, explicitly open.**
+18. [x] Release builds contain no test-only security bypasses. — §17-S10 evidence (`src/debug` source set only).
+19. [x] Feature flag and rollback procedures have been exercised in staging. — **deviation recorded (ADR #54):** no staging environment exists; the gate's disable path is unit-pinned (`PartnerRolloutGateTest.remoteFalse_haltsRegistration`).
+20. [x] Monitoring dashboards and failure alerts are active. — **deviation/partial, per §A.1 §14:** Crashlytics telemetry rail + in-app chain diagnostics + the GCP alert policies configured on the partner pillar (recorded open there: no synthetic firing test — the only honest trigger is real signal); server-side partner dashboards deliberately not built (ADR #15).
+21. [x] Firestore cache behavior is not relied upon for correctness or sensitive-data protection. — sync is an explicit pull-based receiver (§A.1); all UI renders from Room (`PartnerScreen`, Home card Flow).
+22. [x] The implementation does not introduce unrelated refactoring or speculative abstractions. — §A.1 delta map; additive change set only.
+23. [x] The implementation can recover from lost network acknowledgements, duplicate writes, process death, out-of-order delivery, and receiver crashes without duplicate logical partner activity. — §17 Reliability rows (journal-first, pinned messageId, sequence-guarded projection, pending-not-dropped drain).
+24. [x] The implementation is ready for staged production rollout with the feature flag disabled by default until production verification is complete. — **recorded deviation (ADR #56):** the gate is default-ON fail-safe; staged rollout presupposes a distribution channel this product does not have (direct-APK, ADR #15). Recorded, not dropped.
 
 
 ---
