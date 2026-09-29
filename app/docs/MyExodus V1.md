@@ -486,8 +486,8 @@ Every functional requirement below specifies a testable behavior. Before any of 
 **Happy Path:** Given a paired user is struggling, When they tap SOS, Then the partner's device receives a gentle check-in notification and the user's app confirms it was sent.
 **Copy direction (user-set 2026-09-13, "chill, subtle"):** the user's own framing ("needs you to reach out... at risk of relapse") is the intent; the shipped wording should stay warm and low-stakes rather than clinical or alarmist — e.g. "Sam could use a quick check-in." Final copy is an open product decision (Open Product Decisions #7).
 **Edge Case (Offline):** Given the device is offline, When SOS is tapped, Then the signal is queued and delivered on reconnect, and the in-app confirmation honestly states it is waiting for a connection. Rate-limit: one signal per ~10 minutes; a repeat tap inside the window asks "send another?" — accidental presses must not spam the partner.
-**Dependencies (flagged — SOS is not a small feature given the current state):** (1) partner pairing has no shipping UI (see Req 6/16 status) — there is nothing to deliver to yet; (2) **no push path exists in code** — no FCM service or sender; the mailbox is a 15-minute pull and periodic WorkManager does not run on the XOS fleet device (ADR #27); timely delivery is an architectural decision, see Open Product Decisions #7; (3) if the copy names the user, name capture must exist first — anonymous auth today, and nothing populates the schema's `name` column.
-**Implementation status (2026-09-13): not built — spec added from user direction; plan pending (should be planned together with the partner pillar, or at minimum after the delivery-channel decision).**
+**Dependencies (flagged 2026-09-13 — all three resolved as of 2026-09-29):** (1) partner pairing has no shipping UI — **resolved:** the production ceremony ships (ADR #97; OPD #25 closed 2026-09-28); (2) **no push path exists in code** — **resolved:** the Cloud Functions relay dispatches FCM (`functions/fcm-transport.js`) and the wake path is device-verified (ADR #74 / #117); (3) if the copy names the user, name capture must exist first — **resolved:** the partner display name ships (ADR #99, exchanged at pairing). The remaining open item is the final copy wording (Open Product Decisions #7, "chill, subtle" direction above).
+**Implementation status (2026-09-29): not built — but now fully unblocked; selected as the next feature to build (owner researching the plan, 2026-09-29).** Original (2026-09-13): spec added from user direction; plan pending.
 
 ### 36. Home-Screen Widget
 
@@ -573,7 +573,7 @@ By writing it this way, we satisfy the principal: Work that doesn't trace to a g
 * **Milestone 1: The Core Blocking Engine (Device-Level)**
   Deliverable: A functional Android build where you can set specific time-ranges (Bedtimes), total block durations, and daily usage limits (e.g., 2 hours). The app successfully uses WorkManager and UsageStatsManager to track these rules and instantly draws the full-screen block overlay when a rule is violated. The blocks are enforced at the local device level and remain active even if the user logs out or switches profiles.
 * **Milestone 2: Automated Interception & Recovery Flow**
-  Deliverable: From an active block screen, the system automatically increments the "Block Attempt" counter. The user can tap 'Manage urge' to view the recovery resource screen, which now displays willpower-adaptive suggested activities based on the time of day, their custom coaching action steps, and a direct Escape Hatch to launch the local MyExodus app privately. The system natively routes them back to the device's home screen after the un-skippable friction countdown timer expires. **(Delivered 2026-09-19 — Recovery Resource UI workstream, ADR #61. Two corrections vs. this prose: the shipped countdown is the seeded 60 s friction value, not 3-to-5 minutes (documented deviation, Req 13); persistent partner motivational messages are not built — Req 15 has no sender UI. An urge log also routes home but does not unlock — the restriction survives it, per Req 10.)**
+  Deliverable: From an active block screen, the system automatically increments the "Block Attempt" counter. The user can tap 'Manage urge' to view the recovery resource screen, which now displays willpower-adaptive suggested activities based on the time of day, their custom coaching action steps, and a direct Escape Hatch to launch the local MyExodus app privately. The system natively routes them back to the device's home screen after the un-skippable friction countdown timer expires. **(Delivered 2026-09-19 — Recovery Resource UI workstream, ADR #61. Two corrections vs. this prose: the shipped countdown is the seeded 60 s friction value, not 3-to-5 minutes (documented deviation, Req 13); persistent partner motivational messages were not built at that date — **shipped 2026-09-28 (ADR #115: composer on the partner Activity subpage; corrected here 2026-09-29)**. An urge log also routes home but does not unlock — the restriction survives it, per Req 10.)**
 * **Milestone 3: Habit Tracking & Streaks**
   Deliverable: The system successfully monitors absolute time to increment the "days free" counter after a full 24-hour period without a relapse. The app successfully triggers a local milestone celebration notification (e.g., 7 days) and accurately resets the streak if a relapse is logged.
 * **Milestone 4: Dual-Role Cloud Identity, Partner Sync & Alpha Release**
@@ -1239,9 +1239,11 @@ deviation) · **Not built** (no implementation in the codebase).
 "no pairing screen ships yet" — false since §19.4/§19.5 landed (the ceremony UI ships and was
 device-verified); annotated inline at that paragraph.
 
-**The honest gap list (6 not built + 8 partial):** not built — 15 (motivational messages),
-21 (solo quarantine), 24 (sovereignty portal), 25 (escape hatch as written), 33 (rollback
-protection), 35 (SOS). Partial — 5, 6, 12, 14, 16, 20, 22, 23, 27, 28, 29, 34. Of these, the
+**The honest gap list (5 not built + 10 partial + 1 by-design deviation):** not built — 21
+(solo quarantine), 24 (sovereignty portal), 25 (escape hatch as written), 33 (rollback
+protection), 35 (SOS). Partial — 5, 6, 14, 16, 20, 22, 23, 27, 28, 29. By design — 34.
+(Corrected 2026-09-29 — this line still named 15 as not built and 12 as partial; ADR #115 moved
+both, and the table rows above already say Shipped. This line now matches them.) Of these, the
 ones with a **stale risk** (behavior differs from what a reader of only this doc would believe)
 are: 5 (clock-tamper prose), 28 (`recovery_escrow_key` column implying escrow exists), 29
 (server-retention prose), 34 (TTL prose). The others are tracked product decisions already
