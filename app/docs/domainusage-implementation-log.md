@@ -220,9 +220,12 @@ only, so the class is not in `Clocks.kt` even though it is one line.
    indistinguishable from a real config by design, so no Chrome hello *without* ECH exists to
    capture and B/C are `Result.Ech` with their plaintext SNI (a spec-mandated public cover name,
    `du-b.192.0.2.99.nip.io`) deliberately ignored. Per-fixture source, date, device, client and
-   SHA-256 live in `app/src/test/resources/tls/FIXTURES.provenance`. **Fixture D is still synthetic
-   and is not a capture** — it is pending a Chrome capture on the API 37 (Android 17) reference
-   emulator, recorded as such in the provenance file and in the S10 report's open items.
+   SHA-256 live in `app/src/test/resources/tls/FIXTURES.provenance`. **Fixture D is now a real
+   capture too (2026-09-29, #92):** Chrome 145.0.7632.218 on the API 37 (`MyExodus_API37`) image
+   against the same host listener, `hello-03.bin` of 3 (1730 B, ECH extension 186 B, same
+   smallest-ECH convention as C); same GREASE-ECH shape, plaintext SNI `du-b.10.0.2.2.nip.io`
+   ignored, and it carries the same X25519MLKEM768 (0x11EC) key-share group, which its U-8 case
+   asserts. The report's §3.4 carries the companion I-12b run on the same image.
 2. **A non-ClientHello handshake message ⇒ `NoSni`, not `Malformed`.** §8 S4.2 fixes `NotTls` for
    the record-level checks but does not name the handshake-type mismatch. A well-formed TLS
    handshake that simply is not a ClientHello (e.g. a ServerHello) carries no SNI and is not
@@ -276,7 +279,10 @@ only, so the class is not in `Clocks.kt` even though it is one line.
   that tap, together with `tls443_flows`, `inspect_timeout`, the `OwnedBytes` wrapping at each
   terminal result, and `onClosed`'s `release()`.
 - **S10 needs an Android 17 image for I-12b** (ECH on by platform default) and real Chrome
-  captures for fixtures B–D if the project later wants them byte-for-byte.
+  captures for fixtures B–D if the project later wants them byte-for-byte. — **Closed 2026-09-29
+  (task #92):** the `MyExodus_API37` AVD filled the image need; I-12b PASSed on it (`sni_ech=0→4`,
+  page renders "You are using ECH.") and Fixture D became a real Chrome 145 capture from the same
+  image (U-8 re-ran 19/0). Fixtures B–D are now all real captures. Report §3.4.
 
 ## S5 — Ledger and registry (2026-09-20)
 

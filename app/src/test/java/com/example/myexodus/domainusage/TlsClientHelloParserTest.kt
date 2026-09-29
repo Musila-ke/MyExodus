@@ -16,9 +16,9 @@ import org.junit.Test
  * carried `0xFE0D`, so a real Chrome hello *without* an ECH extension no longer exists to
  * capture: Chrome sends GREASE ECH to hosts that publish no ECH config, and RFC 9849 §6.2 makes
  * GREASE indistinguishable from a real config by design — hence `Result.Ech` for B and C, with
- * their plaintext SNI (a cover name, per spec) deliberately ignored. Fixture D is still synthetic
- * pending the Android 17 capture; the S4 section of `app/docs/domainusage-implementation-log.md`
- * carries the history.
+ * their plaintext SNI (a cover name, per spec) deliberately ignored. Fixture D is a real Chrome
+ * 145 capture from the Android 17 (API 37) reference image, taken 2026-09-29; the S4 section of
+ * `app/docs/domainusage-implementation-log.md` carries the history.
  */
 class TlsClientHelloParserTest {
 
@@ -61,6 +61,19 @@ class TlsClientHelloParserTest {
     fun echFixturesReportEchAndIgnoreTheirPlaintextSni() {
         assertEquals(TlsClientHelloParser.Result.Ech, feed(c))
         assertEquals(TlsClientHelloParser.Result.Ech, feed(d))
+    }
+
+    @Test
+    fun fixtureDCarriesAPostQuantumKeyShareUnderAnIgnoredGreaseEchSni() {
+        assertEquals(TlsClientHelloParser.Result.Ech, feed(d))
+        assertTrue(
+            "fixture still carries the X25519MLKEM768 key-share group",
+            (0 until d.size - 1).any { d[it] == 0x11.toByte() && d[it + 1] == 0xEC.toByte() },
+        )
+        assertTrue(
+            "capture still carries its plaintext SNI for the ignore-path to be meaningful",
+            String(d, Charsets.ISO_8859_1).contains("du-b.10.0.2.2.nip.io"),
+        )
     }
 
     @Test

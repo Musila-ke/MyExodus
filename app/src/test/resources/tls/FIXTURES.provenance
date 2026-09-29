@@ -1,6 +1,6 @@
 # U-8 ClientHello fixtures — where each byte came from.
 # Reference-device captures are the plan's §12.1 requirement (fixture B/C "Chrome-stable
-# capture"); A is generated, D is still synthetic pending the Android 17 capture.
+# capture"); A is generated, B/C/D are real captures (B/C on the X6532, D on the API 37 image).
 
 fixture_a_example_com.bin
 source=python3 ssl.MemoryBIO wrap_bio(server_hostname="example.com"); do_handshake(); read outgoing BIO
@@ -31,8 +31,15 @@ notes=hello-06.bin of 20; smallest ECH extension in the session (186 B, plausibl
 sha256=80ca19987a3689bf7fe3c9f55a26ae83d8f5d32a472104b5dc65a5a14249d4bc
 
 fixture_d_android17_ech.bin
-source=synthetic (hand-built Chrome-shaped ClientHello)
-retrieved_at=2026-09-20
-notes=NOT a capture. Pending a Chrome capture on the API 37 (Android 17) reference emulator —
-      platform-default ECH. Replace with the real capture and update this record before release.
-sha256=33b8bbd3db2b2c4c8ad4f8a460ce72f6e24f6a975bce9f049ddb0ebcfc7f014b
+source=scripts/domainusage-tls-hello-capture.py 9447 /tmp/hello-capture-api37 (host listener), Chrome to https://du-b.10.0.2.2.nip.io:9447
+retrieved_at=2026-09-29
+device=MyExodus_API37 AVD (sdk_gphone64_x86_64, Android 17 / API 37) — the ECH-by-default
+       reference target; replaces the earlier synthetic stand-in.
+client=Chrome 145.0.7632.218 (Android)
+notes=hello-03.bin of 3 (captured after `pm clear com.android.chrome` + first-run dismissal);
+      smallest ECH extension in the session (186 B — same convention as fixture C). Carries
+      GREASE + X25519MLKEM768 (group 0x11EC) + X25519 key shares and 0xFE0D (GREASE ECH — the
+      target publishes no HTTPS RR), so the parser verdict is Ech and the plaintext SNI
+      (du-b.10.0.2.2.nip.io, a spec-mandated public name) is ignored. Accompanies the I-12b
+      device leg (Chrome -> tls-ech.dev, sni_ech counter) on the same image.
+sha256=04ec8c93fe2a92166e406c65fe07cf72df15615828807ebc85b80bcd2a733503

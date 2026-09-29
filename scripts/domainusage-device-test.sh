@@ -634,7 +634,11 @@ i12b() {
   fi
   local sni0; sni0=$(counter sni_ech)
   adbs shell am start -a android.intent.action.VIEW -d https://tls-ech.dev >/dev/null 2>&1
-  sleep 15
+  # 60 s, not 15: on the API 37 image a cold Chrome spends tens of seconds before its first
+  # ClientHello reaches the TUN. At 15 s the leg photographed a blank page and read a 0→0 delta
+  # while that same connection was ECH-negotiated seconds later (device-caught 2026-09-29 — the
+  # page's own "You are using ECH." verdict arrived after the screenshot, sni_ech already >0).
+  sleep 60
   adbs exec-out screencap -p > "$TMP/i12b-chrome.png" 2>/dev/null
   local sni1; sni1=$(counter sni_ech)
   judge "I-12b chrome->tls-ech.dev sni_ech=${sni0}→$sni1 — read $TMP/i12b-chrome.png"

@@ -9,8 +9,9 @@ day — §5.1 items 14–16).
 at close-out). **S0 gate:** `app/docs/domainusage-baseline-check.md`.
 
 **Reference targets (§3.1):** (1) Infinix Smart 9 X6532, XOS, API 34 — the low-end device;
-(2) stock-Android emulator `Lean_API34` — instrumented legs; (3) an Android 17 (API 37) device or
-emulator image — ECH-by-default legs (I-12b, Fixture D); not yet available in this environment.
+(2) stock-Android emulator `Lean_API34` — instrumented legs; (3) Android 17 (API 37) emulator
+`MyExodus_API37` — ECH-by-default legs (I-12b, Fixture D), **ran 2026-09-29 (§3.4)**; the
+earlier "not available in this environment" is closed.
 
 **How to reproduce:** host server `scripts/domainusage-test-server.py` (one IP, TLS 443/8443
 SNI-routed, HTTP 80 `/stream`+`/sink`, TCP 8080, IPv6-only 9443); instrumented matrix
@@ -23,8 +24,9 @@ SNI-routed, HTTP 80 `/stream`+`/sink`, TCP 8080, IPv6-only 9443); instrumented m
 | §12 leg | Scope | Result |
 |---|---|---|
 | 12.1 Unit (JVM) | U-1…U-14 | **PASS** — full suite 1020 / 0 fail / 0 err / 0 skip across 129 classes; domainusage package 232 tests (incl. U-13 running the shipped CI script) |
-| 12.2 Instrumented — X6532 | I-1…I-23 (+b variants) | **21 PASS, 3 SKIP (I-9, I-10 → emulator; I-12b → API 37)** — the frozen 2026-09-21 matrix (19 PASS / 1 FAIL / 3 SKIP) plus the 2026-09-22 session closing the last three: **I-17 PASS**, **I-11b PASS**, **I-13b PASS** with the engine genuinely in `ACCOUNT` (§4.2) |
+| 12.2 Instrumented — X6532 | I-1…I-23 (+b variants) | **21 PASS, 3 SKIP (I-9, I-10 → emulator; I-12b → API 37)** — the frozen 2026-09-21 matrix (19 PASS / 1 FAIL / 3 SKIP) plus the 2026-09-22 session closing the last three: **I-17 PASS**, **I-11b PASS**, **I-13b PASS** with the engine genuinely in `ACCOUNT` (§4.2). All three SKIPs then landed elsewhere: I-9/I-10 PASS on the emulator (§3.3), **I-12b PASS on the API 37 image 2026-09-29 (§3.4)** |
 | 12.2 Instrumented — emulator | I-21, I-21b (+6 regression migrations), I-9, I-10 | **PASS** on the migrations (8/8), I-9 and I-10 (re-run #6 after three harness fixes — §3.3) |
+| 12.2 Instrumented — API 37 (`MyExodus_API37`) | I-12b (+ Fixture D capture) | **I-12b PASS 2026-09-29** — `sni_ech=0→4` with the `tls-ech.dev` page rendering "You are using ECH." behind the tunnel (§3.4); Fixture D replaced by a real Chrome capture from the same image |
 | 12.3 Performance — PF-1…PF-8 | §11 gates | **7 PASS (PF-1, PF-2, PF-3, PF-4, PF-6, PF-7, PF-8) / 1 open (PF-5)** — all seven measured on the X6532 with pinned+verified modes 2026-09-22 (§4.2); the withdrawn vacuous-A/B numbers are superseded. PF-4 scored under the re-ruled +10 thread tolerance (§5.1 item 15), PF-7 on idle runs with the in-batch sample recorded (§5.1 item 14). PF-5 alone needs the cable out (task #6) |
 
 ## 2. §12.1 — Unit tests (JVM)
@@ -41,7 +43,7 @@ Command: `./gradlew :app:testDebugUnitTest` — **1020 tests, 0 failures, 0 erro
 | U-5 | `DnsReplyBuilderTest` | 3 | NXDOMAIN/NODATA re-parse, question echo, SOA TTL/minimum |
 | U-6 | `DnsShaperTest` | 18 | full qtype × {OFF,ACCOUNT,ENFORCE} × {no match, enabled, exhausted} table |
 | U-7 | `DnsObservationStoreTest` | 9 | TTL to 0, cap, IP-LRU eviction, expiry, clear |
-| U-8 | `TlsClientHelloParserTest` | 18 | per-byte split, two TLS records, ECH⇒`Ech`, oversize, timeout, fuzz ≥100 000 (`:252`, `:273`); Fixtures A–D under `src/test/resources/tls/` |
+| U-8 | `TlsClientHelloParserTest` | 19 | per-byte split, two TLS records, ECH⇒`Ech`, oversize, timeout, fuzz ≥100 000 (`:252`, `:273`); Fixtures A–D under `src/test/resources/tls/` — D is a **real Chrome 145 capture from the API 37 image** (2026-09-29, §3.4), and the suite carries a provenance case asserting its post-quantum key share |
 | U-9 | `AttributionResolverTest` | 10 | SNI authoritative, DNS single-candidate, ECH never blocked for being ECH, ambiguity, stale revisions |
 | U-10 | `UsageLedgerTest` (+ `RuleCounterTest` for the §4.7 identity) | 17 + 12 | 20 s flow ⇒ ≈20 s + tail, 8 overlapping flows counted once, <512 B ⇒ 0, delayed-tick correctness, day rollover exact split, clock-jump clamping |
 | U-11 | `UsagePersistenceTest`, `RuleUsageDaoTest` | 9 + 5 | MAX never lowers, generation race, retry keeps newest, reload seeds, retention |
@@ -78,7 +80,7 @@ pass in `ENFORCE`) — correct for every leg below except `I-11b`/`I-13b`, whose
 | I-10 | SKIP here — midnight-rollover leg needs root; run on the emulator (§3.3) |
 | I-11 | PASS `udp_dropped=0→1 icmp=0→1; I-11b unrelated ip untouched (1)` |
 | I-12 | PASS `nodata https=0→1 svcb=0→0` (screenshot `i12-chrome.png`) |
-| I-12b | SKIP — ECH-by-platform-default needs SDK ≥ 37; device is 34 → API 37 image |
+| I-12b | SKIP here — ECH-by-platform-default needs SDK ≥ 37; device is 34 → **ran on the API 37 image, PASS 2026-09-29 (§3.4)** |
 | I-13 | PASS `aaaa(rule)=NODATA aaaa(unrelated) real + literal rst=4→5 (I-13b)` |
 | I-14 | PASS `strict=Degraded(reason=PRIVATE_DNS) tamper=0→1; I-14b cleared=Dormant` |
 | I-15 | PASS `revoke: notif 15→22, flush row … ms=35280 (in-memory 33274ms)` |
@@ -121,6 +123,40 @@ log `/tmp/du-emu-i9i10.log`.
   (`ms=74778`) and the new day accrued on its own row (38200 ms) — AC-8's exact requirement. The
   three preceding aborts were harness defects (§7 item 2), never product faults; this run is the
   first with all three fixed.
+
+### 3.4 I-12b + Fixture D — API 37 ECH legs (emulator `MyExodus_API37`, ran 2026-09-29)
+
+The plan's third reference target (NFR-7 / §3.1: Android 17, ECH-by-default) is the
+`MyExodus_API37` AVD (`android-37.0/google_apis/x86_64`, Chrome 145.0.7632.218). Both ECH legs the
+plan assigns to this target ran on it, same script as §3.1 (`--serial emulator-5554 --only I-12b`),
+log `/tmp/i12b-run2.log`.
+
+- **I-12b PASS** — verbatim:
+  `JUDGE I-12b chrome->tls-ech.dev sni_ech=0→4 — read /tmp/domainusage-matrix/i12b-chrome.png`.
+  The screenshot shows the `tls-ech.dev` page rendering **"You are using ECH. :)"** behind the
+  tunnel — real ECH negotiated on a host with no rule, connection succeeded. Per the plan's
+  deviation #9, the leg targets the public `tls-ech.dev` endpoint (the host test server has no real
+  ECH listener) — this is the leg's specified "controlled ECH-enabled test endpoint, Android 17
+  device, no rule on that host" shape.
+- **Fixture D capture (U-8)** — three Chrome ClientHellos captured on the host listener
+  (`scripts/domainusage-tls-hello-capture.py 9447 /tmp/hello-capture-api37 240`), Chrome driven to
+  `https://du-b.10.0.2.2.nip.io:9447`; all three `ech=True` with GREASE + X25519MLKEM768 (0x11EC)
+  key shares. `hello-03.bin` (1730 B, ECH extension 186 B — same smallest-ECH convention as fixture
+  C) replaced the synthetic fixture: sha256
+  `04ec8c93fe2a92166e406c65fe07cf72df15615828807ebc85b80bcd2a733503`. The U-8 suite re-ran green,
+  **19 tests / 0 failures** (§2 U-8 row), including the new provenance case
+  (`fixtureDCarriesAPostQuantumKeyShareUnderAnIgnoredGreaseEchSni`) asserting the fixture still
+  carries the post-quantum key-share group and its plaintext SNI.
+- **Honest limit:** `adb remount` on this image fails ("Device must be bootloader unlocked"), so
+  `/system/etc/hosts` cannot be edited and a *config-backed* real-ECH capture via a hosts alias to a
+  local ECH listener is impossible on this image. The capture shape is therefore GREASE-ECH (the
+  target publishes no HTTPS RR); **real-ECH evidence is delivered by I-12b** (Chrome negotiated ECH
+  over the public DNS), which is exactly the split the plan's deviation #9 anticipated.
+- **Harness fix found by this run:** the leg's wait was 15 s; on the API 37 image a cold Chrome
+  spends tens of seconds before its first ClientHello reaches the TUN — at 15 s the first attempt
+  photographed a blank page and read `sni_ech=0→0` while the same connection was ECH-negotiated
+  seconds later. Fixed to `sleep 60` (device-caught, comment in the script) and re-run → the
+  verbatim PASS above.
 
 ## 4. §12.3 — Performance gates (PF-1…PF-8)
 
@@ -413,7 +449,7 @@ against the fixed tree; the two marked *device-caught* produced the correspondin
 | 6 | Debug UI seam location | `DomainUsageDebugSection.kt` under `ui/settings` (wired from MainActivity/AppShell/SettingsScreen) | The plan's §3.3 modify list allows the RuleEditor UI + settings surface; this is the in-app counters view §14 requires. |
 | 7 | Plan's own `D-15` IPv4-only TUN sentence | Dual-stack TUN kept as shipped | ADR #70 (S0 ruling): the baseline's dual-stack TUN is strictly more capable; stripping IPv6 would reroute device traffic outside the tunnel. |
 | 8 | §4.9/§S7 DAO: `INSERT OR IGNORE` then `UPDATE … MAX` per row | Single `INSERT … ON CONFLICT … DO UPDATE SET active_ms = MAX(active_ms, excluded.active_ms)` per row | Same `MAX` semantics, one statement instead of two; measured 327 ms p50 / 573 ms p99 → ~94 ms for 200 rows. Plan text synced to the shipped form 2026-09-21; PF-7 gate status unaffected (§5.1 item 11). |
-| 9 | §12.2 test server carries "a controlled ECH-enabled endpoint with known configs (new, for I-12b)" | I-12b targets the public `tls-ech.dev`; the host server has no ECH listener | The host server is Python `ssl`-based; ECH *server* support depends on the OpenSSL build (unverified — tagged unknown, not assumed). The leg still proves the claim it exists for (a non-metered ECH connection is never disturbed, `sni_ech` observed on device); what it loses is config control (e.g. forcing a real config vs GREASE). To revisit when the API 37 target runs (task #17) rather than shipping an unverified listener now. |
+| 9 | §12.2 test server carries "a controlled ECH-enabled endpoint with known configs (new, for I-12b)" | I-12b targets the public `tls-ech.dev`; the host server has no ECH listener | The host server is Python `ssl`-based; ECH *server* support depends on the OpenSSL build (unverified — tagged unknown, not assumed). The leg still proves the claim it exists for (a non-metered ECH connection is never disturbed, `sni_ech` observed on device); what it loses is config control (e.g. forcing a real config vs GREASE). **Resolved by the API 37 run (2026-09-29, §3.4):** the leg ran end-to-end against `tls-ech.dev` and PASSed; the emulator image's `adb remount` is blocked, so a hosts-alias local ECH listener is impossible there — the public endpoint is the shipped shape permanently, and real-ECH evidence comes from I-12b while the fixture capture is GREASE-ECH. |
 
 ## 7. Open items (blocked or scheduled)
 
@@ -423,10 +459,10 @@ against the fixed tree; the two marked *device-caught* produced the correspondin
 | 2 | I-9, I-10 (clock legs) — **CLOSED 2026-09-21** | Both PASS on the emulator (§3.3); I-10 needed three harness fixes ((a) /tmp copies resolved `DNS_TOOL`/`HELLO_TOOL` to /tmp; (b) VPN-restart timeout under host load; (c) `i10()` read the ledger day before adding a rule — a Dormant engine reports `day=`, so the clock guard refused the no-op). All three fixed in both copies | done |
 | 8 | PF-1, PF-2, PF-3, PF-4 — **CLOSED 2026-09-22** | All four re-measured on the X6532 with modes pinned and readback-verified (§4.2), replacing the withdrawn vacuous-A/B numbers. PF-4 scores PASS under the re-ruled +10 thread tolerance (§5.1 item 15) | done |
 | 9 | `I-11b`/`I-13b` in `ACCOUNT` (AC-19 device evidence) — **CLOSED 2026-09-22** | The frozen-matrix sub-clauses ran `ENFORCE`; the explicit `ACCOUNT` halves (rule exhausted, engine in `ACCOUNT`, DNS must resolve, unrelated flow untouched) both PASS in the phone session (§4.2). AC-19 is no longer partial | done |
-| 3 | I-12b + Fixture D | Need an API 37 image (ECH on by default) — `MyExodus_API37` AVD exists on the `android-37.0/google_apis/x86_64` image and boots (~2 min); Chrome availability on a non-Play image is the open question for the *capture* half | API 37 emulator, scheduled |
+| 3 | I-12b + Fixture D — **CLOSED 2026-09-29** | Both ran on `MyExodus_API37` (§3.4): I-12b PASS (`sni_ech=0→4`, page renders "You are using ECH."), Fixture D replaced by a real Chrome 145 capture (U-8 re-ran 19/0). Chrome **does** ship on the google_apis image (145.0.7632.218) — the capture-half question closed | done |
 | 4 | PF-5 | Needs the X6532 **unplugged** for a full hour per leg. `--runs 1` → 2 h (one full calibrated hour per arm), which needs only ~40% start charge and is the selected shape; the 6 h `--runs 3` default would need the battery to survive the whole window. The charging guard now also catches Qi pads (§5.1 item 16) so a pad left under the phone cannot silently produce a drain number | `DU_ONLY=PF-5 … --runs 1`, task #6 |
 | 5 | PF-3/PF-4/PF-7/PF-8 — **CLOSED 2026-09-22** | Run 3 superseded by the re-run (item 8). All four measured on the X6532 (§4.2): PF-3 1.00× OFF, PF-4 −1 MB median heap (re-ruled tolerance — §5.1 item 15), PF-7 PASS on idle runs with the in-batch sample recorded (§5.1 item 14), PF-8 ~5 orders under bound | done |
-| 6 | AC-16 (all gates on all three reference devices) | Third reference target (API 37) not available; X6532 is 7/8 (PF-5 alone open, task #6) | tracked as task #20 |
+| 6 | AC-16 (all gates on all three reference devices) | API 37 target now exists and its dedicated ECH legs PASS (§3.4). Still open on two grounds: **PF-5** on the X6532 needs the cable out (task #91, owner-deferred to last), and the PF gates were **not re-run on the API 37 emulator** — its plan role is the ECH legs, and the AC's battery gate is physically unmeasurable there (synthetic emulator battery). Recorded, not re-scoped silently. | tracked as task #91 (PF-5), #92 closed |
 | 7 | S9 UI claims on-device (refresh cadence, expiry banner) | Quick device leg on the X6532 — rides the deferred phone night | task #15 |
 
 **Phone-night deferral, revised 2026-09-22.** The original deferral (user ruling 2026-09-21,
@@ -468,7 +504,7 @@ not survive a phone reboot**. Until the PF-5 drain lands, PF-5 and AC-16 stay op
 - [x] Components of §4.1 implemented; out-of-scope areas untouched (diff-check: task #21, below).
 - [x] INV-1…INV-16 each have a test or CI check — mapping above.
 - [x] U-1…U-14 pass in CI (1020/0/0/0).
-- [ ] I-1…I-23 on all three reference devices — X6532 (**21 PASS / 3 SKIP**, closed 2026-09-22) + emulator done; API 37 target outstanding (open #6).
+- [x] I-1…I-23 on all three reference devices — X6532 (**21 PASS / 3 SKIP**, closed 2026-09-22; all three SKIPs then landed: I-9/I-10 on the stock-Android emulator §3.3, **I-12b on the API 37 image §3.4, 2026-09-29**) + I-21/I-21b on the emulator (§3.2). Every leg has now run on a target that can support it; the report's §3.1 SKIP rows name the destination.
 - [ ] PF-1…PF-8 — **PF-1, PF-2, PF-3, PF-4, PF-6, PF-7, PF-8 PASS** on the X6532 (§4.2; PF-4 under the re-ruled +10 thread tolerance — §5.1 item 15; PF-7's in-batch sample over bound, recorded as §5.1 item 14); **PF-5 open** (needs the cable out — open #4).
 - [x] Room schema exported; upgrade + downgrade tested (I-21, I-21b on emulator).
 - [x] RuleEditor validation + notices + usage display + status banner shipped with string resources (S9; device-verified in S9 close).
@@ -517,8 +553,8 @@ open-by-design, or dead (product decision):
 - **Open by design (owner noted):** item 9 (constant tuning — beta `ACCOUNT` stage; product),
   item 13 (telemetry/sync — product decision, V1 has neither), item 17 (DNS-bypass surface —
   accepted limitation, documented in S-12/D-18, no further owner).
-- **Open, single remaining thread:** item 8's API-37 reference target — Fixture D + I-12b (tasks
-  #17/#20; blocked on an API 37 image, not on code).
+- **Closed 2026-09-29:** item 8's API-37 reference target — Fixture D + I-12b both ran on
+  `MyExodus_API37` and PASSed (§3.4); item 8 is now fully resolved (`minSdk` half above).
 - **Dead by product decision:** item 4 (Play flavor policy) — the project ships direct APK only
   (ADR #15); rollout stage S5 is not applicable.
 
@@ -528,7 +564,9 @@ open-by-design, or dead (product decision):
 - Instrumented (emulator): `AppRulesStoreMigrationInstrumentedTest` **8/8** incl. both directions of
   the 9↔10 cycle; `DailyMaintenanceWorkerInstrumentedTest` and the VPN-spike legs were green in
   their own S7/S8 sessions (implementation log).
-- Device matrix: 19 PASS / 1 FAIL (harness, fixed, re-run pending) / 3 SKIP (environment) — §3.1.
+- Device matrix: 19 PASS / 1 FAIL (harness, fixed, re-run pending) / 3 SKIP (environment) — §3.1,
+  snapshot at S10. Since then: I-17/I-11b/I-13b PASS (2026-09-22, §4.2), I-9/I-10 PASS (§3.3),
+  I-12b PASS (§3.4) — every leg closed.
 
 ## 12. Plan §17 acceptance criteria (AC-1…AC-22) — verdict table
 
@@ -545,14 +583,14 @@ the evidence behind the verdict.
 | AC-6 | ENFORCE resets a live flow ≤ 2 s after exhaustion; NXDOMAIN for any qtype; hardcoded-IP/resolver enforced | I-7, I-20 | **PASS** |
 | AC-7 (revised) | Persisted totals never decrease per `(rule, revision, day)`; shutdown/abrupt-death loss bounded as re-worded | I-8; U-11 | **PASS** |
 | AC-8 | Clock rollback never reopens a past day; midnight splits at the exact boundary | I-9 PASS (§3.3); I-10 PASS re-run #6 — exhausted rule NXDOMAIN pre-midnight, real answer post-midnight, old row intact (`ms=74778`), new day 38200 ms | **PASS** |
-| AC-9 | ECH never blocked merely for being ECH, any mode; ENFORCE scoped suppression; unrelated sites unaffected | I-12 PASS with screenshot; I-12b needs an API 37 target | **PARTIAL — API 37 target outstanding (task #17)** |
+| AC-9 | ECH never blocked merely for being ECH, any mode; ENFORCE scoped suppression; unrelated sites unaffected | I-12 PASS with screenshot; **I-12b PASS 2026-09-29** — `sni_ech=0→4` on the API 37 image with the `tls-ech.dev` page rendering "You are using ECH." behind the tunnel (§3.4) | **PASS** |
 | AC-10 | IPv6 cannot bypass an enabled rule; unrelated IPv6-only traffic unaffected | I-13, I-13b — both ran `ENFORCE`, the strictest mode for this claim (shaping exists only there); the blanket-suppression regression they guard is `ENFORCE`-scoped by definition | **PASS** |
 | AC-11 | Private-DNS strict banner + auto-clear; VPN stop posts the notification exactly once | I-14, I-14b, I-15 | **PASS** |
 | AC-12 | Own traffic never metered; never-block/escape-hatch/recovery reachable in every mode, even fully exhausted | I-18 PASS; **I-17 PASS 2026-09-22** on a quiet baseline — `app request apphttp done code=200 chars=27, flows_tcp_total unchanged (71)` (§4.2) | **PASS** |
 | AC-13 | Raising a limit unblocks within 6 s | I-19 | **PASS** |
 | AC-14 | Parsers survive ≥ 100 000 mutated inputs each plus targeted boundary mutations | U-4 (`fuzzMutationsNeverThrow`), U-8 | **PASS** |
 | AC-15 | Migration N → N+1 preserves data; downgrade preserves every pre-existing table across repeated cycles | I-21, I-21b (emulator, 8/8 incl. interrupted-migration rollback) | **PASS** |
-| AC-16 | All PF gates pass on all three reference devices | **X6532: 7 of 8 PASS** — PF-1, PF-2, PF-3, PF-4, PF-6, PF-7, PF-8 (§4.2; PF-4 under the re-ruled +10 tolerance — §5.1 item 15; PF-7 scored on idle runs, in-batch sample recorded — §5.1 item 14); **PF-5 outstanding** (task #6); API 37 target absent | **PENDING (task #6, #17)** |
+| AC-16 | All PF gates pass on all three reference devices | **X6532: 7 of 8 PASS** — PF-1, PF-2, PF-3, PF-4, PF-6, PF-7, PF-8 (§4.2; PF-4 under the re-ruled +10 tolerance — §5.1 item 15; PF-7 scored on idle runs, in-batch sample recorded — §5.1 item 14); **PF-5 outstanding** (task #91, owner-deferred); the API 37 target's ECH legs PASS (§3.4) but PF gates were not re-run on the emulator — its plan role is the ECH legs and the battery gate is unmeasurable there (synthetic battery) | **PENDING (PF-5 — task #91; #92 closed)** |
 | AC-17 | CI grep check passes; PSL checksum matches provenance; no hostname/IP in feature logs | U-13; PSL asset test; INV-7 CI + review (baseline-service caveat recorded in §9) | **PASS** |
 | AC-18 | Rollout stage gates S1–S4 met before release mode leaves `OFF` | Not triggered: release builds ship `DOMAIN_USAGE_MODE=OFF` (§13); S5 dead per ADR #15 | **N/A by construction** |
 | AC-19 | `ACCOUNT` never blocks, drops, or reshapes, under any tested scenario | U-6 full table (JVM) PASS; **device half PASS 2026-09-22** — `I-11b` (`udp_dropped=0→1 icmp=0→1`, unrelated IP untouched) and `I-13b` (`aaaa(rule)=NODATA`, `aaaa(unrelated)` real, literal `rst=10→11`) both with the engine verifiably in `ACCOUNT` and the rule exhausted (§4.2) | **PASS** |
@@ -560,10 +598,12 @@ the evidence behind the verdict.
 | AC-21 | Saving a rule whose normalized pattern duplicates an enabled rule is rejected | I-23 | **PASS** |
 | AC-22 | A pooled TLS buffer is never reused while a prior flow's bytes still reference it | `InspectionBufferPoolTest` (4), `InspectingTcpTapTest` (14), `FlowTapTest` (8); S4 concurrency coverage | **PASS** |
 
-**Tally at this writing (revised 2026-09-22):** **19 PASS** · 1 PARTIAL (AC-9 — API 37 target,
-task #17) · 1 PENDING (AC-16 — PF-5 alone, task #6) · 1 N/A (AC-18). AC-12 and AC-19 moved
-PARTIAL → PASS in the 2026-09-22 phone session, which also closed PF-1/2/3/4. No AC is FAIL on
-product behavior; the two FAILs raised that session were both harness criteria, not code — PF-7
-measured inside a CPU-saturating batch (re-measured PASS on the idle device, §5.1 item 14) and
-PF-4's thread tolerance calibrated below keep-alive wander (re-ruled, legs re-scored, §5.1 item
-15). Both are recorded with their raw numbers rather than dropped.
+**Tally at this writing (revised 2026-09-29):** **20 PASS** · 1 PENDING (AC-16 — PF-5 alone on
+the X6532, task #91 owner-deferred to last; the API 37 target's assigned ECH legs PASS, §3.4) ·
+1 N/A (AC-18). AC-9 moved PARTIAL → PASS on 2026-09-29: I-12b ran green on the API 37 image with a
+real Chrome capture replacing Fixture D (U-8 re-ran 19/0). AC-12 and AC-19 moved PARTIAL → PASS in
+the 2026-09-22 phone session, which also closed PF-1/2/3/4. No AC is FAIL on product behavior; the
+two FAILs raised that session were both harness criteria, not code — PF-7 measured inside a
+CPU-saturating batch (re-measured PASS on the idle device, §5.1 item 14) and PF-4's thread
+tolerance calibrated below keep-alive wander (re-ruled, legs re-scored, §5.1 item 15). Both are
+recorded with their raw numbers rather than dropped.
