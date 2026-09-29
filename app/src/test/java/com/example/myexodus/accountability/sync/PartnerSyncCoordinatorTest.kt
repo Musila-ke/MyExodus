@@ -86,6 +86,7 @@ class PartnerSyncCoordinatorTest {
     private var rejectionChecks = mutableListOf<Pair<String, String>>()
     private var rejectionsToReport = 0
     private val stepOrder = mutableListOf<String>()
+    private val reachabilityPrunes = mutableListOf<Set<String>>()
 
     /** §19.5: the uids each pair resolves to. A test adds a second supported user here; a pair
      *  absent from the map models an unresolvable one (its slice is skipped, the rest run). */
@@ -562,6 +563,27 @@ class PartnerSyncCoordinatorTest {
         assertNull(dao.projection("pair-gone"))
     }
 
+    // ---- OPD #30(b): the reachability sweep (see PairingReachabilityStoreTest for the store) ----
+
+    @Test
+    fun reachabilityPrune_seesExactlyTheEnrolledPairIds() = runTest {
+        enroll()
+        enroll(pairId = "pair-two")
+
+        coordinator.syncOnce()
+
+        assertEquals(setOf(pairId, "pair-two"), reachabilityPrunes.single())
+    }
+
+    @Test
+    fun reachabilityPrune_stillRunsWithNoEnrollmentLeft() = runTest {
+        // After the last unpair there is no enrollment — which is exactly when the orphaned
+        // flags for the gone pairs must still be dropped.
+        coordinator.syncOnce()
+
+        assertEquals(setOf<String>(), reachabilityPrunes.single())
+    }
+
     // ---- helpers ----
 
     // Defaults are "just written": a fixture timestamped years in the past is a row the
@@ -627,6 +649,7 @@ class PartnerSyncCoordinatorTest {
             FirestoreMailboxReceiver.PullResult(appended = 3)
         },
         repairPass = { repairCalls++; 2 },
+        pruneReachability = { reachabilityPrunes += it },
     )
 
     private fun enroll(

@@ -402,6 +402,11 @@
          deliberately not attempted, and the only route forward is pairing again. -->
     <string name="partner_wipe_title">Pairing data was lost</string>
     <string name="partner_wipe_body">This phone’s pairing data went missing, so the connection to your partner was cleared and can’t be restored automatically. Pair again with a new code to reconnect. Until then, nothing is shared.</string>
+    <!-- OPD #30(b): the live enrollment whose pairing document denies this device — sync has
+         silently frozen. Cause is stated honestly (identity change or a partner-side ending),
+         and the only route forward is the same one the wipe card names: pair again. -->
+    <string name="partner_unreachable_title">Can’t reach your partner</string>
+    <string name="partner_unreachable_body">This phone is no longer recognized by your pairing, so nothing has been syncing. That happens when the app’s data was cleared or the app was reinstalled, or when the pairing was ended from the other side. Pair again with a new code to reconnect. Until then, nothing is shared.</string>
     <string name="partner_paired_with">Paired with %1$s</string>
     <string name="partner_paired_since">Since %1$s</string>
     <string name="partner_paired_explainer">That code identifies your partner’s device — they see the same code for you, so you can both confirm you paired with the right person.</string>

@@ -106,6 +106,8 @@ class PartnerDashboardSourceTest {
         rejectionsSince: Int = 0,
         rejectionsByPair: Map<String, Int> = emptyMap(),
         rejectionsThrow: Boolean = false,
+        /** OPD #30(b): the recorded first-denial timestamp for this pairing; null = reachable. */
+        pairingDeniedAt: (String) -> Long? = { null },
     ): RecordingSource {
         val sinceArgs = mutableListOf<Long>()
         val sincePairIds = mutableListOf<String>()
@@ -136,6 +138,7 @@ class PartnerDashboardSourceTest {
                 if (approvalsThrow) throw IllegalStateException("approval read failed") else approvalRows
             },
             hasPriorPairingKeys = { priorPairingKeys },
+            pairingDeniedAt = pairingDeniedAt,
             rejectionsSince = { pairId, _ ->
                 rejectionPairIds += pairId
                 if (rejectionsThrow) throw IllegalStateException("outbox read failed") else {
@@ -230,6 +233,25 @@ class PartnerDashboardSourceTest {
         assertEquals(now - 60_000L, paired.lastSyncedAtEpochMillis)
         assertEquals(listOf(PartnerAlert.AppActivity("com.x", false, now - 3_600_000L)), paired.alerts.recent)
         assertEquals(1, paired.alerts.todayCount)
+    }
+
+    @Test
+    fun deniedPairingDocument_readsAsUnreachable() = runTest {
+        val paired = source(pairingDeniedAt = { 42L })
+            .source.load(now) as PartnerDashboardUi.Paired
+        assertTrue(paired.pairingUnreachable)
+    }
+
+    @Test
+    fun reachablePairing_isNotFlagged_andAFailedFlagReadReadsAsReachable() = runTest {
+        val paired = source().source.load(now) as PartnerDashboardUi.Paired
+        assertFalse(paired.pairingUnreachable)
+
+        // A prefs read that throws degrades to "reachable" — the card is an accusation, so it
+        // only ever appears on positive evidence.
+        val throwing = source(pairingDeniedAt = { throw IllegalStateException("prefs locked") })
+            .source.load(now) as PartnerDashboardUi.Paired
+        assertFalse(throwing.pairingUnreachable)
     }
 
     @Test

@@ -335,6 +335,14 @@ fun PartnerScreen(
         return
     }
 
+    /** §19.4 item 4: one way into the ceremony — null on the harness path, where no production
+     *  ceremony exists and the "pair again" cards render without their actions. */
+    val ceremonyEntry: ((CeremonyMode) -> Unit)? = if (deps != null) {
+        { mode -> view = if (mode == CeremonyMode.INVITE) VIEW_CEREMONY_INVITE else VIEW_CEREMONY_JOIN }
+    } else {
+        null
+    }
+
     val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
     val paired = state as? PartnerDashboardUi.Paired
     Column(
@@ -399,32 +407,20 @@ fun PartnerScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            PartnerDashboardUi.Unpaired -> InfoCard(
-                title = stringResource(R.string.partner_unpaired_title),
-                body = stringResource(R.string.partner_unpaired_body),
-            ) {
-                if (deps != null) {
-                    PairingEntryActions(
-                        onInvite = { view = VIEW_CEREMONY_INVITE },
-                        onJoin = { view = VIEW_CEREMONY_JOIN },
-                    )
-                }
-            }
+            PartnerDashboardUi.Unpaired -> PairingGoneCard(
+                titleRes = R.string.partner_unpaired_title,
+                bodyRes = R.string.partner_unpaired_body,
+                onRePair = ceremonyEntry,
+            )
 
             // §8 Step 17 (AD-22): says plainly what was lost and the one route forward —
             // re-enrollment (the ceremony, since §19.4 item 4). No recovery: the old pairing
             // cannot be restored, only replaced.
-            PartnerDashboardUi.WipeDetected -> InfoCard(
-                title = stringResource(R.string.partner_wipe_title),
-                body = stringResource(R.string.partner_wipe_body),
-            ) {
-                if (deps != null) {
-                    PairingEntryActions(
-                        onInvite = { view = VIEW_CEREMONY_INVITE },
-                        onJoin = { view = VIEW_CEREMONY_JOIN },
-                    )
-                }
-            }
+            PartnerDashboardUi.WipeDetected -> PairingGoneCard(
+                titleRes = R.string.partner_wipe_title,
+                bodyRes = R.string.partner_wipe_body,
+                onRePair = ceremonyEntry,
+            )
 
             is PartnerDashboardUi.Ended -> EndedCard(
                 state = current,
@@ -482,17 +478,7 @@ fun PartnerScreen(
                         onStartUnpair = { confirmingUnpair = true },
                         // §19.5: pairing again is how the roster grows; hidden on the harness
                         // path where no production ceremony exists.
-                        onAddUser = if (deps != null) {
-                            { mode ->
-                                view = if (mode == CeremonyMode.INVITE) {
-                                    VIEW_CEREMONY_INVITE
-                                } else {
-                                    VIEW_CEREMONY_JOIN
-                                }
-                            }
-                        } else {
-                            null
-                        },
+                        onAddUser = ceremonyEntry,
                     )
                 }
             } else {
@@ -519,6 +505,16 @@ fun PartnerScreen(
                         selectedPairId = current.pairId,
                         onSelect = ::selectUser,
                         onRename = { renaming = it },
+                    )
+                }
+                // OPD #30: the pairing's document denies this device, so nothing has synced and
+                // nothing can until a new pairing exists. Verdict before content — a pairing
+                // that cannot sync makes every number below it a stale claim.
+                if (current.pairingUnreachable) {
+                    PairingGoneCard(
+                        titleRes = R.string.partner_unreachable_title,
+                        bodyRes = R.string.partner_unreachable_body,
+                        onRePair = ceremonyEntry,
                     )
                 }
                 // §7 Step 11 delta: the partner's shared aggregate, directly under who they are
@@ -1319,7 +1315,9 @@ private fun SyncCard(
             ),
             style = MaterialTheme.typography.titleSmall,
         )
-        if (state.freshness == SyncFreshness.STALE) {
+        // An unreachable pairing is not a delayed sync: "check your connection" would send the
+        // user after the wrong problem, and the card above already names the real one.
+        if (state.freshness == SyncFreshness.STALE && !state.pairingUnreachable) {
             Text(
                 stringResource(R.string.partner_sync_delayed),
                 style = MaterialTheme.typography.bodySmall,
@@ -1560,6 +1558,16 @@ private fun PairingView(
     onStartUnpair: () -> Unit,
     onAddUser: ((CeremonyMode) -> Unit)?,
 ) {
+    // OPD #30: verdict before mechanism — when the pairing cannot be reached, the sync card's
+    // "last synced" is a frozen number and Check now cannot move it, so the cause and the way
+    // out are stated first.
+    if (state.pairingUnreachable) {
+        PairingGoneCard(
+            titleRes = R.string.partner_unreachable_title,
+            bodyRes = R.string.partner_unreachable_body,
+            onRePair = onAddUser,
+        )
+    }
     SyncCard(
         state = state,
         checking = checking,
@@ -1727,6 +1735,24 @@ private fun PartnerContextBar(state: PartnerDashboardUi.Paired, onSwitch: () -> 
     }
 }
 
+/**
+ * The "this pairing is gone — pair again" card, shared by the unpaired, wipe-detected and
+ * unreachable states: the title/body that fits that state, then the ceremony's two entry modes.
+ * [onRePair] is null on the harness path, where no production ceremony can be raised — the
+ * diagnosis still stands, only the way out is absent.
+ */
+@Composable
+private fun PairingGoneCard(titleRes: Int, bodyRes: Int, onRePair: ((CeremonyMode) -> Unit)?) {
+    InfoCard(title = stringResource(titleRes), body = stringResource(bodyRes)) {
+        if (onRePair != null) {
+            PairingEntryActions(
+                onInvite = { onRePair(CeremonyMode.INVITE) },
+                onJoin = { onRePair(CeremonyMode.JOIN) },
+            )
+        }
+    }
+}
+
 /** The two ways into the ceremony, shared by the unpaired and wipe-detected cards. */
 @Composable
 private fun PairingEntryActions(onInvite: () -> Unit, onJoin: () -> Unit) {
@@ -1746,12 +1772,15 @@ private fun PairingEntryActions(onInvite: () -> Unit, onJoin: () -> Unit) {
 /**
  * True when the sync state has something the user may have to act on: never synced, stale, or a
  * send the server rate-limited. A healthy sync stays off the hub — its detail, and the manual
- * Check now, live on the Pairing page.
+ * Check now, live on the Pairing page. An unreachable pairing is deliberately not this case: it
+ * has its own card, which names the cause instead of offering the network as a suspect.
  */
 private fun syncNeedsAttention(state: PartnerDashboardUi.Paired): Boolean =
-    state.lastSyncedAtEpochMillis == null ||
-        state.freshness == SyncFreshness.STALE ||
-        state.rateLimitedRecently
+    !state.pairingUnreachable && (
+        state.lastSyncedAtEpochMillis == null ||
+            state.freshness == SyncFreshness.STALE ||
+            state.rateLimitedRecently
+    )
 
 @Composable
 private fun ChainStatusCard(status: PartnerChainStatus) {

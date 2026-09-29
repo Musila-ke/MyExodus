@@ -53,5 +53,20 @@ object AppCheckInstaller {
         }
     }
 
+    /**
+     * OPD #30(b): whether this app can still pass attestation — asked before the pairing
+     * identity-loss signal is recorded. Firestore reports an App Check rejection as the same
+     * `PERMISSION_DENIED` a rules rejection produces (the client cannot tell them apart), so a
+     * build whose token cannot be minted would otherwise raise a re-pair card that re-pairing
+     * cannot clear. Any failure answers "no": the flag stays off and the next pass re-checks.
+     *
+     * Only ever called off a denial (rare), so the token round-trip is not on a hot path.
+     */
+    suspend fun canAttest(): Boolean = runCatching {
+        FirebaseAppCheck.getInstance().getAppCheckToken(false).await() != null
+    }
+        .onFailure { Log.w(TAG, "App Check token fetch failed — not an identity signal", it) }
+        .isSuccess
+
     private const val TAG = "AppCheckInstaller"
 }

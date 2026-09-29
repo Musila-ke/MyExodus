@@ -35,6 +35,7 @@ import com.example.myexodus.accountability.sync.PUSH_REGISTRATION_CONFIG_KEY
 import com.example.myexodus.accountability.sync.PairingExchange
 import com.example.myexodus.accountability.sync.PartnerRolloutGate
 import com.example.myexodus.accountability.sync.PairingRegistration
+import com.example.myexodus.accountability.sync.PairingReachabilityStore
 import com.example.myexodus.accountability.sync.PairUidResolver
 import com.example.myexodus.accountability.sync.PartnerNotifications
 import com.example.myexodus.accountability.sync.displayNameOf
@@ -403,6 +404,7 @@ object AccountabilityModule {
         registration: PairingRegistration,
         secretsRepository: SecretsRepository,
         storeFactory: AppRulesStoreFactory,
+        reachability: PairingReachabilityStore,
     ): PairingFlow = PairingFlow(
         enrollmentFlow = enrollmentFlow,
         enrollmentDao = enrollmentDao,
@@ -420,6 +422,10 @@ object AccountabilityModule {
         // Owner ruling 2026-09-29: the newcomer gets one fresh snapshot at pair-complete
         // (reconcile no longer hands them the pre-pairing backlog).
         onEnrolled = { pairId ->
+            // OPD #30(b): AD-02 pair ids are deterministic, so re-pairing reuses the id — a
+            // denial flag from the orphaned pairing would otherwise outlive the fix and put a
+            // false re-pair card on a brand-new, working pairing.
+            reachability.markReachable(pairId)
             storeFactory.open()?.let {
                 PartnerActivityJournal.emitPairingSnapshot(it, pairId, System.currentTimeMillis())
             }
@@ -440,7 +446,8 @@ object AccountabilityModule {
     fun providePairUidResolver(
         @ApplicationContext context: Context,
         firestore: FirebaseFirestore,
-    ): PairUidResolver = PairUidResolver(context, firestore)
+        reachability: PairingReachabilityStore,
+    ): PairUidResolver = PairUidResolver(context, firestore, reachability)
 
     /** Plan §8 Step 10 / AD-08: requester-side cadence + escalation and the AD-08b responder. */
     @Provides @Singleton
@@ -470,6 +477,7 @@ object AccountabilityModule {
         keystore: AccountabilityKeyStore,
         cekDerivation: CekDerivation,
         processor: MailboxEventProcessor,
+        reachability: PairingReachabilityStore,
     ): PartnerDashboardSource {
         val enrollmentDao = db.enrollmentDao()
         val eventDao = db.chainEventDao()
@@ -481,6 +489,8 @@ object AccountabilityModule {
             approvals = { pairId -> approvalDao.recentFor(pairId, 20) },
             unpairRows = db.unpairStateDao()::all,
             hasPriorPairingKeys = keystore::hasAgreementKey,
+            // OPD #30(b): the denied-pairing flag the resolver records, read for the re-pair card.
+            pairingDeniedAt = reachability::deniedAt,
             rejectionsSince = db.outboxDao()::rejectionCountSince,
             // §7 Step 11: a local Room read of the partner's shared aggregate — the dashboard
             // never waits on Firestore for a number the mailbox already delivered (plan §1).
@@ -547,6 +557,7 @@ object AccountabilityModule {
         deletion: BilateralDeletion,
         sessionKeyManager: SessionKeyManager,
         rejectionChecker: MailboxRejectionChecker,
+        reachability: PairingReachabilityStore,
     ): PartnerSyncCoordinator = PartnerSyncCoordinator(
         enrollmentDao = enrollmentDao,
         storeFactory = storeFactory,
@@ -562,6 +573,7 @@ object AccountabilityModule {
             sessionKeyManager.rotateIfDue(pairId, senderKeyId, System.currentTimeMillis())
         },
         checkRejections = { pairId, partnerUid -> rejectionChecker.check(partnerUid, pairId) },
+        pruneReachability = reachability::prune,
     )
 
     /**

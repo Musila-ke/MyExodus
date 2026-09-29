@@ -464,6 +464,7 @@ Implemented as shown in Step 5; thresholds per AD-23. Rejected writes surface to
 | App force-stopped on receiving device | No client-side mitigation exists; documented platform ceiling (Section 15, R-01), not coded around. |
 | Device has neither FCM nor HMS | No push installation registered; foreground/best-effort periodic sync only (AD-05); expected, not a failure state. |
 | Local data wipe detected | Forced re-enrollment via SAS/QR (Step 17); no silent recovery attempted. |
+| Pairing document denies this device (anonymous identity rotated, or evicted from the other side) | Card naming re-pairing as the only route forward (OPD #30 option (b), ADR #125 — a delta past Step 17, recorded here). Recorded only on a server rules denial while the app can still attest; offline codes and App Check failures never raise it. |
 | HMS SDK absent on device | `isHmsAvailable()` returns false; `HmsPushTransport` never referenced; no crash (Step 7). |
 
 ---

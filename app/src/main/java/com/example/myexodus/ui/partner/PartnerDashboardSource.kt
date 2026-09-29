@@ -37,6 +37,11 @@ class PartnerDashboardSource(
     /** §7 Step 11 delta: the received partner-visible aggregate, read from Room (never from
      *  Firestore on paint) — the dashboard's "how is my partner doing" half. */
     private val partnerActivity: suspend (pairId: String) -> PartnerActivityUi? = { null },
+    /** OPD #30: when this pairing's document first denied this device — the anonymous-identity
+     *  rotation (or a partner-side eviction) that freezes sync silently. Null = no such evidence.
+     *  Only a definitive server denial is ever written here (see `isDefinitiveDenial`), so an
+     *  offline device never raises the re-pair card. */
+    private val pairingDeniedAt: (pairId: String) -> Long? = { null },
 ) {
 
     /**
@@ -127,6 +132,8 @@ class PartnerDashboardSource(
             rateLimitedRecently = runCatching {
                 rejectionsSince(enrollment.pairId, nowMillis - REJECTION_WINDOW_MILLIS) > 0
             }.getOrDefault(false),
+            pairingUnreachable = runCatching { pairingDeniedAt(enrollment.pairId) }
+                .getOrNull() != null,
         )
     }
 
@@ -174,6 +181,10 @@ sealed interface PartnerDashboardUi {
         /** Step 18: the server rejected a recent send (AD-23 rate limit) — the mailbox write
          *  itself succeeded, so this is explicitly not the network-failure copy. */
         val rateLimitedRecently: Boolean = false,
+        /** OPD #30: the pairing's document denied this device on a read. The enrollment is live,
+         *  so this is not an ending — it is a connection that cannot be restored locally, and
+         *  the screen names the cause (an identity change, an eviction) instead of the network. */
+        val pairingUnreachable: Boolean = false,
     ) : PartnerDashboardUi
 
     /**

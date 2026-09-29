@@ -56,6 +56,8 @@ class PartnerSyncCoordinator(
     /** Step 18 (AD-23): read back the relay's rejection marker for sent rows. Runs BEFORE the
      *  drain so this pass's own writes are never checked against a relay that has not run. */
     private val checkRejections: suspend (pairId: String, partnerUid: String) -> Int = { _, _ -> 0 },
+    /** OPD #30: drop reachability flags for pairings this device no longer holds. */
+    private val pruneReachability: (activePairIds: Set<String>) -> Unit = {},
 ) {
 
     data class SyncReport(
@@ -86,10 +88,13 @@ class PartnerSyncCoordinator(
     suspend fun syncOnce(wakeMessageId: String? = null): SyncReport {
         runCatching { resumeUnpairs() }.onFailure { Log.w(TAG, "unpair resume failed", it) }
         val enrollments = enrollmentDao.all()
+        val enrolledPairIds = enrollments.map { it.pairId }.toSet()
         // Before the early return: after the last unpair there is no enrollment left, which is
-        // exactly when the orphaned activity rows for the gone pairs must still be pruned.
-        runCatching { sweepActivity(enrollments.map { it.pairId }.toSet()) }
+        // exactly when the orphaned rows for the gone pairs must still be pruned.
+        runCatching { sweepActivity(enrolledPairIds) }
             .onFailure { Log.w(TAG, "activity sweep failed", it) }
+        runCatching { pruneReachability(enrolledPairIds) }
+            .onFailure { Log.w(TAG, "reachability prune failed", it) }
         if (enrollments.isEmpty()) {
             return SyncReport() // Unpaired: attempts stay local (§6 attempt log is the record).
         }
@@ -308,10 +313,17 @@ class PartnerSyncCoordinator(
  * `/pairings/{pairId}` document's `members` **array** (Step 1 rules shape — an array, unlike
  * the retired v1 `pairs` map). The rules gate the read to members; the doc is the only local
  * source of the partner's uid — it is deliberately never persisted on-device.
+ *
+ * Every pair read in the app starts here, so this is also the one place the OPD #30
+ * identity-loss signal is observed: a server denial (and only a server denial, and only while
+ * the app can still attest — see [AppCheckInstaller.canAttest]) is recorded in
+ * [PairingReachabilityStore], a server answer clears it, and the dashboard renders the re-pair
+ * card from it.
  */
 class PairUidResolver(
     private val appContext: Context,
     private val firestore: FirebaseFirestore,
+    private val reachability: PairingReachabilityStore,
 ) {
     /** The local device's uid — anonymous sign-in if needed. [resolve]'s first half, on its
      *  own for the pairing ceremony, which needs a uid before any pair id exists. */
@@ -329,11 +341,24 @@ class PairUidResolver(
 
     suspend fun resolve(pairId: String): Pair<String, String>? {
         val uid = ensureUid() ?: return null
-        val members = runCatching {
-            FirestoreSchema.pairingDocument(firestore, pairId).get().await().get("members")
+        val read = runCatching {
+            FirestoreSchema.pairingDocument(firestore, pairId).get().await()
         }
             .onFailure { Log.w(TAG, "pair $pairId: pairing document read failed", it) }
-            .getOrNull()
+        val snapshot = read.getOrNull()
+        // OPD #30: a definitive denial means this uid is no longer a member — the rotated-identity
+        // (or evicted) pairing. Network failures must not qualify, and neither may an attestation
+        // failure (same PERMISSION_DENIED, but about the build — see shouldRecordDenial).
+        val cause = read.exceptionOrNull()
+        if (shouldRecordDenial(cause, AppCheckInstaller.canAttest())) {
+            reachability.markDenied(pairId, System.currentTimeMillis())
+        }
+        // The server answered, so whatever was denied before is denied no longer; a cached copy
+        // is not a server answer (see shouldClearDenial).
+        if (shouldClearDenial(snapshot != null, snapshot?.metadata?.isFromCache == true)) {
+            reachability.markReachable(pairId)
+        }
+        val members = snapshot?.get("members")
         if (members == null) {
             Log.w(TAG, "pair $pairId: pairing document missing or has no members field")
             return null
