@@ -775,6 +775,18 @@ green. No S5 source change was needed after the interruption.
   drop (the gate function is JVM-asserted in `SiteLimitTest`; the recomposition it feeds is not).
   Both want a screen-on read in S10.
 
+**Closed 2026-09-30** — both claims were pinned on the X6532 in a 6-minute screen-on session
+(app foreground, no interaction; report §7 item 7): the usage line re-read live (`0 / 60 min` at
+58,185 ms accrued → `1` at 112,354 ms → `2`) and the expiry flip landed **≈3.6–4.6 s after the
+expiry epoch** (host/device skew-corrected) — the rule's row pill flipped to `Expired` and the
+strict-DNS banner dropped between two captures 2 s apart, with no store change and nothing but
+`nowMillis` moving. Restore: `private_dns_mode` back to `off` (specifier untouched), rule deleted,
+tunnel `ACTIVE` re-verified. **Harness seam added for it:** `du-addrule` takes an optional
+`--el expiresInSec <n>` (debug receiver) — the editor's picker is day-granular (end of the
+selected day) and clock moves are root-only/emulator-scoped, so a seconds-away expiry had no
+other instrument; `blockExpiresAt` is stamped from the engine's own `wallClock` (the S1.4 guard
+keeps raw clock calls out of `domainusage`).
+
 ---
 
 ## S10 — Verification: the 2026-09-22 X6532 phone session (2026-09-22)

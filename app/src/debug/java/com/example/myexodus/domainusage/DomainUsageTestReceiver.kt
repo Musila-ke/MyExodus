@@ -38,7 +38,7 @@ import kotlinx.coroutines.withContext
  *
  * Commands (all `-n com.example.myexodus/.domainusage.DomainUsageTestReceiver`):
  *   -a du-mode        --es mode OFF|ACCOUNT|ENFORCE|clear
- *   -a du-addrule     --es pattern <p> --el limitSec <n>
+ *   -a du-addrule     --es pattern <p> --el limitSec <n> [--el expiresInSec <n>]
  *   -a du-setlimit    --es id <ruleId> --el limitSec <n>
  *   -a du-editpattern --es id <ruleId> --es pattern <p>
  *   -a du-delrule     --es id <ruleId>
@@ -79,7 +79,8 @@ class DomainUsageTestReceiver : BroadcastReceiver() {
                 DomainUsageSettings.setModeOverride(context, mode)
                 Log.i(TAG, "DUPROBE mode override=${mode?.name ?: "cleared"} effective=${ep.engine().mode}")
             }
-            ACTION_ADD_RULE -> addRule(ep.rulesRepository(), ep.publicSuffixList(), intent)
+            ACTION_ADD_RULE ->
+                addRule(ep.rulesRepository(), ep.publicSuffixList(), intent, engineNowMs(ep))
             ACTION_SET_LIMIT -> editRule(ep.rulesRepository(), intent, psl = null, pattern = null)
             ACTION_EDIT_PATTERN ->
                 editRule(ep.rulesRepository(), intent, ep.publicSuffixList(), intent.getStringExtra("pattern"))
@@ -110,16 +111,32 @@ class DomainUsageTestReceiver : BroadcastReceiver() {
     }
 
     /** §8 S9.1/S2.8 chain: a rule added here is normalized exactly as the editor would. */
-    private suspend fun addRule(repo: RulesRepository, psl: PublicSuffixList, intent: Intent) {
+    private suspend fun addRule(
+        repo: RulesRepository,
+        psl: PublicSuffixList,
+        intent: Intent,
+        nowMillis: Long,
+    ) {
         val pattern = intent.getStringExtra("pattern") ?: return run { Log.e(TAG, "DUPROBE addrule missing pattern") }
         val limitSec = intent.getLongExtra("limitSec", 0L)
+        // The editor's own picker is day-granular (end of the selected day); expiry-driven UI
+        // transitions are otherwise only reachable at a real midnight. The extra exists so the
+        // S9 UI legs can put an expiry seconds away — same seam class as du-setlimit.
+        val expiresInSec = intent.getLongExtra("expiresInSec", 0L)
         val rules = repo.getActiveRules()
         val check = siteLimitTarget(pattern, psl, siteLimitPatternsOf(rules, psl, null))
         when (check) {
             is SiteLimitCheck.Ok -> {
-                val rule = baseRule(repo, check.host).copy(dailyLimitMs = clampStoredLimitMs(limitSec * 1000L))
+                val rule = baseRule(repo, check.host).copy(
+                    dailyLimitMs = clampStoredLimitMs(limitSec * 1000L),
+                    blockExpiresAt = if (expiresInSec > 0L) nowMillis + expiresInSec * 1000L else 0L,
+                )
                 repo.insertRule(rule)
-                Log.i(TAG, "DUPROBE addrule result=Ok id=${rule.ruleId} limitMs=${rule.dailyLimitMs}")
+                Log.i(
+                    TAG,
+                    "DUPROBE addrule result=Ok id=${rule.ruleId} limitMs=${rule.dailyLimitMs} " +
+                        "expiresAt=${rule.blockExpiresAt}",
+                )
             }
             is SiteLimitCheck.HasPath -> Log.i(TAG, "DUPROBE addrule result=HasPath")
             SiteLimitCheck.Invalid -> Log.i(TAG, "DUPROBE addrule result=Invalid")
@@ -323,6 +340,12 @@ class DomainUsageTestReceiver : BroadcastReceiver() {
     private fun todayKey(ep: DomainUsageTestEntryPoint): String =
         ep.engine().effectiveDayKey.ifEmpty {
             ep.engine().wallClock.now(ZoneId.systemDefault()).toLocalDate().toString()
+        }
+
+    /** Epoch millis from the engine's own wall clock — S1.4 keeps raw clock calls out of this package. */
+    private fun engineNowMs(ep: DomainUsageTestEntryPoint): Long =
+        ZoneId.systemDefault().let { zone ->
+            ep.engine().wallClock.now(zone).atZone(zone).toInstant().toEpochMilli()
         }
 
     private fun revoke(context: Context, engine: DomainUsageEngine) {

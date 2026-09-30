@@ -483,6 +483,13 @@ pf4_leg() { # one warm-up + soak; sets PF4_GROWTH (MB), the thread pair, PF4_INV
 }
 
 pf5() { # 1-hour screen-on browsing: drain ≤ OFF + 2 percentage points
+  # Fast-variant recipe (not wired in — the shipped 60-min shape is what the §11 gate calibrated):
+  # the integer-% readout is what forces the long legs (~10pp signal, 1pp resolution). Where
+  # available, `dumpsys battery`'s `charge counter` (µAh) resolves below 1% per read, so 20–30 min
+  # arms on a full battery become meaningful — translate the ≤ OFF+2pp bound using the battery's
+  # full capacity (`/sys/class/power_supply/battery/charge_full`), and sanity-check the counter
+  # actually moves across two reads a minute apart before trusting it (OEM coulomb counters can
+  # hold stale values). One full 60-min pair must still corroborate the short shape's verdict.
   local host="$1"
   # All three charging paths, not just cable: a Qi pad reports `Wireless powered: true` and the
   # cable-only pattern would let a charging device through — the drain number would then be real

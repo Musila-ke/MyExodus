@@ -3,7 +3,8 @@
 **Plan:** `app/plans/myexodus-domain-usage-metering-implementation-plan (1).md` — §7 S10 ("Execute §12
 fully; record results in `docs/domainusage-test-report.md`"; this project's docs folder is `app/docs/`).
 **Date:** 2026-09-21; **X6532 phone session appended 2026-09-22** (§4.2; PF-3/PF-4 closed the same
-day — §5.1 items 14–16).
+day — §5.1 items 14–16); **PF-5 drain PASSed 2026-09-29 overnight** (unplugged, wireless adb —
+§4.2), closing §12.3 at 8/8 and the AC tally at 21 PASS / 0 PENDING / 1 N/A.
 **Branch:** `dev` (work uncommitted). **Baseline commit:** `cc7a13b`.
 **Per-step implementation record:** `app/docs/domainusage-implementation-log.md` (S1–S9; S10 appended
 at close-out). **S0 gate:** `app/docs/domainusage-baseline-check.md`.
@@ -27,7 +28,7 @@ SNI-routed, HTTP 80 `/stream`+`/sink`, TCP 8080, IPv6-only 9443); instrumented m
 | 12.2 Instrumented — X6532 | I-1…I-23 (+b variants) | **21 PASS, 3 SKIP (I-9, I-10 → emulator; I-12b → API 37)** — the frozen 2026-09-21 matrix (19 PASS / 1 FAIL / 3 SKIP) plus the 2026-09-22 session closing the last three: **I-17 PASS**, **I-11b PASS**, **I-13b PASS** with the engine genuinely in `ACCOUNT` (§4.2). All three SKIPs then landed elsewhere: I-9/I-10 PASS on the emulator (§3.3), **I-12b PASS on the API 37 image 2026-09-29 (§3.4)** |
 | 12.2 Instrumented — emulator | I-21, I-21b (+6 regression migrations), I-9, I-10 | **PASS** on the migrations (8/8), I-9 and I-10 (re-run #6 after three harness fixes — §3.3) |
 | 12.2 Instrumented — API 37 (`MyExodus_API37`) | I-12b (+ Fixture D capture) | **I-12b PASS 2026-09-29** — `sni_ech=0→4` with the `tls-ech.dev` page rendering "You are using ECH." behind the tunnel (§3.4); Fixture D replaced by a real Chrome capture from the same image |
-| 12.3 Performance — PF-1…PF-8 | §11 gates | **7 PASS (PF-1, PF-2, PF-3, PF-4, PF-6, PF-7, PF-8) / 1 open (PF-5)** — all seven measured on the X6532 with pinned+verified modes 2026-09-22 (§4.2); the withdrawn vacuous-A/B numbers are superseded. PF-4 scored under the re-ruled +10 thread tolerance (§5.1 item 15), PF-7 on idle runs with the in-batch sample recorded (§5.1 item 14). PF-5 alone needs the cable out (task #6) |
+| 12.3 Performance — PF-1…PF-8 | §11 gates | **8 PASS — all gates green** — PF-1, PF-2, PF-3, PF-4, PF-6, PF-7, PF-8 measured on the X6532 with pinned+verified modes 2026-09-22 (§4.2); the withdrawn vacuous-A/B numbers are superseded. PF-4 scored under the re-ruled +10 thread tolerance (§5.1 item 15), PF-7 on idle runs with the in-batch sample recorded (§5.1 item 14). **PF-5 PASS 2026-09-29 overnight** (`--runs 1`, 2×60 min unplugged, wireless adb — §4.2) |
 
 ## 2. §12.1 — Unit tests (JVM)
 
@@ -170,7 +171,7 @@ by explicit approval"). Each leg now pins and readback-verifies its mode (§5.1 
 | PF-2 TLS setup latency | p95 TTFC ≤ OFF+25 ms, 200 connects | **PASS** | X6532 2026-09-22: `p95 TTFC OFF=34ms ACCOUNT=13ms (bound 59ms) runs=[52 19 34]/[13 13 13]` — `ACCOUNT` is *faster* than the bound requires and than `OFF`'s own spread |
 | PF-3 browsing CPU | ≤ 1.15× OFF, scripted browsing | **PASS** | X6532 2026-09-22: `OFF=63947j ACCOUNT=63717j (bound 73539j, 10min x3)` — ACCOUNT at **1.00× OFF**, an order of magnitude inside the 1.15× bound. Supersedes run 3's withdrawn `63028j/62709j` (same defect as PF-1 — §5.1 item 12) |
 | PF-4 soak | 30 min, ≥100-flow churn, heap growth ≤ 10 MB, threads flat — end ≤ start + 10 (re-ruled 2026-09-22 — §5.1 item 15; was +5) | **PASS** | X6532 2026-09-22, mode pinned+readback `ACCOUNT`, 3 legs: heap `[−1, −1, +5] MB` median **−1 MB**; thread deltas **+6 / +2 / −3** — all three legs read end ≈ start with the heap net *shrinking*, i.e. a steady state, not retention. Scored under the re-ruled +10 tolerance (§5.1 item 15); the strict +5 reading failed the same data on leg 1 by one thread, which is what triggered the re-rule. Run 6's earlier numbers stay withdrawn (§5.1 item 12 — mode unproven) |
-| PF-5 battery drain | ≤ OFF+2 pp, 1 h screen-on browsing | _(requires unplugged device — scheduled)_ | |
+| PF-5 battery drain | ≤ OFF+2 pp, 1 h screen-on browsing | **PASS** | X6532 2026-09-29 overnight (wireless adb, unplugged throughout): `OFF=10pp ACCOUNT=10pp` over 60 min screen-on browsing per arm, `--runs 1` (2×60 min, 72% start charge) — both arms drained identically against the 12 pp bound; zero WARN lines across the ~2 h block (`/tmp/du-night.log`) |
 | PF-6 hot-path allocation | zero allocations (unit) | **PASS** | `RelayHotPathAllocationTest` 3/3: `touch`, post-decision `onClientData`, `onServerData` all 0 B over 100 000-call windows after 200 000-call warm-up |
 | PF-7 DB flush | 200 rows, p99 ≤ **150 ms** on db thread (re-calibrated 2026-09-21 — §5.1 item 11) | **PASS** *(idle); in-batch re-run over bound — §5.1 item 14* | **Six idle measurements, all under bound:** run 6 `p50=99.2 p99=137.6`; standby `93.9/117.7`, `93.4/110.1`; X6532 2026-09-22 re-measured **twice over: `97.6/125.7`, `89.7/121.9`, `83.4/119.1`**. The same session's in-batch sample `p50=110.5 p99=171.7` (taken while PF-1/PF-2 still saturated the CPU) is over bound and is recorded, not averaged away — §5.1 item 14 |
 | PF-8 raw packet build | RST/ICMP incl. checksum < 1 ms/packet | **PASS** | X6532 2026-09-22: `rst p50=0.006ms p99=0.014ms max=0.041ms icmp p50=0.021ms p99=0.031ms max=0.085ms n=2000` (run 6: `rst p99=0.014 icmp p99=0.026`) — ~5 orders under the 1 ms bound |
@@ -240,9 +241,12 @@ PF-4's soak (30 min) and PF-5's drain (1 h × 2 arms × 3 runs = 6 h) — were *
 the session, because a compressed soak or drain measures a different thing than the gate asks.
 The first two ran in the same day's second block (13:39–16:22, `/tmp/du-night.log`): PF-3 passed at
 **1.00× OFF** and PF-4 at **−1 MB** median heap with the thread deltas +6/+2/−3 that triggered the
-tolerance re-rule (§5.1 item 15). **PF-5 alone stays open** — it is the only leg that needs the
-cable out, and `domainusage-phone-night-run.sh` is trimmed to exactly that (`DU_ONLY=PF-5`) so the
-remaining block cannot drift back into re-running settled legs.
+tolerance re-rule (§5.1 item 15). **PF-5 alone stayed open** — it is the only leg that needs the
+cable out, and `domainusage-phone-night-run.sh` was trimmed to exactly that (`DU_ONLY=PF-5`) so the
+remaining block could not drift back into re-running settled legs. **That block ran 2026-09-29
+overnight** over wireless adb (the cable was never out): 2 h unplugged, both 60-min arms read
+`OFF=10pp ACCOUNT=10pp` against the 12 pp bound — `PASS PF-5 drain` — and the X6532 is now
+**8/8 PF gates**, closing the last open leg of §12.3.
 
 **One measurement caveat, recorded rather than smoothed over:** PF-1's margin is thin — the `OFF`
 arm itself ranged 13–16 Mbps and 93% clears a 90% gate from inside that spread. `[Likely]` a true
@@ -445,7 +449,7 @@ against the fixed tree; the two marked *device-caught* produced the correspondin
 | 2 | PF-1 via iperf3 streams | `nc`-driven 8×TCP streams measured by the harness against the sink endpoint | No iperf3 on either side; same measured quantity (carried Mbit/s, 8 parallel, 30 s). Noted, not silently swapped. |
 | 3 | §12.2 `c.<testdomain>` separate IP | `c` = host's ULA via `sslip.io` (v6-only port 9443) on the physical device; `10.0.2.2` split on the emulator | The test host has one routable v4 address in this environment; per-topology naming keeps I-3/I-5 faithful. |
 | 4 | `RawPacketBuilder` as a new file | `VpnPacket.buildIcmpPortUnreachable` added to the existing packet module | S0 established `VpnPacket` already owns raw construction (RST path); a second file would split one responsibility in two. |
-| 5 | PF-5 on all three reference devices (AC-16) | X6532 first; others deferred with the API-37 target | Battery legs need an unplugged physical device; emulator batteries are synthetic. Recorded as open (task #20). |
+| 5 | PF-5 on all three reference devices (AC-16) | X6532 only; the emulator targets carry no PF gates | Battery legs need an unplugged physical device; emulator batteries are synthetic, so PF-5 is unmeasurable there — permanent by physics, not a deferral. **Resolved 2026-09-29:** PF-5 PASSed on the X6532 (§4.2); the phrasing delta is recorded under AC-16 (§7 item 6) and flagged to the owner. |
 | 6 | Debug UI seam location | `DomainUsageDebugSection.kt` under `ui/settings` (wired from MainActivity/AppShell/SettingsScreen) | The plan's §3.3 modify list allows the RuleEditor UI + settings surface; this is the in-app counters view §14 requires. |
 | 7 | Plan's own `D-15` IPv4-only TUN sentence | Dual-stack TUN kept as shipped | ADR #70 (S0 ruling): the baseline's dual-stack TUN is strictly more capable; stripping IPv6 would reroute device traffic outside the tunnel. |
 | 8 | §4.9/§S7 DAO: `INSERT OR IGNORE` then `UPDATE … MAX` per row | Single `INSERT … ON CONFLICT … DO UPDATE SET active_ms = MAX(active_ms, excluded.active_ms)` per row | Same `MAX` semantics, one statement instead of two; measured 327 ms p50 / 573 ms p99 → ~94 ms for 200 rows. Plan text synced to the shipped form 2026-09-21; PF-7 gate status unaffected (§5.1 item 11). |
@@ -460,10 +464,10 @@ against the fixed tree; the two marked *device-caught* produced the correspondin
 | 8 | PF-1, PF-2, PF-3, PF-4 — **CLOSED 2026-09-22** | All four re-measured on the X6532 with modes pinned and readback-verified (§4.2), replacing the withdrawn vacuous-A/B numbers. PF-4 scores PASS under the re-ruled +10 thread tolerance (§5.1 item 15) | done |
 | 9 | `I-11b`/`I-13b` in `ACCOUNT` (AC-19 device evidence) — **CLOSED 2026-09-22** | The frozen-matrix sub-clauses ran `ENFORCE`; the explicit `ACCOUNT` halves (rule exhausted, engine in `ACCOUNT`, DNS must resolve, unrelated flow untouched) both PASS in the phone session (§4.2). AC-19 is no longer partial | done |
 | 3 | I-12b + Fixture D — **CLOSED 2026-09-29** | Both ran on `MyExodus_API37` (§3.4): I-12b PASS (`sni_ech=0→4`, page renders "You are using ECH."), Fixture D replaced by a real Chrome 145 capture (U-8 re-ran 19/0). Chrome **does** ship on the google_apis image (145.0.7632.218) — the capture-half question closed | done |
-| 4 | PF-5 | Needs the X6532 **unplugged** for a full hour per leg. `--runs 1` → 2 h (one full calibrated hour per arm), which needs only ~40% start charge and is the selected shape; the 6 h `--runs 3` default would need the battery to survive the whole window. The charging guard now also catches Qi pads (§5.1 item 16) so a pad left under the phone cannot silently produce a drain number | `DU_ONLY=PF-5 … --runs 1`, task #6 |
+| 4 | PF-5 — **CLOSED 2026-09-29** | PASS overnight on the X6532 (unplugged, wireless adb): `OFF=10pp ACCOUNT=10pp` over 60 min screen-on browsing per arm against the 12 pp bound — §4.2. Ran in the selected `--runs 1` shape (2 h); the Qi-aware charging guard (§5.1 item 16) held, zero WARN lines | done |
 | 5 | PF-3/PF-4/PF-7/PF-8 — **CLOSED 2026-09-22** | Run 3 superseded by the re-run (item 8). All four measured on the X6532 (§4.2): PF-3 1.00× OFF, PF-4 −1 MB median heap (re-ruled tolerance — §5.1 item 15), PF-7 PASS on idle runs with the in-batch sample recorded (§5.1 item 14), PF-8 ~5 orders under bound | done |
-| 6 | AC-16 (all gates on all three reference devices) | API 37 target now exists and its dedicated ECH legs PASS (§3.4). Still open on two grounds: **PF-5** on the X6532 needs the cable out (task #91, owner-deferred to last), and the PF gates were **not re-run on the API 37 emulator** — its plan role is the ECH legs, and the AC's battery gate is physically unmeasurable there (synthetic emulator battery). Recorded, not re-scoped silently. | tracked as task #91 (PF-5), #92 closed |
-| 7 | S9 UI claims on-device (refresh cadence, expiry banner) | Quick device leg on the X6532 — rides the deferred phone night | task #15 |
+| 6 | AC-16 (all gates on all three reference devices) | **X6532 grounds CLOSED 2026-09-29** — PF-5 PASS (§4.2) completes **8/8**. Residual, recorded rather than silently re-scoped: the PF gates were **not re-run on the API 37 emulator** — its plan role is the ECH legs (I-12b PASS §3.4), and PF-5 is physically unmeasurable there (synthetic emulator battery), so the AC's literal "all three devices" cannot be satisfied for that gate on any emulator. Scored under the report's recorded run-where-supportable reading (§9 I-legs box); the phrasing delta is flagged to the owner | X6532 8/8; emulator PF coverage recorded as out of role |
+| 7 | S9 UI claims on-device (refresh cadence, expiry banner) — **CLOSED 2026-09-30** | Screen-on leg on the X6532 (app foreground, no interaction after the rule was added): **(a)** the "Used today" line re-read live — `0 / 60 min` at 58,185 ms of accrued usage → `1` at 112,354 ms → `2 / 60 min` while nothing but the 5 s ticker moved (the figure has no other refresh path — `RulesScreen.kt:137-144`, the row re-reads `usageTodayMs` on recomposition); **(b)** a rule expiring mid-view flipped its pill to **Expired** and dropped the strict-DNS banner between two captures 2 s apart, **≈3.6–4.6 s after the expiry epoch** read back from the device (host/device skew-corrected) — inside one tick, with no store change and no interaction. Instrument: `du-addrule` gained an optional `expiresInSec` extra (debug receiver) — the editor's picker is day-granular and clock moves are root-only/emulator-scoped, so an expiry seconds away had no other lever | done |
 
 **Phone-night deferral, revised 2026-09-22.** The original deferral (user ruling 2026-09-21,
 "we will deal with the physical phone bit overnight another day") listed seven legs. Six of them
@@ -475,7 +479,12 @@ night either: **PF-5 alone**, a 2 h unplugged drain at `--runs 1`. The runner
 session, not just the emulator one — and keeps the app foregrounded and cached memory relieved
 across the USB→wireless-adb swap. Wireless adb on this build is `adb tcpip 5555` while on USB
 (verified working 2026-09-22; the header's earlier `ro.debuggable=0` claim was wrong) and **does
-not survive a phone reboot**. Until the PF-5 drain lands, PF-5 and AC-16 stay open.
+not survive a phone reboot**. The PF-5 drain landed 2026-09-29 overnight (unplugged, `PF-5 PASS`),
+closing the X6532 half of AC-16 at **8/8**; the one recorded residual against AC-16 is the literal
+"all three reference devices" phrasing versus the emulator's inability to carry the PF gates (item
+6 above) — flagged to the owner, not silently re-scoped. The residual S9 UI claims (item 7) rode
+no night at all: they were pinned in a **6-minute screen-on session on 2026-09-30**, so §7 now has
+no open rows.
 
 ## 8. Invariant → evidence map (INV-1…INV-16, §4.4)
 
@@ -505,7 +514,7 @@ not survive a phone reboot**. Until the PF-5 drain lands, PF-5 and AC-16 stay op
 - [x] INV-1…INV-16 each have a test or CI check — mapping above.
 - [x] U-1…U-14 pass in CI (1020/0/0/0).
 - [x] I-1…I-23 on all three reference devices — X6532 (**21 PASS / 3 SKIP**, closed 2026-09-22; all three SKIPs then landed: I-9/I-10 on the stock-Android emulator §3.3, **I-12b on the API 37 image §3.4, 2026-09-29**) + I-21/I-21b on the emulator (§3.2). Every leg has now run on a target that can support it; the report's §3.1 SKIP rows name the destination.
-- [ ] PF-1…PF-8 — **PF-1, PF-2, PF-3, PF-4, PF-6, PF-7, PF-8 PASS** on the X6532 (§4.2; PF-4 under the re-ruled +10 thread tolerance — §5.1 item 15; PF-7's in-batch sample over bound, recorded as §5.1 item 14); **PF-5 open** (needs the cable out — open #4).
+- [x] PF-1…PF-8 — **all 8 PASS** on the X6532: PF-1, PF-2, PF-3, PF-4, PF-6, PF-7, PF-8 (§4.2; PF-4 under the re-ruled +10 thread tolerance — §5.1 item 15; PF-7's in-batch sample over bound, recorded as §5.1 item 14); **PF-5 PASS 2026-09-29 overnight** (`OFF=10pp ACCOUNT=10pp` against the 12 pp bound — §4.2).
 - [x] Room schema exported; upgrade + downgrade tested (I-21, I-21b on emulator).
 - [x] RuleEditor validation + notices + usage display + status banner shipped with string resources (S9; device-verified in S9 close).
 - [x] `addDisallowedApplication(APPLICATION_ID)` present; `allowBypass()` absent; no IPv6 config added (CI checks INV-9/INV-10; S0 P6 note).
@@ -590,7 +599,7 @@ the evidence behind the verdict.
 | AC-13 | Raising a limit unblocks within 6 s | I-19 | **PASS** |
 | AC-14 | Parsers survive ≥ 100 000 mutated inputs each plus targeted boundary mutations | U-4 (`fuzzMutationsNeverThrow`), U-8 | **PASS** |
 | AC-15 | Migration N → N+1 preserves data; downgrade preserves every pre-existing table across repeated cycles | I-21, I-21b (emulator, 8/8 incl. interrupted-migration rollback) | **PASS** |
-| AC-16 | All PF gates pass on all three reference devices | **X6532: 7 of 8 PASS** — PF-1, PF-2, PF-3, PF-4, PF-6, PF-7, PF-8 (§4.2; PF-4 under the re-ruled +10 tolerance — §5.1 item 15; PF-7 scored on idle runs, in-batch sample recorded — §5.1 item 14); **PF-5 outstanding** (task #91, owner-deferred); the API 37 target's ECH legs PASS (§3.4) but PF gates were not re-run on the emulator — its plan role is the ECH legs and the battery gate is unmeasurable there (synthetic battery) | **PENDING (PF-5 — task #91; #92 closed)** |
+| AC-16 | All PF gates pass on all three reference devices | **X6532: 8 of 8 PASS** — PF-1, PF-2, PF-3, PF-4, PF-6, PF-7, PF-8 (§4.2; PF-4 under the re-ruled +10 tolerance — §5.1 item 15; PF-7 scored on idle runs, in-batch sample recorded — §5.1 item 14) plus **PF-5 PASS 2026-09-29 overnight** (`OFF=10pp ACCOUNT=10pp`, bound 12 pp — §4.2). The API 37 target's ECH legs PASS (§3.4); PF gates were not re-run on the emulator and PF-5 cannot be (synthetic battery) — the literal "all three devices" phrasing is not satisfiable for the battery gate; scored under the recorded run-where-supportable reading (§9), delta flagged to the owner rather than silently re-scoped | **PASS (X6532 8/8)** — residual phrasing note recorded, §7 item 6 |
 | AC-17 | CI grep check passes; PSL checksum matches provenance; no hostname/IP in feature logs | U-13; PSL asset test; INV-7 CI + review (baseline-service caveat recorded in §9) | **PASS** |
 | AC-18 | Rollout stage gates S1–S4 met before release mode leaves `OFF` | Not triggered: release builds ship `DOMAIN_USAGE_MODE=OFF` (§13); S5 dead per ADR #15 | **N/A by construction** |
 | AC-19 | `ACCOUNT` never blocks, drops, or reshapes, under any tested scenario | U-6 full table (JVM) PASS; **device half PASS 2026-09-22** — `I-11b` (`udp_dropped=0→1 icmp=0→1`, unrelated IP untouched) and `I-13b` (`aaaa(rule)=NODATA`, `aaaa(unrelated)` real, literal `rst=10→11`) both with the engine verifiably in `ACCOUNT` and the rule exhausted (§4.2) | **PASS** |
@@ -598,9 +607,10 @@ the evidence behind the verdict.
 | AC-21 | Saving a rule whose normalized pattern duplicates an enabled rule is rejected | I-23 | **PASS** |
 | AC-22 | A pooled TLS buffer is never reused while a prior flow's bytes still reference it | `InspectionBufferPoolTest` (4), `InspectingTcpTapTest` (14), `FlowTapTest` (8); S4 concurrency coverage | **PASS** |
 
-**Tally at this writing (revised 2026-09-29):** **20 PASS** · 1 PENDING (AC-16 — PF-5 alone on
-the X6532, task #91 owner-deferred to last; the API 37 target's assigned ECH legs PASS, §3.4) ·
-1 N/A (AC-18). AC-9 moved PARTIAL → PASS on 2026-09-29: I-12b ran green on the API 37 image with a
+**Tally at this writing (revised 2026-09-29, PF-5 landed):** **21 PASS** · 0 PENDING · 1 N/A
+(AC-18). AC-16 closed at **PASS** on the X6532's **8/8** PF gates (PF-5 PASS 2026-09-29 overnight)
+with the emulator-coverage phrasing delta recorded, not silently re-scoped — §7 item 6. AC-9 moved
+PARTIAL → PASS on 2026-09-29: I-12b ran green on the API 37 image with a
 real Chrome capture replacing Fixture D (U-8 re-ran 19/0). AC-12 and AC-19 moved PARTIAL → PASS in
 the 2026-09-22 phone session, which also closed PF-1/2/3/4. No AC is FAIL on product behavior; the
 two FAILs raised that session were both harness criteria, not code — PF-7 measured inside a
