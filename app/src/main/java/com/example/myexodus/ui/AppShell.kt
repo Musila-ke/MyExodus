@@ -47,6 +47,7 @@ import com.example.myexodus.blocking.recovery.RecoveryStateStore
 import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.blocking.usage.PlatformUsageReader
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
+import com.example.myexodus.accountability.sync.MessageSendOutcome
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.domainusage.DomainUsageEngine
 import com.example.myexodus.domainusage.PublicSuffixList
@@ -128,9 +129,10 @@ fun AppShell(
     onUnpair: suspend (pairId: String) -> UnpairOutcome = { UnpairOutcome.FAILED },
     onDismissUnpair: suspend (pairId: String) -> Unit = {},
     onRenameUser: suspend (pairId: String, label: String?) -> Unit = { _, _ -> },
-    /** Req 15: journals a motivational message for the selected partner (#96); false =
-     *  nothing was written. */
-    onSendMessage: suspend (pairId: String, text: String) -> Boolean = { _, _ -> false },
+    /** Req 15: journals a motivational message for the selected partner (#96) and kicks a
+     *  sync pass; the outcome is what the composer reports back. */
+    onSendMessage: suspend (pairId: String, text: String) -> MessageSendOutcome =
+        { _, _ -> MessageSendOutcome.FAILED },
     encryptionPending: Boolean = false,
     requestedTab: String? = null,
     onTabConsumed: () -> Unit = {},
@@ -243,6 +245,9 @@ fun AppShell(
                         onRetryStreak = streaks::refresh,
                         streakLoadFailed = streakLoadFailed,
                         encryptionPending = encryptionPending,
+                        // #12: the pinned card's sender line — the same roster read the
+                        // Partner tab folds in, kept to names only.
+                        loadPartnerNames = partnerSource::partnerDisplayNames,
                         modifier = contentModifier,
                     )
                     contentTab == 1 -> RulesScreen(

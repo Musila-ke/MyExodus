@@ -35,7 +35,7 @@ import org.junit.runner.RunWith
  *     the production creator + drainer; A pulls through the production mailbox pipeline
  *     (verify → CEK → decrypt → chain append → `PartnerActivityReceiver` projection) and the
  *     EXACT read models the UI renders are asserted — `PartnerDashboardSource` (the Partner tab's
- *     summary card) and the Home card's `observeLatestPinned` Flow query.
+ *     summary card) and the Home card's `observePinnedMessages` Flow query.
  *  2. **Emit → deliver** (A → B, the #111 rails): A emits through the production journal
  *     ([PartnerActivityJournal.emitForProfile] — the same call the Req 15 composer and the domain
  *     transactions make), `syncOnce` reconciles it into a signed envelope with A's REAL device
@@ -122,7 +122,7 @@ class PartnerActivityLayerInstrumentedTest {
             assertEquals("pinned message is the Req 15 arrival surface", message, activity.pinnedMessageText)
             assertNotNull("last event occurred must be set once an event applied", activity.lastEventOccurredAtEpochMillis)
 
-            val homePinned = dao.observeLatestPinned().first()
+            val homePinned = dao.observePinnedMessages().first().firstOrNull()
             assertEquals("the Home card query must surface the same message", message, homePinned?.pinnedMessageText)
             assertEquals("pinned-at is the sender's event wall-clock", t0, homePinned?.pinnedMessageAtMs)
 

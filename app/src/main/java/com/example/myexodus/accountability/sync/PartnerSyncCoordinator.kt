@@ -16,6 +16,8 @@ import com.example.myexodus.data.db.entity.decodeMilestoneDays
 import com.example.myexodus.recovery.RecoveryMirror
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * §14 partner-sync housekeeping (blocking-core plan §6 + §14): the periodic pass that turns
@@ -48,8 +50,9 @@ class PartnerSyncCoordinator(
     private val expireApprovals: suspend (pairId: String) -> Int = { 0 },
     /** Step 13 unpair: continue in-flight unpairs (re-delivery, owed ack, ack poll, timeout).
      *  Runs BEFORE the enrollment early-return — a shredded device has no enrollment, and its
-     *  unfinished unpair is exactly what still needs this pass. */
-    private val resumeUnpairs: suspend () -> Unit = {},
+     *  unfinished unpair is exactly what still needs this pass. True = a journal row advanced
+     *  (feeds [SyncReport.unpairAdvanced] so the UI repaints without a manual reload). */
+    private val resumeUnpairs: suspend () -> Boolean = { false },
     /** Step 15 (AD-12): the rotation sweep. [EventCreator] also checks before every envelope,
      *  so this covers the idle pair — a 30-day-old epoch with no new traffic still rolls. */
     private val rotateKeys: suspend (pairId: String, mySenderKeyId: String) -> Int? = { _, _ -> null },
@@ -74,6 +77,12 @@ class PartnerSyncCoordinator(
         /** Sent messages this pass read back as rejected by the relay (Step 18; any marker —
          *  `RATE_LIMITED` is the one the §9 error table names). */
         val rejectionsFound: Int = 0,
+        /** Local partner-visible state changed outside the append path: an in-flight unpair
+         *  advanced (delivery, ack, confirmation, timeout) or a verified deletion request
+         *  shredded this device's pair. One-shot screens — the Partner dashboard, the unpair
+         *  card — re-read on it; without it a shred on device B left B's page showing the
+         *  erased data until the next manual navigation (owner-observed 2026-10-01). */
+        val unpairAdvanced: Boolean = false,
     )
 
     /** [wakeMessageId] carries the FCM wake's own message id (null on periodic/deleted-messages
@@ -86,7 +95,9 @@ class PartnerSyncCoordinator(
      *  independent; one pair's failure never skips another's. The report aggregates the pass
      *  (counters summed, [SyncReport.uidsResolved] true only when every pair resolved). */
     suspend fun syncOnce(wakeMessageId: String? = null): SyncReport {
-        runCatching { resumeUnpairs() }.onFailure { Log.w(TAG, "unpair resume failed", it) }
+        val unpairAdvanced = runCatching { resumeUnpairs() }
+            .onFailure { Log.w(TAG, "unpair resume failed", it) }
+            .getOrDefault(false)
         val enrollments = enrollmentDao.all()
         val enrolledPairIds = enrollments.map { it.pairId }.toSet()
         // Before the early return: after the last unpair there is no enrollment left, which is
@@ -96,9 +107,11 @@ class PartnerSyncCoordinator(
         runCatching { pruneReachability(enrolledPairIds) }
             .onFailure { Log.w(TAG, "reachability prune failed", it) }
         if (enrollments.isEmpty()) {
-            return SyncReport() // Unpaired: attempts stay local (§6 attempt log is the record).
+            // Unpaired: attempts stay local (§6 attempt log is the record) — but the unpair's
+            // own tail (ack poll, confirmation) still ran above and must reach the UI.
+            return SyncReport(unpairAdvanced = unpairAdvanced)
         }
-        var report = SyncReport(enrolled = true)
+        var report = SyncReport(enrolled = true, unpairAdvanced = unpairAdvanced)
         var resolved = 0
         for (enrollment in enrollments) {
             val one = syncPair(enrollment, wakeMessageId) ?: continue
@@ -112,6 +125,7 @@ class PartnerSyncCoordinator(
                 approvalsExpired = report.approvalsExpired + one.approvalsExpired,
                 rotatedKeyEpoch = one.rotatedKeyEpoch ?: report.rotatedKeyEpoch,
                 rejectionsFound = report.rejectionsFound + one.rejectionsFound,
+                unpairAdvanced = report.unpairAdvanced || one.unpairAdvanced,
             )
         }
         return report.copy(uidsResolved = resolved == enrollments.size)
@@ -173,6 +187,10 @@ class PartnerSyncCoordinator(
             approvalsExpired = expiredApprovals,
             rotatedKeyEpoch = rotated,
             rejectionsFound = rejected,
+            // A deletion request pulled this pass shredded the pair (the responder half runs
+            // in the pull path): the UI must repaint onto the termination card even though
+            // pulledCount stays 0 on the deletion wake path (owner-observed 2026-10-01).
+            unpairAdvanced = pulled?.deletionRequested == true,
         )
     }
 
@@ -326,8 +344,17 @@ class PairUidResolver(
     private val reachability: PairingReachabilityStore,
 ) {
     /** The local device's uid — anonymous sign-in if needed. [resolve]'s first half, on its
-     *  own for the pairing ceremony, which needs a uid before any pair id exists. */
-    suspend fun ensureUid(): String? {
+     *  own for the pairing ceremony, which needs a uid before any pair id exists.
+     *
+     *  Single-flight ([SIGN_IN_LOCK]): on cold start several callers race here (push
+     *  registration, sync, the dashboard, the ceremony) while `currentUser` is still null,
+     *  and each concurrent signInAnonymously() mints a DISTINCT anonymous account —
+     *  device-verified 2026-10-01, three accounts per phone within one second. The Firebase
+     *  SDK's uid/token state then desyncs (the app names uid A while the wire carries uid B's
+     *  token), and every identity-pinning write is denied server-side (pairing_tokens create,
+     *  push registration) while reads pass — the "missing or insufficient permissions" pairing
+     *  failure of that day. Serializing sign-in leaves exactly one account per install. */
+    suspend fun ensureUid(): String? = SIGN_IN_LOCK.withLock {
         AppCheckInstaller.install(appContext)
         val auth = FirebaseAuth.getInstance()
         val user = auth.currentUser
@@ -336,7 +363,7 @@ class PairUidResolver(
                 .getOrNull()
                 ?.user
         if (user == null) Log.w(TAG, "no uid — sign-in unavailable")
-        return user?.uid
+        user?.uid
     }
 
     suspend fun resolve(pairId: String): Pair<String, String>? {
@@ -373,5 +400,8 @@ class PairUidResolver(
 
     private companion object {
         const val TAG = "MyExodusPairUidResolver"
+
+        /** Static so every resolver instance shares one lock — see [ensureUid]. */
+        val SIGN_IN_LOCK = Mutex()
     }
 }

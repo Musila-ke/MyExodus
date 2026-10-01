@@ -273,9 +273,14 @@ class BilateralDeletion(
      * its enrollment early-return (a post-shred device has no enrollment, yet its unpair is
      * exactly what still needs network work: re-delivery, the owed ack, the ack poll, the
      * 7-day timeout).
+     *
+     * Returns true when any journal row changed — the coordinator carries it into the pass
+     * report so one-shot screens (the unpair card, the Partner dashboard) re-read in real
+     * time instead of staring at the pre-advance state (owner UX ruling 2026-10-01).
      */
-    suspend fun resumePending() {
-        for (row in runCatching { journal.all() }.getOrDefault(emptyList())) {
+    suspend fun resumePending(): Boolean {
+        val before = runCatching { journal.all() }.getOrDefault(emptyList())
+        for (row in before) {
             runCatching {
                 // Re-paired: the same two devices produce the same pairId (the epoch, not the
                 // id, distinguishes sessions — AD-07), so a live enrollment for an already-
@@ -290,7 +295,14 @@ class BilateralDeletion(
                 if (row.role == UnpairState.ROLE_RESPONDER) resumeResponder(row.pairId) else resumeRequester(row.pairId)
             }.onFailure { Log.w(TAG, "unpair resume failed pairId=${row.pairId}", it) }
         }
+        val after = runCatching { journal.all() }.getOrDefault(emptyList())
+        // Compare the row columns this function mutates — a data-class equals would compare
+        // requestEnvelope by array reference and report every re-read as a change.
+        return before.map { it.progressSignature() } != after.map { it.progressSignature() }
     }
+
+    private fun UnpairState.progressSignature(): String =
+        "$pairId|$role|$delivered|$ackSent|$localShredded|$confirmedAtEpochMillis"
 
     /** Deletes the journal row behind the terminal card — guarded by [UnpairState.isDismissible]
      *  so an early dismissal can never strand the initiator's confirmation. */

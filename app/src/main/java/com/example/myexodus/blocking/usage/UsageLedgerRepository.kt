@@ -192,14 +192,18 @@ class UsageLedgerRepository(
     }
 
     /**
-     * D1's measured-outage spans (§8.7) since a wall-clock cutoff. Reboot boundaries are
+     * D1's measured-outage rows (§8.7) since a wall-clock cutoff. Reboot boundaries are
      * excluded by [AccountingDiagnostics.isMeasuredOutage]: the boundary row records that the
-     * monotonic frame restarted, which is not an interruption to report to anyone.
+     * monotonic frame restarted, which is not an interruption to report to anyone. The rows
+     * themselves are returned whole — #13's dismissal/recurrence decision needs their wall
+     * clocks, which the span lengths alone do not carry.
      */
+    suspend fun measuredOutagesSince(sinceWallClockMs: Long): List<UsageLedger> =
+        gapsSince(sinceWallClockMs).filter(AccountingDiagnostics::isMeasuredOutage)
+
+    /** The span lengths of [measuredOutagesSince] — the report's count/largest inputs. */
     suspend fun outageSpansSince(sinceWallClockMs: Long): List<Long> =
-        gapsSince(sinceWallClockMs)
-            .filter(AccountingDiagnostics::isMeasuredOutage)
-            .map { it.elapsedEndMs - it.elapsedStartMs }
+        measuredOutagesSince(sinceWallClockMs).map { it.elapsedEndMs - it.elapsedStartMs }
 
     /**
      * §8.8 retention: delete journal rows older than [LedgerRetention.RETENTION_DAYS] in bounded

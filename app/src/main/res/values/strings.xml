@@ -64,7 +64,12 @@
     <string name="outage_notification_text">MyExodus couldn’t measure app use for up to %1$s at one stretch, so that time may not be counted.</string>
     <string name="outage_action_fix">Fix</string>
     <string name="outage_action_later">Not now</string>
+    <string name="outage_action_dismiss">Dismiss</string>
     <string name="home_outage_title">Usage tracking was interrupted</string>
+    <!-- #13's confirmation, shown once after the fix flow was fired and the exemption is in
+         effect. AD-13: it states the setting and the capability — never a cause. -->
+    <string name="home_outage_resolved_title">Battery optimization is off for MyExodus</string>
+    <string name="home_outage_resolved_body">Background tracking can run again. If another interruption is measured, you’ll see a report here.</string>
     <!-- D1's report carries both facts the record holds: how many interruptions, and the
          largest window. Callers pass (count, duration) in that order, so the duration is
          %2$s in EVERY item — the "one" item prints no count but must still skip %1$s
@@ -92,7 +97,11 @@
          The message body is partner-authored text, rendered verbatim; the label names the
          sender without naming the pair (multi-user pairs each pin independently). -->
     <string name="home_pinned_title">Your partner sent you this</string>
+    <string name="home_pinned_from">From %1$s</string>
     <string name="home_pinned_sent">Sent %1$s</string>
+    <string name="home_pinned_position">%1$d of %2$d</string>
+    <string name="home_pinned_prev">Previous message</string>
+    <string name="home_pinned_next">Next message</string>
     <string name="home_grid_title">Milestones</string>
     <string name="home_grid_day_of">Day %1$d of %2$d</string>
     <string name="home_grid_all_days">%1$d days and counting</string>
@@ -115,6 +124,17 @@
     <string name="partner_event_title">New activity from your partner</string>
     <string name="partner_event_title_named">New activity from %1$s</string>
     <string name="partner_event_text">Open MyExodus to see what changed.</string>
+    <string name="partner_message_title_named">%1$s sent you a message</string>
+    <string name="partner_message_quoted">“%1$s”</string>
+    <!-- #16: the responder's announcement that the partner ended the partnership. States who,
+         when, and the erasure that just ran on this phone; the plain forms stay the
+         lockscreen-safe public version (FR-13). The no-time form covers a document with no
+         server timestamp (non-conforming writer) rather than showing a fabricated time. -->
+    <string name="partner_ended_title">Partnership ended</string>
+    <string name="partner_ended_text">A shared partnership was ended. Its shared data was erased.</string>
+    <string name="partner_ended_title_named">%1$s ended the partnership</string>
+    <string name="partner_ended_text_named">Ended %1$s. The shared data was erased on both phones.</string>
+    <string name="partner_ended_text_named_no_time">The shared data was erased on both phones.</string>
 
     <!-- Rule state labels and schedule summaries (shared by Home and Rules rows) -->
     <string name="state_paused">Paused</string>
@@ -413,7 +433,7 @@
     <string name="partner_never_synced">Never synced yet</string>
     <string name="partner_last_synced">Last synced %1$s</string>
     <string name="partner_sync_delayed">Sync is taking longer than usual — the phone may be offline or paused by Android.</string>
-    <string name="partner_sync_note">Updates arrive when both phones are online. There is no instant delivery.</string>
+    <string name="partner_sync_note">Updates arrive as soon as both phones are online.</string>
     <string name="partner_sync_rate_limited">Some recent updates came in faster than the server allows, so they weren’t sent as instant alerts. They’ll arrive with the next sync.</string>
     <string name="partner_check_now">Check now</string>
     <string name="partner_check_now_running">Checking…</string>
@@ -446,7 +466,19 @@
     <string name="partner_compose_hint">Your message</string>
     <string name="partner_compose_send">Send</string>
     <string name="partner_compose_cancel">Cancel</string>
+    <string name="partner_compose_close">Close</string>
     <string name="partner_compose_sending">Sending…</string>
+    <string name="partner_compose_saved">Saved</string>
+    <!-- Owner UX ruling 2026-10-01: a queued send (offline, or the signing prompt was
+         declined) is not a failure — the journal guarantees delivery on a later pass, so
+         this note is neutral, never red. -->
+    <string name="partner_compose_queued">Saved. It will send at the next sync.</string>
+    <string name="partner_compose_auth_title">Send your message</string>
+    <!-- Owner ask 2026-10-01 (messaging UX round 2): the sender sees their own latest message
+         on the Activity subpage, and a SENT send closes the sheet with this toast — naming the
+         recipient, since a device can hold several pairings. -->
+    <string name="partner_activity_sent_label">Your latest message</string>
+    <string name="partner_toast_sent">Sent to %1$s</string>
     <string name="partner_compose_failed">Couldn\'t save your message. Try again.</string>
     <string name="partner_compose_too_long">Your message is too long. Trim it to %1$d characters or fewer, then send again.</string>
     <string name="partner_compose_suggestion_1">Thinking of you today.</string>
@@ -518,10 +550,6 @@
     <string name="partner_sign_lock_rejected_body">Your screen lock verified, but this device’s security key was created before screen-lock confirmation was available, and keys can’t be changed after creation. Add a fingerprint or face in Android Settings and try again.</string>
     <!-- The confirm-credential prompt's subtitle (ADR #112 fallback path). -->
     <string name="partner_signing_screen_lock_subtitle">Confirm with your screen lock</string>
-    <!-- Owner ruling 2026-10-01 (amends ADR #112): the biometric prompt's secondary
-         button is the escape hatch to screen-lock confirmation, so a finger that won't
-         read no longer forces a lockout wait before the fallback opens. -->
-    <string name="partner_signing_use_screen_lock">Use screen lock</string>
     <string name="partner_biometric_open_settings">Open settings</string>
     <string name="partner_biometric_close">Close</string>
     <!-- §8.2/§9 identity migration (task #68): enrollment change or a permanently invalidated
@@ -559,6 +587,8 @@
     <string name="partner_users_rename_label">Name</string>
     <string name="partner_users_rename_note">Shown on this phone only.</string>
     <string name="partner_users_rename_save">Save</string>
+    <string name="partner_users_rename_saving">Saving…</string>
+    <string name="partner_users_rename_failed">Couldn’t save the name — the change wasn’t written. Try again.</string>
     <string name="partner_users_rename_cancel">Cancel</string>
 
     <!-- Pairing ceremony (§19.4 item 4). The screen shows only mapped copy: protocol
@@ -586,9 +616,12 @@
     <string name="partner_ceremony_waiting">Waiting for your partner to enter the code…</string>
     <string name="partner_ceremony_cancel">Cancel invitation</string>
     <string name="partner_ceremony_sas_overline">Safety code</string>
-    <string name="partner_ceremony_sas_body">Read these digits aloud to each other. If both phones show the same code, tap “They match”. If anything differs, stop and tap “They don’t match”.</string>
+    <string name="partner_ceremony_sas_body_joiner">Your phone shows the safety code first. Read the digits aloud to your partner, then tap Confirm — their phone will show the same code so they can check it.</string>
+    <string name="partner_ceremony_sas_body_initiator">Your partner read these digits aloud from their phone. If they match what you heard, tap “They match”. If anything is different, stop — don’t continue.</string>
     <string name="partner_ceremony_sas_match">They match</string>
     <string name="partner_ceremony_sas_no_match">They don’t match</string>
+    <string name="partner_ceremony_sas_confirm">Confirm</string>
+    <string name="partner_ceremony_sas_stop">Stop</string>
     <string name="partner_ceremony_paired_title">You’re paired</string>
     <string name="partner_ceremony_paired_with">Paired with %1$s</string>
     <string name="partner_ceremony_paired_body">Your partner can now support you with approvals you ask them for. Nothing is shared until you request it.</string>
@@ -602,7 +635,21 @@
     <string name="partner_ceremony_used_title">That code was already used</string>
     <string name="partner_ceremony_used_body">Each invitation works once, and this one was already claimed. Ask for a new invitation, then try again.</string>
     <string name="partner_ceremony_failed_title">Pairing didn’t finish</string>
-    <string name="partner_ceremony_failed_body">The setup stopped before the partnership was created. Check that both phones are online, then try again.</string>
+    <string name="partner_ceremony_failed_body">The setup stopped before the partnership was created. Close this and start a fresh pairing from scratch on both phones.</string>
+    <string name="partner_ceremony_failed_active_title">Already paired</string>
+    <string name="partner_ceremony_failed_active_body">You already have an active partnership with this partner. Unpair the existing partnership first, then pair again.</string>
+    <string name="partner_ceremony_failed_stale_title">The attempts didn’t line up</string>
+    <string name="partner_ceremony_failed_stale_body">The two phones were taking part in different pairing attempts. Close this and start a fresh pairing from scratch on both phones.</string>
+    <string name="partner_ceremony_failed_same_device_title">Both sides came from one phone</string>
+    <string name="partner_ceremony_failed_same_device_body">This attempt was set up twice from the same phone. Pairing needs one phone on each side — start again with each phone in its own role.</string>
+    <string name="partner_ceremony_failed_same_account_title">Same identity on both phones</string>
+    <string name="partner_ceremony_failed_same_account_body">Both phones are using the same My Exodus identity, so they can’t partner with each other. Your partner’s phone needs its own setup first.</string>
+    <string name="partner_ceremony_failed_verify_title">Couldn’t verify the other phone</string>
+    <string name="partner_ceremony_failed_verify_body">The other phone’s security identity didn’t pass verification. Make sure My Exodus on both phones is the official build, then start a fresh pairing.</string>
+    <string name="partner_ceremony_failed_rate_title">Too many attempts</string>
+    <string name="partner_ceremony_failed_rate_body">There have been too many pairing attempts in a short time. Wait a few minutes, then try again.</string>
+    <string name="partner_ceremony_failed_version_title">Apps are on different versions</string>
+    <string name="partner_ceremony_failed_version_body">The two phones are running different versions of My Exodus. Update both phones to the same version, then pair again.</string>
     <string name="partner_ceremony_mismatch_title">The codes didn’t match</string>
     <string name="partner_ceremony_mismatch_body">The two phones showed different safety codes, so pairing stopped and the invitation was cancelled. Move to a trusted network, then create a new invitation.</string>
 

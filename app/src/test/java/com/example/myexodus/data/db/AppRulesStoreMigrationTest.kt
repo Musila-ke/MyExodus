@@ -275,11 +275,11 @@ class AppRulesStoreMigrationTest {
             )
             assertEquals(5L, activity.projection("pair-a")!!.lastSequence)
 
-            // A message-only arrival creates its row; the newest pin wins across pairs.
+            // A message-only arrival creates its row; newest pin first across pairs (#12 list).
             activity.pinMessage("pair-b", "You've got this", atMs = 1_700_000_100_000L)
-            assertEquals("pair-b", activity.observeLatestPinned().first()!!.pairId)
+            assertEquals(listOf("pair-b"), activity.observePinnedMessages().first().map { it.pairId })
             activity.pinMessage("pair-a", "Still rooting for you", atMs = 1_700_000_200_000L)
-            assertEquals("pair-a", activity.observeLatestPinned().first()!!.pairId)
+            assertEquals(listOf("pair-a", "pair-b"), activity.observePinnedMessages().first().map { it.pairId })
 
             // Retention: nothing older than the cutoff survives it (and the deleted journal
             // row stops pending for the pair that never got a link).

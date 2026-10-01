@@ -123,6 +123,37 @@ class PartnerNotificationsTest {
         )
     }
 
+    /** #11 (owner feedback 2026-10-01): a motivational message names the sender and shows the
+     *  message itself in the unlocked tray — the lockscreen public version stays generic
+     *  (FR-13), body included. */
+    @Test
+    fun motivationalMessage_showsTheBodyUnlocked_lockscreenStaysGeneric() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyPartnerEvent(context, PAIR_ID, PARTNER_NAME, messageBody = "Thinking of you today.")
+
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_message_title_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(R.string.partner_message_quoted, "Thinking of you today."),
+            notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+        val publicVersion = notification.publicVersion
+        assertTrue("lockscreen renders the generic public copy", publicVersion != null)
+        assertEquals(
+            context.getString(R.string.partner_event_title),
+            publicVersion!!.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            "the message body never reaches the lockscreen (FR-13)",
+            context.getString(R.string.partner_event_text),
+            publicVersion.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
     /** §19.5 multi-partner (owner ruling 2026-09-29): N pairs' items coexist in the tray, each
      *  named for its own partner and keyed by its own id — one partner's entry can never
      *  silently replace another's. */

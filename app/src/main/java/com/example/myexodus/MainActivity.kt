@@ -70,7 +70,10 @@ import com.example.myexodus.accountability.enrollment.PairingCeremonyTelemetry
 import com.example.myexodus.accountability.enrollment.PairingFlow
 import com.example.myexodus.accountability.enrollment.PartnerLabel
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.state.AccountabilityDatabase
+import com.example.myexodus.accountability.sync.MessageSendOutcome
 import com.example.myexodus.accountability.sync.PairUidResolver
+import com.example.myexodus.accountability.sync.messageSendOutcome
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
 import com.example.myexodus.accountability.sync.PartnerRolloutGate
 import com.example.myexodus.accountability.sync.PushInstallationRegistrar
@@ -214,11 +217,16 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var biometricEnrollmentMonitor: BiometricEnrollmentMonitor
     @Inject lateinit var identityMigration: IdentityMigration
     @Inject lateinit var accountabilitySigner: AccountabilitySigner
-    // The dashboard's "Check now" runs the production sync pass in-process — WorkManager
-    // dispatch is never performed on XOS (ADR #27), so a WM-based button would be dead there.
+    // The dashboard's "Check now" and the #14 foreground pass both run the production sync
+    // pass in-process — WorkManager dispatch is never performed on XOS (ADR #27), so a
+    // WM-based path would be dead there.
     @Inject lateinit var partnerSyncCoordinator: PartnerSyncCoordinator
     @Inject lateinit var pushInstallationRegistrar: PushInstallationRegistrar
     @Inject lateinit var partnerRolloutGate: PartnerRolloutGate
+    // Send-kick (owner UX ruling 2026-10-01): after a message is journaled, the composer's
+    // outcome is derived from whether the pair's queues actually cleared — the outbox half
+    // lives in this database.
+    @Inject lateinit var accountabilityDb: AccountabilityDatabase
     // Already constructed by MyExodusApp at process start; injected here only to re-publish the
     // snapshot the moment the discreet/detailed toggle flips (widget spec §5 Decision 10).
     @Inject lateinit var widgetSnapshotWriter: ProtectionSnapshotWriter
@@ -240,6 +248,22 @@ class MainActivity : FragmentActivity() {
         // outside setInvalidatedByBiometricEnrollment's scope — android-36 javadoc), so the
         // poll runs here: startup and every ON_RESUME.
         lifecycleScope.launch { checkIdentityEnrollment() }
+        // #14: partner sync is an automatic process — opening the app runs the same in-process
+        // pass the periodic worker and the dashboard's manual path run (the cold-auth-window
+        // case stops cleanly inside the pass; no biometric prompt is ever raised from here).
+        // Fire-and-forget: a failed pass leaves the dashboard's freshness state to say so, and
+        // the next pass retries.
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                if (isOnline()) {
+                    runPartnerSyncPass(
+                        pushInstallationRegistrar,
+                        partnerRolloutGate,
+                        partnerSyncCoordinator,
+                    )
+                }
+            }.onFailure { Log.w(TAG, "foreground sync pass failed", it) }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -438,20 +462,44 @@ class MainActivity : FragmentActivity() {
                             enrollmentDao.updatePartnerLabel(pairId, PartnerLabel.sanitize(label))
                         },
                         // Req 15: journal-first, same as every other shared event — the message
-                        // is written locally now and leaves on the next sync pass, so this call
-                        // touches no network and needs no signing window. Addressed to the
-                        // selected partner (#96): the row carries targetPairId, so no other
-                        // supported user's chain can ever be handed this message.
+                        // is written locally first (no signing window needed for the write).
+                        // Addressed to the selected partner (#96): the row carries targetPairId,
+                        // so no other supported user's chain can ever be handed this message.
+                        // Owner UX ruling 2026-10-01: the write is followed by a sync kick, so
+                        // the message leaves this phone now instead of waiting for the next
+                        // 15-minute pass — and the outcome the composer shows is derived from
+                        // the queues actually clearing, never from the local write alone.
                         onSendMessage = { pairId, text ->
                             val store = rulesStoreFactory.open()
                             val profileId = store?.userProfileDao()?.getActive()?.userId
-                            profileId != null && PartnerActivityJournal.emitForProfile(
+                            val emitted = profileId != null && PartnerActivityJournal.emitForProfile(
                                 store,
                                 profileId,
                                 EventPayload.TYPE_MOTIVATIONAL_MESSAGE,
                                 occurredAtMs = System.currentTimeMillis(),
                                 text = text,
                                 targetPairId = pairId,
+                            )
+                            messageSendOutcome(
+                                emitted = emitted,
+                                online = isOnline(),
+                                // Cold-window send (journey finding 2026-10-01): the chain
+                                // signature needs the §8.1 window warm, and a normal session
+                                // never raises a prompt — so tapping Send itself authorizes,
+                                // same house pattern as unpair. Cancelling keeps the message
+                                // journaled, so it reports QUEUED, never a failure.
+                                authorize = {
+                                    signingWindowWarm() ||
+                                        signWithAuthPrompt(getString(R.string.partner_compose_auth_title)) != null
+                                },
+                                runPass = {
+                                    runPartnerSyncPass(
+                                        pushInstallationRegistrar,
+                                        partnerRolloutGate,
+                                        partnerSyncCoordinator,
+                                    )
+                                },
+                                stillPending = { messageQueuedForPair(store, pairId) },
                             )
                         },
                         requestedTab = requestedTab,
@@ -581,9 +629,12 @@ class MainActivity : FragmentActivity() {
      * (PIN/pattern/password) authorizes the key through the platform's confirm-credential
      * flow. The explicit-message dialog shows only when neither can produce a signature.
      *
-     * Owner ruling 2026-10-01 (amends ADR #112): the screen-lock route must be reachable
-     * whenever the user chooses — not only after a biometric lockout — so the prompt's
-     * secondary button hands over to it directly.
+     * Owner ruling 2026-10-01, revised same day (#17): the screen-lock route must be
+     * reachable whenever the user chooses — and in ONE dialog. The biometric sheet itself
+     * carries the credential affordance (DEVICE_CREDENTIAL joins BIOMETRIC_STRONG), so
+     * "Use PIN/pattern" opens credential entry inline instead of chaining a second system
+     * dialog. `chooseSigningPath` still routes the no-biometrics case straight to the
+     * confirm flow — that is already a single dialog.
      */
     private suspend fun signWithAuthPrompt(title: String): Signature? {
         val status = BiometricManager.from(this)
@@ -605,11 +656,11 @@ class MainActivity : FragmentActivity() {
 
             is SigningPath.Biometric -> when (val outcome = biometricSign(title)) {
                 is BiometricOutcome.Signed -> outcome.signature
-                // Lockout is what "fall back to whatever you have" is for; a plain cancel
-                // stays a cancel — the underlying action reads as nothing having happened.
-                BiometricOutcome.LockedOut,
-                BiometricOutcome.UseDeviceCredential,
-                -> if (deviceCredentialPossible) signWithDeviceCredential(title) else null
+                // Lockout routing survives for OEM sheets that still raise it (the credential
+                // affordance itself is in-prompt, #17); a plain cancel stays a cancel — the
+                // underlying action reads as nothing having happened.
+                BiometricOutcome.LockedOut ->
+                    if (deviceCredentialPossible) signWithDeviceCredential(title) else null
 
                 // §9: not a cancel — the key is permanently dead and migration is the fix.
                 BiometricOutcome.PermanentlyInvalidated -> {
@@ -626,7 +677,6 @@ class MainActivity : FragmentActivity() {
         data class Signed(val signature: Signature) : BiometricOutcome
         data object Cancelled : BiometricOutcome
         data object LockedOut : BiometricOutcome
-        data object UseDeviceCredential : BiometricOutcome
         data object PermanentlyInvalidated : BiometricOutcome
     }
 
@@ -693,11 +743,9 @@ class MainActivity : FragmentActivity() {
                         override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                             Log.w(TAG, "approval biometric prompt: $errString")
                             val outcome = when (errorCode) {
-                                // The secondary button is the screen-lock escape hatch,
-                                // not a dismissal (owner ruling 2026-10-01).
-                                BiometricPrompt.ERROR_NEGATIVE_BUTTON ->
-                                    BiometricOutcome.UseDeviceCredential
-
+                                // The combined sheet keeps credential in-prompt (#17), so no
+                                // negative-button routing exists; a lockout raised by an OEM
+                                // sheet still falls back to the confirm flow.
                                 BiometricPrompt.ERROR_LOCKOUT,
                                 BiometricPrompt.ERROR_LOCKOUT_PERMANENT,
                                 -> BiometricOutcome.LockedOut
@@ -714,8 +762,18 @@ class MainActivity : FragmentActivity() {
                 val promptInfo = BiometricPrompt.PromptInfo.Builder()
                     .setTitle(title)
                     .setSubtitle(getString(R.string.partner_approval_prompt_subtitle))
-                    .setNegativeButtonText(getString(R.string.partner_signing_use_screen_lock))
-                    .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                    // #17 owner ruling 2026-10-01: DEVICE_CREDENTIAL joins the sheet, so
+                    // "Use PIN/pattern" is an in-prompt affordance entering credential mode
+                    // inline — one dialog, no KeyguardManager hand-off. androidx 1.1.0 refuses
+                    // crypto + credential only below API 30 (verified in the 1.1.0 sources:
+                    // auth gate in BiometricPrompt.authenticate), and the signing surfaces
+                    // cannot run below API 31 (in-Keystore ECDH floor), so the combined warm
+                    // path is safe. A negative button is forbidden with DEVICE_CREDENTIAL
+                    // (PromptInfo.build() throws).
+                    .setAllowedAuthenticators(
+                        BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                            BiometricManager.Authenticators.DEVICE_CREDENTIAL,
+                    )
                     .build()
                 if (cryptoReady) {
                     prompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(signature))
@@ -852,6 +910,25 @@ class MainActivity : FragmentActivity() {
         val capabilities = manager.getNetworkCapabilities(manager.activeNetwork) ?: return false
         return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
+
+    /** True while the §8.1 900 s signing window is open — [AccountabilitySigner.beginSign]
+     *  initializes the auth-bound cipher without a prompt only inside the window. Any failure
+     *  (cold window, dead keystore) reads as not-warm; the prompted path owns both cases. */
+    private fun signingWindowWarm(): Boolean =
+        runCatching { accountabilitySigner.beginSign() }.isSuccess
+
+    /** Send-kick truth check (owner UX ruling 2026-10-01): after the pass, is anything for
+     *  [pairId] still queued? A message the drain delivered is linked out of the journal AND
+     *  marked SENT in the outbox — either queue non-empty means something (worst case: our
+     *  message) is still on this phone, so the composer must not claim [MessageSendOutcome.SENT].
+     *  A read failure reads as queued too: over-reporting "will send later" is honest, a false
+     *  "sent" is not. */
+    private suspend fun messageQueuedForPair(store: AppRulesStore?, pairId: String): Boolean = runCatching {
+        val sinceMs = enrollmentDao.all().firstOrNull { it.pairId == pairId }?.createdAtEpochMillis
+        store == null || sinceMs == null ||
+            store.partnerActivityDao().pendingForPair(pairId, sinceMs, 1).isNotEmpty() ||
+            accountabilityDb.outboxDao().pendingFor(pairId, 1).isNotEmpty()
+    }.getOrDefault(true)
 
     /** §8 Step 6: protection status is re-evaluated on every resume through the shared
      *  arbiter (which also runs on the FGS's own 30s cycle — revocation while the app is

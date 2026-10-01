@@ -155,16 +155,16 @@ class PartnerActivityReceiverTest {
         assertEquals("Keep going", projection().pinnedMessageText)
     }
 
-    /** Req 15 home card: the newest pinned message across pairs is what the dashboard reads. */
+    /** Req 15 home card: newest pinned message first across pairs (#12 — the card pages). */
     @Test
-    fun latestPinned_returnsTheNewestAcrossPairs() = runBlocking {
+    fun pinnedMessages_returnNewestFirstAcrossPairs() = runBlocking {
         receiver.applyAppended("pair-a", message("older", atMs = NOW), sequence = 1L)
         receiver.applyAppended("pair-b", message("newer", atMs = NOW + 60_000), sequence = 1L)
 
-        val latest = checkNotNull(store.partnerActivityDao().observeLatestPinned().first())
+        val rows = checkNotNull(store.partnerActivityDao().observePinnedMessages().first())
 
-        assertEquals("pair-b", latest.pairId)
-        assertEquals("newer", latest.pinnedMessageText)
+        assertEquals(listOf("pair-b", "pair-a"), rows.map { it.pairId })
+        assertEquals(listOf("newer", "older"), rows.map { it.pinnedMessageText })
     }
 
     // --- Harness ------------------------------------------------------------------------------

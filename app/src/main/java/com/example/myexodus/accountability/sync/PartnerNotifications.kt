@@ -14,6 +14,8 @@ import com.example.myexodus.R
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.ui.partner.shortKeyId
+import java.text.DateFormat
+import java.util.Date
 
 /**
  * Partner-event notification surface (AD-11/NFR2): rendered locally only AFTER the mailbox
@@ -35,6 +37,9 @@ object PartnerNotifications {
     const val CHANNEL_APPROVAL_REQUESTS = "approval_requests"
     const val NOTIF_APPROVAL_REQUEST = 2002
     const val NOTIF_APPROVAL_DECISION = 2003
+
+    /** #16: the responder's announcement that the partner ended the partnership. */
+    const val NOTIF_PARTNERSHIP_ENDED = 2004
 
     /** Plan §8 Step 16's third channel: LOW importance, "used only for internal/debug
      *  visibility, not shown to the user in production builds" — so the channel is created
@@ -61,9 +66,26 @@ object PartnerNotifications {
      *  tray entry; `onlyAlertOnce` additionally keeps that burst to one alert (a
      *  partner-activity pull can append several events at once) — the trade is that further
      *  updates while the user leaves the notification untouched are silent, which is the
-     *  non-spammy side of §11.7. */
-    fun notifyPartnerEvent(context: Context, pairId: String, partnerName: String) =
-        post(context, CHANNEL_PARTNER_ALERTS, context.getString(R.string.partner_channel_activity_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_PARTNER_EVENT, pairId), R.string.partner_event_title, R.string.partner_event_text, onlyAlertOnce = true, namedTitle = context.getString(R.string.partner_event_title_named, partnerName))
+     *  non-spammy side of §11.7. A motivational message names the sender and shows the
+     *  message itself (owner feedback 2026-10-01) — unlocked only; the lockscreen public
+     *  version stays generic (FR-13). */
+    fun notifyPartnerEvent(context: Context, pairId: String, partnerName: String, messageBody: String? = null) =
+        post(
+            context,
+            CHANNEL_PARTNER_ALERTS,
+            context.getString(R.string.partner_channel_activity_name),
+            NotificationManager.IMPORTANCE_HIGH,
+            idFor(NOTIF_PARTNER_EVENT, pairId),
+            R.string.partner_event_title,
+            R.string.partner_event_text,
+            onlyAlertOnce = true,
+            namedTitle = if (messageBody != null) {
+                context.getString(R.string.partner_message_title_named, partnerName)
+            } else {
+                context.getString(R.string.partner_event_title_named, partnerName)
+            },
+            namedText = messageBody?.let { context.getString(R.string.partner_message_quoted, it) },
+        )
 
     /** A verified disable-approval request arrived — the responder's actionable item.
      *  Plan Step 16 channel spec: `approval_requests` is HIGH importance. */
@@ -73,6 +95,36 @@ object PartnerNotifications {
     /** The partner answered our request — informational. */
     fun notifyApprovalDecision(context: Context, pairId: String, partnerName: String) =
         post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_APPROVAL_DECISION, pairId), R.string.approval_decision_title, R.string.approval_decision_text, namedTitle = context.getString(R.string.approval_decision_title_named, partnerName))
+
+    /** #16: the partner ended the partnership and this device's shared data was shredded — the
+     *  responder is told who, when, and that the erase happened (owner-observed defect: the
+     *  roster silently dropped with nothing on the other device). Posted only by the deletion
+     *  composition, and only after the shred returned success. */
+    fun notifyPartnershipEnded(
+        context: Context,
+        pairId: String,
+        partnerName: String,
+        endedAtEpochMillis: Long?,
+    ) {
+        val endedAt = endedAtEpochMillis?.let {
+            DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(it))
+        }
+        post(
+            context,
+            CHANNEL_PARTNER_ALERTS,
+            context.getString(R.string.partner_channel_activity_name),
+            NotificationManager.IMPORTANCE_HIGH,
+            idFor(NOTIF_PARTNERSHIP_ENDED, pairId),
+            R.string.partner_ended_title,
+            R.string.partner_ended_text,
+            namedTitle = context.getString(R.string.partner_ended_title_named, partnerName),
+            namedText = if (endedAt != null) {
+                context.getString(R.string.partner_ended_text_named, endedAt)
+            } else {
+                context.getString(R.string.partner_ended_text_named_no_time)
+            },
+        )
+    }
 
     // Suppressed: the gate is NotificationAccess.canPost (the only way in), which lint can't
     // trace through a helper.
@@ -86,25 +138,34 @@ object PartnerNotifications {
         titleRes: Int,
         textRes: Int,
         namedTitle: String? = null,
+        namedText: String? = null,
         onlyAlertOnce: Boolean = false,
     ) {
         if (!NotificationAccess.canPost(context)) return
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(channelId, channelName, importance),
         )
+        // Owner ask 2026-10-01: the tap lands on Home — the pinned message card (messages)
+        // and the day hero live there, so that is where the partner event is visible. The
+        // request code is this object's own (extras don't count toward PendingIntent
+        // identity, and the shared code 0 would let this post rewrite Protection's
+        // Settings-landing extras on the same MainActivity intent).
         val openApp = PendingIntent.getActivity(
             context,
-            0,
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            NOTIF_PARTNER_EVENT,
+            Intent(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_HOME),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         // FR-13: the lockscreen public version stays generic by construction (no alias, event
         // type, count, or coaching/motivational content), so the redaction shows generic copy
         // rather than hiding the notification entirely. The unlocked content may name the
-        // partner (owner ruling 2026-09-29) — it never carries anything beyond the label.
+        // partner (owner ruling 2026-09-29) and carry a motivational message's body (owner
+        // feedback 2026-10-01) — neither ever reaches the public version, which is built from
+        // the generic resources alone.
         val title = namedTitle ?: context.getString(titleRes)
-        val text = context.getString(textRes)
-        val publicTitle = context.getString(titleRes)
+        val text = namedText ?: context.getString(textRes)
         NotificationManagerCompat.from(context).notify(
             notificationId,
             NotificationCompat.Builder(context, channelId)
@@ -117,8 +178,8 @@ object PartnerNotifications {
                 .setPublicVersion(
                     NotificationCompat.Builder(context, channelId)
                         .setSmallIcon(R.mipmap.ic_launcher)
-                        .setContentTitle(publicTitle)
-                        .setContentText(text)
+                        .setContentTitle(context.getString(titleRes))
+                        .setContentText(context.getString(textRes))
                         .build(),
                 )
                 .setOnlyAlertOnce(onlyAlertOnce)

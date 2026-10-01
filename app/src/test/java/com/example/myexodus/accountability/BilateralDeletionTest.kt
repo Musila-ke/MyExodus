@@ -563,6 +563,37 @@ class BilateralDeletionTest {
         assertNull(db.unpairStateDao().get(pairId))
     }
 
+    // --- resumePending's change report (drives the UI repaint tick, owner UX ruling 2026-10-01) ---
+
+    @Test
+    fun resumePending_reportsTrue_onConfirmation_falseWhenSettled() = runTest {
+        markOnDrain = true
+        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(1)
+        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(0)
+        deletion.initiate(pairId, "uid-a", "uid-b", signing())
+
+        // Settled row (delivered, awaiting the ack): nothing advances — keep the tick quiet
+        // or every pass would repaint every screen forever.
+        assertFalse("no row change on a settled wait", deletion.resumePending())
+
+        partnerAcked = true
+        assertTrue("confirmation is progress the UI must see", deletion.resumePending())
+        assertEquals(UnpairPhase.TERMINAL, db.unpairStateDao().get(pairId)!!.phaseAt(clock))
+        assertFalse("settled again after the confirmation", deletion.resumePending())
+    }
+
+    @Test
+    fun resumePending_reportsTrue_whenOwedAckGoesOut() = runTest {
+        ackWorks = false
+        assertTrue(deletion.handleIncoming(pairId, "msg-ack"))
+        assertFalse("ack still owed and failing — no progress", deletion.resumePending())
+
+        ackWorks = true
+        assertTrue("a written ack is progress the UI must see", deletion.resumePending())
+        assertTrue(db.unpairStateDao().get(pairId)!!.ackSent)
+        assertFalse("settled again after the ack", deletion.resumePending())
+    }
+
     private fun signing(): Signature = Signature.getInstance("SHA256withECDSA").apply {
         initSign(mySigning.private)
     }

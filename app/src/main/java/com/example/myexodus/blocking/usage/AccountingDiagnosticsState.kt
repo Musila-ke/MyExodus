@@ -26,8 +26,18 @@ class AccountingDiagnosticsState @Inject constructor(@ApplicationContext context
 
     val lastDeclinedMs: Long get() = prefs.getLong(KEY_LAST_DECLINED, 0L)
 
+    /** #13: wall clock of the last dismissal of an outage report; 0 = never dismissed. */
+    val dismissedAtMs: Long get() = prefs.getLong(KEY_DISMISSED, 0L)
+
     fun markPromptEligible(nowWallClockMs: Long) {
         prefs.edit { putLong(KEY_ELIGIBLE_SINCE, nowWallClockMs) }
+    }
+
+    /** #13: the report was acknowledged — every outage surface stays silent for evidence at or
+     *  before this instant. A newer measured interruption re-raises the report: a dismissal
+     *  silences the report it named, never future ones. */
+    fun markDismissed(nowWallClockMs: Long) {
+        prefs.edit { putLong(KEY_DISMISSED, nowWallClockMs) }
     }
 
     /** The interruption that made this eligible either turned out to be recoverable or has
@@ -76,6 +86,7 @@ class AccountingDiagnosticsState @Inject constructor(@ApplicationContext context
         private const val KEY_ELIGIBLE_SINCE = "prompt_eligible_since_ms"
         private const val KEY_LAST_PROMPT = "last_prompt_ms"
         private const val KEY_LAST_DECLINED = "last_declined_ms"
+        private const val KEY_DISMISSED = "dismissed_at_ms"
 
         /**
          * An interruption recorded long ago no longer explains what the user is seeing, so it

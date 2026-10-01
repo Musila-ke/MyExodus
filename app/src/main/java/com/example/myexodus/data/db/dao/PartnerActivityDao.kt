@@ -39,6 +39,21 @@ interface PartnerActivityDao {
     )
     suspend fun pendingForPair(pairId: String, sinceMs: Long, limit: Int): List<PartnerActivityOutbox>
 
+    /**
+     * Owner ask 2026-10-01: the sender's own latest composed message for this pair — what the
+     * Activity subpage shows back to the writer. The composer addresses rows (#96), so the
+     * common case is the targeted branch; a pre-#96 fan-out row counts once this pair was
+     * actually linked, never merely because it exists.
+     */
+    @Query(
+        "SELECT text FROM partner_activity_outbox WHERE kind = :kind " +
+            "AND (target_pair_id = :pairId OR (target_pair_id IS NULL AND EXISTS (" +
+            "SELECT 1 FROM partner_activity_link l " +
+            "WHERE l.event_id = partner_activity_outbox.event_id AND l.pair_id = :pairId))) " +
+            "ORDER BY created_at_ms DESC LIMIT 1",
+    )
+    suspend fun latestSentMessageText(pairId: String, kind: String): String?
+
     /** Exactly-once per (event, pair): re-linking the same pair is a no-op (ADR #111). */
     @Query(
         "INSERT OR IGNORE INTO partner_activity_link (event_id, pair_id, sequence) " +
@@ -69,14 +84,16 @@ interface PartnerActivityDao {
     @Query("SELECT * FROM partner_activity_projection WHERE pair_id = :pairId")
     suspend fun projection(pairId: String): PartnerActivityProjection?
 
-    /** Req 15 home card: the newest pinned message across all pairs (`[0]` wins by timestamp).
-     *  A Flow, not a one-shot read: a message delivered by a background sync pass must reach a
-     *  card that is already on screen. */
+    /** Req 15 home card (#12): every pair's newest pinned message, newest first — with several
+     *  partners the card pages across senders, so the whole list is handed over, not just the
+     *  winner. A Flow, not a one-shot read: a message delivered by a background sync pass must
+     *  reach a card that is already on screen. The pair-id tiebreak keeps the order stable when
+     *  two arrivals share a millisecond (clock skew between senders makes that real). */
     @Query(
         "SELECT * FROM partner_activity_projection WHERE pinned_message_text IS NOT NULL " +
-            "ORDER BY pinned_message_at_ms DESC LIMIT 1",
+            "ORDER BY pinned_message_at_ms DESC, pair_id ASC",
     )
-    fun observeLatestPinned(): Flow<PartnerActivityProjection?>
+    fun observePinnedMessages(): Flow<List<PartnerActivityProjection>>
 
     @Query(
         "INSERT OR IGNORE INTO partner_activity_projection (pair_id, days_free, relapse_count, " +

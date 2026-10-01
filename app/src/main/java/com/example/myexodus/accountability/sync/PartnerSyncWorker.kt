@@ -57,7 +57,13 @@ suspend fun runPartnerSyncPass(
     if (rollout.pushRegistrationEnabled()) {
         if (!registrar.register()) Log.w("MyExodusPartnerSync", "push installation not (re)registered this run")
     }
-    return coordinator.syncOnce(wakeMessageId)
+    val report = coordinator.syncOnce(wakeMessageId)
+    // Unpair progress (peer shred pulled, journal row advanced, ack confirmed) repaints too:
+    // deletion passes report pulledCount=0 by design (the wake path returns before the
+    // watermark query), yet they are exactly the passes the Partner page must react to
+    // (owner-observed stale page after a partnership ended, 2026-10-01).
+    if (report.pulledCount > 0 || report.unpairAdvanced) PartnerSyncSignals.pulledEvents.tryEmit(Unit)
+    return report
 }
 
 /** §14 housekeeping enqueue (MyExodusApp, post-unlock process start): KEEP, so the first

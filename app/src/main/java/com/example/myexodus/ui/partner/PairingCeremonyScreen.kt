@@ -77,6 +77,7 @@ import com.example.myexodus.accountability.enrollment.PartnerLabel
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.rememberWindowWidth
+import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -213,14 +214,15 @@ fun PairingCeremonyScreen(
                     R.string.partner_ceremony_used_body,
                     PairingCeremonyTelemetry.Outcome.TOKEN_USED,
                 )
-                // The reason is written for a developer reading logcat (it can name key
-                // parsing and registration internals) — never shown to the user.
+                // The raw reason is written for a developer reading logcat (it can name key
+                // parsing and registration internals) — the user reads mapped copy. A null
+                // outcome is an exception from the submit call itself (transport), the one
+                // case where the connectivity copy is true.
                 is PairingFlow.Outcome.Rejected, null -> {
-                    Log.w(TAG, "pairing rejected: ${(outcome as? PairingFlow.Outcome.Rejected)?.reason}")
-                    fail(
-                        R.string.partner_ceremony_failed_title,
-                        R.string.partner_ceremony_failed_body,
-                    )
+                    val reason = (outcome as? PairingFlow.Outcome.Rejected)?.reason
+                    Log.w(TAG, "pairing rejected: $reason")
+                    val (title, body) = pairingFailureCopy(reason)
+                    fail(title, body)
                 }
             }
             pending = null
@@ -233,16 +235,20 @@ fun PairingCeremonyScreen(
             working = true
             runCatching { deps.saveName(name) }.onFailure { Log.w(TAG, "saving name failed", it) }
             val uid = deps.myUid()
-            val initiation = uid?.let {
+            val attempt = uid?.let {
                 runCatching { deps.flow.initiate(it, PartnerLabel.sanitize(name)) }
                     // Without this the protocol's failure reason is discarded (the missing-key
                     // stall of 2026-09-28 surfaced as copy for a network problem).
                     .onFailure { e -> Log.w(TAG, "invite failed", e) }
-                    .getOrNull()
             }
             working = false
+            val initiation = attempt?.getOrNull()
             if (initiation == null) {
-                fail(R.string.partner_ceremony_offline_title, R.string.partner_ceremony_offline_body)
+                // #22 class, create side: a server denial (rules / App Check) is not a
+                // connectivity problem — only a transport-shaped throw or a missing session
+                // (uid == null) gets the offline copy.
+                val (title, body) = pairingFailureCopy(attempt?.exceptionOrNull().serverRejectionReason())
+                fail(title, body)
                 return@launch
             }
             step = CeremonyStep.ShowingCode(
@@ -264,14 +270,17 @@ fun PairingCeremonyScreen(
             working = true
             runCatching { deps.saveName(name) }.onFailure { Log.w(TAG, "saving name failed", it) }
             val uid = deps.myUid()
-            val prepared = uid?.let {
+            val attempt = uid?.let {
                 runCatching { deps.flow.prepareJoinWithCode(PairingCode.normalize(code), it) }
                     .onFailure { e -> Log.w(TAG, "join prepare failed", e) }
-                    .getOrNull()
             }
             working = false
+            val prepared = attempt?.getOrNull()
             if (prepared == null) {
-                fail(R.string.partner_ceremony_offline_title, R.string.partner_ceremony_offline_body)
+                // Same #22 class as the invite side: a thrown server denial keeps the neutral
+                // copy; only transport-shaped throws and a missing session read as offline.
+                val (title, body) = pairingFailureCopy(attempt?.exceptionOrNull().serverRejectionReason())
+                fail(title, body)
                 return@launch
             }
             when (prepared) {
@@ -290,10 +299,14 @@ fun PairingCeremonyScreen(
                         R.string.partner_ceremony_used_body,
                         PairingCeremonyTelemetry.Outcome.TOKEN_USED,
                     )
-                    else -> fail(
-                        R.string.partner_ceremony_failed_title,
-                        R.string.partner_ceremony_failed_body,
-                    )
+                    else -> {
+                        // Verdicts from the prepare phase: unreadable token, failed partner
+                        // verification, or a read error — mapped, with the raw reason in logcat.
+                        val reason = (prepared.outcome as? PairingFlow.Outcome.Rejected)?.reason
+                        Log.w(TAG, "join prepare rejected: $reason")
+                        val (title, body) = pairingFailureCopy(reason)
+                        fail(title, body)
+                    }
                 }
             }
         }
@@ -402,6 +415,7 @@ fun PairingCeremonyScreen(
 
             is CeremonyStep.Compare -> CompareSas(
                 sas = current.sas,
+                mode = mode,
                 working = working,
                 onMatch = ::signAndFinish,
                 onMismatch = ::rejectMismatch,
@@ -717,12 +731,22 @@ private fun ShowingCode(
 
 /**
  * The SAS check — the one moment the humans defeat a machine-in-the-middle. Digits are the
- * hero (reference: overline + display number), and the choice is explicit and symmetric: the
- * "they match" button is what releases the biometric signature, "they don't match" kills the
- * invitation on the spot.
+ * hero (reference: overline + display number). The copy follows the real ceremony order, which
+ * is asymmetric: the joiner's phone shows the digits first — prepareJoin derives them from the
+ * verified initiator material with no write, so the initiator's digits only appear once the
+ * joiner's Confirm has released the biometric signature (the token write the initiator polls
+ * for). The joiner reads their digits aloud (Confirm / Stop); the initiator's tap is the actual
+ * out-of-band comparison against what they heard ("They match" / "They don't match").
  */
 @Composable
-private fun CompareSas(sas: String, working: Boolean, onMatch: () -> Unit, onMismatch: () -> Unit) {
+private fun CompareSas(
+    sas: String,
+    mode: CeremonyMode,
+    working: Boolean,
+    onMatch: () -> Unit,
+    onMismatch: () -> Unit,
+) {
+    val joiner = mode == CeremonyMode.JOIN
     CeremonyCard {
         Text(
             stringResource(R.string.partner_ceremony_sas_overline),
@@ -742,7 +766,10 @@ private fun CompareSas(sas: String, working: Boolean, onMatch: () -> Unit, onMis
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
-            stringResource(R.string.partner_ceremony_sas_body),
+            stringResource(
+                if (joiner) R.string.partner_ceremony_sas_body_joiner
+                else R.string.partner_ceremony_sas_body_initiator,
+            ),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -755,7 +782,12 @@ private fun CompareSas(sas: String, working: Boolean, onMatch: () -> Unit, onMis
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(8.dp))
             }
-            Text(stringResource(R.string.partner_ceremony_sas_match))
+            Text(
+                stringResource(
+                    if (joiner) R.string.partner_ceremony_sas_confirm
+                    else R.string.partner_ceremony_sas_match,
+                ),
+            )
         }
         OutlinedButton(
             onClick = onMismatch,
@@ -763,7 +795,12 @@ private fun CompareSas(sas: String, working: Boolean, onMatch: () -> Unit, onMis
             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(stringResource(R.string.partner_ceremony_sas_no_match))
+            Text(
+                stringResource(
+                    if (joiner) R.string.partner_ceremony_sas_stop
+                    else R.string.partner_ceremony_sas_no_match,
+                ),
+            )
         }
     }
 }
@@ -841,6 +878,63 @@ private fun FailedTerminal(title: String, body: String, onRetry: () -> Unit, onC
         }
     }
 }
+
+/**
+ * #22: maps a failure reason to user copy. registerPairing verdicts arrive as stable reason
+ * codes (PairingRegistration surfaces the HttpsError message verbatim); pairing-preparation
+ * rejections carry local English developer reasons. Unknown reasons get the neutral
+ * "start fresh" body — the connectivity copy is reserved for the genuinely transport-shaped
+ * cases: a null reason (the submit call threw) and read errors while polling.
+ */
+internal fun pairingFailureCopy(reason: String?): Pair<Int, Int> = when {
+    reason == null ->
+        R.string.partner_ceremony_offline_title to R.string.partner_ceremony_offline_body
+    // #22, create/prepare side: the server actively declined (FirebaseFirestoreException
+    // PERMISSION_DENIED — a rules denial or an App Check refusal). Truthful neutral copy:
+    // there is no connection to check.
+    reason == "SERVER_REJECTED" ->
+        R.string.partner_ceremony_failed_title to R.string.partner_ceremony_failed_body
+    reason == "PAIRING_ACTIVE" ||
+        reason == "an active pairing with different material already exists" ->
+        R.string.partner_ceremony_failed_active_title to R.string.partner_ceremony_failed_active_body
+    reason == "TRANSCRIPT_MISMATCH" || reason == "sessionId mismatch" ->
+        R.string.partner_ceremony_failed_stale_title to R.string.partner_ceremony_failed_stale_body
+    reason == "SAME_KEY" ->
+        R.string.partner_ceremony_failed_same_device_title to R.string.partner_ceremony_failed_same_device_body
+    reason == "SELF_PAIRING" ->
+        R.string.partner_ceremony_failed_same_account_title to R.string.partner_ceremony_failed_same_account_body
+    reason == "RATE_LIMITED" ->
+        R.string.partner_ceremony_failed_rate_title to R.string.partner_ceremony_failed_rate_body
+    reason == "PROTOCOL_VERSION_UNSUPPORTED" ->
+        R.string.partner_ceremony_failed_version_title to R.string.partner_ceremony_failed_version_body
+    reason in IDENTITY_REJECTIONS || reason.startsWith("attestation:") ->
+        R.string.partner_ceremony_failed_verify_title to R.string.partner_ceremony_failed_verify_body
+    else ->
+        R.string.partner_ceremony_failed_title to R.string.partner_ceremony_failed_body
+}
+
+/**
+ * "The other phone's identity couldn't be verified", from either side: the server's
+ * attestation guard codes (functions/attestation.js) or the joiner's local
+ * EnrollmentFlow.PartnerVerification reasons.
+ */
+private val IDENTITY_REJECTIONS = setOf(
+    "ATTESTATION_MISSING", "KEY_SOFTWARE", "KEY_LEVEL_UNKNOWN", "CHALLENGE_MISMATCH",
+    "ORIGIN_NOT_GENERATED", "PURPOSE_MISSING_SIGN", "KEY_CHAIN_MISMATCH", "CHAIN_UNTRUSTED",
+    "transcript signature invalid", "malformed certificate chain",
+)
+
+/**
+ * A throw from the invite/join prepare calls that the SERVER declined (rules or App Check
+ * PERMISSION_DENIED) — as opposed to a transport failure, which keeps the offline copy.
+ * Everything else, including null, stays transport-shaped.
+ */
+private fun Throwable?.serverRejectionReason(): String? =
+    if (this is FirebaseFirestoreException && code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+        "SERVER_REJECTED"
+    } else {
+        null
+    }
 
 private fun copyToClipboard(context: Context, code: String) {
     val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return

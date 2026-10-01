@@ -214,6 +214,38 @@ class PartnerSyncCoordinatorTest {
         assertEquals(1, repairCalls)
     }
 
+    /** Owner-observed 2026-10-01: the responder's page kept showing the erased pair after a
+     *  deletion request shredded it — the pass pulled nothing, so the repaint tick never
+     *  fired. The pull's deletionRequested flag must ride the report as unpairAdvanced. */
+    @Test
+    fun deletionRequestPull_reportsUnpairAdvanced_withZeroPulled() = runTest {
+        enroll()
+        coordinator = coordinator(
+            warmSigner(),
+            pullResult = FirestoreMailboxReceiver.PullResult(deletionRequested = true),
+        )
+
+        val report = coordinator.syncOnce()
+
+        assertEquals("deletion wake path appends nothing by design", 0, report.pulledCount)
+        assertTrue("the shred is progress the UI must repaint on", report.unpairAdvanced)
+    }
+
+    /** A post-shred device has no enrollment — the pass early-returns — yet its unpair still
+     *  needs network work (redelivery, ack, timeout), so resumeUnpairs runs there and its
+     *  change report must survive the early return. */
+    @Test
+    fun postShredDevice_resumeUnpairsRunsBeforeEarlyReturn_andItsChangeCarries() = runTest {
+        var resumed = 0
+        coordinator = coordinator(warmSigner(), resumeUnpairs = { resumed++; true })
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(false, report.enrolled)
+        assertEquals(1, resumed)
+        assertTrue(report.unpairAdvanced)
+    }
+
     /** §8 Step 18: the relay-rejection read-back runs before the drain — this pass's own
      *  writes are not yet SENT, so they can never be checked against a relay that has not
      *  run — and its finding rides the report. */
@@ -618,6 +650,8 @@ class PartnerSyncCoordinatorTest {
     private fun coordinator(
         signer: AccountabilitySigner,
         drain: MailboxOutboxDrainer.DrainResult = MailboxOutboxDrainer.DrainResult.Sent(2),
+        pullResult: FirestoreMailboxReceiver.PullResult = FirestoreMailboxReceiver.PullResult(appended = 3),
+        resumeUnpairs: suspend () -> Boolean = { false },
     ) = PartnerSyncCoordinator(
         enrollmentDao = db.enrollmentDao(),
         storeFactory = factory,
@@ -646,10 +680,11 @@ class PartnerSyncCoordinatorTest {
         pullMailbox = { pId, myUid, messageId ->
             pullCalls += pId
             pullWakeIds += messageId
-            FirestoreMailboxReceiver.PullResult(appended = 3)
+            pullResult
         },
         repairPass = { repairCalls++; 2 },
         pruneReachability = { reachabilityPrunes += it },
+        resumeUnpairs = resumeUnpairs,
     )
 
     private fun enroll(

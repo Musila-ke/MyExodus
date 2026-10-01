@@ -24,22 +24,46 @@ class AccountingOutageSource @Inject constructor(
 ) {
     /** The current outage report, or null when nothing measurable happened inside the
      *  freshness window — the same window the offer's own eligibility uses, so the report and
-     *  the offer never disagree about what "recent" means. */
+     *  the offer never disagree about what "recent" means. #13: the same read also yields the
+     *  one-time "tracking can run again" confirmation ([AccountingOutage.trackingResumed]). */
     suspend fun current(nowWallClockMs: Long = System.currentTimeMillis()): AccountingOutage? {
         val since = nowWallClockMs - AccountingDiagnosticsState.ELIGIBILITY_FRESHNESS_MS
-        val spans = ledger.outageSpansSince(since)
-        if (spans.isEmpty()) return null
-        return AccountingOutage(
-            summary = AccountingDiagnostics.outageSummary(spans),
-            promptRoute = BatteryPromptGate.route(
-                alreadyExempt = isBatteryExempt(context),
-                promptEligible = state.promptEligible(nowWallClockMs),
-            ),
+        val rows = ledger.measuredOutagesSince(since)
+        val exempt = isBatteryExempt(context)
+        val stage = OutageStage.stage(
+            newestMeasuredOutageAtMs = rows.maxOfOrNull { it.wallClockTsMs } ?: 0L,
+            batteryExempt = exempt,
+            lastFixFiredAtMs = state.lastPromptMs,
+            dismissedAtMs = state.dismissedAtMs,
+            nowWallClockMs = nowWallClockMs,
         )
+        val summary = AccountingDiagnostics.outageSummary(
+            rows.map { it.elapsedEndMs - it.elapsedStartMs },
+        )
+        return when (stage) {
+            OutageStage.Stage.NONE -> null
+            OutageStage.Stage.CONFIRMED -> AccountingOutage(
+                summary = summary,
+                promptRoute = null,
+                trackingResumed = true,
+            )
+            OutageStage.Stage.REPORT -> AccountingOutage(
+                summary = summary,
+                promptRoute = BatteryPromptGate.route(
+                    alreadyExempt = exempt,
+                    promptEligible = state.promptEligible(nowWallClockMs),
+                ),
+            )
+        }
     }
 
     /** §8.7's prompt cooldown bookkeeping: the offer was accepted (the user fired the fix), so
      *  the eligibility it came from is consumed and no repeat offer is made for the cooldown. */
     fun markOfferShown(nowWallClockMs: Long = System.currentTimeMillis()) =
         state.markPromptShown(nowWallClockMs)
+
+    /** #13: the user acknowledged the report (or its confirmation) — every outage surface goes
+     *  quiet until a newer interruption is measured (see [OutageStage]). */
+    fun dismiss(nowWallClockMs: Long = System.currentTimeMillis()) =
+        state.markDismissed(nowWallClockMs)
 }

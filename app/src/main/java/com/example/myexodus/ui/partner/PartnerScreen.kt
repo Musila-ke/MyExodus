@@ -1,6 +1,7 @@
 package com.example.myexodus.ui.partner
 
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -66,6 +68,8 @@ import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.UnpairPhase
 import com.example.myexodus.accountability.state.UnpairState
+import com.example.myexodus.accountability.sync.MessageSendOutcome
+import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.ui.AppMark
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.NavTile
@@ -219,11 +223,15 @@ fun PartnerScreen(
      *  locally; the label never leaves this phone. */
     onRenameUser: suspend (pairId: String, label: String?) -> Unit = { _, _ -> },
     /** Req 15: journals a motivational message for this profile, addressed to [pairId] — the
-     *  partner the composer names (#96). False = nothing was written (blank/oversized body, or
-     *  the store refused) — the dialog stays open and says so. */
-    onSendMessage: suspend (pairId: String, text: String) -> Boolean = { _, _ -> false },
+     *  partner the composer names (#96) — and kicks a sync pass so it leaves the phone now.
+     *  The outcome is honest about what actually happened (owner UX ruling 2026-10-01):
+     *  [MessageSendOutcome.SENT] = written to the partner's mailbox; [MessageSendOutcome.QUEUED]
+     *  = saved, leaves on the retry cadence; [MessageSendOutcome.FAILED] = nothing written. */
+    onSendMessage: suspend (pairId: String, text: String) -> MessageSendOutcome =
+        { _, _ -> MessageSendOutcome.FAILED },
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var state by remember { mutableStateOf<PartnerDashboardUi?>(null) }
     var view by rememberSaveable { mutableStateOf<String?>(null) }
     // System back leaves a subpage the way its BackRow does. The ceremony registers its own
@@ -242,7 +250,7 @@ fun PartnerScreen(
     var switching by remember { mutableStateOf(false) }
     var composing by remember { mutableStateOf(false) }
     var messageSending by remember { mutableStateOf(false) }
-    var messageFailed by remember { mutableStateOf(false) }
+    var messageOutcome by remember { mutableStateOf<MessageSendOutcome?>(null) }
 
     suspend fun reload() {
         state = runCatching { source.load(selectedPairId = selectedPairId, nowMillis = System.currentTimeMillis()) }
@@ -306,6 +314,14 @@ fun PartnerScreen(
     }
 
     LaunchedEffect(Unit) { reload() }
+
+    // Owner UX ruling 2026-10-01: a background pass (FCM wake, periodic, check-now elsewhere)
+    // that pulled partner events repaints this page in place. The dashboard is a one-shot
+    // read, so without this tick an arrival waits for a resume — the exact "nothing moves
+    // until I press something" annoyance the ruling retires.
+    LaunchedEffect(Unit) {
+        PartnerSyncSignals.pulledEvents.collect { reload() }
+    }
 
     // The partner's events arrive via background syncs; re-read on every resume so the tab
     // is never a stale frame (the local read is cheap — §11's cache-first constraint).
@@ -466,6 +482,9 @@ fun PartnerScreen(
                     )
                     VIEW_ACTIVITY -> {
                         ComposeMessageCard(onCompose = { composing = true })
+                        // Owner ask 2026-10-01: the writer sees their own last message here —
+                        // the mirror of the hub's "Their message to you".
+                        current.sentMessageText?.let { SentMessageCard(it) }
                         ActivityCard(current.alerts)
                     }
                     else -> PairingView(
@@ -649,32 +668,54 @@ fun PartnerScreen(
     // Req 15 composer. Hoisted for the same reason as the other dialogs: the send is a suspend
     // write, and the dashboard reload that follows it must not close the sheet mid-flight.
     if (composing) {
+        // #96: the message names its recipient, and goes to the pair it names — the selected
+        // partner at the moment Send is tapped. Hoisted so the SENT toast names the same one.
+        val toName = paired?.let { it.partnerLabel ?: shortKeyId(it.partnerKeyId) }.orEmpty()
         ComposeMessageDialog(
             sending = messageSending,
-            failed = messageFailed,
-            // #96: the message names its recipient, and goes to the pair it names — the
-            // selected partner at the moment Send is tapped.
-            toName = paired?.let { it.partnerLabel ?: shortKeyId(it.partnerKeyId) }.orEmpty(),
+            outcome = messageOutcome,
+            toName = toName,
             onSend = { text ->
                 val target = paired?.pairId
                 if (target == null) {
-                    messageFailed = true
+                    messageOutcome = MessageSendOutcome.FAILED
                 } else {
                     scope.launch(Dispatchers.IO) {
                         messageSending = true
-                        messageFailed = false
-                        val ok = runCatching { onSendMessage(target, text) }
+                        messageOutcome = null
+                        val outcome = runCatching { onSendMessage(target, text) }
                             .onFailure { Log.w(TAG, "message send threw", it) }
-                            .getOrDefault(false)
+                            .getOrDefault(MessageSendOutcome.FAILED)
                         messageSending = false
-                        messageFailed = !ok
-                        if (ok) composing = false
+                        messageOutcome = outcome
+                        // SENT closes the sheet — the mailbox write is the confirmation —
+                        // plus the transient toast (owner ask 2026-10-01): with the sheet
+                        // gone, the toast is the one visible receipt that the message left.
+                        // QUEUED keeps the sheet open with the honest "saved" note (the retry
+                        // cadence owns it; a red failure would be a lie), so it must not
+                        // close here. A reload follows either way: a SENT kick advanced
+                        // this pair's freshness state.
+                        if (outcome == MessageSendOutcome.SENT) {
+                            composing = false
+                            // Device finding 2026-10-01: this coroutine runs on
+                            // Dispatchers.IO, and API 30+ constructs the toast on the
+                            // calling thread's Looper — which IO threads don't have, so a
+                            // bare Toast.makeText here crashes the app. The composition's
+                            // main scope shows it instead. The send itself already
+                            // succeeded at this point; the crash was the receipt, not
+                            // the delivery.
+                            val toastText = context.getString(R.string.partner_toast_sent, toName)
+                            scope.launch {
+                                Toast.makeText(context, toastText, Toast.LENGTH_SHORT).show()
+                            }
+                            reload()
+                        }
                     }
                 }
             },
             onDismiss = {
                 composing = false
-                messageFailed = false
+                messageOutcome = null
             },
         )
     }
@@ -683,8 +724,15 @@ fun PartnerScreen(
     // swaps the user list out from under the open dialog.
     renaming?.let { user ->
         var name by remember(user.pairId) { mutableStateOf(user.label.orEmpty()) }
+        // #15: the save is a real write, so it gets the same triad the other actions have —
+        // "Saving…" while in flight, the dialog stays open (and keeps the typed text) with an
+        // inline failure if the write throws, and the row's updated label is the success
+        // confirmation. The old fire-and-forget closed the dialog before the write happened,
+        // so a failed rename was indistinguishable from a successful one.
+        var saving by remember(user.pairId) { mutableStateOf(false) }
+        var failed by remember(user.pairId) { mutableStateOf(false) }
         AlertDialog(
-            onDismissRequest = { renaming = null },
+            onDismissRequest = { if (!saving) renaming = null },
             title = { Text(stringResource(R.string.partner_users_rename_title)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -693,6 +741,7 @@ fun PartnerScreen(
                         onValueChange = { name = it },
                         label = { Text(stringResource(R.string.partner_users_rename_label)) },
                         singleLine = true,
+                        enabled = !saving,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Text(
@@ -700,24 +749,42 @@ fun PartnerScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (failed) {
+                        Text(
+                            stringResource(R.string.partner_users_rename_failed),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        renaming = null
                         scope.launch(Dispatchers.IO) {
-                            runCatching { onRenameUser(user.pairId, name) }
+                            saving = true
+                            failed = false
+                            val ok = runCatching { onRenameUser(user.pairId, name) }
                                 .onFailure { Log.w(TAG, "rename failed", it) }
+                                .isSuccess
+                            saving = false
+                            failed = !ok
+                            if (ok) renaming = null
                             reload()
                         }
                     },
+                    enabled = !saving,
                 ) {
-                    Text(stringResource(R.string.partner_users_rename_save))
+                    Text(
+                        stringResource(
+                            if (saving) R.string.partner_users_rename_saving
+                            else R.string.partner_users_rename_save,
+                        ),
+                    )
                 }
             },
             dismissButton = {
-                TextButton(onClick = { renaming = null }) {
+                TextButton(onClick = { renaming = null }, enabled = !saving) {
                     Text(stringResource(R.string.partner_users_rename_cancel))
                 }
             },
@@ -806,19 +873,22 @@ private fun PartnerSummaryCard(activity: PartnerActivityUi?, chainStatus: Partne
 
 /**
  * Req 15 composer: three suggestions plus free text, one 280-char bound (the same the wire and
- * the receiving projection enforce). The message is journaled locally and rides the normal
- * sync rails — this dialog never talks to the network, so "sending" means "written, will be
- * delivered by the next sync", which is what the copy says.
+ * the receiving projection enforce). The message is journaled locally, then the send call
+ * kicks a sync pass — what the dialog reports back is the real outcome ([MessageSendOutcome]):
+ * SENT closes, QUEUED keeps the sheet open with the honest "saved" note, FAILED shows inline.
  */
 @Composable
 private fun ComposeMessageDialog(
     sending: Boolean,
-    failed: Boolean,
+    outcome: MessageSendOutcome?,
     /** #96: who this message is addressed to — the selected partner, named verbatim. */
     toName: String,
     onSend: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    // Non-null only after the write attempt: FAILED renders inline red, QUEUED renders the
+    // neutral "saved" note and disables Send (re-tapping would queue a duplicate).
+    val queued = outcome == MessageSendOutcome.QUEUED
     var text by remember { mutableStateOf("") }
     var tooLong by remember { mutableStateOf(false) }
     val suggestions = listOf(
@@ -877,11 +947,18 @@ private fun ComposeMessageDialog(
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-                if (failed) {
+                if (outcome == MessageSendOutcome.FAILED) {
                     Text(
                         stringResource(R.string.partner_compose_failed),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (queued) {
+                    Text(
+                        stringResource(R.string.partner_compose_queued),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -889,21 +966,45 @@ private fun ComposeMessageDialog(
         confirmButton = {
             TextButton(
                 onClick = { onSend(text) },
-                enabled = !sending && text.isNotBlank() && !tooLong,
+                enabled = !sending && !queued && text.isNotBlank() && !tooLong,
             ) {
                 Text(
                     stringResource(
-                        if (sending) R.string.partner_compose_sending else R.string.partner_compose_send,
+                        when {
+                            sending -> R.string.partner_compose_sending
+                            queued -> R.string.partner_compose_saved
+                            else -> R.string.partner_compose_send
+                        },
                     ),
                 )
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss, enabled = !sending) {
-                Text(stringResource(R.string.partner_compose_cancel))
+                Text(
+                    stringResource(
+                        if (queued) R.string.partner_compose_close else R.string.partner_compose_cancel,
+                    ),
+                )
             }
         },
     )
+}
+
+/**
+ * Owner ask 2026-10-01: the writer's own receipt — the latest message sent to this partner,
+ * read back from the journal (label + text, the hub's "Their message to you" grammar).
+ */
+@Composable
+private fun SentMessageCard(text: String) {
+    PartnerSurface(spacing = 4.dp) {
+        Text(
+            stringResource(R.string.partner_activity_sent_label),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(text, style = MaterialTheme.typography.bodyMedium)
+    }
 }
 
 /**
@@ -1109,7 +1210,10 @@ private fun EndedCard(
                 },
             )
             if (state.phase == UnpairPhase.AWAITING_CONFIRMATION) {
-                Button(onClick = onCheckNow, enabled = !checking) {
+                // #14: the confirmation arrives on its own (push + the automatic pass); this is
+                // the recovery nudge for a poll that looks stuck, not a primary path — so it
+                // stays quiet.
+                TextButton(onClick = onCheckNow, enabled = !checking) {
                     Text(
                         stringResource(
                             if (checking) R.string.partner_check_now_running
@@ -1250,10 +1354,13 @@ private fun PartnerIdentityCard(state: PartnerDashboardUi.Paired) {
 }
 
 /**
- * Sync detail. The same card serves two jobs, so it takes its emphasis from the caller: on the
- * Pairing page it is the mechanism the user came for, with a filled action; on the hub it is
- * there only because something needs attention, and there a filled button would make a routine
+ * Sync detail. The same card serves two jobs, so it takes its emphasis from the caller: the hub
+ * shows it only when something needs attention, and there a filled button would make a routine
  * resync the loudest control on a page whose real subject is the partner.
+ *
+ * #14: "Check now" is a recovery affordance, not a primary path — the pass runs automatically
+ * on every app open (plus the periodic worker and push), so [showCheck] hides the button while
+ * the state is healthy; callers pass true whenever something needs attention.
  *
  * [showIdentity] (#97 cognitive-load pass): the Pairing page used to stack a separate
  * identity card above this one — two cards, one subject ("who is this and is it healthy?").
@@ -1268,6 +1375,7 @@ private fun SyncCard(
     tone: CardTone = CardTone.CALM,
     prominentAction: Boolean = true,
     showIdentity: Boolean = false,
+    showCheck: Boolean = true,
 ) {
     PartnerSurface(tone = tone) {
         if (showIdentity) {
@@ -1339,21 +1447,23 @@ private fun SyncCard(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (prominentAction) {
-            Button(onClick = onCheckNow, enabled = !checking) {
-                Text(
-                    stringResource(
-                        if (checking) R.string.partner_check_now_running else R.string.partner_check_now,
-                    ),
-                )
-            }
-        } else {
-            TextButton(onClick = onCheckNow, enabled = !checking) {
-                Text(
-                    stringResource(
-                        if (checking) R.string.partner_check_now_running else R.string.partner_check_now,
-                    ),
-                )
+        if (showCheck) {
+            if (prominentAction) {
+                Button(onClick = onCheckNow, enabled = !checking) {
+                    Text(
+                        stringResource(
+                            if (checking) R.string.partner_check_now_running else R.string.partner_check_now,
+                        ),
+                    )
+                }
+            } else {
+                TextButton(onClick = onCheckNow, enabled = !checking) {
+                    Text(
+                        stringResource(
+                            if (checking) R.string.partner_check_now_running else R.string.partner_check_now,
+                        ),
+                    )
+                }
             }
         }
         if (checkFailed) {
@@ -1574,6 +1684,9 @@ private fun PairingView(
         checkFailed = checkFailed,
         onCheckNow = onCheckNow,
         showIdentity = true,
+        // #14: the manual check appears only when the state needs it — routine freshness is
+        // the automatic pass's job (foreground, worker, push).
+        showCheck = checkFailed || syncNeedsAttention(state),
     )
     if (onAddUser != null) AddUserCard(onAddUser)
     UnpairCard(working = unpairing, failed = unpairFailed, onStart = onStartUnpair)

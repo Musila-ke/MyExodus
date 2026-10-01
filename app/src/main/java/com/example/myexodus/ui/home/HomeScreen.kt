@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.outlined.Block
@@ -27,15 +29,20 @@ import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,6 +83,7 @@ import com.example.myexodus.ui.streaks.splashMilestones
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
@@ -109,6 +117,9 @@ fun HomeScreen(
     streakLoadFailed: Boolean = false,
     modifier: Modifier = Modifier,
     encryptionPending: Boolean = false,
+    /** #12: pairId -> shown partner name for the pinned card's sender line. A failed read
+     *  degrades to no names — the card falls back to its generic title, never a wrong name. */
+    loadPartnerNames: suspend () -> Map<String, String> = { emptyMap() },
 ) {
     val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
     val serviceEnabled by monitor.enabled.collectAsStateWithLifecycle()
@@ -126,19 +137,33 @@ fun HomeScreen(
     val countsByTarget = remember(attemptCounts) {
         attemptCounts?.associate { it.target to it.count }.orEmpty()
     }
-    // Req 15: the newest pinned message across pairs, as a Flow — a message delivered by a
-    // background sync pass must reach a card that is already on screen.
-    val pinned by store.partnerActivityDao().observeLatestPinned()
+    // Req 15 / #12: every partner's newest pinned message, newest first, as a Flow — a message
+    // delivered by a background sync pass must reach a card that is already on screen, and the
+    // card pages across senders. Names resolve on each pinned-list change (the app's existing
+    // per-screen-entry freshness bar for partner labels).
+    val pinnedRows by store.partnerActivityDao().observePinnedMessages()
         .collectAsStateWithLifecycle(initialValue = null)
+    var partnerNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    LaunchedEffect(pinnedRows) {
+        partnerNames = withContext(Dispatchers.IO) {
+            runCatching { loadPartnerNames() }.getOrElse { emptyMap() }
+        }
+    }
+    var pinnedIndex by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(pinnedRows?.size) {
+        if (pinnedIndex > (pinnedRows?.size ?: 1) - 1) pinnedIndex = 0
+    }
 
     // §8.7/D1's Home surface: the measured-interruption report, read off Main (the read can
     // open the SQLCipher store — the same rule the shell's own reads follow). One-shot on
     // entry: an interruption is always followed by a foreground entry, so nothing needs to
-    // poll for it.
+    // poll for it. #13: Dismiss persists the acknowledgement (so no surface re-raises this
+    // evidence) and clears the card in place.
     var outage by remember { mutableStateOf<AccountingOutage?>(null) }
     LaunchedEffect(Unit) {
         outage = withContext(Dispatchers.IO) { outageSource.current() }
     }
+    val scope = rememberCoroutineScope()
 
     // Live block state flips at schedule boundaries; a slow tick keeps the labels honest
     // while the screen stays open. Nothing else on this screen is time-derived.
@@ -185,19 +210,38 @@ fun HomeScreen(
         // D1: the outage report sits beside the degradation banner — both are statements about
         // protection, and the outage is the one the user can act on from here.
         outage?.let { current ->
-            item(key = "outage") { OutageBanner(current, onFixOutage) }
+            item(key = "outage") {
+                OutageBanner(
+                    outage = current,
+                    onFix = onFixOutage,
+                    onDismiss = {
+                        scope.launch {
+                            withContext(Dispatchers.IO) { outageSource.dismiss() }
+                            outage = null
+                        }
+                    },
+                )
+            }
         }
         if (encryptionPending) {
             item(key = "encryption-pending") { EncryptionPendingNotice() }
         }
-        // Req 15 arrival surface: the partner's newest pinned message. Absent entirely when
-        // nothing has arrived — an empty card would be noise, not encouragement.
-        pinned?.pinnedMessageText?.let { message ->
+        // Req 15 arrival surface (#12): the newest pinned message, named for its sender and
+        // paged across partners when several have sent one. Absent entirely when nothing has
+        // arrived — an empty card would be noise, not encouragement.
+        val pinned = pinnedRows.orEmpty()
+        if (pinned.isNotEmpty()) {
+            val pinnedShown = pinnedIndex.coerceIn(0, pinned.lastIndex)
+            val current = pinned[pinnedShown]
             item(key = "pinned") {
                 PinnedMessageCard(
-                    text = message,
-                    sentAtMillis = pinned?.pinnedMessageAtMs,
+                    text = current.pinnedMessageText.orEmpty(),
+                    senderName = partnerNames[current.pairId],
+                    sentAtMillis = current.pinnedMessageAtMs,
+                    position = if (pinned.size > 1) pinnedShown + 1 to pinned.size else null,
                     nowMillis = nowMillis,
+                    onPrev = { pinnedIndex = pinnedShown - 1 },
+                    onNext = { pinnedIndex = pinnedShown + 1 },
                 )
             }
         }
@@ -687,11 +731,22 @@ private fun StatePill(label: String, active: Boolean) {
  *  encryption conversion retries on a later launch (plan §8 Step 0 — never blocks app use). */
 /**
  * Req 15: the partner's pinned message, rendered verbatim (partner-authored text is content,
- * never a template). The age line is the message's own send time — same honesty rule the
- * dashboard follows, a stale message must not read as if it just arrived.
+ * never a template). #12: the header names the sender when the roster resolves one — the
+ * generic title covers the moments before names load and a label-less pairing — and with
+ * several senders the arrows page newest-to-oldest. The age line is the message's own send
+ * time — same honesty rule the dashboard follows, a stale message must not read as if it
+ * just arrived.
  */
 @Composable
-private fun PinnedMessageCard(text: String, sentAtMillis: Long?, nowMillis: Long) {
+private fun PinnedMessageCard(
+    text: String,
+    senderName: String?,
+    sentAtMillis: Long?,
+    position: Pair<Int, Int>?,
+    nowMillis: Long,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+) {
     Surface(
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -702,10 +757,36 @@ private fun PinnedMessageCard(text: String, sentAtMillis: Long?, nowMillis: Long
             Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text(
-                stringResource(R.string.home_pinned_title),
-                style = MaterialTheme.typography.titleSmall,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (senderName != null) {
+                        stringResource(R.string.home_pinned_from, senderName)
+                    } else {
+                        stringResource(R.string.home_pinned_title)
+                    },
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                if (position != null) {
+                    val (index, count) = position
+                    IconButton(onClick = onPrev, enabled = index > 1) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                            contentDescription = stringResource(R.string.home_pinned_prev),
+                        )
+                    }
+                    Text(
+                        stringResource(R.string.home_pinned_position, index, count),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                    IconButton(onClick = onNext, enabled = index < count) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = stringResource(R.string.home_pinned_next),
+                        )
+                    }
+                }
+            }
             Text(text, style = MaterialTheme.typography.bodyLarge)
             sentAtMillis?.let { sent ->
                 Text(
@@ -745,10 +826,13 @@ private fun EncryptionPendingNotice() {
  * D1's Home surface (§8.7): what was measured — how long tracking went unobserved — and never
  * a cause (AD-13). The Fix action exists only while the exemption offer is live
  * ([AccountingOutage.promptRoute] non-null); a report with no offer is still worth showing,
- * because the user's limits really are missing that time.
+ * because the user's limits really are missing that time. #13: every variant is dismissible —
+ * the acknowledgement persists ([AccountingOutageSource.dismiss]) so the report never returns
+ * for the same evidence — and [AccountingOutage.trackingResumed] renders the one-time
+ * confirmation that the fired fix is in effect instead of the alert.
  */
 @Composable
-private fun OutageBanner(outage: AccountingOutage, onFix: () -> Unit) {
+private fun OutageBanner(outage: AccountingOutage, onFix: () -> Unit, onDismiss: () -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.tertiaryContainer,
         contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
@@ -759,21 +843,42 @@ private fun OutageBanner(outage: AccountingOutage, onFix: () -> Unit) {
             Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
-                stringResource(R.string.home_outage_title),
-                style = MaterialTheme.typography.titleSmall,
-            )
-            Text(
-                pluralStringResource(
-                    R.plurals.home_outage_body,
-                    outage.summary.count,
-                    outage.summary.count,
-                    formatDuration(outage.summary.largestWindowMs),
-                ),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            if (outage.promptRoute != null) {
-                Button(onClick = onFix) { Text(stringResource(R.string.outage_action_fix)) }
+            if (outage.trackingResumed) {
+                // AD-13: the setting, not a cause — the app never claims what interrupted
+                // tracking, only that the user's fix is in effect and can run again.
+                Text(
+                    stringResource(R.string.home_outage_resolved_title),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    stringResource(R.string.home_outage_resolved_body),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Button(onClick = onDismiss) {
+                    Text(stringResource(R.string.outage_action_dismiss))
+                }
+            } else {
+                Text(
+                    stringResource(R.string.home_outage_title),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    pluralStringResource(
+                        R.plurals.home_outage_body,
+                        outage.summary.count,
+                        outage.summary.count,
+                        formatDuration(outage.summary.largestWindowMs),
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (outage.promptRoute != null) {
+                        Button(onClick = onFix) { Text(stringResource(R.string.outage_action_fix)) }
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Text(stringResource(R.string.outage_action_dismiss))
+                    }
+                }
             }
         }
     }

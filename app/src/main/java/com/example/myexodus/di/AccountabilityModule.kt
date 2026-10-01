@@ -1,6 +1,7 @@
 package com.example.myexodus.di
 
 import android.content.Context
+import android.util.Log
 import androidx.room3.Room
 import com.example.myexodus.accountability.BilateralDeletion
 import com.example.myexodus.accountability.EventCreator
@@ -78,6 +79,8 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object AccountabilityModule {
+
+    private const val TAG = "MyExodusAccountabilityModule"
 
     @Provides @Singleton
     fun provideAccountabilityDatabase(@ApplicationContext context: Context): AccountabilityDatabase =
@@ -162,27 +165,26 @@ object AccountabilityModule {
     }
 
     /**
-     * Plan §8 Step 7 (client) / AD-18a: this device's push installation. `ensureUid` mirrors
-     * [PairUidResolver]'s anonymous sign-in; the token fetch is FCM's cached getToken (a
-     * Task); the write is a full replace (no merge — a server-set `stale` must clear, see
-     * [FirestoreSchema.pushInstallationData]). ANDROID_ID is read once at provider
-     * construction; a device reporting none registers nothing (AD-05 sync fallback applies).
+     * Plan §8 Step 7 (client) / AD-18a: this device's push installation. `ensureUid` is
+     * [PairUidResolver.ensureUid] itself — the one single-flighted anonymous sign-in (a second
+     * concurrent sign-in path here is what minted duplicate anonymous accounts and starved
+     * identity-pinned writes of their token, device-caught 2026-10-01); the token fetch is
+     * FCM's cached getToken (a Task); the write is a full replace (no merge — a server-set
+     * `stale` must clear, see [FirestoreSchema.pushInstallationData]). ANDROID_ID is read once
+     * at provider construction; a device reporting none registers nothing (AD-05 sync fallback
+     * applies).
      */
     @Provides @Singleton
     fun providePushInstallationRegistrar(
         @ApplicationContext context: Context,
         firestore: FirebaseFirestore,
         messaging: FirebaseMessaging,
+        resolver: PairUidResolver,
     ): PushInstallationRegistrar = PushInstallationRegistrar(
         installationId = PushInstallationRegistrar.androidIdOf(context),
         platform = "android",
         appVersion = BuildConfig.VERSION_NAME,
-        ensureUid = {
-            AppCheckInstaller.install(context)
-            val auth = FirebaseAuth.getInstance()
-            auth.currentUser?.uid
-                ?: runCatching { auth.signInAnonymously().await() }.getOrNull()?.user?.uid
-        },
+        ensureUid = { resolver.ensureUid() },
         fetchToken = { messaging.token.await() },
         write = { uid, installationId, data ->
             FirestoreSchema.pushInstallationDocument(firestore, uid, installationId).set(data).await()
@@ -507,6 +509,13 @@ object AccountabilityModule {
                     )
                 }
             },
+            // Owner ask 2026-10-01: the sender's own latest message, read back from the
+            // journal (ADR #115's table) — the Activity subpage shows the writer what they
+            // last sent this partner.
+            latestSentMessage = { pairId ->
+                storeFactory.open()?.partnerActivityDao()
+                    ?.latestSentMessageText(pairId, EventPayload.TYPE_MOTIVATIONAL_MESSAGE)
+            },
             decoderFor = { enrollment ->
                 val cek = cekDerivation.deriveCek(
                     enrollment.pairId,
@@ -616,13 +625,16 @@ object AccountabilityModule {
             },
             // Step 13: approval messages own their notifications (ApprovalFlow posts them with
             // the right channel); the generic partner-event post skips those types. The other
-            // party's label is read per post so the tray names which partner it concerns.
-            notify = { pairId, payloadType ->
+            // party's label is read per post so the tray names which partner it concerns, and
+            // a motivational message's body rides along so the tray shows the message itself.
+            notify = { pairId, payloadType, messageBody ->
                 if (payloadType != EventPayload.TYPE_APPROVAL_REQUEST &&
                     payloadType != EventPayload.TYPE_APPROVAL_RESPONSE
                 ) {
                     enrollmentDao.getByPairId(pairId)?.let { enrollment ->
-                        PartnerNotifications.notifyPartnerEvent(context, pairId, displayNameOf(enrollment))
+                        PartnerNotifications.notifyPartnerEvent(
+                            context, pairId, displayNameOf(enrollment), messageBody,
+                        )
                     }
                 }
             },
@@ -630,8 +642,21 @@ object AccountabilityModule {
                 repair.respondToRequest(pairId, sequence, hash)
             },
             // §8 Step 13: verify -> shred -> ack, inside BilateralDeletion (the ack is only
-            // written once the erase completed — AD-13b's no-over-claim rule).
-            onDeletionRequest = deletion::handleIncoming,
+            // written once the erase completed — AD-13b's no-over-claim rule). #16: the
+            // responder must learn the partnership ended — the label is read BEFORE the call,
+            // because the shred destroys the enrollment row the name lives on. The post is
+            // wrapped so a notification failure can never flip the shred result (that would
+            // leave the request unacked and re-deliverable).
+            onDeletionRequest = { pairId, messageId, atEpochMillis ->
+                val name = runCatching { enrollmentDao.getByPairId(pairId)?.let(::displayNameOf) }.getOrNull()
+                val shredded = deletion.handleIncoming(pairId, messageId)
+                if (shredded && name != null) {
+                    runCatching {
+                        PartnerNotifications.notifyPartnershipEnded(context, pairId, name, atEpochMillis)
+                    }.onFailure { Log.w(TAG, "partnership-ended notification failed pairId=$pairId", it) }
+                }
+                shredded
+            },
             flagTamperIfRepairing = store::flagTamperIfRepairing,
             onAppended = { pairId, senderKeyId, sequence, payload, serverTs ->
                 when (payload.type) {

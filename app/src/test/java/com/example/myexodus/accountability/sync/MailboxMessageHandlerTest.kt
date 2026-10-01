@@ -50,8 +50,9 @@ class MailboxMessageHandlerTest {
         val appended = mutableListOf<Triple<String, String, Long>>()
         val acks = mutableListOf<Pair<String, String>>()
         val notified = mutableListOf<Pair<String, String>>()
+        val notifyBodies = mutableListOf<String?>()
         val repairResponses = mutableListOf<Triple<String, Long, ByteArray>>()
-        val deletionRequests = mutableListOf<Pair<String, String>>()
+        val deletionRequests = mutableListOf<Triple<String, String, Long?>>()
         var tamperChecks = 0
 
         val handler = MailboxMessageHandler(
@@ -65,13 +66,14 @@ class MailboxMessageHandlerTest {
                 ackError?.let { throw it }
                 acks += recipientUid to messageId
             },
-            onDeletionRequest = { pairId, messageId ->
-                deletionRequests += pairId to messageId
+            onDeletionRequest = { pairId, messageId, atEpochMillis ->
+                deletionRequests += Triple(pairId, messageId, atEpochMillis)
                 deletionShredded
             },
-            notify = { pairId, payloadType ->
+            notify = { pairId, payloadType, messageBody ->
                 notifyError?.let { throw it }
                 notified += pairId to payloadType
+                notifyBodies += messageBody
             },
             respondToRequest = { pairId, sequence, hash -> repairResponses += Triple(pairId, sequence, hash) },
             flagTamperIfRepairing = { tamperChecks++; tamperRepairing },
@@ -187,6 +189,38 @@ class MailboxMessageHandlerTest {
         assertEquals(listOf(Triple("pair-1", "m1", 42L)), fake.appended)
         assertEquals(listOf("uid-me" to "m1"), fake.acks)
         assertEquals(listOf("pair-1" to EventPayload.TYPE_ACTIVITY), fake.notified)
+        assertEquals("non-message kinds carry no body", listOf<String?>(null), fake.notifyBodies)
+    }
+
+    /** #11: only a motivational message's text is tray copy; it rides the notify hook. */
+    @Test
+    fun motivationalMessage_carriesItsBodyIntoNotify() {
+        val fake = Fake().apply {
+            outcome = MailboxEventProcessor.EnvelopeResult.Valid(
+                Fake.envelope(),
+                EventPayload(type = EventPayload.TYPE_MOTIVATIONAL_MESSAGE, text = "Thinking of you"),
+            )
+        }
+
+        on(fake, doc())
+
+        assertEquals(listOf("pair-1" to EventPayload.TYPE_MOTIVATIONAL_MESSAGE), fake.notified)
+        assertEquals(listOf<String?>("Thinking of you"), fake.notifyBodies)
+    }
+
+    /** A blank body (never our composer's output) must not render as an empty quotation. */
+    @Test
+    fun blankMotivationalBody_staysNullInNotify() {
+        val fake = Fake().apply {
+            outcome = MailboxEventProcessor.EnvelopeResult.Valid(
+                Fake.envelope(),
+                EventPayload(type = EventPayload.TYPE_MOTIVATIONAL_MESSAGE, text = "   "),
+            )
+        }
+
+        on(fake, doc())
+
+        assertEquals(listOf<String?>(null), fake.notifyBodies)
     }
 
     @Test
@@ -239,10 +273,11 @@ class MailboxMessageHandlerTest {
 
         // §8 Step 13 / §10: the verified intent is shredded directly — the one exception to
         // append-then-ack. The handler writes no ack of its own (the shred path owes it),
-        // does not chain the event, and never notifies.
+        // does not chain the event, and never notifies. #16: the document's server timestamp
+        // rides the hook so the composition can state when the partnership was ended.
         assertEquals(EventPayload.TYPE_DELETION_REQUEST, result.payloadType)
         assertEquals(MailboxMessageHandler.Kind.DELETION_REQUESTED, result.kind)
-        assertEquals(listOf("pair-1" to "m1"), fake.deletionRequests)
+        assertEquals(listOf(Triple("pair-1", "m1", 1_700_000_000_000L)), fake.deletionRequests)
         assertEquals(emptyList<Triple<String, String, Long>>(), fake.appended)
         assertEquals(emptyList<Pair<String, String>>(), fake.acks)
         assertEquals(emptyList<Pair<String, String>>(), fake.notified)

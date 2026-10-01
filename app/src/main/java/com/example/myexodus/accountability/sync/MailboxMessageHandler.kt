@@ -47,13 +47,18 @@ class MailboxMessageHandler(
     private val ack: suspend (recipientUid: String, messageId: String) -> Unit,
     /** §10/AD-13b receive half: shred this device's pair data for a verified deletion request.
      *  True = the local erase completed (the handler then owes nothing more; the ack rode the
-     *  same call); false = it failed and the message must stay unacked and re-deliverable. */
-    private val onDeletionRequest: suspend (pairId: String, messageId: String) -> Boolean = { _, _ -> false },
+     *  same call); false = it failed and the message must stay unacked and re-deliverable.
+     *  [atEpochMillis] is the mailbox document's server timestamp — the moment the requester
+     *  ended it, which the responder's announcement (#16) reports; null only for a
+     *  hand-written document. */
+    private val onDeletionRequest: suspend (pairId: String, messageId: String, atEpochMillis: Long?) -> Boolean = { _, _, _ -> false },
     /** Fired for an appended event other than a repair request; carries the pair so the post
-     *  can resolve the partner and key its notification id (§19.5 multi-partner). Approval
-     *  types reach this hook too — the composition layer filters them, because the approval
-     *  flows post their own dedicated, named notifications (§8 Step 12). */
-    private val notify: suspend (pairId: String, payloadType: String) -> Unit = { _, _ -> },
+     *  can resolve the partner and key its notification id (§19.5 multi-partner), and the
+     *  motivational body (the one type whose [EventPayload.text] is message copy the tray may
+     *  show; null for every other type). Approval types reach this hook too — the composition
+     *  layer filters them, because the approval flows post their own dedicated, named
+     *  notifications (§8 Step 12). */
+    private val notify: suspend (pairId: String, payloadType: String, messageBody: String?) -> Unit = { _, _, _ -> },
     /** Step 11 responder: enqueue a replay of our chain after the requested anchor. */
     private val respondToRequest: suspend (pairId: String, expectedPreviousSequence: Long, expectedPreviousHash: ByteArray) -> Unit = { _, _, _ -> },
     /** Step 11 tamper correlation: true when a repair was in flight and is now blocked. */
@@ -153,7 +158,7 @@ class MailboxMessageHandler(
 
             is MailboxEventProcessor.EnvelopeResult.Valid -> {
                 if (outcome.payloadType == EventPayload.TYPE_DELETION_REQUEST) {
-                    val shredded = runCatching { onDeletionRequest(pairId, messageId) }
+                    val shredded = runCatching { onDeletionRequest(pairId, messageId, doc.timestampEpochMillis) }
                         .onFailure { Log.w(TAG, "deletion shred failed messageId=$messageId pairId=$pairId", it) }
                         .getOrDefault(false)
                     if (!shredded) Log.w(TAG, "DELETION_FAILED messageId=$messageId pairId=$pairId")
@@ -186,7 +191,10 @@ class MailboxMessageHandler(
                     if (outcome.payloadType == EventPayload.TYPE_SYNC_REQUEST) {
                         answerRepairRequest(pairId, messageId, outcome.payload)
                     } else {
-                        runCatching { notify(pairId, outcome.payloadType) }
+                        val messageBody = outcome.payload.text.takeIf {
+                            outcome.payloadType == EventPayload.TYPE_MOTIVATIONAL_MESSAGE && it.isNotBlank()
+                        }
+                        runCatching { notify(pairId, outcome.payloadType, messageBody) }
                             .onFailure { Log.w(TAG, "notify failed messageId=$messageId", it) }
                     }
                 }

@@ -164,7 +164,14 @@ internal fun ProtectionScreen(
                             IntegrityStatus.FAILED -> StatusTone.ATTENTION
                             else -> StatusTone.INFO
                         },
-                        actionLabel = stringResource(R.string.settings_integrity_recheck),
+                        // #14: the recheck is a recovery action — the checks re-run on every
+                        // Settings resume, so the button exists only while the row reports a
+                        // non-verified state.
+                        actionLabel = if (integrity == IntegrityStatus.VERIFIED) {
+                            null
+                        } else {
+                            stringResource(R.string.settings_integrity_recheck)
+                        },
                         onAction = onRecheck,
                     )
                 }
@@ -188,7 +195,8 @@ private fun StatusRow(
     title: String,
     status: String,
     tone: StatusTone,
-    actionLabel: String,
+    /** #14: null hides the action — a healthy row offers no manual re-run. */
+    actionLabel: String?,
     onAction: () -> Unit,
     supporting: String? = null,
 ) {
@@ -218,14 +226,16 @@ private fun StatusRow(
                 )
             }
         }
-        TextButton(
-            onClick = onAction,
-            // The button is a sibling of the title, not its child, so its own label is all
-            // TalkBack has to go on — six rows of "Open"/"Fix" announce identically with no
-            // subject (WCAG 2.4.6; finding #26, the Rules switches' same defect in #25).
-            modifier = Modifier.semantics { contentDescription = "$actionLabel — $title" },
-        ) {
-            Text(actionLabel)
+        if (actionLabel != null) {
+            TextButton(
+                onClick = onAction,
+                // The button is a sibling of the title, not its child, so its own label is all
+                // TalkBack has to go on — six rows of "Open"/"Fix" announce identically with no
+                // subject (WCAG 2.4.6; finding #26, the Rules switches' same defect in #25).
+                modifier = Modifier.semantics { contentDescription = "$actionLabel — $title" },
+            ) {
+                Text(actionLabel)
+            }
         }
     }
 }

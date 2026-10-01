@@ -2,6 +2,7 @@ package com.example.myexodus.ui.partner
 
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.state.ApprovalRequest
+import com.example.myexodus.accountability.sync.displayNameOf
 import com.example.myexodus.accountability.state.ChainEvent
 import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.accountability.state.UnpairPhase
@@ -42,6 +43,9 @@ class PartnerDashboardSource(
      *  Only a definitive server denial is ever written here (see `isDefinitiveDenial`), so an
      *  offline device never raises the re-pair card. */
     private val pairingDeniedAt: (pairId: String) -> Long? = { null },
+    /** Owner ask 2026-10-01: the writer's own last composed message to this pair, read back
+     *  from the local journal — the Activity subpage shows the sender what they sent. */
+    private val latestSentMessage: suspend (pairId: String) -> String? = { null },
 ) {
 
     /**
@@ -127,6 +131,7 @@ class PartnerDashboardSource(
                 forked = chainHead?.forked ?: false,
             ),
             alerts = summarizeAlerts(alerts, startOfLocalDay(nowMillis, zone)),
+            sentMessageText = runCatching { latestSentMessage(enrollment.pairId) }.getOrNull(),
             approvals = approvalRows,
             activity = runCatching { partnerActivity(enrollment.pairId) }.getOrNull(),
             rateLimitedRecently = runCatching {
@@ -136,6 +141,15 @@ class PartnerDashboardSource(
                 .getOrNull() != null,
         )
     }
+
+    /**
+     * #12: pairId -> shown name for the Home pinned-message card, which pages across senders.
+     * The same enrollment read [load] folds in, kept minimal (no chain work); a failed read
+     * degrades to no names — the card falls back to its generic title, never a wrong name.
+     */
+    suspend fun partnerDisplayNames(): Map<String, String> =
+        runCatching { enrollments() }.getOrNull().orEmpty()
+            .associate { it.pairId to displayNameOf(it) }
 
     private companion object {
         const val WEEK_MILLIS = 7 * 24 * 60 * 60 * 1000L
@@ -174,6 +188,9 @@ sealed interface PartnerDashboardUi {
         val freshness: SyncFreshness,
         val chainStatus: PartnerChainStatus,
         val alerts: AlertSummary,
+        /** Owner ask 2026-10-01: the last message this user wrote to this partner (journal
+         *  read-back); null = nothing sent yet. */
+        val sentMessageText: String? = null,
         /** Step 13 approval rows: RESPONDER rows are actionable, REQUESTER rows status-only. */
         val approvals: List<ApprovalUi> = emptyList(),
         /** §7 Step 11 delta: the partner's shared aggregate; null = nothing received yet. */
