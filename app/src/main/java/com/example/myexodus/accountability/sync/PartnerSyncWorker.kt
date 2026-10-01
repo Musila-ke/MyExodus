@@ -43,8 +43,10 @@ class PartnerSyncWorker @AssistedInject constructor(
 /**
  * One full sync pass — the worker body, shared with the dashboard's "Check for updates"
  * (Step 12) so the manual path runs the exact production pass in-process rather than
- * depending on WorkManager dispatch (which XOS never performs, ADR #27). A manual run racing
- * the periodic one is safe: every write on this path is transactional or dedup-guarded.
+ * depending on WorkManager dispatch, which cannot be relied on for latency on OEM builds
+ * (XOS dispatch was observed working 2026-10-01, but that is not a guarantee — ADR #27 as
+ * amended). A manual run racing the periodic one is safe: every write on this path is
+ * transactional or dedup-guarded.
  */
 suspend fun runPartnerSyncPass(
     registrar: PushInstallationRegistrar,

@@ -518,6 +518,10 @@
     <string name="partner_sign_lock_rejected_body">Your screen lock verified, but this device’s security key was created before screen-lock confirmation was available, and keys can’t be changed after creation. Add a fingerprint or face in Android Settings and try again.</string>
     <!-- The confirm-credential prompt's subtitle (ADR #112 fallback path). -->
     <string name="partner_signing_screen_lock_subtitle">Confirm with your screen lock</string>
+    <!-- Owner ruling 2026-10-01 (amends ADR #112): the biometric prompt's secondary
+         button is the escape hatch to screen-lock confirmation, so a finger that won't
+         read no longer forces a lockout wait before the fallback opens. -->
+    <string name="partner_signing_use_screen_lock">Use screen lock</string>
     <string name="partner_biometric_open_settings">Open settings</string>
     <string name="partner_biometric_close">Close</string>
     <!-- §8.2/§9 identity migration (task #68): enrollment change or a permanently invalidated

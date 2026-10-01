@@ -505,7 +505,11 @@ class DeviceVerificationActivity : Activity() {
                     dailyLimitMs = 0L,
                     timeRangeStart = null,
                     timeRangeEnd = null,
-                    activeDaysOfWeek = "0,1,2,3,4,5,6",
+                    // 7-char Mon-first mask (EVERY_DAY), matching the production rule editor
+                    // and BlockDecisionEngine.dayActiveOn. The old comma list read as a mask
+                    // only accidentally matched on Wednesdays (caught 2026-10-01: latency
+                    // suite decide -> Allow on X6532C with the rule published).
+                    activeDaysOfWeek = "1111111",
                     blockExpiresAt = Long.MAX_VALUE,
                     severityLevel = "HIGH",
                 ),

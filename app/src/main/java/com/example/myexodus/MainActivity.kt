@@ -580,6 +580,10 @@ class MainActivity : FragmentActivity() {
      * prompt is used whenever it can run; otherwise a secure screen lock
      * (PIN/pattern/password) authorizes the key through the platform's confirm-credential
      * flow. The explicit-message dialog shows only when neither can produce a signature.
+     *
+     * Owner ruling 2026-10-01 (amends ADR #112): the screen-lock route must be reachable
+     * whenever the user chooses — not only after a biometric lockout — so the prompt's
+     * secondary button hands over to it directly.
      */
     private suspend fun signWithAuthPrompt(title: String): Signature? {
         val status = BiometricManager.from(this)
@@ -603,8 +607,9 @@ class MainActivity : FragmentActivity() {
                 is BiometricOutcome.Signed -> outcome.signature
                 // Lockout is what "fall back to whatever you have" is for; a plain cancel
                 // stays a cancel — the underlying action reads as nothing having happened.
-                BiometricOutcome.LockedOut ->
-                    if (deviceCredentialPossible) signWithDeviceCredential(title) else null
+                BiometricOutcome.LockedOut,
+                BiometricOutcome.UseDeviceCredential,
+                -> if (deviceCredentialPossible) signWithDeviceCredential(title) else null
 
                 // §9: not a cancel — the key is permanently dead and migration is the fix.
                 BiometricOutcome.PermanentlyInvalidated -> {
@@ -621,6 +626,7 @@ class MainActivity : FragmentActivity() {
         data class Signed(val signature: Signature) : BiometricOutcome
         data object Cancelled : BiometricOutcome
         data object LockedOut : BiometricOutcome
+        data object UseDeviceCredential : BiometricOutcome
         data object PermanentlyInvalidated : BiometricOutcome
     }
 
@@ -687,6 +693,11 @@ class MainActivity : FragmentActivity() {
                         override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                             Log.w(TAG, "approval biometric prompt: $errString")
                             val outcome = when (errorCode) {
+                                // The secondary button is the screen-lock escape hatch,
+                                // not a dismissal (owner ruling 2026-10-01).
+                                BiometricPrompt.ERROR_NEGATIVE_BUTTON ->
+                                    BiometricOutcome.UseDeviceCredential
+
                                 BiometricPrompt.ERROR_LOCKOUT,
                                 BiometricPrompt.ERROR_LOCKOUT_PERMANENT,
                                 -> BiometricOutcome.LockedOut
@@ -703,7 +714,7 @@ class MainActivity : FragmentActivity() {
                 val promptInfo = BiometricPrompt.PromptInfo.Builder()
                     .setTitle(title)
                     .setSubtitle(getString(R.string.partner_approval_prompt_subtitle))
-                    .setNegativeButtonText(getString(android.R.string.cancel))
+                    .setNegativeButtonText(getString(R.string.partner_signing_use_screen_lock))
                     .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
                     .build()
                 if (cryptoReady) {
