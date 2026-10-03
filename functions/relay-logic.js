@@ -26,6 +26,26 @@ const MAX_INSTALLATIONS = 5;
 // failed attempt is terminal.
 const MAX_ATTEMPTS = 8;
 
+/**
+ * AD-02 re-check, race-tolerant (defect #18(a), 2026-10-03). Membership is the security
+ * boundary; the status is a lifecycle fact, not a relay gate. The mailbox create rule
+ * requires the pairing to be `active` at write time and pins members, so a document can
+ * only sit under a `terminated` pairing when the terminate landed between the sender's
+ * write and this trigger's evaluation — the unpair deletion-request race (seconds of
+ * trigger latency), which is exactly the message that must still be delivered. No other
+ * document can reach here for a terminated pair: writes are rules-denied the moment the
+ * flip lands. Rejecting `terminated` silently dropped the request that tells the partner
+ * to shred (device-caught 2026-10-01: request rejected 3.4 s after the terminate flip,
+ * partner never erased).
+ */
+function pairingUsableForRelay(data, senderUid, recipientUid) {
+  if (!data || typeof senderUid !== 'string' || typeof recipientUid !== 'string') return false;
+  if (data.status !== 'active' && data.status !== 'terminated') return false;
+  return Array.isArray(data.members) &&
+    data.members.includes(senderUid) &&
+    data.members.includes(recipientUid);
+}
+
 /** Strict standard base64 (padded); Buffer.from is too lenient to be a validator. */
 function isValidBase64(s) {
   return typeof s === 'string' && s.length > 0 && s.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(s);
@@ -143,6 +163,7 @@ module.exports = {
   windowState,
   incrementWindows,
   createRelayHandler,
+  pairingUsableForRelay,
   selectInstallations,
   isInstallationStale,
 };

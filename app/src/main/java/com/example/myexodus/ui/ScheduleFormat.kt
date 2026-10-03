@@ -87,6 +87,15 @@ fun formatDate(epochMillis: Long): String =
     DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)
         .format(Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()).toLocalDate())
 
+/** Day + month for dates the user just lived; a date from another year keeps its year so an
+ *  old "Free since" never reads as this year's. */
+fun formatDayMonth(epochMillis: Long, nowMillis: Long = System.currentTimeMillis()): String {
+    val zone = ZoneId.systemDefault()
+    val then = Instant.ofEpochMilli(epochMillis).atZone(zone)
+    val pattern = if (then.year == Instant.ofEpochMilli(nowMillis).atZone(zone).year) "MMM d" else "MMM d, yyyy"
+    return DateTimeFormatter.ofPattern(pattern, Locale.getDefault()).format(then)
+}
+
 /** Weekday + day + month, no year — the Home header eyebrow ("Tuesday, 22 September"). The
  *  year is dead weight on a screen whose subject is the current streak, and no localized
  *  FormatStyle drops it, so the pattern is explicit (names still come from the locale). */

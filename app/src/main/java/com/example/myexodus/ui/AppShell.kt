@@ -58,6 +58,8 @@ import com.example.myexodus.settings.StrictModeManager
 import com.example.myexodus.settings.WidgetSettings
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.ui.home.HomeScreen
+import com.example.myexodus.ui.home.NudgeInboxViewModel
+import com.example.myexodus.ui.home.SosViewModel
 import com.example.myexodus.ui.partner.PairingCeremonyDeps
 import com.example.myexodus.ui.partner.PartnerDashboardSource
 import com.example.myexodus.ui.partner.PartnerScreen
@@ -66,6 +68,7 @@ import com.example.myexodus.ui.partner.UnpairOutcome
 import com.example.myexodus.ui.recovery.RecoveryPrefs
 import com.example.myexodus.ui.recovery.RecoveryScreen
 import com.example.myexodus.ui.rules.RulesScreen
+import com.example.myexodus.ui.settings.NudgeSettingsViewModel
 import com.example.myexodus.ui.settings.SettingsScreen
 import com.example.myexodus.ui.streaks.HabitPickerSheet
 import com.example.myexodus.ui.streaks.StreaksScreen
@@ -117,6 +120,12 @@ fun AppShell(
     authority: ProtectionAuthority? = null,
     onReenable: () -> Unit,
     streaks: StreaksViewModel,
+    /** SOS §8.15 (Step 8): Home's Reach out sender state machine. */
+    sos: SosViewModel,
+    /** SOS §8.16 (Step 9): the recipient inbox — listener follows the Home surface. */
+    nudgeInbox: NudgeInboxViewModel,
+    /** SOS §8.19 (Step 11): the recipient block switch behind the Settings row. */
+    nudgeSettings: NudgeSettingsViewModel,
     partnerSource: PartnerDashboardSource,
     /** §19.4 item 4: the production ceremony's seams; §19.5: the persisted user pick. */
     partnerSelection: PartnerSelection,
@@ -168,6 +177,20 @@ fun AppShell(
     val setupError by streaks.setupError.collectAsStateWithLifecycle()
     val relapseInFlight by streaks.relapseInFlight.collectAsStateWithLifecycle()
     val relapseNote by streaks.relapseNote.collectAsStateWithLifecycle()
+
+    // SOS §8.15 (Step 8): the Reach out control's client flag and sender state.
+    val sosEnabled by sos.enabled.collectAsStateWithLifecycle()
+    val sosState by sos.state.collectAsStateWithLifecycle()
+
+    // SOS §8.16 (Step 9): "attach the listener during Home lifecycle" — the §6.9 query runs
+    // only while Home is the visible tab.
+    val nudgeCard by nudgeInbox.card.collectAsStateWithLifecycle()
+    LaunchedEffect(contentTab) {
+        if (contentTab == 0) nudgeInbox.start() else nudgeInbox.stop()
+    }
+
+    // SOS §8.19 (Step 11): the block switch's state — null hides the row (no live partner).
+    val partnerBlock by nudgeSettings.state.collectAsStateWithLifecycle()
 
     // Interception Escape Hatch lands here: the intent extra carries a NavKeys constant.
     LaunchedEffect(requestedTab) {
@@ -248,6 +271,18 @@ fun AppShell(
                         // #12: the pinned card's sender line — the same roster read the
                         // Partner tab folds in, kept to names only.
                         loadPartnerNames = partnerSource::partnerDisplayNames,
+                        // SOS §8.14: the check-ins-off banner shares the Partner tab's
+                        // notification state and fix path.
+                        partnerNotificationsEnabled = partnerNotificationsEnabled,
+                        partnerNotificationsRequestable = partnerNotificationsRequestable,
+                        onFixPartnerNotifications = onFixNotifications,
+                        // SOS §8.15: the Reach out card's flag, state, and tap path.
+                        sosEnabled = sosEnabled,
+                        sosState = sosState,
+                        onSosTap = sos::onTap,
+                        // SOS §8.16: the recipient card + its acknowledge path.
+                        nudgeCard = nudgeCard,
+                        onNudgeAcknowledge = nudgeInbox::acknowledge,
                         modifier = contentModifier,
                     )
                     contentTab == 1 -> RulesScreen(
@@ -312,6 +347,10 @@ fun AppShell(
                         recoveryPrefs = prefs,
                         domainUsageEngine = domainUsageEngine,
                         accountingOutageSource = accountingOutage,
+                        // SOS §8.19 (Step 11): the block switch's state + refresh/write paths.
+                        partnerBlock = partnerBlock,
+                        onPartnerBlockRefresh = nudgeSettings::refresh,
+                        onPartnerBlockChange = nudgeSettings::setBlocked,
                         modifier = contentModifier,
                     )
                 }

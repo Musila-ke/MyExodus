@@ -123,7 +123,10 @@ object PartnerActivityJournal {
                 targetPairId = targetPairId,
                 text = text,
                 occurredAtMs = occurredAtMs,
-                daysFree = ((streak?.currentStreakElapsedMs ?: 0L) / StreakTimer.DAY_MS).toInt(),
+                // Ordinal display day, the same count the sender's own app shows (owner ruling
+                // 2026-10-03, ADR #128): a fresh streak reports Day 1, never 0. A profile with
+                // no streak at all still reports 0 — there is nothing to floor.
+                daysFree = streak?.let { (it.currentStreakElapsedMs / StreakTimer.DAY_MS).toInt() + 1 } ?: 0,
                 relapseCount = habit?.totalRelapses ?: 0,
                 // Achieved days of the *current* streak — a relapse's fresh streak reports none.
                 milestonesReached = encodeMilestoneDays(achieved),

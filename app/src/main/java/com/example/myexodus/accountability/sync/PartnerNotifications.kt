@@ -41,6 +41,12 @@ object PartnerNotifications {
     /** #16: the responder's announcement that the partner ended the partnership. */
     const val NOTIF_PARTNERSHIP_ENDED = 2004
 
+    /** Partner SOS (V1 Req 35, plan §8.2/§8 Step 7): the "Reach Out" nudge channel. Its
+     *  presence + importance are two thirds of the §8.12 pushEligible formula; the channel
+     *  itself is created by the Step 7 notification flow. */
+    const val CHANNEL_PARTNER_NUDGES = "partner_nudges"
+    const val NOTIF_PARTNER_NUDGE = 2005
+
     /** Plan §8 Step 16's third channel: LOW importance, "used only for internal/debug
      *  visibility, not shown to the user in production builds" — so the channel is created
      *  only in debug builds. No production surface posts to it by design. */
@@ -59,6 +65,24 @@ object PartnerNotifications {
                 context.getString(R.string.partner_channel_sync_status_name),
                 NotificationManager.IMPORTANCE_LOW,
             ),
+        )
+    }
+
+    /** SOS §8.14 (V1 Req 35, plan Step 7): the `partner_nudges` channel, created at
+     *  application startup so the §8.12 pushEligible snapshot can report true before the
+     *  first nudge. IMPORTANCE_DEFAULT, private on the lockscreen, vibration on first
+     *  creation. Re-creation with the same id never overrides user-modified settings —
+     *  channel importance is not programmatically changed after creation. */
+    fun ensurePartnerNudgesChannel(context: Context) {
+        context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_PARTNER_NUDGES,
+                context.getString(R.string.partner_channel_nudges_name),
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ).apply {
+                lockscreenVisibility = NotificationCompat.VISIBILITY_PRIVATE
+                enableVibration(true)
+            },
         )
     }
 
@@ -126,6 +150,31 @@ object PartnerNotifications {
         )
     }
 
+    /** SOS §8.17/FR-20: the foreground FCM receipt posts immediately — generic copy only
+     *  (FR-19), the Step 7 channel, and the fixed FR-19 tag so a follow-up nudge replaces the
+     *  tray entry (one replaceable entry by design). The tap carries the same launcher extras
+     *  the background system path delivers, so §8.18's routing is identical for both. */
+    fun notifyPartnerNudge(context: Context, nudgeId: String) =
+        post(
+            context,
+            CHANNEL_PARTNER_NUDGES,
+            context.getString(R.string.partner_channel_nudges_name),
+            NotificationManager.IMPORTANCE_DEFAULT,
+            NOTIF_PARTNER_NUDGE,
+            R.string.partner_nudge_title,
+            R.string.partner_nudge_text,
+            tag = PartnerNudgePush.TAG,
+            pushNudgeId = nudgeId,
+        )
+
+    /** SOS §6.9 step 4 (plan §8.16): after the acknowledgment batch commits, the tray entry
+     *  for the reach-out is retired. FR-19's fixed tag + id mean at most one such entry
+     *  exists (replace-in-place), so this single cancel is the whole contract — and it is
+     *  scoped to exactly that tag/id, never the partner-alert entries on other channels. */
+    fun cancelPartnerNudge(context: Context) {
+        NotificationManagerCompat.from(context).cancel(PartnerNudgePush.TAG, NOTIF_PARTNER_NUDGE)
+    }
+
     // Suppressed: the gate is NotificationAccess.canPost (the only way in), which lint can't
     // trace through a helper.
     @SuppressLint("MissingPermission")
@@ -140,6 +189,8 @@ object PartnerNotifications {
         namedTitle: String? = null,
         namedText: String? = null,
         onlyAlertOnce: Boolean = false,
+        tag: String? = null,
+        pushNudgeId: String? = null,
     ) {
         if (!NotificationAccess.canPost(context)) return
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(
@@ -150,12 +201,18 @@ object PartnerNotifications {
         // request code is this object's own (extras don't count toward PendingIntent
         // identity, and the shared code 0 would let this post rewrite Protection's
         // Settings-landing extras on the same MainActivity intent).
+        val openAppIntent = Intent(context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_HOME)
+        if (pushNudgeId != null) {
+            openAppIntent
+                .putExtra(PartnerNudgePush.TYPE_KEY, PartnerNudgePush.TYPE_PARTNER_NUDGE)
+                .putExtra(PartnerNudgePush.NUDGE_ID_KEY, pushNudgeId)
+        }
         val openApp = PendingIntent.getActivity(
             context,
             NOTIF_PARTNER_EVENT,
-            Intent(context, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_HOME),
+            openAppIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         // FR-13: the lockscreen public version stays generic by construction (no alias, event
@@ -166,26 +223,29 @@ object PartnerNotifications {
         // the generic resources alone.
         val title = namedTitle ?: context.getString(titleRes)
         val text = namedText ?: context.getString(textRes)
-        NotificationManagerCompat.from(context).notify(
-            notificationId,
-            NotificationCompat.Builder(context, channelId)
-                .setSmallIcon(R.mipmap.ic_launcher)
-                .setContentTitle(title)
-                .setContentText(text)
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                .setAutoCancel(true)
-                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-                .setPublicVersion(
-                    NotificationCompat.Builder(context, channelId)
-                        .setSmallIcon(R.mipmap.ic_launcher)
-                        .setContentTitle(context.getString(titleRes))
-                        .setContentText(context.getString(textRes))
-                        .build(),
-                )
-                .setOnlyAlertOnce(onlyAlertOnce)
-                .setContentIntent(openApp)
-                .build(),
-        )
+        val notification = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(
+                NotificationCompat.Builder(context, channelId)
+                    .setSmallIcon(R.mipmap.ic_launcher)
+                    .setContentTitle(context.getString(titleRes))
+                    .setContentText(context.getString(textRes))
+                    .build(),
+            )
+            .setOnlyAlertOnce(onlyAlertOnce)
+            .setContentIntent(openApp)
+            .build()
+        val manager = NotificationManagerCompat.from(context)
+        if (tag != null) {
+            manager.notify(tag, notificationId, notification)
+        } else {
+            manager.notify(notificationId, notification)
+        }
     }
 }
 

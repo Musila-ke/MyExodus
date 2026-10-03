@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
 import com.example.myexodus.data.db.entity.MilestoneEvent
 import com.example.myexodus.streaks.HabitState
+import com.example.myexodus.ui.formatDayMonth
 
 /**
  * The hero's label row, shared by the Streaks summary card and Home's streak card — the two
@@ -77,6 +78,22 @@ internal fun HabitLabelRow(text: String, onSwitch: (() -> Unit)?) {
 }
 
 /**
+ * The stop date as a statement of fact, never a second counter: "Free since Oct 1". The
+ * verified day count above it starts at setup — the picked date is remembered and shown, but
+ * credits nothing (anti-minting keeps the partner-visible number evidence-backed; owner
+ * decision 2026-10-03). After a logged relapse it reads the relapse date, which is exactly
+ * when the current free period began. Shared by both streak cards so the two cannot drift.
+ */
+@Composable
+internal fun FreeSinceLine(recoveryStartAtEpochMillis: Long) {
+    Text(
+        stringResource(R.string.streaks_free_since, formatDayMonth(recoveryStartAtEpochMillis)),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+    )
+}
+
+/**
  * Live streak headline: days free (primary), the three milestones as a rung strip, best run
  * (secondary). The label row doubles as the multi-habit switcher ([onSwitch] opens the picker
  * sheet) — the sheet is also where "Add habit" lives, so the control shows whenever it's wired,
@@ -90,8 +107,8 @@ internal fun HabitLabelRow(text: String, onSwitch: (() -> Unit)?) {
  */
 @Composable
 internal fun StreakSummaryCard(state: HabitState, onSwitch: (() -> Unit)? = null) {
-    val days = habitDays(state.currentStreakElapsedMs)
-    val best = habitDays(state.allTimeMaxElapsedMs)
+    val days = daysFree(state.currentStreakElapsedMs)
+    val best = daysFree(state.allTimeMaxElapsedMs)
     Surface(
         color = MaterialTheme.colorScheme.primaryContainer,
         contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -120,6 +137,8 @@ internal fun StreakSummaryCard(state: HabitState, onSwitch: (() -> Unit)? = null
                     modifier = Modifier.padding(bottom = 10.dp),
                 )
             }
+            Spacer(Modifier.size(8.dp))
+            FreeSinceLine(state.recoveryStartAt)
             Spacer(Modifier.size(12.dp))
             MilestoneRungStrip(state)
             if (best > days) {

@@ -87,19 +87,86 @@ service cloud.firestore {
       }
     }
 
+    // Partner SOS — Reach Out nudge (V1 Req 35, plan §8.2). Nudge documents are written
+    // exclusively by the sendNudge callable (Admin SDK bypasses rules); the recipient device
+    // is the only client reader, and its one write is the acknowledgment. The read carries
+    // the pair-active gate through the same exists+get pattern as the mailbox create rule.
+    //
+    // get vs list are split deliberately. get (direct read by id after a notification tap)
+    // carries the plan §8.2 expiresAt gate: TTL may lag its cleanup by ~24h, and a direct
+    // read of a dead record is refused. list (the Home §6.9 query) cannot carry it: the
+    // rules engine evaluates a LIST against the query's potential result set, and a
+    // request.time comparison on a field the query does not constrain is unevaluable
+    // ("Property expiresAt is undefined on object" — verified against the emulator,
+    // rules-test R-F2q). The plan scopes the gate to direct reads (§8.2) and puts expiry
+    // filtering on the client query (§6.9 / §17: "Client queries apply the expiresAt
+    // check"). The list side therefore re-checks exactly what the engine can prove from
+    // the §6.9 query constraints: recipient identity and a live pair.
+    match /pairings/{pairId}/nudges/{nudgeId} {
+      allow get: if request.auth != null
+        && resource.data.recipientUid == request.auth.uid
+        && exists(/databases/$(database)/documents/pairings/$(pairId))
+        && get(/databases/$(database)/documents/pairings/$(pairId)).data.status == 'active'
+        && resource.data.expiresAt >= request.time;
+      allow list: if request.auth != null
+        && resource.data.recipientUid == request.auth.uid
+        && exists(/databases/$(database)/documents/pairings/$(pairId))
+        && get(/databases/$(database)/documents/pairings/$(pairId)).data.status == 'active';
+      // Acknowledgment: the recipient flips ackedAt exactly once. get() treats an absent
+      // field as null, so the gate holds for both the schema's explicit null and a
+      // pre-schema document; the diff() hasOnly makes every other field immutable.
+      allow update: if request.auth != null
+        && resource.data.recipientUid == request.auth.uid
+        && resource.data.get('ackedAt', null) == null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ackedAt'])
+        && request.resource.data.ackedAt == request.time;
+      allow create, delete: if false;
+    }
+
+    // Nudge rate-limit state (per pairId × senderUid): the sendNudge callable's sole
+    // bookkeeping. Function-only in both directions.
+    match /pairings/{pairId}/nudgeState/{senderUid} {
+      allow read, write: if false;
+    }
+
+    // Nudge block preference (owner-owned, plan §8.2): read/write only by the owner while
+    // the pair is active and the owner is a member (same membership boundary as the
+    // mailbox create rule). Only `blocked` + `updatedAt` exist, boolean + server time.
+    match /pairings/{pairId}/nudgeSettings/{uid} {
+      allow read: if request.auth != null
+        && request.auth.uid == uid
+        && exists(/databases/$(database)/documents/pairings/$(pairId))
+        && get(/databases/$(database)/documents/pairings/$(pairId)).data.status == 'active'
+        && request.auth.uid in get(/databases/$(database)/documents/pairings/$(pairId)).data.members;
+      allow create, update: if request.auth != null
+        && request.auth.uid == uid
+        && exists(/databases/$(database)/documents/pairings/$(pairId))
+        && get(/databases/$(database)/documents/pairings/$(pairId)).data.status == 'active'
+        && request.auth.uid in get(/databases/$(database)/documents/pairings/$(pairId)).data.members
+        && request.resource.data.keys().hasOnly(['blocked', 'updatedAt'])
+        && request.resource.data.blocked is bool
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
     // Per-device/provider push registrations (AD-18a). provider is constrained to the
     // transports that exist (plan §8 Steps 7/8); token freshness is tracked via updatedAt.
+    // pushEligible (SOS §8.12) is optional so pre-SOS clients keep registering; when present
+    // it is a capability snapshot, never authority.
     match /users/{uid}/push_installations/{installationId} {
       allow read: if request.auth.uid == uid;
       allow create, update: if request.auth.uid == uid
         && request.resource.data.keys().hasOnly(
-             ['provider', 'token', 'platform', 'appVersion', 'updatedAt', 'createdAt'])
+             ['provider', 'token', 'platform', 'appVersion', 'pushEligible', 'updatedAt', 'createdAt'])
         && request.resource.data.provider in ['fcm', 'hms']
         && request.resource.data.token is string
         && request.resource.data.token.size() > 0
         && request.resource.data.token.size() <= 4096
         && request.resource.data.platform is string
         && request.resource.data.appVersion is string
+        && request.resource.data.appVersion.size() <= 32
+        && (!request.resource.data.keys().hasAny(['pushEligible'])
+            || request.resource.data.pushEligible is bool)
         && request.resource.data.updatedAt == request.time;
       allow delete: if request.auth.uid == uid;
     }
@@ -141,5 +208,11 @@ service cloud.firestore {
     match /relay-dispatch/{document=**} { allow read, write: if false; }
     match /rate-limits/{document=**} { allow read, write: if false; }
     match /idempotency/{document=**} { allow read, write: if false; }
+
+    // SOS push queue + feature flag: Admin SDK only (plan §8.2/§8.4). Default-deny would
+    // cover both, but the explicit lines keep the function-only surface auditable in one
+    // place, same as the v1 relay collections above.
+    match /nudgePushQueue/{document=**} { allow read, write: if false; }
+    match /config/features { allow read, write: if false; }
   }
 }

@@ -7,7 +7,8 @@
     "node": "22"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "test:sos": "firebase emulators:exec --only firestore --project demo-myexodus-sos \"node --test emulator-test/partner-sos.emulator.js emulator-test/partner-sos-push.emulator.js emulator-test/partner-sos-scheduler.emulator.js\""
   },
   "dependencies": {
     "firebase-admin": "14.4.0",

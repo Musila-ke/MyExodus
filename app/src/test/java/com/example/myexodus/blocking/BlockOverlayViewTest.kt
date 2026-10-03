@@ -18,7 +18,9 @@ import org.robolectric.annotation.Config
 
 /** The blocking overlay's pause card (V1 State 2): a URL block must name the site and carry
  *  the Interception Escape Hatch; an app block (ADR #31) shows the block screen's card twin —
- *  the app named, the same single recovery action, no different-site action. */
+ *  the app named, the same single recovery action, no different-site action — and is
+ *  persistent like the daily wall (owner ruling 2026-10-03): on an evicting host it carries
+ *  the in-place Close and stays until the user dismisses it. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
 class BlockOverlayViewTest {
@@ -110,7 +112,7 @@ class BlockOverlayViewTest {
     }
 
     @Test
-    fun dailyWall_closeAction_dismissesAndNeverSurvivesARebind() {
+    fun dailyWall_closeAction_dismissesAndNeverSurvivesIntoAUrlCard() {
         var dismissed = 0
         val wall = BlockOverlayView(
             context, {}, recovered::add, differentSite::add, onWallDismiss = { dismissed++ },
@@ -121,10 +123,41 @@ class BlockOverlayViewTest {
         close.performClick()
         assertEquals(1, dismissed)
 
-        // Other cards must not keep a live Close around (a stray tap would dismiss a cover
-        // the user has no way to bring back).
+        // The app-block card runs the same persistent contract (owner ruling 2026-10-03):
+        // its Close stays armed across the rebind and dismisses too.
         wall.bind(OverlayContent.AppBlocked("AnkiDroid", "rule-2"))
+        assertEquals(View.VISIBLE, close.visibility)
+        close.performClick()
+        assertEquals(2, dismissed)
+
+        // A URL card offers no in-place dismiss (a stray tap would hand the blocked page
+        // straight back from a cover the user has no way to bring back) — the Close must
+        // not survive into it.
+        wall.bind(OverlayContent.UrlBlocked("example.com", "rule-1", "com.android.chrome"))
         assertEquals(View.GONE, close.visibility)
+    }
+
+    @Test
+    fun appBlock_onAnEvictingHost_showsRecoveryAndClose_withTheWallHint() {
+        var dismissed = 0
+        val host = BlockOverlayView(
+            context, {}, recovered::add, differentSite::add, onWallDismiss = { dismissed++ },
+        )
+        host.bind(OverlayContent.AppBlocked("AnkiDroid", "rule-2"))
+
+        val visible = buttons(host).filter { it.visibility == View.VISIBLE }
+        assertEquals(2, visible.size)
+        assertEquals(context.getString(R.string.overlay_open_recovery), visible[0].text)
+        assertEquals(context.getString(R.string.overlay_wall_dismiss), visible[1].text)
+        visible[0].performClick()
+        assertEquals(listOf("rule-2"), recovered)
+        visible[1].performClick()
+        assertEquals(1, dismissed)
+
+        // Wall parity (owner ruling 2026-10-03): the card is a wall now — the block screen's
+        // hint, never the cover's transient "Home and back always work".
+        assertTrue(texts(host).contains(context.getString(R.string.block_screen_hint)))
+        assertTrue(texts(host).none { it == context.getString(R.string.overlay_hint) })
     }
 
     @Test

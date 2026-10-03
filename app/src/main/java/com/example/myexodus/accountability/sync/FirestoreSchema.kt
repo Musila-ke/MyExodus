@@ -6,6 +6,7 @@ import com.google.firebase.firestore.CollectionReference
 import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Query
 import com.google.firebase.Timestamp
 import java.security.MessageDigest
 
@@ -29,6 +30,8 @@ object FirestoreSchema {
     const val MAILBOXES_COLLECTION = "mailboxes"
     const val MESSAGES_COLLECTION = "messages"
     const val ACKS_COLLECTION = "acks"
+    const val NUDGES_COLLECTION = "nudges"
+    const val NUDGE_SETTINGS_COLLECTION = "nudgeSettings"
 
     /** v2 `pairings/{pairId}` document — the uid-resolution read (members is the array the
      *  rules' `request.auth.uid in resource.data.members` checks). */
@@ -94,22 +97,26 @@ object FirestoreSchema {
     fun mailboxAckData(): Map<String, Any> = mapOf("ackedAt" to FieldValue.serverTimestamp())
 
     /**
-     * AD-18a push-installation registration (plan §8 Step 7, client FCM transport): exactly
-     * the keys the v2 rules' create/update `hasOnly` allows, nothing else. `updatedAt` must
-     * equal the server timestamp (rules gate), so every write refreshes AD-18c staleness.
-     * Writers replace the document (no merge) — a server-written `stale: true` flag must
-     * disappear on re-registration, and merge would keep it.
+     * AD-18a push-installation registration (plan §8 Step 7, client FCM transport; SOS §4.3
+     * delta): exactly the keys the v2 rules' create/update `hasOnly` allows, nothing else.
+     * `updatedAt` must equal the server timestamp (rules gate), so every write refreshes
+     * AD-18c staleness. `pushEligible` is the §8.12 capability snapshot the SOS dispatcher
+     * queries; optional under the rules so pre-SOS clients keep registering. Writers replace
+     * the document (no merge) — a server-written `stale: true` flag must disappear on
+     * re-registration, and merge would keep it.
      */
     fun pushInstallationData(
         provider: String,
         token: String,
         platform: String,
         appVersion: String,
+        pushEligible: Boolean,
     ): Map<String, Any> = mapOf(
         "provider" to provider,
         "token" to token,
         "platform" to platform,
         "appVersion" to appVersion,
+        "pushEligible" to pushEligible,
         "updatedAt" to FieldValue.serverTimestamp(),
         "createdAt" to FieldValue.serverTimestamp(),
     )
@@ -120,6 +127,52 @@ object FirestoreSchema {
         installationId: String,
     ): DocumentReference = firestore.collection(USERS_COLLECTION).document(uid)
         .collection(PUSH_INSTALLATIONS_COLLECTION).document(installationId)
+
+    /**
+     * Partner SOS (V1 Req 35, plan §8.2): `pairings/{pairId}/nudges/{nudgeId}` — written
+     * exclusively by the sendNudge callable; the recipient device reads and acknowledges.
+     * The client never creates or deletes a nudge document (rules deny both).
+     */
+    fun nudgeDocument(
+        firestore: FirebaseFirestore,
+        pairId: String,
+        nudgeId: String,
+    ): DocumentReference = firestore.collection(PAIRINGS_COLLECTION).document(pairId)
+        .collection(NUDGES_COLLECTION).document(nudgeId)
+
+    /** Exactly the one key the nudge ack rule allows (`hasOnly(['ackedAt'])`,
+     *  `ackedAt == request.time` — server-timestamp form, not a number). */
+    fun nudgeAckData(): Map<String, Any> = mapOf("ackedAt" to FieldValue.serverTimestamp())
+
+    /**
+     * The §6.9 recipient inbox query, verbatim — the only shape the list rule admits (its
+     * eligibility is pinned by rules-test R-F2q: recipient equality is what proves the rule;
+     * expiry is client-side because a LIST cannot evaluate `request.time`). The composite
+     * index in firestore.indexes.json matches these three equalities + the descending order.
+     */
+    fun nudgeInboxQuery(firestore: FirebaseFirestore, pairId: String, uid: String): Query =
+        firestore.collection(PAIRINGS_COLLECTION).document(pairId).collection(NUDGES_COLLECTION)
+            .whereEqualTo("recipientUid", uid)
+            .whereEqualTo("suppressedAt", null)
+            .whereEqualTo("ackedAt", null)
+            .orderBy("createdAt", Query.Direction.DESCENDING)
+            .limit(10)
+
+    /**
+     * `pairings/{pairId}/nudgeSettings/{uid}` — owner-owned block preference (plan §8.2);
+     * rules gate writes on an active pair + membership and allow exactly these two keys.
+     */
+    fun nudgeSettingsDocument(
+        firestore: FirebaseFirestore,
+        pairId: String,
+        uid: String,
+    ): DocumentReference = firestore.collection(PAIRINGS_COLLECTION).document(pairId)
+        .collection(NUDGE_SETTINGS_COLLECTION).document(uid)
+
+    fun nudgeSettingsData(blocked: Boolean): Map<String, Any> = mapOf(
+        "blocked" to blocked,
+        "updatedAt" to FieldValue.serverTimestamp(),
+    )
 
     /**
      * §10 step 1: the relay stores only SHA-256(token) as the document id — a token document

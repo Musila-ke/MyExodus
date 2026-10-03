@@ -18,22 +18,20 @@ const { attemptDispatch } = require('./dispatch-record');
 const {
   createRelayHandler,
   incrementWindows,
+  pairingUsableForRelay,
   selectInstallations,
 } = require('./relay-logic');
 
 const REGION = 'us-central1';
 const db = getFirestore();
 
-/** AD-02 defense in depth: the relay never trusts the rules alone. */
+/** AD-02 defense in depth: the relay never trusts the rules alone. `terminated` is accepted
+ *  (members-bound) — see [pairingUsableForRelay] for why that is race-closing, not a hole. */
 async function pairingActive(pairId, senderUid, recipientUid) {
   if (typeof pairId !== 'string' || typeof senderUid !== 'string') return false;
   const snap = await db.doc(`pairings/${pairId}`).get();
   if (!snap.exists) return false;
-  const d = snap.data();
-  return d.status === 'active' &&
-    Array.isArray(d.members) &&
-    d.members.includes(senderUid) &&
-    d.members.includes(recipientUid);
+  return pairingUsableForRelay(snap.data(), senderUid, recipientUid);
 }
 
 /**

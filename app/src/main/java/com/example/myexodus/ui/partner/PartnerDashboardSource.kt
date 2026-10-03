@@ -1,6 +1,7 @@
 package com.example.myexodus.ui.partner
 
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
+import com.example.myexodus.accountability.enrollment.targetEnrollment
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.sync.displayNameOf
 import com.example.myexodus.accountability.state.ChainEvent
@@ -62,8 +63,7 @@ class PartnerDashboardSource(
         // A failed read is the plan's "fails to open/decrypt" branch, not a plain no-pairing:
         // it folds into the same key check below rather than stranding the screen on Loading.
         val all = runCatching { enrollments() }.getOrNull().orEmpty()
-        val enrollment = all.firstOrNull { it.pairId == selectedPairId }
-            ?: all.maxByOrNull { it.createdAtEpochMillis }
+        val enrollment = all.targetEnrollment(selectedPairId)
         if (enrollment == null) {
             // Step 17 (AD-22): the agreement key is destroyed before the enrollment on every
             // legitimate unpair, so key-present + enrollment-absent cannot be a normal ending —

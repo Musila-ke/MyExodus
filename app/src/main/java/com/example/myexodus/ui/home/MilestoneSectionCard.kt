@@ -28,7 +28,7 @@ import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
 import com.example.myexodus.data.db.entity.MilestoneEvent
 import com.example.myexodus.streaks.HabitState
-import com.example.myexodus.ui.streaks.habitDays
+import com.example.myexodus.ui.streaks.daysFree
 
 /**
  * Home's milestone ladder as a permanent section (product call 2026-09-29): it used to render
@@ -109,7 +109,9 @@ internal fun MilestoneSectionCard(
 
         else -> MilestoneCardShell {
             MilestoneCardContent(
-                days = habitDays(habit.currentStreakElapsedMs),
+                // The ordinal display day (Day 1 on a fresh streak — never "Day 0 of 90"):
+                // cell fill, header, and the app's other counters share one reading.
+                days = daysFree(habit.currentStreakElapsedMs),
                 achieved = habit.milestones
                     .mapNotNull { it.achievedAt?.let { _ -> it.milestoneDay } },
             )

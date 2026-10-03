@@ -221,16 +221,32 @@ class OverlayControllerTest {
         // Path A (this host) evicts, so its wall carries the Close action. Path B's controller
         // passes no callback (canEvict=false) and the view renders no action — pinned by
         // BlockOverlayViewTest.dailyLimitBlock_withoutAnEvictingHost_hasNoActions_showsTheHintOnly.
-        val close = view(0).let { v ->
+        val close = closeButton()
+        assertEquals(android.view.View.VISIBLE, close.visibility)
+        close.performClick()
+        assertFalse("Close is the wall's only dismissal (user ruling 2026-09-27)", controller.isShown(0))
+    }
+
+    @Test
+    fun appBlockCard_dismissesFromItsOwnCloseAction_too() {
+        // Device-caught 2026-10-03: the card rendered and wired its Close (owner ruling
+        // 2026-10-03 made it persistent), but this controller gate accepted only
+        // DailyLimitBlocked — the button was dead on the X6532. Both wall kinds dismiss.
+        val gen = advance()
+        controller.show(gen, displayId = 0, bounds = fullScreen(), content = cover())
+        val close = closeButton()
+        assertEquals(android.view.View.VISIBLE, close.visibility)
+        close.performClick()
+        assertFalse("the app-block card dismisses from its Close", controller.isShown(0))
+    }
+
+    private fun closeButton(): android.widget.Button =
+        view(0).let { v ->
             (0 until v.childCount).flatMap { i ->
                 val row = v.getChildAt(i) as android.view.ViewGroup
                 (0 until row.childCount).mapNotNull { row.getChildAt(it) as? android.widget.Button }
             }.first { it.text == ApplicationProvider.getApplicationContext<android.content.Context>().getString(R.string.overlay_wall_dismiss) }
         }
-        assertEquals(android.view.View.VISIBLE, close.visibility)
-        close.performClick()
-        assertFalse("Close is the wall's only dismissal (user ruling 2026-09-27)", controller.isShown(0))
-    }
 
     @Test
     fun flagsForContent_perModel() {

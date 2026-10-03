@@ -23,6 +23,7 @@ import com.example.myexodus.data.db.entity.UsageLedgerKind
 import com.example.myexodus.data.db.entity.UsageLedgerSource
 import com.example.myexodus.data.db.entity.UserProfile
 import com.google.android.gms.tasks.Tasks
+import com.google.firebase.installations.FirebaseInstallations
 import com.google.firebase.messaging.FirebaseMessaging
 import dagger.hilt.android.EntryPointAccessors
 import java.io.File
@@ -109,16 +110,22 @@ class DeviceVerificationReceiver : BroadcastReceiver() {
         context.applicationContext, EnhancedModeTestEntryPoint::class.java,
     )
 
-    /** §18 FCM matrix leg: the token a host-side `messages:send` needs to target this install.
-     *  `Tasks.await` blocks, but the receiver already runs on Dispatchers.IO. */
+    /** §18 FCM matrix leg: the token a host-side `messages:send` needs to target this install,
+     *  plus the FID the dispatcher multicasts to (SOS §8.12) and the legacy ANDROID_ID so the
+     *  migration leg can confirm its document was deleted. `Tasks.await` blocks, but the
+     *  receiver already runs on Dispatchers.IO. */
     private fun pushRead(context: Context) {
         val token = runCatching { Tasks.await(FirebaseMessaging.getInstance().token) }
             .onFailure { Log.w(TAG, "push fcm token unavailable: ${it.message}") }
             .getOrNull()
+        val fid = runCatching { Tasks.await(FirebaseInstallations.getInstance().id) }
+            .onFailure { Log.w(TAG, "push fid unavailable: ${it.message}") }
+            .getOrNull()
         Log.i(
             TAG,
             "push fcm token=${token ?: "<unavailable>"} " +
-                "installationId=${PushInstallationRegistrar.androidIdOf(context)}",
+                "installationId=${fid ?: "<unavailable>"} " +
+                "legacyAndroidId=${PushInstallationRegistrar.androidIdOf(context)}",
         )
     }
 

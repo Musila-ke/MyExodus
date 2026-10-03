@@ -59,8 +59,8 @@ class PushInstallationInstrumentedTest {
         val token = withTimeout(30_000) { FirebaseMessaging.getInstance().token.await() }
         assertTrue("FCM must issue a token on this device", !token.isNullOrBlank())
 
-        val installationId = PushInstallationRegistrar.androidIdOf(context)
-        assertNotNull("device must report an ANDROID_ID", installationId)
+        val installationId = withTimeout(30_000) { PushInstallationRegistrar.installationIdOf() }
+        assertNotNull("device must resolve a Firebase Installation ID", installationId)
 
         val registered = withTimeout(120_000) { registrar.register() }
         val doc = FirestoreSchema.pushInstallationDocument(
@@ -68,9 +68,9 @@ class PushInstallationInstrumentedTest {
         )
         if (registered) {
             val snapshot = doc.get().await()
-            assertTrue("registered install must exist under (uid, installationId)", snapshot.exists())
+            assertTrue("registered install must exist under (uid, fid)", snapshot.exists())
             assertEquals(
-                setOf("provider", "token", "platform", "appVersion", "updatedAt", "createdAt"),
+                setOf("provider", "token", "platform", "appVersion", "pushEligible", "updatedAt", "createdAt"),
                 snapshot.data?.keys,
             )
         } else {
@@ -78,7 +78,7 @@ class PushInstallationInstrumentedTest {
             // different breakage wearing the same boolean.
             val failure = runCatching {
                 doc.set(
-                    FirestoreSchema.pushInstallationData("fcm", token!!, "android", "instrumented"),
+                    FirestoreSchema.pushInstallationData("fcm", token!!, "android", "instrumented", true),
                 ).await()
             }.exceptionOrNull()
             assertTrue(
@@ -95,7 +95,7 @@ class PushInstallationInstrumentedTest {
         val auth = FirebaseAuth.getInstance()
         val uid = auth.currentUser?.uid
             ?: withTimeout(30_000) { auth.signInAnonymously().await() }.user?.uid
-        val installationId = PushInstallationRegistrar.androidIdOf(context)
+        val installationId = withTimeout(30_000) { PushInstallationRegistrar.installationIdOf() }
         val doc = FirestoreSchema.pushInstallationDocument(
             FirebaseFirestore.getInstance(), uid!!, installationId!!,
         )

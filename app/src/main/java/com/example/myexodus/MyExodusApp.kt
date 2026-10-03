@@ -98,6 +98,9 @@ class MyExodusApp : Application(), Configuration.Provider {
         AppCheckInstaller.install(this)
         // Plan §8 Step 16's sync_status channel: debug-only (never user-visible in release).
         PartnerNotifications.ensureSyncStatusChannel(this)
+        // SOS §8.14: the partner_nudges channel exists from startup — the §8.12 pushEligible
+        // snapshot reads its presence/importance, so it cannot wait for the first nudge.
+        PartnerNotifications.ensurePartnerNudgesChannel(this)
         // Decision 12 opt-out: FirebaseInitProvider ran before this call, so this is what the
         // stored preference overrides from the first moment of each process.
         crashReporting.applyStoredPreference()

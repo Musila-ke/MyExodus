@@ -272,3 +272,27 @@ exports.retryDispatchSweep = retryDispatchSweep;
 const { cleanupMailboxes, cleanupIdempotencyRecords } = require('./cleanup');
 exports.cleanupMailboxes = cleanupMailboxes;
 exports.cleanupIdempotencyRecords = cleanupIdempotencyRecords;
+
+// V1 Req 35 / plan §8.4 Step 2: the SOS acceptance callable. The raw handler (injected db)
+// is exported for the emulator suite, same seam pattern as `_createRegisterPairing`.
+const { createSendNudge, createSendNudgeHandler } = require('./partner-sos');
+exports.sendNudge = createSendNudge({ db });
+exports._createSendNudgeHandler = createSendNudgeHandler;
+
+// V1 Req 35 / plan §8.5-§8.10 Step 3: queue-created trigger → lease → FID multicast →
+// lease-checked finalization. `_createPushNudge` is the emulator suite's seam (injected
+// messaging client).
+const { getMessaging } = require('firebase-admin/messaging');
+const { createPushNudge, createOnNudgeQueueCreated } = require('./partner-sos-push');
+const sosPushNudge = createPushNudge({ db, messaging: getMessaging() });
+exports.onNudgeQueueCreated = createOnNudgeQueueCreated({ pushNudge: sosPushNudge });
+exports._createPushNudge = createPushNudge;
+
+// V1 Req 35 / plan §8.11/§6.6 Step 4: the every-5-minute repair sweep over the root queue.
+// `_createResumePendingNudgesHandler` is the emulator suite's seam.
+const {
+  createResumePendingNudgesSchedule,
+  createResumePendingNudgesHandler,
+} = require('./partner-sos-scheduler');
+exports.resumePendingNudges = createResumePendingNudgesSchedule({ db, pushNudge: sosPushNudge });
+exports._createResumePendingNudgesHandler = createResumePendingNudgesHandler;

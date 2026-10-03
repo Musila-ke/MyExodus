@@ -121,7 +121,9 @@ class HabitRepositoryTest {
 
         assertEquals(0L, state.currentStreakElapsedMs)
         assertEquals(0L, state.allTimeMaxElapsedMs)
-        assertEquals(0, state.currentDay)
+        // Display ordinal, never 0 (ADR #128): a backdated start still shows Day 1 — backdating
+        // sets the label, the accumulator still anchors at creation (§6.2).
+        assertEquals(1, state.currentDay)
         assertEquals(T0 - StreakTimer.DAY_MS, state.recoveryStartAt)
         assertEquals(WithdrawalSeverity.MODERATE, state.severity)
         assertEquals(WithdrawalCurve.weeks(2, WithdrawalSeverity.MODERATE), state.withdrawalWeeks)
@@ -318,7 +320,8 @@ class HabitRepositoryTest {
 
         assertEquals(60_000L, advanced.currentStreakElapsedMs)
         assertEquals(60_000L, advanced.allTimeMaxElapsedMs)
-        assertEquals(0, advanced.currentDay)
+        // Still inside the first 24h: the ordinal display stays Day 1.
+        assertEquals(1, advanced.currentDay)
         assertEquals(advanced, repository.state.value)
 
         val streak = store.recoveryStreakDao().getActiveStreak(habitId)!!
@@ -350,14 +353,15 @@ class HabitRepositoryTest {
         val firstStreakId = (onboard() as HabitRepository.OnboardingResult.Ready).state.streakId
 
         now = TimeReadings(tWallMillis = T0 + 5 * StreakTimer.DAY_MS, rBootMillis = 1_000 + 5 * StreakTimer.DAY_MS, bootCount = 7)
-        assertEquals(5, repository.evaluate(habitIdOf())!!.currentDay)
+        // 5 completed days = the 6th ordinal day (ADR #128).
+        assertEquals(6, repository.evaluate(habitIdOf())!!.currentDay)
 
         val result = repository.logRelapse(habitIdOf()) as HabitRepository.RelapseResult.RolledOver
         val state = result.state
 
-        // REQ-18 edge: the timeline restarts at Day 0 for the new streak.
+        // REQ-18 edge: the new streak restarts at Day 1 — never 0 (ADR #128).
         assertEquals(0L, state.currentStreakElapsedMs)
-        assertEquals(0, state.currentDay)
+        assertEquals(1, state.currentDay)
         assertEquals(5 * StreakTimer.DAY_MS, state.allTimeMaxElapsedMs)
         assertEquals(WithdrawalCurve.weeks(2, WithdrawalSeverity.MODERATE), state.withdrawalWeeks)
         assertTrue(state.streakId != firstStreakId)
@@ -512,11 +516,12 @@ class HabitRepositoryTest {
         onboard()
 
         now = TimeReadings(tWallMillis = T0 + StreakTimer.DAY_MS, rBootMillis = RB0 + StreakTimer.DAY_MS, bootCount = 7)
-        assertEquals(1, repository.evaluate(habitIdOf())!!.currentDay)
+        // One completed day = ordinal Day 2 — the count the user's own surfaces show (ADR #128).
+        assertEquals(2, repository.evaluate(habitIdOf())!!.currentDay)
 
         val rows = journalRows()
         assertEquals(listOf(EventPayload.TYPE_STREAK_UPDATED), rows.map { it.kind })
-        assertEquals(1, rows.single().daysFree)
+        assertEquals(2, rows.single().daysFree)
 
         // Re-evaluating inside the same day adds nothing — the gate is the day boundary.
         now = TimeReadings(tWallMillis = T0 + StreakTimer.DAY_MS + 60_000, rBootMillis = RB0 + StreakTimer.DAY_MS + 60_000, bootCount = 7)
@@ -562,7 +567,7 @@ class HabitRepositoryTest {
         repository.logRelapse(habitId)
 
         val row = journalRows().single { it.kind == EventPayload.TYPE_RELAPSE_RECORDED }
-        assertEquals("the new streak has no clean days yet", 0, row.daysFree)
+        assertEquals("the new streak reports Day 1, never 0 (ADR #128)", 1, row.daysFree)
         assertEquals(1, row.relapseCount)
         assertEquals("a fresh streak has achieved nothing", "", row.milestonesReached)
     }

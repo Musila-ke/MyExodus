@@ -150,7 +150,9 @@ private fun viewFor(context: Context, snapshot: ProtectionSnapshot?): WidgetView
     val nowUtc = System.currentTimeMillis()
     val nowElapsed = SystemClock.elapsedRealtime()
     val nowBootCount = systemBootCount(context)
-    val milestone = nextMilestone(snapshot?.streakDays)
+    // streakDays is the ordinal display day (ADR #128); the rung math stays in completed days,
+    // so convert here. coerceAtLeast guards a stale pre-ruling snapshot that still reads 0.
+    val milestone = nextMilestone(snapshot?.streakDays?.minus(1)?.coerceAtLeast(0))
     val view = WidgetView(
         status = displayedStatusFor(
             snapshot = snapshot,

@@ -114,6 +114,12 @@ fun notificationSettingsIntent(context: Context): Intent =
     Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
         .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
 
+/** SOS §8.14: the per-channel settings pane (API 26+; all Android targets are 26+). */
+fun notificationChannelSettingsIntent(context: Context, channelId: String): Intent =
+    Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+        .putExtra(Settings.EXTRA_CHANNEL_ID, channelId)
+
 /**
  * Plan §5.20: a device with no BIOMETRIC_STRONG-class authenticator cannot approve or unpair —
  * the one honest fix is enrolling one, so the explicit message routes here. API 30+ has the
@@ -159,6 +165,11 @@ private val OEM_RESTRICTION_SCREENS: Map<String, String> = mapOf(
     "huawei" to "com.huawei.systemmanager/com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
     "honor" to "com.hihonor.systemmanager/com.hihonor.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
     "asus" to "com.asus.mobilemanager/com.asus.mobilemanager.powersaver.PowerSaverSettings",
+    // Transsion brands share Phone Master's auto-start screen — verified on the X6532
+    // (Infinix): component resolves and resumes, 2026-10-03.
+    "infinix" to "com.transsion.phonemaster/com.cyin.himgr.autostart.AutoStartActivity",
+    "tecno" to "com.transsion.phonemaster/com.cyin.himgr.autostart.AutoStartActivity",
+    "itel" to "com.transsion.phonemaster/com.cyin.himgr.autostart.AutoStartActivity",
 )
 
 private fun packageUri(context: Context): Uri = Uri.fromParts("package", context.packageName, null)

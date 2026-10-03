@@ -13,6 +13,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Widgets
@@ -21,6 +23,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +41,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.R
+import com.example.myexodus.accountability.sync.PartnerNotifications
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.usage.AccountingOutage
@@ -49,6 +53,8 @@ import com.example.myexodus.settings.IntegrityStatus
 import com.example.myexodus.settings.ProtectionChecks
 import com.example.myexodus.settings.StrictModeManager
 import com.example.myexodus.settings.WidgetSettings
+import com.example.myexodus.settings.notificationChannelSettingsIntent
+import com.example.myexodus.settings.notificationSettingsIntent
 import com.example.myexodus.settings.readProtectionChecks
 import com.example.myexodus.settings.requestBatteryExemption
 import com.example.myexodus.telemetry.CrashReporting
@@ -81,6 +87,10 @@ fun SettingsScreen(
     recoveryPrefs: RecoveryPrefs,
     domainUsageEngine: DomainUsageEngine,
     accountingOutageSource: AccountingOutageSource,
+    /** SOS §8.19 (Step 11): the recipient's block switch — null hides the row (no partner). */
+    partnerBlock: NudgeSettingsViewModel.UiState? = null,
+    onPartnerBlockRefresh: () -> Unit = {},
+    onPartnerBlockChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -106,11 +116,17 @@ fun SettingsScreen(
                 monitor.refresh()
                 scope.launch { checks = withContext(Dispatchers.IO) { readProtectionChecks(context) } }
                 scope.launch { outage = withContext(Dispatchers.IO) { accountingOutageSource.current() } }
+                onPartnerBlockRefresh()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+
+    // SOS §8.19: tab entry is not a resume (the activity never left), so the switch's state is
+    // also re-read here — a pairing finished elsewhere in the app must land before this
+    // composition shows the row.
+    LaunchedEffect(Unit) { onPartnerBlockRefresh() }
 
     val loaded = checks
     when (pane) {
@@ -158,6 +174,8 @@ fun SettingsScreen(
             crashReporting = crashReporting,
             widgetSettings = widgetSettings,
             onWidgetSettingsChanged = onWidgetSettingsChanged,
+            partnerBlock = partnerBlock,
+            onPartnerBlockChange = onPartnerBlockChange,
             onOpenPane = { pane = it },
         )
     }
@@ -178,10 +196,13 @@ private fun SettingsIndex(
     crashReporting: CrashReporting,
     widgetSettings: WidgetSettings,
     onWidgetSettingsChanged: () -> Unit,
+    partnerBlock: NudgeSettingsViewModel.UiState?,
+    onPartnerBlockChange: (Boolean) -> Unit,
     onOpenPane: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
+    val context = LocalContext.current
     var discreet by remember { mutableStateOf(widgetSettings.discreetMode) }
     var crashReportsOn by remember { mutableStateOf(crashReporting.enabled) }
     // Null until the checks land: the row shows no status rather than claiming one it hasn't read.
@@ -267,6 +288,48 @@ private fun SettingsIndex(
                     subtitle = stringResource(R.string.settings_recovery_windows_body),
                     onClick = { onOpenPane(PANE_RISK_WINDOWS) },
                 )
+
+                RowDivider()
+                // SOS §8.14: straight to the partner_nudges channel pane; an OEM settings
+                // build that refuses the channel-scoped action gets the app-level pane.
+                IndexRow(
+                    icon = Icons.Outlined.Notifications,
+                    title = stringResource(R.string.settings_partner_checkins_title),
+                    subtitle = stringResource(R.string.settings_partner_checkins_body),
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                notificationChannelSettingsIntent(
+                                    context,
+                                    PartnerNotifications.CHANNEL_PARTNER_NUDGES,
+                                ),
+                            )
+                        }.onFailure { context.startActivity(notificationSettingsIntent(context)) }
+                    },
+                )
+
+                // SOS §8.19 (Step 11): the recipient's block switch — it configures exactly
+                // the pair the inbox listens on (§19.5 rule) and names that partner, and the
+                // write is one document: already-delivered notifications are never retracted.
+                partnerBlock?.let { block ->
+                    RowDivider()
+                    ToggleRow(
+                        icon = Icons.Outlined.NotificationsOff,
+                        title = stringResource(R.string.settings_partner_block_title),
+                        subtitle = stringResource(
+                            R.string.settings_partner_block_body,
+                            block.partnerName,
+                        ),
+                        checked = block.blocked,
+                        enabled = !block.saving,
+                        onCheckedChange = onPartnerBlockChange,
+                        warning = if (block.saveFailed) {
+                            stringResource(R.string.settings_partner_block_failed)
+                        } else {
+                            null
+                        },
+                    )
+                }
 
                 RowDivider()
                 ToggleRow(

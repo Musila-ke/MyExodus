@@ -58,6 +58,19 @@ internal fun AboutScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     modifier = Modifier.padding(16.dp),
                 )
             }
+            // SOS §8.15 FR-25: the reach-out scope note lives in help text only — the tap
+            // path itself never displays it.
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    stringResource(R.string.sos_not_emergency),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
         }
     }
 }

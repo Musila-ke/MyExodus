@@ -22,11 +22,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,6 +59,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.R
+import com.example.myexodus.accountability.sos.NudgeInboxRepository
+import com.example.myexodus.accountability.sos.NudgeRepository
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.ProtectionAuthority
 import com.example.myexodus.blocking.ProtectionDegradation
@@ -74,10 +78,11 @@ import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.rememberWindowWidth
 import com.example.myexodus.ui.ruleRowState
 import com.example.myexodus.ui.scheduleSummary
+import com.example.myexodus.ui.streaks.FreeSinceLine
 import com.example.myexodus.ui.streaks.HabitLabelRow
 import com.example.myexodus.ui.streaks.MilestoneSplashCard
+import com.example.myexodus.ui.streaks.daysFree
 import com.example.myexodus.ui.streaks.daysUntil
-import com.example.myexodus.ui.streaks.habitDays
 import com.example.myexodus.ui.streaks.nextMilestone
 import com.example.myexodus.ui.streaks.splashMilestones
 import kotlinx.coroutines.Dispatchers
@@ -120,6 +125,18 @@ fun HomeScreen(
     /** #12: pairId -> shown partner name for the pinned card's sender line. A failed read
      *  degrades to no names — the card falls back to its generic title, never a wrong name. */
     loadPartnerNames: suspend () -> Map<String, String> = { emptyMap() },
+    /** SOS §8.14: the check-ins-off banner inputs — notification state and its fix path. */
+    partnerNotificationsEnabled: Boolean = true,
+    partnerNotificationsRequestable: Boolean = false,
+    onFixPartnerNotifications: () -> Unit = onOpenSettings,
+    /** SOS §8.15 (Step 8): the Reach out card — client flag, sender state machine, tap path. */
+    sosEnabled: Boolean = false,
+    sosState: SosViewModel.SosSendState = SosViewModel.SosSendState.Idle,
+    onSosTap: () -> Unit = {},
+    /** SOS §8.16 (Step 9): the recipient card — newest pending reach-out, or null. Both of
+     *  its actions ("I'm here" and X) acknowledge through the one callback (§6.9). */
+    nudgeCard: NudgeInboxRepository.NudgeCard? = null,
+    onNudgeAcknowledge: () -> Unit = {},
 ) {
     val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
     val serviceEnabled by monitor.enabled.collectAsStateWithLifecycle()
@@ -175,15 +192,29 @@ fun HomeScreen(
         }
     }
 
-    val streakDays = habit?.let { habitDays(it.currentStreakElapsedMs) }
+    val streakDays = habit?.let { daysFree(it.currentStreakElapsedMs) }
     val nextUp = habit?.let { nextMilestone(it) }
     val splashDays = habit?.let { splashMilestones(it) }?.map { it.milestoneDay }.orEmpty()
+    // SOS §8.14 (V1 Req 35): paired + notifications off.
+    val checkInsAtRisk = partnerNames.isNotEmpty() && !partnerNotificationsEnabled
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = sidePadding, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        // SOS §8.16 (Step 9): the partner's open reach-out is the one Home item with an
+        // active ask, so it leads the column — above the milestone splash — until
+        // acknowledged.
+        nudgeCard?.let { current ->
+            item(key = "nudge") {
+                NudgeCardView(
+                    card = current,
+                    nowMillis = nowMillis,
+                    onAcknowledge = onNudgeAcknowledge,
+                )
+            }
+        }
         // §8 Step 5: the splash card renders at the top of Home (REQ-12's guaranteed
         // delivery path, independent of notifications) — ONE combined card for every
         // unacknowledged milestone (product-owner call 2026-09-14, resolving plan §16 OQ).
@@ -204,8 +235,21 @@ fun HomeScreen(
                 onOpenSettings = onOpenSettings,
             )
         }
+        // SOS §8.14 (V1 Req 35): the check-ins banner below speaks for the same root cause
+        // and the same fix as an NOTIFICATIONS_OFF degradation, so exactly one of the two
+        // renders (never two stacked).
         degradation?.let { current ->
-            item(key = "degradation") { DegradationBanner(current, onReenable, onOpenSettings) }
+            if (!(current == ProtectionDegradation.NOTIFICATIONS_OFF && checkInsAtRisk)) {
+                item(key = "degradation") { DegradationBanner(current, onReenable, onOpenSettings) }
+            }
+        }
+        if (checkInsAtRisk) {
+            item(key = "partner-checkins-off") {
+                PartnerCheckInsNotificationsBanner(
+                    requestable = partnerNotificationsRequestable,
+                    onFix = onFixPartnerNotifications,
+                )
+            }
         }
         // D1: the outage report sits beside the degradation banner — both are statements about
         // protection, and the outage is the one the user can act on from here.
@@ -245,10 +289,19 @@ fun HomeScreen(
                 )
             }
         }
+        // SOS §8.15 (V1 Req 35): the one-tap Reach out control, after the partner-communication
+        // block and before the streak hero. Absent without an active pair or with the feature
+        // flag off (FR-1) — never a dead control.
+        if (sosEnabled && partnerNames.isNotEmpty()) {
+            item(key = "sos") {
+                ReachOutCard(state = sosState, onTap = onSosTap)
+            }
+        }
         item(key = "streak") {
             StreakHeroCard(
                 days = streakDays,
                 habitLabel = habit?.targetLabel,
+                freeSinceEpochMillis = habit?.recoveryStartAt,
                 nextMilestoneDay = nextUp?.milestoneDay,
                 daysToNext = habit?.let { state -> nextUp?.let { daysUntil(state, it.milestoneDay) } },
                 streakResolved = streakResolved,
@@ -258,7 +311,7 @@ fun HomeScreen(
         }
         item(key = "stats") {
             StatTrio(
-                bestStreakDays = habit?.let { habitDays(it.allTimeMaxElapsedMs) },
+                bestStreakDays = habit?.let { daysFree(it.allTimeMaxElapsedMs) },
                 streakResolved = streakResolved,
                 blocks = rules?.size,
                 blocked = attemptCounts?.sumOf { it.count },
@@ -410,6 +463,7 @@ private data class ChipStyle(
 private fun StreakHeroCard(
     days: Int?,
     habitLabel: String?,
+    freeSinceEpochMillis: Long?,
     nextMilestoneDay: Int?,
     daysToNext: Int?,
     streakResolved: Boolean,
@@ -476,6 +530,10 @@ private fun StreakHeroCard(
                         )
                     }
                 }
+            }
+            if (freeSinceEpochMillis != null) {
+                Spacer(Modifier.height(6.dp))
+                FreeSinceLine(freeSinceEpochMillis)
             }
             Spacer(Modifier.height(4.dp))
             Text(caption, style = MaterialTheme.typography.bodyMedium)
@@ -931,6 +989,159 @@ private fun DegradationBanner(
         ) {
             Text(message, style = MaterialTheme.typography.bodyMedium)
             Button(onClick = action) { Text(actionLabel) }
+        }
+    }
+}
+
+/** SOS §8.14 (V1 Req 35): a pair is linked and notifications are off — the plan's copy with
+ *  the working fix path (the system dialog while it can still be raised, else the app's
+ *  notification settings). Same surface grammar as [DegradationBanner]. */
+@Composable
+private fun PartnerCheckInsNotificationsBanner(requestable: Boolean, onFix: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                stringResource(R.string.partner_notifications_checkins_body),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Button(onClick = onFix) {
+                Text(
+                    stringResource(
+                        if (requestable) R.string.partner_notifications_enable
+                        else R.string.partner_notifications_open_settings,
+                    ),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * SOS §8.16 (V1 Req 35, Step 9): the recipient's card for the newest unacknowledged
+ * reach-out. Both actions acknowledge — §6.9's batch covers every fetched pending nudge and
+ * the tray entry is cancelled after it commits (repository); the card then clears through
+ * the listener. No inner text: a nudge's plaintext is constant by design, so the card never
+ * implies a message was written.
+ */
+@Composable
+private fun NudgeCardView(
+    card: NudgeInboxRepository.NudgeCard,
+    nowMillis: Long,
+    onAcknowledge: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.sos_card_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(onClick = onAcknowledge) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = stringResource(R.string.sos_card_dismiss),
+                    )
+                }
+            }
+            Text(
+                stringResource(R.string.sos_card_sent, relativeTimeText(nowMillis, card.createdAtMs)),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(onClick = onAcknowledge) {
+                Text(stringResource(R.string.sos_card_im_here))
+            }
+        }
+    }
+}
+
+/**
+ * SOS §8.15 (V1 Req 35): single-tap check-in to the active partner. The body line is the
+ * state machine's one user-visible surface; the button disables while a result is showing —
+ * the plan's tap path is a plain immediate call, never a dialog, timer, or confirmation.
+ */
+@Composable
+private fun ReachOutCard(state: SosViewModel.SosSendState, onTap: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                stringResource(R.string.sos_reach_out),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = when (state) {
+                    SosViewModel.SosSendState.Idle,
+                    SosViewModel.SosSendState.Sending,
+                    -> stringResource(R.string.sos_reach_out_body)
+
+                    SosViewModel.SosSendState.Sent ->
+                        stringResource(R.string.sos_state_sent)
+
+                    SosViewModel.SosSendState.NotSentOffline ->
+                        stringResource(R.string.sos_state_offline)
+
+                    SosViewModel.SosSendState.CouldNotConfirm ->
+                        stringResource(R.string.sos_state_could_not_confirm)
+
+                    SosViewModel.SosSendState.Unavailable ->
+                        stringResource(R.string.sos_state_unavailable)
+
+                    is SosViewModel.SosSendState.RateLimited -> when (state.reason) {
+                        NudgeRepository.RateLimitReason.COOLDOWN ->
+                            stringResource(
+                                R.string.sos_rate_limited_cooldown,
+                                SosViewModel.cooldownMinutes(state.retryAfterSeconds),
+                            )
+
+                        NudgeRepository.RateLimitReason.DAILY_CAP ->
+                            stringResource(R.string.sos_rate_limited_daily_cap)
+
+                        NudgeRepository.RateLimitReason.UNKNOWN ->
+                            stringResource(R.string.sos_rate_limited_unknown)
+                    }
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(
+                onClick = onTap,
+                enabled = state == SosViewModel.SosSendState.Idle ||
+                    state == SosViewModel.SosSendState.CouldNotConfirm,
+            ) {
+                if (state == SosViewModel.SosSendState.Sending) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(
+                    stringResource(
+                        if (state == SosViewModel.SosSendState.CouldNotConfirm) R.string.sos_try_again
+                        else R.string.sos_reach_out,
+                    ),
+                )
+            }
         }
     }
 }

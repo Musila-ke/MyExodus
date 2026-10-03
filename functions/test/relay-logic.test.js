@@ -20,11 +20,40 @@ const {
   windowState,
   incrementWindows,
   createRelayHandler,
+  pairingUsableForRelay,
   selectInstallations,
   isInstallationStale,
 } = require('../relay-logic');
 
 const b64 = (bytes) => Buffer.alloc(bytes, 0x41).toString('base64');
+
+// Defect #18(a): the unpair deletion request races its own pair's terminate — the trigger
+// evaluates after the status flip and must still accept the message (members-bound), or the
+// partner never learns to shred. Device-caught 2026-10-01 (request rejected 3.4 s after).
+test('pairingUsableForRelay accepts an active pairing for members', () => {
+  const pair = { status: 'active', members: ['alice', 'bob'] };
+  assert.strictEqual(pairingUsableForRelay(pair, 'alice', 'bob'), true);
+});
+
+test('pairingUsableForRelay accepts a terminated pairing for members (the deletion-request race)', () => {
+  const pair = { status: 'terminated', members: ['alice', 'bob'] };
+  assert.strictEqual(pairingUsableForRelay(pair, 'alice', 'bob'), true);
+});
+
+test('pairingUsableForRelay rejects a non-member sender under either status', () => {
+  for (const status of ['active', 'terminated']) {
+    const pair = { status, members: ['alice', 'bob'] };
+    assert.strictEqual(pairingUsableForRelay(pair, 'mallory', 'bob'), false);
+    assert.strictEqual(pairingUsableForRelay(pair, 'alice', 'mallory'), false);
+  }
+});
+
+test('pairingUsableForRelay rejects unknown statuses, missing members, and missing data', () => {
+  assert.strictEqual(pairingUsableForRelay({ status: 'pending', members: ['a', 'b'] }, 'a', 'b'), false);
+  assert.strictEqual(pairingUsableForRelay({ status: 'active' }, 'a', 'b'), false);
+  assert.strictEqual(pairingUsableForRelay(null, 'a', 'b'), false);
+  assert.strictEqual(pairingUsableForRelay({ status: 'active', members: ['a', 'b'] }, undefined, 'b'), false);
+});
 
 test('validatePayload accepts base64 within the AD-19 limit', () => {
   assert.strictEqual(validatePayload(b64(64)), null);

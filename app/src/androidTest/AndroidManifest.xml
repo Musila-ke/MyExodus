@@ -7,5 +7,10 @@
         <activity
             android:name="com.example.myexodus.blocking.TouchRecordingActivity"
             android:exported="true" />
+        <!-- ActivityScenario host for createAndroidComposeRule<ComponentActivity>()
+             (compose-testing's documented requirement: the class must be manifest-declared). -->
+        <activity
+            android:name="androidx.activity.ComponentActivity"
+            android:exported="true" />
     </application>
 </manifest>

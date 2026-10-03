@@ -342,6 +342,9 @@ fun PartnerScreen(
         PairingCeremonyScreen(
             mode = if (view == VIEW_CEREMONY_INVITE) CeremonyMode.INVITE else CeremonyMode.JOIN,
             deps = deps,
+            notificationsEnabled = notificationsEnabled,
+            notificationsRequestable = notificationsRequestable,
+            onFixNotifications = onFixNotifications,
             onExit = {
                 view = null
                 scope.launch(Dispatchers.IO) { reload() }

@@ -120,7 +120,7 @@ fun StreaksScreen(
                     onClick = { view = VIEW_TIMELINE },
                 )
                 RelapseCard(
-                    currentDays = habitDays(state.currentStreakElapsedMs),
+                    currentDays = daysFree(state.currentStreakElapsedMs),
                     inFlight = relapseInFlight,
                     note = relapseNote,
                     onRelapse = onRelapse,

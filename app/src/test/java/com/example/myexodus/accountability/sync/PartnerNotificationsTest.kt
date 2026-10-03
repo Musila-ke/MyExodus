@@ -194,6 +194,70 @@ class PartnerNotificationsTest {
         assertTrue(manager.activeNotifications.isEmpty())
     }
 
+    /** SOS §8.14: the check-ins channel is created at application startup with exactly the
+     *  plan's shape — IMPORTANCE_DEFAULT so a nudge alerts without heads-up priority,
+     *  VISIBILITY_PRIVATE for the lockscreen, vibration enabled on first creation. */
+    @Test
+    fun ensurePartnerNudgesChannel_hasThePlanShape() {
+        PartnerNotifications.ensurePartnerNudgesChannel(context)
+        val channel = manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_NUDGES)!!
+        assertEquals(NotificationManager.IMPORTANCE_DEFAULT, channel.importance)
+        assertEquals(Notification.VISIBILITY_PRIVATE, channel.lockscreenVisibility)
+        assertTrue("vibration enabled on first creation", channel.shouldVibrate())
+        assertEquals(
+            context.getString(R.string.partner_channel_nudges_name),
+            channel.name.toString(),
+        )
+    }
+
+    /** SOS §8.17/FR-19/FR-20: the foreground nudge posts immediately on the check-ins
+     *  channel under the fixed FR-19 tag + id (one replaceable tray entry), with the plan's
+     *  generic copy only — no partner name, no ciphertext, nothing from the push side. */
+    @Test
+    fun partnerNudge_postsGenericCopyUnderTheFixedTag() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val nudgeId = "123e4567-e89b-42d3-a456-426614174000"
+
+        PartnerNotifications.notifyPartnerNudge(context, nudgeId)
+
+        val posted = manager.activeNotifications.single()
+        assertEquals(PartnerNudgePush.TAG, posted.tag)
+        assertEquals(PartnerNotifications.NOTIF_PARTNER_NUDGE, posted.id)
+        assertEquals(PartnerNotifications.CHANNEL_PARTNER_NUDGES, posted.notification.channelId)
+        assertEquals(
+            context.getString(R.string.partner_nudge_title),
+            posted.notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(R.string.partner_nudge_text),
+            posted.notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+        assertEquals(Notification.VISIBILITY_PRIVATE, posted.notification.visibility)
+    }
+
+    /** §8.18 parity: the foreground post's tap carries the same launcher extras the
+     *  background system path delivers, so MainActivity's routing is identical. */
+    @Test
+    fun partnerNudge_tapCarriesTheLauncherExtras() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val nudgeId = "123e4567-e89b-42d3-a456-426614174000"
+
+        PartnerNotifications.notifyPartnerNudge(context, nudgeId)
+
+        val tap = shadowOf(manager.activeNotifications.single().notification.contentIntent).savedIntent
+        assertEquals(PartnerNudgePush.TYPE_PARTNER_NUDGE, tap.getStringExtra(PartnerNudgePush.TYPE_KEY))
+        assertEquals(nudgeId, tap.getStringExtra(PartnerNudgePush.NUDGE_ID_KEY))
+    }
+
+    /** Denied permission skips the post entirely — the FCM callback must not crash (plan
+     *  §12 line 523's denied-permission path). */
+    @Test
+    fun partnerNudge_deniedPermissionIsASilentNoOp() {
+        shadowOf(context as Application).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        PartnerNotifications.notifyPartnerNudge(context, "123e4567-e89b-42d3-a456-426614174000")
+        assertTrue(manager.activeNotifications.isEmpty())
+    }
+
     private companion object {
         const val PAIR_ID = "pair-alpha"
         const val PARTNER_NAME = "Mama"

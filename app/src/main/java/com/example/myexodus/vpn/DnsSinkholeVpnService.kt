@@ -3,6 +3,7 @@ package com.example.myexodus.vpn
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -107,6 +108,10 @@ class DnsSinkholeVpnService : VpnService() {
         const val UPSTREAM_DNS_V6 = "2001:4860:4860::8888"
         const val FLOW_IDLE_SWEEP_MS = 300_000L
 
+        /** SOS §8.13: GMS is disallowed from the TUN so FCM push delivery is never
+         *  sinkholed (no runtime permission needed for a disallow entry). */
+        const val GMS_PACKAGE = "com.google.android.gms"
+
         @Volatile var state: VpnEngineState = VpnEngineState.STOPPED; private set
         @Volatile var reason: String = ""; private set
         @Volatile var privateDnsMode: String = ""; private set
@@ -163,6 +168,14 @@ class DnsSinkholeVpnService : VpnService() {
                 // INV-9: the app's own traffic must never enter the TUN — it would be metered
                 // against its own rules and could deadlock the upstream DNS sockets.
                 addDisallowedApplication(BuildConfig.APPLICATION_ID)
+                // SOS §8.13: GMS stays outside the TUN so FCM push wake-ups (the nudge
+                // transport) are never subject to the sinkhole. Every other app's traffic
+                // remains filtered. NameNotFoundException = GMS-less device, nothing to
+                // exclude.
+                try {
+                    addDisallowedApplication(GMS_PACKAGE)
+                } catch (_: PackageManager.NameNotFoundException) {
+                }
                 addAddress(TUN_V4, 32)
                 addAddress(TUN_V6, 128)
                 addRoute("0.0.0.0", 0)

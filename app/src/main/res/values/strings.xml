@@ -508,6 +508,47 @@
     <string name="partner_channel_requests_name">MyExodus partner requests</string>
     <string name="partner_channel_sync_status_name">MyExodus sync status</string>
 
+    <!-- Partner SOS (V1 Req 35, plan §8.14/§8 Step 7): the nudge channel ("Accountability
+         Check-ins"), the check-ins-off Home banner (plan copy), the ceremony's ask, and the
+         Settings channel row. -->
+    <string name="partner_channel_nudges_name">Accountability Check-ins</string>
+    <string name="partner_notifications_checkins_body">Notifications are off, so you’ll miss check-ins.</string>
+    <string name="partner_ceremony_notifications_body">Turn on notifications so your partner’s check-ins reach you.</string>
+    <string name="settings_partner_checkins_title">Check-in notifications</string>
+    <string name="settings_partner_checkins_body">Open the Accountability Check-ins channel settings.</string>
+    <!-- The recipient's block switch (plan §8.19 Step 11): names the partner the switch
+         configures (§19.5 target), so the N-partner case is never ambiguous. -->
+    <string name="settings_partner_block_title">Block check-ins</string>
+    <string name="settings_partner_block_body">Don’t let reach-outs from %1$s reach this phone.</string>
+    <string name="settings_partner_block_failed">Couldn’t save. Check your connection and try again.</string>
+    <!-- The nudge notification copy (plan §4.6): one fixed generic pair — the same text the
+         background system notification shows, so both delivery paths read identically. No
+         partner name, no habit detail (FR-19/FR-13). -->
+    <string name="partner_nudge_title">Accountability Check-in</string>
+    <string name="partner_nudge_text">Your partner reached out — check in when you can.</string>
+    <!-- The sender card (plan §8.15 Step 8). Result copy mirrors the plan's state names —
+         deliberately terse; the plan's "chill, subtle" direction (OPD #7) and FR-25's rule
+         that the tap path never shows an emergency warning. -->
+    <string name="sos_reach_out">Reach out</string>
+    <string name="sos_reach_out_body">Let your partner know you could use a check-in.</string>
+    <string name="sos_try_again">Try again</string>
+    <string name="sos_state_sent">Sent</string>
+    <string name="sos_state_offline">No connection. Not sent.</string>
+    <string name="sos_state_could_not_confirm">Couldn’t confirm</string>
+    <string name="sos_state_unavailable">Unavailable</string>
+    <string name="sos_rate_limited_cooldown">You’ve reached out recently. Try again in %1$d min.</string>
+    <string name="sos_rate_limited_daily_cap">Daily limit reached. Try again tomorrow.</string>
+    <string name="sos_rate_limited_unknown">You’ve reached the check-in limit. Try again later.</string>
+    <!-- FR-25: help/onboarding text only — the tap path itself never displays this. -->
+    <string name="sos_not_emergency">Reach out is a check-in, not an emergency service. If you need urgent help, call your local emergency number.</string>
+    <!-- The recipient card (plan §8.16 Step 9): title, relative send time, the "I'm here"
+         reply and the X (both acknowledge). The plaintext is constant by design, so the
+         card never quotes a message — it only says who reached out and when. -->
+    <string name="sos_card_title">Your partner reached out</string>
+    <string name="sos_card_sent">Sent %1$s</string>
+    <string name="sos_card_im_here">I’m here</string>
+    <string name="sos_card_dismiss">Dismiss the reach-out</string>
+
     <!-- Step 13 disable-approval (§8 Step 12, AD-07/AD-16): the responder decides with a
          hash-chain verification badge shown before the buttons; a blocked chain disables
          responding rather than hiding the request. Tray copy stays generic (NFR2) — the
@@ -679,15 +720,17 @@
     <string name="streaks_day_singular">day</string>
     <string name="streaks_day_plural">days</string>
     <string name="streaks_best_run">Best run: %1$d days — that record stays with you.</string>
+    <!-- Owner decision 2026-10-03: the chosen stop date is shown as a since-label (identity), never as credited days — the side-by-side reads as two facts, not two counters. -->
+    <string name="streaks_free_since">Free since %1$s</string>
     <string name="streaks_rung_reached">Reached</string>
     <string name="streaks_rung_days_away">%1$d days away</string>
     <string name="streaks_rung_day">Day %1$d</string>
     <string name="streaks_relapse_title">Had a slip?</string>
-    <string name="streaks_relapse_body">Logging a relapse ends the current count and starts a new one at Day 0. Your best run stays on record — progress you\'ve made isn\'t erased.</string>
+    <string name="streaks_relapse_body">Logging a relapse ends the current count and starts a new one at Day 1. Your best run stays on record — progress you\'ve made isn\'t erased.</string>
     <string name="streaks_relapse_action">Log a relapse</string>
     <string name="streaks_relapse_in_flight">Logging…</string>
     <string name="streaks_relapse_confirm_title">Log a relapse?</string>
-    <string name="streaks_relapse_confirm_body">Your current streak of %1$d %2$s ends and a new one starts at Day 0. Your best run stays on record.</string>
+    <string name="streaks_relapse_confirm_body">Your current streak of %1$d %2$s ends and a new one starts at Day 1. Your best run stays on record.</string>
     <string name="streaks_relapse_confirm_action">Log it</string>
     <string name="streaks_cancel">Cancel</string>
     <string name="streaks_done">Nice — keep going</string>
@@ -715,9 +758,9 @@
     <string name="streaks_setup_severity_mild">Mild — occasionally</string>
     <string name="streaks_setup_severity_moderate">Moderate — most days</string>
     <string name="streaks_setup_severity_severe">Severe — constantly, hard to control</string>
-    <string name="streaks_setup_counting_from">Counting from</string>
+    <string name="streaks_setup_counting_from">Free since</string>
     <string name="streaks_setup_change">Change</string>
-    <string name="streaks_setup_date_note">The count starts when you set this up and runs forward from this moment. The date is a label for when you stopped.</string>
+    <string name="streaks_setup_date_note">Your count starts now, on this phone — only tracked time adds days. The date is remembered as when you stopped; it doesn\'t add days by itself.</string>
     <string name="streaks_setup_start">Start my streak</string>
     <string name="streaks_picker_confirm">OK</string>
     <string name="streaks_picker_title">Your habits</string>

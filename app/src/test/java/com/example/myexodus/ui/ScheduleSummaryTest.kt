@@ -7,6 +7,7 @@ import com.example.myexodus.R
 import com.example.myexodus.data.db.entity.RestrictionRule
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.Month
 import java.time.ZoneId
 import java.time.format.TextStyle
 import java.util.Calendar
@@ -108,6 +109,22 @@ class ScheduleSummaryTest {
     fun expiry_isAppendedForEveryMechanism() {
         val summary = scheduleSummary(rule(alwaysOn = true, expiresAt = utc(2026, 10, 1, 12, 0)), res)
         assertTrue(summary, summary.contains("until"))
+    }
+
+    @Test
+    fun freeSinceDate_dropsTheYearOnlyWithinTheSameYear() {
+        val zone = ZoneId.systemDefault()
+        val now = LocalDate.of(2026, 10, 3).atTime(12, 0).atZone(zone).toInstant().toEpochMilli()
+        val thisYear = LocalDate.of(2026, 10, 1).atTime(9, 0).atZone(zone).toInstant().toEpochMilli()
+        val lastYear = LocalDate.of(2025, 12, 31).atTime(9, 0).atZone(zone).toInstant().toEpochMilli()
+        val oct = Month.OCTOBER.getDisplayName(TextStyle.SHORT, Locale.getDefault())
+
+        val recent = formatDayMonth(thisYear, now)
+        assertTrue(recent, recent.contains(oct))
+        assertFalse("a this-year date keeps no year: $recent", recent.contains("2026"))
+
+        val older = formatDayMonth(lastYear, now)
+        assertTrue("another year stays unambiguous: $older", older.contains("2025"))
     }
 
     @Test

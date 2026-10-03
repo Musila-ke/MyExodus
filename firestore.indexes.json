@@ -7,6 +7,16 @@
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "attempts", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "nudges",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "recipientUid", "order": "ASCENDING" },
+        { "fieldPath": "suppressedAt", "order": "ASCENDING" },
+        { "fieldPath": "ackedAt", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [
@@ -18,6 +28,11 @@
         { "queryScope": "COLLECTION", "order": "DESCENDING" },
         { "queryScope": "COLLECTION_GROUP", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "nudges",
+      "fieldPath": "envelope",
+      "indexes": []
     }
   ]
 }

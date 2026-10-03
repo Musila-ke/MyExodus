@@ -75,6 +75,7 @@ import com.example.myexodus.accountability.sync.MessageSendOutcome
 import com.example.myexodus.accountability.sync.PairUidResolver
 import com.example.myexodus.accountability.sync.messageSendOutcome
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
+import com.example.myexodus.accountability.sync.PartnerNudgePush
 import com.example.myexodus.accountability.sync.PartnerRolloutGate
 import com.example.myexodus.accountability.sync.PushInstallationRegistrar
 import com.example.myexodus.accountability.sync.runPartnerSyncPass
@@ -105,6 +106,9 @@ import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.ui.AppShell
 import com.example.myexodus.ui.NavKeys
 import com.example.myexodus.ui.SecureSurfaces
+import com.example.myexodus.ui.home.NudgeInboxViewModel
+import com.example.myexodus.ui.settings.NudgeSettingsViewModel
+import com.example.myexodus.ui.home.SosViewModel
 import com.example.myexodus.ui.partner.PairingCeremonyDeps
 import com.example.myexodus.ui.partner.PartnerDashboardSource
 import com.example.myexodus.ui.partner.PartnerSelection
@@ -170,6 +174,19 @@ class MainActivity : FragmentActivity() {
         requestedTab = intent.getStringExtra(EXTRA_START_TAB)
         requestedHabit = intent.getStringExtra(EXTRA_START_HABIT)
         requestedRecoveryEntry = intent.getStringExtra(EXTRA_RECOVERY_ENTRY)
+        handlePartnerNudgeIntent(intent)
+    }
+
+    /**
+     * SOS §8.18: a nudge launcher intent (background FCM tap, or the foreground post's tap)
+     * routes to Home, and its extras are consumed — stripped from the stored intent so a
+     * later recreate/state restore never re-routes. The extras are navigation hints only;
+     * the card's content always comes from Firestore (never the push payload).
+     */
+    private fun handlePartnerNudgeIntent(intent: Intent?) {
+        if (PartnerNudgePush.consumeLauncherNudge(intent ?: return) != null) {
+            requestedTab = TAB_HOME
+        }
     }
 
     @Inject lateinit var rulesStoreFactory: AppRulesStoreFactory
@@ -238,12 +255,28 @@ class MainActivity : FragmentActivity() {
 
     private val streaksViewModel: StreaksViewModel by viewModels()
 
+    /** SOS §8.15 (Step 8): the Reach out sender state machine. */
+    private val sosViewModel: SosViewModel by viewModels()
+
+    /** SOS §8.16 (Step 9): the recipient inbox — the listener's start/stop follows the
+     *  Home tab inside the shell. */
+    private val nudgeInboxViewModel: NudgeInboxViewModel by viewModels()
+
+    /** SOS §8.19 (Step 11): the recipient's block switch on the Settings row. */
+    private val nudgeSettingsViewModel: NudgeSettingsViewModel by viewModels()
+
     /** Plan §8 Step 5 / Decision 9: the foreground evaluation trigger lives here, at the
      *  Activity lifecycle boundary — never inside composition. The ViewModel's own `init`
      *  covers the first launch. */
     override fun onResume() {
         super.onResume()
         streaksViewModel.refresh()
+        // SOS §8.20: the sos flag is re-read at the same foreground boundary the sync pass
+        // uses — the Remote Config read serves its cached-or-default value on a failed fetch.
+        sosViewModel.refreshEnabled()
+        // SOS §8.19: the block switch's state is re-read at the same boundary (a pair change
+        // or a write from elsewhere lands the fresh value on the way back to Settings).
+        nudgeSettingsViewModel.refresh()
         // §8.2: enrollment changes cannot invalidate the key itself (time-bound keys sit
         // outside setInvalidatedByBiometricEnrollment's scope — android-36 javadoc), so the
         // poll runs here: startup and every ON_RESUME.
@@ -251,8 +284,17 @@ class MainActivity : FragmentActivity() {
         // #14: partner sync is an automatic process — opening the app runs the same in-process
         // pass the periodic worker and the dashboard's manual path run (the cold-auth-window
         // case stops cleanly inside the pass; no biometric prompt is ever raised from here).
-        // Fire-and-forget: a failed pass leaves the dashboard's freshness state to say so, and
-        // the next pass retries.
+        refreshPartnerPushRegistration()
+    }
+
+    /**
+     * §8.2/#14: fire-and-forget sync pass at the lifecycle boundaries that matter to push
+     * delivery — app foreground (§8.12 startup/ON_START) and a notification-permission flip
+     * (§8.12 permission-result trigger: the grant changes `pushEligible`). Also covers the
+     * settings-return trigger, since a return from system settings resumes this activity.
+     * A failed pass leaves the dashboard's freshness state to say so; the next pass retries.
+     */
+    private fun refreshPartnerPushRegistration() {
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
                 if (isOnline()) {
@@ -271,6 +313,7 @@ class MainActivity : FragmentActivity() {
         requestedTab = intent.getStringExtra(EXTRA_START_TAB)
         requestedHabit = intent.getStringExtra(EXTRA_START_HABIT)
         requestedRecoveryEntry = intent.getStringExtra(EXTRA_RECOVERY_ENTRY)
+        handlePartnerNudgeIntent(intent)
         enableEdgeToEdge()
         setContent {
             MyExodusTheme {
@@ -295,6 +338,9 @@ class MainActivity : FragmentActivity() {
                 ) { _ ->
                     notificationsRequested = true
                     notificationsEnabled = NotificationAccess.canPost(this@MainActivity)
+                    // §8.12 permission-result trigger: the grant flips pushEligible on the
+                    // installation document — re-register immediately, don't wait for resume.
+                    refreshPartnerPushRegistration()
                 }
                 val canRequestNotifications =
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -432,6 +478,9 @@ class MainActivity : FragmentActivity() {
                         degradation = degradation,
                         authority = authority,
                         streaks = streaksViewModel,
+                        sos = sosViewModel,
+                        nudgeInbox = nudgeInboxViewModel,
+                        nudgeSettings = nudgeSettingsViewModel,
                         partnerSource = partnerDashboardSource,
                         partnerSelection = partnerSelection,
                         ceremonyDeps = ceremonyDeps,

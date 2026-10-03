@@ -58,4 +58,47 @@ class EventCipherTest {
             cipher.decrypt(ByteArray(32), 1, ct)
         }
     }
+
+    // --- SOS §10.4/D5: the AAD seal used by the nudge envelope -----------------------------
+
+    private val aad = "partner_nudge|v1|p|n|u".toByteArray(Charsets.UTF_8)
+
+    @Test
+    fun aad_roundTrip() {
+        val plaintext = """{"v":1,"kind":"nudge"}""".toByteArray()
+        val sealed = cipher.encryptWithAad(cek, aad, plaintext)
+        assertArrayEquals(plaintext, cipher.decryptWithAad(cek, aad, sealed))
+    }
+
+    @Test
+    fun aad_layout_isNonceThenCiphertext() {
+        val plaintext = "abcd".toByteArray()
+        val sealed = cipher.encryptWithAad(cek, aad, plaintext)
+        assertEquals(12 + plaintext.size + 16, sealed.size)
+    }
+
+    @Test
+    fun aad_mismatch_throwsAEADBadTag() {
+        val sealed = cipher.encryptWithAad(cek, aad, "payload".toByteArray())
+        assertThrows(AEADBadTagException::class.java) {
+            cipher.decryptWithAad(cek, "partner_nudge|v1|p|n|X".toByteArray(), sealed)
+        }
+    }
+
+    @Test
+    fun aad_tamperedCiphertext_throws() {
+        val sealed = cipher.encryptWithAad(cek, aad, "payload".toByteArray())
+        val tampered = sealed.copyOf().also { it[sealed.size - 1] = (it[sealed.size - 1].toInt() xor 0x01).toByte() }
+        assertThrows(AEADBadTagException::class.java) {
+            cipher.decryptWithAad(cek, aad, tampered)
+        }
+    }
+
+    @Test
+    fun aad_usesFreshRandomNoncePerSeal() {
+        val first = cipher.encryptWithAad(cek, aad, "same".toByteArray())
+        val second = cipher.encryptWithAad(cek, aad, "same".toByteArray())
+        assertFalse("same plaintext+AAD must still produce different ciphertext (fresh nonce)", first.contentEquals(second))
+        assertFalse(first.copyOf(12).contentEquals(second.copyOf(12)))
+    }
 }

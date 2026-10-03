@@ -5,6 +5,7 @@ import androidx.activity.compose.BackHandler
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -122,6 +123,11 @@ fun PairingCeremonyScreen(
     mode: CeremonyMode,
     deps: PairingCeremonyDeps,
     onExit: () -> Unit,
+    /** SOS §8.14 (Step 7): the pairing-success ask's inputs — the pair just became active,
+     *  so this is the plan's moment to request notification permission. */
+    notificationsEnabled: Boolean,
+    notificationsRequestable: Boolean,
+    onFixNotifications: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -424,6 +430,9 @@ fun PairingCeremonyScreen(
             is CeremonyStep.Paired -> PairedTerminal(
                 partnerLabel = current.partnerLabel,
                 partnerKeyId = current.partnerKeyId,
+                notificationsEnabled = notificationsEnabled,
+                notificationsRequestable = notificationsRequestable,
+                onFixNotifications = onFixNotifications,
                 onDone = onExit,
             )
 
@@ -806,7 +815,14 @@ private fun CompareSas(
 }
 
 @Composable
-private fun PairedTerminal(partnerLabel: String?, partnerKeyId: String, onDone: () -> Unit) {
+private fun PairedTerminal(
+    partnerLabel: String?,
+    partnerKeyId: String,
+    notificationsEnabled: Boolean,
+    notificationsRequestable: Boolean,
+    onFixNotifications: () -> Unit,
+    onDone: () -> Unit,
+) {
     Surface(
         color = MaterialTheme.colorScheme.tertiaryContainer,
         contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
@@ -843,6 +859,23 @@ private fun PairedTerminal(partnerLabel: String?, partnerKeyId: String, onDone: 
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
             )
+            // SOS §8.14: the pairing-success ask (API 33+). Declining never blocks pairing —
+            // Done stays available in every state.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationsEnabled) {
+                Text(
+                    stringResource(R.string.partner_ceremony_notifications_body),
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                )
+                OutlinedButton(onClick = onFixNotifications, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        stringResource(
+                            if (notificationsRequestable) R.string.partner_notifications_enable
+                            else R.string.partner_notifications_open_settings,
+                        ),
+                    )
+                }
+            }
         }
     }
     Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) {

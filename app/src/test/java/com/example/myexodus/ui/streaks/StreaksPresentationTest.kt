@@ -38,7 +38,7 @@ class StreaksPresentationTest {
         recoveryStartAt = 0,
         currentStreakElapsedMs = elapsedMs,
         allTimeMaxElapsedMs = bestMs,
-        currentDay = habitDays(elapsedMs),
+        currentDay = daysFree(elapsedMs),
         habitDurationYears = 2,
         severity = WithdrawalSeverity.MODERATE,
         withdrawalWeeks = emptyList(),
@@ -51,6 +51,24 @@ class StreaksPresentationTest {
         assertEquals(0, habitDays(day - 1))
         assertEquals(1, habitDays(day))
         assertEquals(3, habitDays(3 * day + day / 2))
+    }
+
+    /** Owner ruling 2026-10-03 (ADR #128): the displayed count is ordinal — Day 1 at start
+     *  (also when backdated), then one up per completed 24h day, never 0. */
+    @Test
+    fun daysFree_isTheOrdinalDisplayDay_neverZero() {
+        assertEquals(1, daysFree(0))
+        assertEquals(1, daysFree(day - 1))
+        assertEquals(2, daysFree(day))
+        assertEquals(4, daysFree(3 * day + day / 2))
+    }
+
+    /** The countdown stays on completed days so it agrees with the milestone's own 24h firing
+     *  moment: "Day 7" completes `daysUntil` days from now = `7 - daysFree + 1`. */
+    @Test
+    fun daysUntil_matchesTheOrdinalCountdown() {
+        assertEquals(7 - daysFree(0) + 1, daysUntil(state(elapsedMs = 0), 7))
+        assertEquals(7 - daysFree(6 * day) + 1, daysUntil(state(elapsedMs = 6 * day), 7))
     }
 
     @Test

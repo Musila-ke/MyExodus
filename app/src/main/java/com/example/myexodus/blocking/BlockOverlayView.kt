@@ -52,7 +52,13 @@ sealed interface OverlayContent {
      *  foreground service is down. [ruleId] is null only when the rule vanished between the
      *  decide and the show; the card then states the block without an action. [packageName]
      *  feeds the anchor disc's real icon; null when the target is not an installed package
-     *  (the URL-race fallback), where the disc shows the block glyph. */
+     *  (the URL-race fallback), where the disc shows the block glyph.
+     *
+     *  Persistent since the owner ruling 2026-10-03: a foreign foreground no longer lifts it
+     *  (that is what made the on-schedule block screen flash for a split second and drop the
+     *  user to Home) — it stays until the user dismisses it via its Close action, or our own
+     *  UI (the durable [BlockerActivity], the recovery flow) takes over. Mirrors the daily
+     *  wall's 2026-09-27 ruling. */
     data class AppBlocked(
         val target: String,
         val ruleId: String?,
@@ -112,8 +118,9 @@ internal class BlockOverlayView(
     private val onPresented: () -> Unit,
     private val onOpenRecovery: (ruleId: String) -> Unit,
     private val onDifferentSite: (browserPackage: String) -> Unit,
-    /** The daily wall's Close action; null on a host that cannot evict (Path B), which keeps
-     *  its follow-the-foreground dismissal and renders no in-place dismiss. */
+    /** The persistent walls' in-place Close (daily wall + app-block card, owner rulings
+     *  2026-09-27 / 2026-10-03); null on a host that cannot evict (Path B), which keeps its
+     *  follow-the-foreground dismissal and renders no in-place dismiss. */
     private val onWallDismiss: (() -> Unit)? = null,
     private val onWarningDismiss: () -> Unit = {},
 ) : FrameLayout(context) {
@@ -262,7 +269,12 @@ internal class BlockOverlayView(
                     recoveryButton.visibility = GONE
                 }
                 differentSiteButton.visibility = GONE
-                wallDismissButton.visibility = GONE
+                // Persistent like the daily wall (owner ruling 2026-10-03): the evicting host
+                // arms the same in-place Close, so the user dismisses the card — the launcher
+                // coming forward after the eviction no longer lifts it mid-flash.
+                val dismiss = onWallDismiss
+                wallDismissButton.visibility = if (dismiss != null) VISIBLE else GONE
+                if (dismiss != null) wallDismissButton.setOnClickListener { dismiss() }
                 hint.visibility = VISIBLE
             }
             is OverlayContent.UrlBlocked -> {
@@ -305,17 +317,18 @@ internal class BlockOverlayView(
                 // is the honest default.
             }
         }
-        // Daily wall = the v1 block screen's rhythm with its single Close action (user-directed
+        // Block walls = the v1 block screen's rhythm with their in-place Close (user-directed
         // 2026-09-15 rhythm; the escape became a wall control on 2026-09-27 — the app is
         // already evicted behind it, so a tap must not be the only way out): title → 8dp →
-        // message → 32dp → Close → 24dp → hint.
-        val daily = content is OverlayContent.DailyLimitBlocked
+        // message → 32dp → Close → 24dp → hint. The app-block card joined the wall on
+        // 2026-10-03 — it too stays until the user dismisses it.
+        val blocked = content is OverlayContent.DailyLimitBlocked || content is OverlayContent.AppBlocked
         message.layoutParams =
-            if (daily) marginParams(top = 8, bottom = 32) else marginParams(bottom = 32)
+            if (blocked) marginParams(top = 8, bottom = 32) else marginParams(bottom = 32)
         wallDismissButton.layoutParams =
-            if (daily) marginParams(bottom = 24) else marginParams(bottom = 8)
-        hint.layoutParams = if (daily) marginParams() else marginParams(top = 24)
-        hint.setText(if (daily) R.string.block_screen_hint else R.string.overlay_hint)
+            if (blocked) marginParams(bottom = 24) else marginParams(bottom = 8)
+        hint.layoutParams = if (blocked) marginParams() else marginParams(top = 24)
+        hint.setText(if (blocked) R.string.block_screen_hint else R.string.overlay_hint)
         // Rebind of an already-attached window (warning → block upgrade in place, §8 Step 10):
         // no attach event will fire again, so arm the confirm callback for the next frame.
         if (onAttached != null && isAttachedToWindow) scheduleAttachCallback()

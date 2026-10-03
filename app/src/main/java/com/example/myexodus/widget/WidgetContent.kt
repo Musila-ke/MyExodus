@@ -351,7 +351,9 @@ private fun MilestoneBand(view: WidgetView) {
     val days = view.streakDays ?: return
     val target = view.nextMilestoneDay ?: return
     val away = view.nextMilestoneDaysAway ?: return
-    val fraction = milestoneFraction(days, target) ?: return
+    // streakDays is the ordinal display day (ADR #128); the fraction counts completed days.
+    // coerceAtLeast guards a stale persisted snapshot written by the pre-ruling build.
+    val fraction = milestoneFraction((days - 1).coerceAtLeast(0), target) ?: return
 
     Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(

@@ -539,7 +539,9 @@ class HabitRepository(
                 habit.allTimeMaxStreakElapsedMs,
                 streak.currentStreakElapsedMs,
             ),
-            currentDay = dayOf(streak.currentStreakElapsedMs),
+            // Ordinal display day (owner ruling 2026-10-03, ADR #128): a fresh streak reads
+            // Day 1, never 0. The accumulator itself stays at whole completed days (§6.2).
+            currentDay = dayOf(streak.currentStreakElapsedMs) + 1,
             habitDurationYears = habit.habitDurationYears,
             severity = severity,
             withdrawalWeeks = WithdrawalCurve.weeks(habit.habitDurationYears, severity),
@@ -547,7 +549,9 @@ class HabitRepository(
         )
     }
 
-    /** Completed clean days of an accumulator — the display-day definition [HabitState] uses. */
+    /** Completed clean days of an accumulator — the engine's day-crossing unit (the partner
+     *  STREAK_UPDATED gate below, milestone thresholds). [HabitState.currentDay] renders its
+     *  ordinal (+1) — see the ruling note there. */
     private fun dayOf(elapsedMs: Long): Int = (elapsedMs / StreakTimer.DAY_MS).toInt()
 
     private fun RecoveryStreak.toAnchor() = StreakAnchor(

@@ -1,6 +1,8 @@
 package com.example.myexodus.di
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Log
 import androidx.room3.Room
 import com.example.myexodus.accountability.BilateralDeletion
@@ -51,10 +53,16 @@ import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.decodeMilestoneDays
 import com.example.myexodus.secrets.SecretsRepository
+import com.example.myexodus.accountability.sos.NudgeInboxRepository
+import com.example.myexodus.accountability.sos.NudgeRepository
+import com.example.myexodus.accountability.sos.NudgeSettingsRepository
+import com.example.myexodus.accountability.sync.PARTNER_SOS_CONFIG_KEY
 import com.example.myexodus.ui.partner.PartnerActivityUi
 import com.example.myexodus.ui.partner.PartnerDashboardSource
+import com.example.myexodus.ui.partner.PartnerSelection
 import com.example.myexodus.BuildConfig
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.functions.FirebaseFunctions
@@ -69,6 +77,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import java.util.Base64
 import javax.inject.Singleton
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.callbackFlow
 
 /**
  * §7.5 wiring for the Accountability-Partner Protocol. The sync engines are provided as
@@ -143,11 +153,15 @@ object AccountabilityModule {
     fun provideFirebaseMessaging(): FirebaseMessaging = FirebaseMessaging.getInstance()
 
     /**
-     * Plan §13 line 564: the push-registration rollout gate. In-code defaults are set to
-     * `true` BEFORE the first read — Remote Config's in-app defaults are separate from console
+     * Plan §13 line 564: the push-registration rollout gate. In-code defaults are set
+     * BEFORE the first read — Remote Config's in-app defaults are separate from console
      * values, so without this an unset console key would read `false` and silently disable a
      * working rail. The 15-minute minimum fetch interval matches the sync cadence: a console
-     * flip is picked up by the next pass, and offline/failed fetches serve the cached value.
+     * flip is picked up by the next pass. A failed fetch must not discard the last activated
+     * value, so it is swallowed and the read still serves the cached value (or the in-app
+     * default on a fresh, offline install). SOS §8.20 rides the same instance: one defaults
+     * map, one fetch — `partner_sos_enabled` defaults `false`, the opposite failure default
+     * of a not-yet-released feature.
      */
     @Provides @Singleton
     fun providePartnerRolloutGate(): PartnerRolloutGate {
@@ -157,22 +171,159 @@ object AccountabilityModule {
                 .setMinimumFetchIntervalInSeconds(900)
                 .build(),
         )
-        remoteConfig.setDefaultsAsync(mapOf(PUSH_REGISTRATION_CONFIG_KEY to true))
-        return PartnerRolloutGate {
-            remoteConfig.fetchAndActivate().await()
-            remoteConfig.getBoolean(PUSH_REGISTRATION_CONFIG_KEY)
+        remoteConfig.setDefaultsAsync(
+            mapOf(
+                PUSH_REGISTRATION_CONFIG_KEY to true,
+                PARTNER_SOS_CONFIG_KEY to false,
+            ),
+        )
+        return PartnerRolloutGate { key ->
+            runCatching { remoteConfig.fetchAndActivate().await() }
+            remoteConfig.getBoolean(key)
         }
     }
 
     /**
-     * Plan §8 Step 7 (client) / AD-18a: this device's push installation. `ensureUid` is
-     * [PairUidResolver.ensureUid] itself — the one single-flighted anonymous sign-in (a second
-     * concurrent sign-in path here is what minted duplicate anonymous accounts and starved
-     * identity-pinned writes of their token, device-caught 2026-10-01); the token fetch is
-     * FCM's cached getToken (a Task); the write is a full replace (no merge — a server-set
-     * `stale` must clear, see [FirestoreSchema.pushInstallationData]). ANDROID_ID is read once
-     * at provider construction; a device reporting none registers nothing (AD-05 sync fallback
-     * applies).
+     * SOS Step 8 (§6.1/§8.15, table A2): the Reach out sender path. The target pair follows
+     * the §19.5 persisted selection (else the newest enrollment — the dashboard's own rule);
+     * the CEK is the same in-memory derivation the dashboard's decoder uses; the callable
+     * rides the shared region-pinned [FirebaseFunctions] instance. FR-3's preflight demands a
+     * *validated* network (captive portals and dead links fail it), stricter than the
+     * INTERNET-only check the sync pass uses — an offline tap must not fire a doomed callable.
+     */
+    @Provides @Singleton
+    fun provideNudgeRepository(
+        @ApplicationContext context: Context,
+        db: AccountabilityDatabase,
+        functions: FirebaseFunctions,
+        keystore: AccountabilityKeyStore,
+        cekDerivation: CekDerivation,
+        uidResolver: PairUidResolver,
+        partnerSelection: PartnerSelection,
+        eventCipher: EventCipher,
+    ): NudgeRepository = NudgeRepository(
+        enrollments = db.enrollmentDao()::all,
+        selectedPairId = { partnerSelection.selectedPairId },
+        ensureUid = { uidResolver.ensureUid() },
+        deriveCek = { enrollment ->
+            cekDerivation.deriveCek(
+                enrollment.pairId,
+                keystore.agreementPrivateKeyFor(enrollment.myAgreementKeyAlias),
+                decodePublicKey(enrollment.partnerAgreementPubKey),
+            )
+        },
+        callSendNudge = { wire -> functions.getHttpsCallable("sendNudge").call(wire).await().data },
+        validatedNetwork = {
+            val cm = context.getSystemService(ConnectivityManager::class.java)
+            val caps = cm?.activeNetwork?.let(cm::getNetworkCapabilities)
+            caps != null &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        },
+        cipher = eventCipher,
+    )
+
+    /**
+     * SOS Step 9 (§6.9/§8.16): the recipient inbox. The listener carries the exact §6.9
+     * query ([FirestoreSchema.nudgeInboxQuery]); the ack is one WriteBatch of the rules'
+     * one allowed mutation ([FirestoreSchema.nudgeAckData], ≤10 writes against the 500
+     * limit); notifications are cancelled by the repository only after that batch commits.
+     * The unreadable-document report is the house telemetry contract — event + cause only
+     * (§6.9 "safe metadata only"; never envelope, pair, uid, or plaintext).
+     */
+    @Provides @Singleton
+    fun provideNudgeInboxRepository(
+        @ApplicationContext context: Context,
+        firestore: FirebaseFirestore,
+        db: AccountabilityDatabase,
+        keystore: AccountabilityKeyStore,
+        cekDerivation: CekDerivation,
+        uidResolver: PairUidResolver,
+        partnerSelection: PartnerSelection,
+        eventCipher: EventCipher,
+        crashReporting: CrashReporting,
+    ): NudgeInboxRepository = NudgeInboxRepository(
+        enrollments = db.enrollmentDao()::all,
+        selectedPairId = { partnerSelection.selectedPairId },
+        ensureUid = { uidResolver.ensureUid() },
+        deriveCek = { enrollment ->
+            cekDerivation.deriveCek(
+                enrollment.pairId,
+                keystore.agreementPrivateKeyFor(enrollment.myAgreementKeyAlias),
+                decodePublicKey(enrollment.partnerAgreementPubKey),
+            )
+        },
+        listenNudges = { pairId, uid ->
+            callbackFlow {
+                val registration = FirestoreSchema.nudgeInboxQuery(firestore, pairId, uid)
+                    .addSnapshotListener { snapshot, error ->
+                        if (error != null) {
+                            close(error)
+                            return@addSnapshotListener
+                        }
+                        trySend(snapshot?.documents?.map(::nudgeDocOf).orEmpty())
+                    }
+                awaitClose { registration.remove() }
+            }
+        },
+        ackBatch = { pairId, nudgeIds ->
+            val batch = firestore.batch()
+            nudgeIds.forEach { nudgeId ->
+                batch.update(
+                    FirestoreSchema.nudgeDocument(firestore, pairId, nudgeId),
+                    FirestoreSchema.nudgeAckData(),
+                )
+            }
+            batch.commit().await()
+        },
+        cancelNotifications = { PartnerNotifications.cancelPartnerNudge(context) },
+        reportUnreadable = { cause -> crashReporting.nonFatal("partner_nudge_card", cause) },
+        cipher = eventCipher,
+    )
+
+    /**
+     * SOS §8.19 (Step 11): the recipient's block preference at
+     * `pairings/{pairId}/nudgeSettings/{uid}` — the one document the Step-11 switch reads and
+     * writes. A missing document reads as unblocked (the rules admit the read and the client
+     * treats absence as the default); the write is a full `set` of exactly
+     * [FirestoreSchema.nudgeSettingsData] — `blocked` + server-timestamp `updatedAt`, the only
+     * keys R-F6 admits. Nothing else is touched: §8.19 forbids retroactive deletion of
+     * delivered notifications, so enabling the block never cancels a tray entry and never
+     * acks a pending nudge.
+     */
+    @Provides @Singleton
+    fun provideNudgeSettingsRepository(
+        firestore: FirebaseFirestore,
+        db: AccountabilityDatabase,
+        uidResolver: PairUidResolver,
+        partnerSelection: PartnerSelection,
+    ): NudgeSettingsRepository = NudgeSettingsRepository(
+        enrollments = db.enrollmentDao()::all,
+        selectedPairId = { partnerSelection.selectedPairId },
+        ensureUid = { uidResolver.ensureUid() },
+        readBlocked = { pairId, uid ->
+            val snapshot = FirestoreSchema.nudgeSettingsDocument(firestore, pairId, uid).get().await()
+            snapshot.getBoolean("blocked") == true
+        },
+        writeBlocked = { pairId, uid, blocked ->
+            FirestoreSchema.nudgeSettingsDocument(firestore, pairId, uid)
+                .set(FirestoreSchema.nudgeSettingsData(blocked))
+                .await()
+        },
+    )
+
+    /**
+     * Plan §8 Step 7 (client) / AD-18a / §8.12: this device's push installation. `ensureUid`
+     * is [PairUidResolver.ensureUid] itself — the one single-flighted anonymous sign-in (a
+     * second concurrent sign-in path here is what minted duplicate anonymous accounts and
+     * starved identity-pinned writes of their token, device-caught 2026-10-01); the token
+     * fetch is FCM's cached getToken (a Task); the write is a full replace (no merge — a
+     * server-set `stale` must clear, see [FirestoreSchema.pushInstallationData]). The
+     * document id is the FID (§8.12, SOS Step 5): the same identity the push dispatcher
+     * multicasts to and AD-18b acks key on. The legacy ANDROID_ID-keyed document (pre-SOS
+     * releases) is deleted once, best-effort, after the first successful FID write — a
+     * device reporting no FID (offline first run) registers nothing and keeps it (AD-05
+     * sync fallback applies).
      */
     @Provides @Singleton
     fun providePushInstallationRegistrar(
@@ -181,13 +332,18 @@ object AccountabilityModule {
         messaging: FirebaseMessaging,
         resolver: PairUidResolver,
     ): PushInstallationRegistrar = PushInstallationRegistrar(
-        installationId = PushInstallationRegistrar.androidIdOf(context),
+        ensureInstallationId = { PushInstallationRegistrar.installationIdOf() },
         platform = "android",
         appVersion = BuildConfig.VERSION_NAME,
         ensureUid = { resolver.ensureUid() },
         fetchToken = { messaging.token.await() },
+        pushEligible = { PushInstallationRegistrar.pushEligibleOf(context) },
         write = { uid, installationId, data ->
             FirestoreSchema.pushInstallationDocument(firestore, uid, installationId).set(data).await()
+        },
+        legacyInstallationId = PushInstallationRegistrar.androidIdOf(context),
+        deleteLegacy = { uid, installationId ->
+            FirestoreSchema.pushInstallationDocument(firestore, uid, installationId).delete().await()
         },
     )
 
@@ -299,7 +455,6 @@ object AccountabilityModule {
         exchange: PairingExchange,
         firestore: FirebaseFirestore,
     ): BilateralDeletion {
-        val installationId = PushInstallationRegistrar.androidIdOf(context)
         return BilateralDeletion(
             creator = creator,
             drainOutbox = drainer::drain,
@@ -349,24 +504,31 @@ object AccountabilityModule {
                 val uid = FirebaseAuth.getInstance().currentUser?.uid
                 when {
                     uid == null -> false
-                    // No installation id: nothing this device can write; the AD-18b 30-day cap
-                    // still bounds retention (same contract as the handler's ack seam).
-                    installationId == null -> true
 
                     else -> {
-                        AppCheckInstaller.install(context)
-                        try {
-                            FirestoreSchema.mailboxAckDocument(firestore, uid, messageId, installationId)
-                                .set(FirestoreSchema.mailboxAckData()).await()
+                        // FID at ack time (§8.12/AD-18b): the ack keys on the same
+                        // installation identity the push dispatcher multicasts to.
+                        val installationId = PushInstallationRegistrar.installationIdOf()
+                        if (installationId == null) {
+                            // No installation id: nothing this device can write; the AD-18b
+                            // 30-day cap still bounds retention (same contract as the
+                            // handler's ack seam).
                             true
-                        } catch (e: FirebaseFirestoreException) {
-                            // The acks rules hold no update rule: a retried ack is denied —
-                            // "already acked" and "denied" are the same reading here, and this
-                            // device is the only legitimate writer, so treat both as done.
-                            e.code == FirebaseFirestoreException.Code.ALREADY_EXISTS ||
-                                e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
-                        } catch (e: Exception) {
-                            false
+                        } else {
+                            AppCheckInstaller.install(context)
+                            try {
+                                FirestoreSchema.mailboxAckDocument(firestore, uid, messageId, installationId)
+                                    .set(FirestoreSchema.mailboxAckData()).await()
+                                true
+                            } catch (e: FirebaseFirestoreException) {
+                                // The acks rules hold no update rule: a retried ack is denied —
+                                // "already acked" and "denied" are the same reading here, and this
+                                // device is the only legitimate writer, so treat both as done.
+                                e.code == FirebaseFirestoreException.Code.ALREADY_EXISTS ||
+                                    e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
+                            } catch (e: Exception) {
+                                false
+                            }
                         }
                     }
                 }
@@ -588,8 +750,9 @@ object AccountabilityModule {
     /**
      * §7 item 10 receive pipeline: dedup (AD-10b), verify-then-decrypt, chain commit with the
      * processed marker in one transaction, AD-18b ack, generic notification (AD-11/NFR2).
-     * ANDROID_ID is read once at provider construction (same contract as the registrar); a
-     * device reporting none simply never acks — the 30-day cap still bounds retention.
+     * The ack keys on the FID, fetched at ack time (§8.12) — the same installation identity
+     * the push dispatcher multicasts to; a null FID (fetch failed) simply skips the ack and
+     * the 30-day cap still bounds retention.
      */
     @Provides @Singleton
     fun providePartnerActivityReceiver(
@@ -610,7 +773,6 @@ object AccountabilityModule {
         enrollmentDao: EnrollmentDao,
     ): MailboxMessageHandler {
         val processedDao = db.processedEventDao()
-        val installationId = PushInstallationRegistrar.androidIdOf(context)
         return MailboxMessageHandler(
             processed = processedDao::contains,
             process = processor::process,
@@ -618,7 +780,7 @@ object AccountabilityModule {
                 store.receiveRemote(pairId, signed, messageId, atEpochMillis)
             },
             ack = { recipientUid, messageId ->
-                if (installationId != null) {
+                PushInstallationRegistrar.installationIdOf()?.let { installationId ->
                     FirestoreSchema.mailboxAckDocument(firestore, recipientUid, messageId, installationId)
                         .set(FirestoreSchema.mailboxAckData()).await()
                 }
@@ -690,3 +852,15 @@ object AccountabilityModule {
         handler = handler,
     )
 }
+
+/** §4.3 nudge document → the inbox seam's record. Every field is cast defensively: a
+ *  wrong-typed or missing field degrades to null, and the repository treats the document as
+ *  unreadable rather than trusting it. */
+private fun nudgeDocOf(snapshot: DocumentSnapshot): NudgeInboxRepository.NudgeDoc =
+    NudgeInboxRepository.NudgeDoc(
+        nudgeId = snapshot.id,
+        senderUid = snapshot.get("senderUid") as? String,
+        envelope = snapshot.get("envelope") as? String,
+        createdAtMs = (snapshot.get("createdAtMs") as? Number)?.toLong(),
+        expiresAtMillis = snapshot.getTimestamp("expiresAt")?.toDate()?.time,
+    )

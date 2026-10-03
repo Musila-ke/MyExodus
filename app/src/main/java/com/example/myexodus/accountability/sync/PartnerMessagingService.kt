@@ -16,7 +16,12 @@ import android.util.Log
  * messageId to the sync pipeline and lets the local processing path (dedup, verify,
  * decrypt, notify) own everything downstream.
  *
- * All three callbacks enqueue the same one-time partner-sync work rather than doing work
+ * The one exception (SOS §8.17/FR-20): a `partner_nudge` push IS rendered here, as a generic
+ * local notification posted immediately — the payload carries no content to protect, and a
+ * foreground nudge must alert now, not at the next work run. The card itself still comes
+ * from Firestore via Home's listener.
+ *
+ * All other callbacks enqueue the same one-time partner-sync work rather than doing work
  * inline: the service's execution window is short and the FCM wake is only a latency
  * optimization on top of the 15-minute cadence — a Doze-deferred run is late, not lost.
  * `onDeletedMessages` enqueues the same watermark-reconciling pass (plan §8 Step 9's
@@ -28,6 +33,20 @@ import android.util.Log
 class PartnerMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
+        // SOS §8.17/§6.7: a partner_nudge push is rendered here and now — a generic local
+        // notification, nothing else: no Firestore reads, no decryption, no network from this
+        // callback (the Home listener renders the card independently). An invalid nudge_id is
+        // ignored, never posted, never synced.
+        if (message.data[PartnerNudgePush.TYPE_KEY] == PartnerNudgePush.TYPE_PARTNER_NUDGE) {
+            val nudgeId = PartnerNudgePush.validNudgeId(message.data[PartnerNudgePush.NUDGE_ID_KEY])
+            if (nudgeId == null) {
+                Log.w(TAG, "partner_nudge push without a valid nudge_id — ignored")
+            } else {
+                Log.i(TAG, "nudge push — posting check-in notification")
+                PartnerNotifications.notifyPartnerNudge(this, nudgeId)
+            }
+            return
+        }
         val messageId = message.data[PARTNER_WAKE_MESSAGE_ID]
         if (messageId.isNullOrBlank()) {
             // Not our wake shape (or a console test send) — nothing actionable.

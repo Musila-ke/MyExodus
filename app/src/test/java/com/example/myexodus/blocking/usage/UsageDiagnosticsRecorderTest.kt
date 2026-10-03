@@ -33,9 +33,10 @@ import org.robolectric.annotation.Config
 /**
  * Usage-ledger plan §8.4/§8.7/§8.9 at the recorder boundary, against the real (Robolectric)
  * Room database: the baseline comes from the ledger (never a separate store), a silence past
- * cadence-plus-tolerance becomes exactly one GAP_DETECTED row, a live pipeline earns a
- * deduplicating heartbeat instead, and escalation (prompt eligibility) is only ever set from a
- * real platform recovery answer — AD-13, no cause is ever asserted.
+ * cadence-plus-tolerance becomes exactly one GAP_DETECTED row while tracking is active (untracked
+ * silence is expected and heartbeats only), a live pipeline earns a deduplicating heartbeat
+ * instead, and escalation (prompt eligibility) is only ever set from a real platform recovery
+ * answer — AD-13, no cause is ever asserted.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
@@ -229,6 +230,59 @@ class UsageDiagnosticsRecorderTest {
         recorder.pass(UsageLedgerSource.PATH_A, BOOT, elapsedNow + 1_000L, wallNow + 1_000L)
 
         assertEquals(1, db.usageLedgerDao().rowsOfKindSince(UsageLedgerKind.HEARTBEAT, 0L).size)
+    }
+
+    // --- §8.7 under "nothing tracked" (owner-reported false outage, 2026-10-03) ---
+
+    @Test
+    fun trackingInactive_silenceRecordsNoOutage_butStillRefreshesTheBaseline() = runBlocking {
+        // 18 h of pipeline silence with no tracked rule — the owner's report: the ledger must
+        // never describe it as an interruption (the outage surfaces read GAP_DETECTED rows alone).
+        val hours = 18 * 60 * 60 * 1000L
+        seedAccounting(endedAtElapsed = elapsedNow - hours, endedAtWall = wallNow - hours)
+
+        assertNull(recorder.pass(UsageLedgerSource.PATH_A, BOOT, elapsedNow, wallNow, trackingActive = false))
+
+        assertTrue(db.usageLedgerDao().rowsOfKindSince(UsageLedgerKind.GAP_DETECTED, 0L).isEmpty())
+        // The heartbeat still lands: the baseline advances to now, which is what lets a later
+        // activation measure from its own moment instead of inheriting this hole.
+        assertEquals(1, db.usageLedgerDao().rowsOfKindSince(UsageLedgerKind.HEARTBEAT, 0L).size)
+    }
+
+    @Test
+    fun activationAfterAnUntrackedSilence_startsMeasuringFromActivation() = runBlocking {
+        val hours = 18 * 60 * 60 * 1000L
+        seedAccounting(endedAtElapsed = elapsedNow - hours, endedAtWall = wallNow - hours)
+        // While untracked: heartbeat only, no gap row.
+        recorder.pass(UsageLedgerSource.PATH_A, BOOT, elapsedNow, wallNow, trackingActive = false)
+
+        // A rule is enabled; the next cycle judges silence only from the fresh baseline, so the
+        // pre-tracking hole is invisible to the outage surfaces.
+        assertNull(
+            recorder.pass(UsageLedgerSource.PATH_A, BOOT, elapsedNow + 30_000L, wallNow + 30_000L, trackingActive = true),
+        )
+
+        assertTrue(db.usageLedgerDao().rowsOfKindSince(UsageLedgerKind.GAP_DETECTED, 0L).isEmpty())
+    }
+
+    @Test
+    fun trackingInactive_acrossAReboot_writesNoBoundaryRow_butRefreshesTheBoot() = runBlocking {
+        seedAccounting(
+            endedAtElapsed = elapsedNow - 10 * 60 * 1000L,
+            endedAtWall = wallNow - 10 * 60 * 1000L,
+            boot = BOOT - 1,
+        )
+
+        // No tracked rule → a boot change is not an interruption either; heartbeatDue fires
+        // immediately on the mismatch, so the new boot becomes the baseline anyway.
+        assertNull(recorder.pass(UsageLedgerSource.PATH_A, BOOT, elapsedNow, wallNow, trackingActive = false))
+
+        assertTrue(db.usageLedgerDao().rowsOfKindSince(UsageLedgerKind.GAP_DETECTED, 0L).isEmpty())
+        assertEquals(BOOT, db.usageLedgerDao().rowsOfKindSince(UsageLedgerKind.HEARTBEAT, 0L).single().bootCount)
+
+        // Activation inside the same boot starts from that heartbeat — still no outage.
+        assertNull(recorder.pass(UsageLedgerSource.PATH_A, BOOT, elapsedNow + 30_000L, wallNow + 30_000L))
+        assertTrue(db.usageLedgerDao().rowsOfKindSince(UsageLedgerKind.GAP_DETECTED, 0L).isEmpty())
     }
 
     // --- §8.7 escalation outcome ---

@@ -59,9 +59,9 @@ class OverlayController(
 
     private val useAddView = usesApplicationOverlay(applicationOverlayHost, isTranssion())
 
-    /** The daily wall's Close action exists only where the host can evict the app behind the
-     *  wall (see [dismissWall]) — i.e. the Accessibility host, whatever window mechanism it
-     *  ends up using on this OEM. */
+    /** The persistent walls' Close action (daily wall + app-block card) exists only where the
+     *  host can evict the app behind the wall (see [dismissWall]) — i.e. the Accessibility
+     *  host, whatever window mechanism it ends up using on this OEM. */
     private val canEvict: Boolean = !applicationOverlayHost
 
     /** §12 device-matrix fill-in: (manufacturer, sdkInt-or-null) entries whose non-focusable
@@ -223,13 +223,19 @@ class OverlayController(
         }
     }
 
-    /** The daily wall's Close action (user ruling 2026-09-27: the wall stays until the user
-     *  dismisses it). Only the Accessibility-host wall carries it: that host evicts the app
-     *  first, so lifting the wall only reveals what the user left behind. Path B's host
-     *  cannot evict (no accessibility token), so an in-place dismiss there would hand the
-     *  blocked app straight back — its wall still follows the foreground instead. */
+    /** The persistent walls' Close action — daily wall (user ruling 2026-09-27) and app-block
+     *  card (owner ruling 2026-10-03): the wall stays until the user dismisses it. Only the
+     *  Accessibility host carries the action: that host evicts the app first, so lifting the
+     *  wall only reveals what the user left behind. Path B's host cannot evict (no
+     *  accessibility token), so an in-place dismiss there would hand the blocked app straight
+     *  back — its wall still follows the foreground instead. Both wall kinds must be accepted
+     *  here: the app-block card renders the same Close, and a DailyLimitBlocked-only gate left
+     *  that button dead on the X6532 (device-caught 2026-10-03 — tap produced no dismissal). */
     private fun dismissWall(displayId: Int) {
-        if (shown[displayId] == true && contents[displayId] is OverlayContent.DailyLimitBlocked) {
+        val content = contents[displayId]
+        if (shown[displayId] == true &&
+            (content is OverlayContent.DailyLimitBlocked || content is OverlayContent.AppBlocked)
+        ) {
             hide(stateMachine.currentGeneration, displayId)
         }
     }

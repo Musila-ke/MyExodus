@@ -225,15 +225,16 @@ class BlockerAccessibilityService : AccessibilityService() {
             return
         }
 
-        // The walled app re-foregrounding under a live wall goes straight back out: covering
-        // is not stopping (device-caught 2026-09-27 — Instagram came back RESUMED and audible
-        // under the wall). This must run before the window-list machinery below: while the
-        // wall covers the app, XOS reports the transition with a window it no longer lists,
+        // The scene's target re-foregrounding under a live persistent scene goes straight
+        // back out: covering is not stopping (device-caught 2026-09-27 — Instagram came back
+        // RESUMED and audible under the wall; the app-block card has the same exposure now
+        // that it persists). This must run before the window-list machinery below: while the
+        // scene covers the app, XOS reports the transition with a window it no longer lists,
         // so the deferred re-check dropped the event and no decide ever ran (device-caught,
-        // same session). The wall's own existence is the evidence — it is only up while its
+        // same session). The scene's own existence is the evidence — it is only up while its
         // package was pushed out — so no window validation is needed, or possible, here.
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            reevictIfWalled(packageName, displayId)
+            reevictIfScene(packageName, displayId)
         ) {
             return
         }
@@ -429,6 +430,12 @@ class BlockerAccessibilityService : AccessibilityService() {
                 // recents — re-run the eviction: covering is not stopping (device-caught
                 // 2026-09-27: Instagram stayed RESUMED and audible under the wall).
                 val wallScene = current as? OverlayContent.DailyLimitBlocked
+                // The app-block card persists too (owner ruling 2026-10-03, same as the
+                // wall): this is what used to make the on-schedule block screen a split-
+                // second flash — the eviction's own HOME fired, the launcher Allow arrived,
+                // and this branch hid the card. A foreign foreground (launcher, other apps)
+                // must never lift it now.
+                val appBlockScene = current as? OverlayContent.AppBlocked
                 // A live warning banner owns its 5s window: the banner's own appearance
                 // makes the app below re-emit window-state changes, and deciding Allow on
                 // them hid the banner ~5ms after attach — the user saw a flash, yet
@@ -443,6 +450,17 @@ class BlockerAccessibilityService : AccessibilityService() {
                     scanner.onContentChanged(packageName, barId, { rootInActiveWindow }, generation)
                 } else if (wallScene != null) {
                     if (wallScene.packageName == packageName) closeBlockedApp(packageName)
+                } else if (appBlockScene != null) {
+                    if (packageName == this.packageName) {
+                        // Our own screen (the durable BlockerActivity landing, the recovery
+                        // flow) takes over the display — the bridge's job is done.
+                        overlay.hide(generation, displayId)
+                    } else if (appBlockScene.packageName == packageName) {
+                        // The card's target re-foregrounding under it goes straight back
+                        // out (only reachable via the deferred re-check; the direct WSC
+                        // path re-evicted pre-decide).
+                        closeBlockedApp(packageName)
+                    }
                 } else if (warningHere) {
                     Unit
                 } else if (!overlay.isShown(displayId) || !restrictedPaneBeside(displayId, window)) {
@@ -697,13 +715,20 @@ class BlockerAccessibilityService : AccessibilityService() {
         }.onFailure { Log.w(TAG, "block close failed pkg=$packageName", it) }
     }
 
-    /** True when [packageName] is the live daily wall's own target — the re-entry signal that
-     *  re-runs the eviction. Only a WSC for the wall's package counts: any other package coming
-     *  forward (the launcher, after the eviction) must leave the wall standing. */
-    private fun reevictIfWalled(packageName: String?, displayId: Int): Boolean {
-        val wall = dailyWallPackage(displayId) ?: return false
-        if (wall != packageName) return false
-        closeBlockedApp(wall)
+    /** True when [packageName] is a live persistent block scene's own target — the daily wall
+     *  or the app-block card (both stay up until the user dismisses them; owner rulings
+     *  2026-09-27 / 2026-10-03) — the re-entry signal that re-runs the eviction. Only a WSC
+     *  for the scene's package counts: any other package coming forward (the launcher, after
+     *  the eviction) must leave the scene standing. */
+    private fun reevictIfScene(packageName: String?, displayId: Int): Boolean {
+        val scene = overlay.currentContent(displayId)
+        val target = when (scene) {
+            is OverlayContent.DailyLimitBlocked -> scene.packageName
+            is OverlayContent.AppBlocked -> scene.packageName
+            else -> null
+        } ?: return false
+        if (target != packageName) return false
+        closeBlockedApp(target)
         return true
     }
 

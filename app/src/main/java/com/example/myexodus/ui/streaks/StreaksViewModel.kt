@@ -181,8 +181,8 @@ class StreaksViewModel @Inject constructor(
         _relapseNote.value = null
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val endedDays = habitDays(current.currentStreakElapsedMs)
-                val bestDays = habitDays(current.allTimeMaxElapsedMs)
+                val endedDays = daysFree(current.currentStreakElapsedMs)
+                val bestDays = daysFree(current.allTimeMaxElapsedMs)
                 when (repository.logRelapse(current.habitId)) {
                     is HabitRepository.RelapseResult.RolledOver ->
                         _relapseNote.value = relapseSupportNote(endedDays, bestDays)

@@ -12,8 +12,21 @@ import com.example.myexodus.streaks.WithdrawalWeek
  * Day counts use the engine's 24-hour unit (Decision 17), never calendar dates.
  */
 
-/** Whole days of an accumulator value. */
+/** Whole completed days of an accumulator value — the engine's own unit. */
 fun habitDays(elapsedMs: Long): Int = (elapsedMs / StreakTimer.DAY_MS).toInt()
+
+/**
+ * The ordinal day number every user-facing count renders: the day of the run the user is
+ * *in*, so a freshly started (or backdated) streak shows Day 1 — never 0. Owner ruling
+ * 2026-10-03 (ADR #128): "lets never tell the user 0 we show 1 then we proceed from there".
+ *
+ * The engine stays untouched: the accumulator still counts whole elapsed days and milestones
+ * still fire at their 24h thresholds (§6.2 anti-minting). The +1 lives only here, at the
+ * display boundary — after N completed days the user is on Day N+1. [daysUntil] deliberately
+ * stays on completed days, which is the same thing as `milestoneDay - daysFree(elapsed) + 1`:
+ * "Day 7" completes `7 - completed` days from now, the truthful countdown.
+ */
+fun daysFree(elapsedMs: Long): Int = habitDays(elapsedMs) + 1
 
 /** Next unachieved milestone of the active streak (rows are day-ordered), if any. */
 fun nextMilestone(state: HabitState): MilestoneEvent? =
@@ -78,7 +91,7 @@ fun relapseSupportNote(endedDays: Int, bestDays: Int): String =
             append(if (endedDays == 1) "1 day" else "$endedDays days")
             append(" in a row — that progress is real and it stays with you.")
             if (bestDays > endedDays) append(" Your best run of $bestDays days is still on record.")
-            append(" Day 0 of the next run starts now.")
+            append(" Day 1 of the next run starts now.")
         }
     }
 

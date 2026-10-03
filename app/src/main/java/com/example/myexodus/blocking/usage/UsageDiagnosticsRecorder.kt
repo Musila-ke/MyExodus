@@ -50,7 +50,12 @@ class UsageDiagnosticsRecorder @Inject constructor(
 ) {
     /**
      * One diagnostics cycle for [source] (the current authority holder — callers pass nothing
-     * when no source holds accounting authority). Returns the recovery window when a gap was
+     * when no source holds accounting authority). [trackingActive] is the caller's answer to
+     * "is anything actually being accounted right now" (any enabled daily-limit rule): when
+     * false, pipeline silence is the expected state, not an outage — only the liveness
+     * baseline is kept fresh, so a later activation measures from its own first observation
+     * and can never inherit a pre-tracking "interruption" (owner-reported false 18 h outage
+     * popup after enabling one limit, 2026-10-03). Returns the recovery window when a gap was
      * recorded, null otherwise.
      *
      * Must NOT be wrapped in the accounting dispatcher by callers: the ledger calls inside hop
@@ -62,6 +67,7 @@ class UsageDiagnosticsRecorder @Inject constructor(
         bootCount: Int,
         elapsedNowMs: Long,
         wallClockMs: Long,
+        trackingActive: Boolean = true,
     ): GapRecoveryRequest? {
         // §9's "unavailable boot count": nothing is attributable to a monotonic frame that
         // cannot be named, and nothing is invented to fill in for it. Record and stop.
@@ -70,6 +76,18 @@ class UsageDiagnosticsRecorder @Inject constructor(
             return null
         }
         val baseline = latestAccountingEvidence()
+        // Nothing tracked → silence is expected, not measurable: no gap row and no reboot row
+        // (neither interrupted anything). The heartbeat still runs — boot mismatch included,
+        // where heartbeatDue fires immediately — so the baseline advances and activation
+        // later starts the gap detector from its own moment.
+        if (!trackingActive) {
+            if (AccountingDiagnostics.heartbeatDue(baseline?.wallClockTsMs, baseline?.bootCount == bootCount, wallClockMs)) {
+                ledger.appendStandalone(
+                    AccountingDiagnostics.heartbeatDraft(source, bootCount, wallClockMs, elapsedNowMs),
+                )
+            }
+            return null
+        }
         // §8.5's reboot flow: the interval spanning the boundary is never computed by
         // subtracting elapsed values. It is recorded as a zero-length boundary gap (the
         // RECONCILIATION-shaped record [AccountingDiagnostics.rebootGapDraft] documents), and

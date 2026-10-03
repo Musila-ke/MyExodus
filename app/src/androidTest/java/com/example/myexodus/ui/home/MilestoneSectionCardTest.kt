@@ -70,7 +70,8 @@ class MilestoneSectionCardTest {
         render(habit = habitAt(days = 5), resolved = true, failed = false)
 
         compose.onNodeWithText(str(R.string.home_grid_title)).assertIsDisplayed()
-        compose.onNodeWithText(str(R.string.home_grid_day_of, 5, 90)).assertIsDisplayed()
+        // 5 completed days render as ordinal Day 6 (ADR #128) — never "Day 0 of 90".
+        compose.onNodeWithText(str(R.string.home_grid_day_of, 6, 90)).assertIsDisplayed()
         compose.onNodeWithText(str(R.string.home_grid_legend, "7, 30, 90")).assertIsDisplayed()
         compose.onNodeWithText(str(R.string.home_grid_empty_body)).assertDoesNotExist()
         compose.onNodeWithText(str(R.string.home_grid_error_body)).assertDoesNotExist()
@@ -97,7 +98,7 @@ class MilestoneSectionCardTest {
         render(habit = habitAt(days = 5), resolved = true, failed = true)
 
         compose.onNodeWithText(str(R.string.home_grid_error_body)).assertIsDisplayed()
-        compose.onNodeWithText(str(R.string.home_grid_day_of, 5, 90)).assertDoesNotExist()
+        compose.onNodeWithText(str(R.string.home_grid_day_of, 6, 90)).assertDoesNotExist()
         compose.onNodeWithText(str(R.string.home_grid_legend, "7, 30, 90")).assertDoesNotExist()
     }
 
@@ -108,7 +109,7 @@ class MilestoneSectionCardTest {
         recoveryStartAt = 0L,
         currentStreakElapsedMs = days * StreakTimer.DAY_MS,
         allTimeMaxElapsedMs = days * StreakTimer.DAY_MS,
-        currentDay = days,
+        currentDay = days + 1,
         habitDurationYears = 2,
         severity = WithdrawalSeverity.MODERATE,
         withdrawalWeeks = WithdrawalCurve.weeks(2, WithdrawalSeverity.MODERATE),

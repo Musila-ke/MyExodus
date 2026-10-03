@@ -418,11 +418,19 @@ class EnforcementForegroundService : Service() {
             // No detection is not an outage to measure — nothing is expected to be accounting.
             else -> return
         }
+        val db = storeFactory.open() ?: return
+        // The recorder's gate (2026-10-03): a pipeline with no enabled daily-limit rule has
+        // nothing to account for, so its silence must never be recorded — or surfaced — as an
+        // outage. Computed here because only the service holds the store; a null request below
+        // therefore guarantees this list is non-empty.
+        val tracked = db.restrictionRuleDao().getActiveRules()
+            .filter { it.isEnabled && it.dailyLimitMs > 0L }
         val request = diagnostics.pass(
             source,
             systemBootCount(this),
             SystemClock.elapsedRealtime(),
             System.currentTimeMillis(),
+            trackingActive = tracked.isNotEmpty(),
         ) ?: return
         if (!hasUsageAccess()) {
             // §8.9: without the permission there is nothing to query and nothing to conclude —
@@ -430,10 +438,6 @@ class EnforcementForegroundService : Service() {
             crashReporting.nonFatal("accounting_gap_unrecoverable", cause = "no_permission")
             return
         }
-        val db = storeFactory.open() ?: return
-        val tracked = db.restrictionRuleDao().getActiveRules()
-            .filter { it.isEnabled && it.dailyLimitMs > 0L }
-        if (tracked.isEmpty()) return
         val clipEnd = request.window.last + 1
         val marks = onBinderThread<Map<String, List<UsageMark>>> {
             foregroundMarksByPackage(

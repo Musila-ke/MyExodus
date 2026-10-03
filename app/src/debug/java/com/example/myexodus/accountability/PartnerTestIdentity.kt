@@ -191,7 +191,10 @@ class PartnerTestIdentity(
                 store.receiveRemote(pairId, signed, messageId, at)
             },
             ack = { recipientUid, messageId ->
-                PushInstallationRegistrar.androidIdOf(context)?.let { installationId ->
+                // FID, matching the production handler + the dispatcher's multicast identity
+                // (§8.12): an ANDROID_ID-keyed ack would never satisfy AD-18b's per-install
+                // contract against FID-dispatched messages.
+                PushInstallationRegistrar.installationIdOf()?.let { installationId ->
                     FirestoreSchema.mailboxAckDocument(firestore, recipientUid, messageId, installationId)
                         .set(FirestoreSchema.mailboxAckData()).await()
                 }

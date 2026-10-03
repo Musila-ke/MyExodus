@@ -13,4 +13,8 @@ public final class FunctionErrors {
     public static FirebaseFunctionsException of(String message, FirebaseFunctionsException.Code code) {
         return new FirebaseFunctionsException(message, code, null);
     }
+
+    public static FirebaseFunctionsException of(String message, FirebaseFunctionsException.Code code, Object details) {
+        return new FirebaseFunctionsException(message, code, details);
+    }
 }

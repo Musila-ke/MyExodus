@@ -8,6 +8,7 @@ import com.example.myexodus.accountability.crypto.IdentityEpochStore
 import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.PairingFlow
+import com.example.myexodus.accountability.sos.NudgeInboxRepository
 import com.example.myexodus.accountability.state.ChainStateStore
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
 import com.example.myexodus.ui.partner.PartnerDashboardSource
@@ -44,4 +45,7 @@ interface RoundTripTestEntryPoint {
 
     /** The real AndroidKeystore, for asserting what a shred did and did not destroy. */
     fun keyStore(): AccountabilityKeyStore
+
+    /** SOS §12.3: the DI-wired recipient inbox the Home surface's nudge card renders from. */
+    fun nudgeInboxRepository(): NudgeInboxRepository
 }
