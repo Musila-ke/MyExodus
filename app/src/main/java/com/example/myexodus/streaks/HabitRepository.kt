@@ -7,6 +7,8 @@ import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.HabitProgress
 import com.example.myexodus.data.db.entity.MilestoneEvent
+import com.example.myexodus.data.db.entity.PairProfileSharing
+import com.example.myexodus.data.db.entity.PairStreakSharing
 import com.example.myexodus.data.db.entity.RecoveryStreak
 import java.util.UUID
 import kotlin.math.abs
@@ -51,12 +53,48 @@ import kotlinx.coroutines.sync.withLock
  *   upgrading mid-streak) must still surface its splash card.
  * - Partner-visible activity (partner-activity plan Appendix A.3) is journalled inside these
  *   same transactions via [PartnerActivityJournal]: STREAK_UPDATED on a day crossing only,
- *   MILESTONE_REACHED per newly stamped day, RELAPSE_RECORDED after the rollover. Consent
- *   flags and the absence of fan-out here are the emitter's contract, not this class's.
+ *   MILESTONE_REACHED per newly stamped day (carrying the day reached), RELAPSE_RECORDED
+ *   after the rollover (carrying the ended streak's ordinal day-count). Consent flags and
+ *   the absence of fan-out here are the emitter's contract, not this class's.
  */
 
 /** One row of the habit switcher. */
 data class HabitSummary(val habitId: String, val label: String, val isSelected: Boolean)
+
+/** One pair's three consent switches for one habit (v16/ADR #135). */
+data class StreakSharingFlags(
+    val shareStreak: Boolean,
+    val shareRelapses: Boolean,
+    val shareMilestones: Boolean,
+) {
+    companion object {
+        /** Absence of a consent row: nothing shared ("nothing until you choose"). */
+        val None = StreakSharingFlags(shareStreak = false, shareRelapses = false, shareMilestones = false)
+    }
+}
+
+/** One habit with every partner's flags; a pair missing from [perPair] shares nothing. */
+data class HabitSharingItem(
+    val progressId: String,
+    val label: String,
+    val perPair: Map<String, StreakSharingFlags>,
+)
+
+/** One pair's profile-wide categories (blocked-app check-ins, recovery practice). */
+data class ProfileSharingFlags(
+    val shareCheckIns: Boolean,
+    val shareRecovery: Boolean,
+) {
+    companion object {
+        val None = ProfileSharingFlags(shareCheckIns = false, shareRecovery = false)
+    }
+}
+
+/** The whole consent matrix as the sharing surface renders it (v16/ADR #135). */
+data class SharingMatrix(
+    val habits: List<HabitSharingItem>,
+    val profile: Map<String, ProfileSharingFlags>,
+)
 
 class HabitRepository(
     private val storeFactory: AppRulesStoreFactory,
@@ -150,9 +188,6 @@ class HabitRepository(
         habitDurationYears: Int,
         severity: WithdrawalSeverity,
         recoveryStartAt: Long,
-        shareAccessAttempts: Boolean = false,
-        shareRelapses: Boolean = false,
-        shareMilestones: Boolean = true,
     ): OnboardingResult {
         if (habitDurationYears < 0) {
             return OnboardingResult.Rejected(OnboardingResult.Rejected.Reason.INVALID_DURATION)
@@ -194,9 +229,9 @@ class HabitRepository(
                             habitDurationYears = habitDurationYears,
                             onboardingSeverityLevel = severity.name,
                             lastRelapseTimestamp = null,
-                            shareAccessAttempts = shareAccessAttempts,
-                            shareRelapses = shareRelapses,
-                            shareMilestones = shareMilestones,
+                            // v16/ADR #135: a new habit is shared with nobody — consent is
+                            // per (pair, habit) and lives in pair_streak_sharing; the sharing
+                            // surface is where partners are chosen ("nothing until you choose").
                             assignedPartnershipId = null,
                             isSelected = true,
                         ),
@@ -280,6 +315,117 @@ class HabitRepository(
         return db.habitProgressDao().getForProfile(profile.userId)
             .map { HabitSummary(it.progressId, it.targetIdentifier, it.isSelected) }
     }
+
+    /** The sharing surface's read model (v16/ADR #135): every habit with every pair's flags
+     *  plus the pair-level profile categories. Null = the store refused to open — the pane
+     *  says so rather than claiming "no streaks"; an empty habit list is a real answer. */
+    suspend fun sharingMatrix(): SharingMatrix? {
+        val db = storeFactory.open() ?: return null
+        val profile = db.userProfileDao().getActive() ?: return SharingMatrix(emptyList(), emptyMap())
+        val streakRows = db.pairSharingDao().streakAll()
+        val habits = db.habitProgressDao().getForProfile(profile.userId).map { habit ->
+            HabitSharingItem(
+                progressId = habit.progressId,
+                label = habit.targetIdentifier,
+                perPair = streakRows
+                    .filter { it.habitProgressId == habit.progressId }
+                    .associate {
+                        it.pairId to StreakSharingFlags(
+                            shareStreak = it.shareStreak,
+                            shareRelapses = it.shareRelapses,
+                            shareMilestones = it.shareMilestones,
+                        )
+                    },
+            )
+        }
+        val profileFlags = db.pairSharingDao().profileAll()
+            .associate { it.pairId to ProfileSharingFlags(it.shareCheckins, it.shareRecovery) }
+        return SharingMatrix(habits = habits, profile = profileFlags)
+    }
+
+    /** Owner ask 2026-10-04 ("you have added a partner sure but you haven't shared anything
+     *  with them yet"): true when nothing is being shared with [pairId] — no streak master on
+     *  and no profile category on. Null = the store refused to open (unknown, never a false
+     *  "nothing shared"). */
+    suspend fun sharesNothingWith(pairId: String): Boolean? =
+        sharingMatrix()?.let { matrix ->
+            matrix.habits.none { it.perPair[pairId]?.shareStreak == true } &&
+                matrix.profile[pairId]?.let { it.shareCheckIns || it.shareRecovery } != true
+        }
+
+    /**
+     * Full-state write of one (pair, habit) streak consent; false = store unavailable or the
+     * habit is gone (the pane reverts its optimistic flip). Each switch's false→true
+     * transition bumps its enable watermark — the reconcile filter then delivers only rows
+     * written at/after it, so enabling never leaks the while-off backlog. A streak-master
+     * rise additionally journals one targeted snapshot now (the pair just started seeing this
+     * habit; waiting for the next real transition would leave their dashboard on "waiting").
+     */
+    suspend fun setPairStreakSharing(
+        pairId: String,
+        habitProgressId: String,
+        shareStreak: Boolean,
+        shareRelapses: Boolean,
+        shareMilestones: Boolean,
+    ): Boolean {
+        val db = storeFactory.open() ?: return false
+        val habit = db.habitProgressDao().getById(habitProgressId) ?: return false
+        val now = readings().tWallMillis
+        return runCatching {
+            db.withWriteTransaction<Unit> {
+                val before = db.pairSharingDao().streakFor(pairId, habitProgressId)
+                db.pairSharingDao().upsertStreak(
+                    PairStreakSharing(
+                        pairId = pairId,
+                        habitProgressId = habitProgressId,
+                        shareStreak = shareStreak,
+                        shareRelapses = shareRelapses,
+                        shareMilestones = shareMilestones,
+                        streakEnabledSinceMs = watermark(before?.streakEnabledSinceMs, before?.shareStreak, shareStreak, now),
+                        relapseEnabledSinceMs = watermark(before?.relapseEnabledSinceMs, before?.shareRelapses, shareRelapses, now),
+                        milestoneEnabledSinceMs = watermark(before?.milestoneEnabledSinceMs, before?.shareMilestones, shareMilestones, now),
+                    ),
+                )
+                if (shareStreak && before?.shareStreak != true) {
+                    PartnerActivityJournal.emitForHabit(
+                        db, habit.progressId, EventPayload.TYPE_STREAK_UPDATED, now,
+                        targetPairId = pairId,
+                    )
+                }
+            }
+        }.isSuccess
+    }
+
+    /** Full-state write of one pair's profile-level categories; watermark semantics match
+     *  [setPairStreakSharing]. No snapshot: attempt and session rows are announcements, not
+     *  state — there is no current-state catch-up to send. */
+    suspend fun setPairProfileSharing(
+        pairId: String,
+        shareCheckIns: Boolean,
+        shareRecovery: Boolean,
+    ): Boolean {
+        val db = storeFactory.open() ?: return false
+        val now = readings().tWallMillis
+        return runCatching {
+            db.withWriteTransaction<Unit> {
+                val before = db.pairSharingDao().profileFor(pairId)
+                db.pairSharingDao().upsertProfile(
+                    PairProfileSharing(
+                        pairId = pairId,
+                        shareCheckins = shareCheckIns,
+                        shareRecovery = shareRecovery,
+                        checkinsEnabledSinceMs = watermark(before?.checkinsEnabledSinceMs, before?.shareCheckins, shareCheckIns, now),
+                        recoveryEnabledSinceMs = watermark(before?.recoveryEnabledSinceMs, before?.shareRecovery, shareRecovery, now),
+                    ),
+                )
+            }
+        }.isSuccess
+    }
+
+    /** The enable watermark: pinned at the false→true transition, kept otherwise (the value is
+     *  only ever read while the switch is on). */
+    private fun watermark(existing: Long?, was: Boolean?, now: Boolean, at: Long): Long =
+        if (now && was != true) at else (existing ?: 0L)
 
     /**
      * Multi-habit switch: make [habitId] the displayed habit (one transaction), then evaluate
@@ -442,6 +588,7 @@ class HabitRepository(
                 if (stamped > 0) {
                     PartnerActivityJournal.emitForHabit(
                         db, habitId, EventPayload.TYPE_MILESTONE_REACHED, tWallMillis,
+                        milestoneDay = it.milestoneDay,
                     )
                 }
             }
@@ -504,12 +651,15 @@ class HabitRepository(
         )
         db.milestoneEventDao().insertAll(milestoneRows(newStreakId))
 
-        // Appendix A.3: post-rollover snapshot (day 0, empty milestone list, bumped count).
-        // The occurrence is the relapse time — backdated when logged retrospectively — while
-        // the journal's retention clock stays real write time.
+        // Appendix A.3: post-rollover snapshot (fresh streak, empty milestone list, bumped
+        // count) plus wire v2's [endedDays] — the ordinal day-count of the streak that just
+        // ended, the same number the sender's own relapse card showed (ADR #128). The
+        // occurrence is the relapse time — backdated when logged retrospectively — while the
+        // journal's retention clock stays real write time.
         PartnerActivityJournal.emitForHabit(
             db, habitId, EventPayload.TYPE_RELAPSE_RECORDED,
             occurredAtMs = relapsedAt, createdAtMs = readings.tWallMillis,
+            endedDays = dayOf(streak.currentStreakElapsedMs) + 1,
         )
 
         return RelapseResult.RolledOver(requireNotNull(loadState(db, habitId)))

@@ -109,6 +109,24 @@ class NudgeRepositoryTest {
         assertEquals("""{"v":1,"kind":"nudge"}""", plaintext.toString(Charsets.UTF_8))
     }
 
+    @Test
+    fun sendNew_carriesTheMessage_insideTheCiphertext_onlyBase64OnTheWire() = runTest {
+        val h = Harness()
+        h.repository.sendNew("n1", "Please call me")
+        val wire = h.calls.single()
+        val envelope = wire["envelope"] as String
+        assertTrue(
+            "the message never appears in the wire body",
+            wire.values.none { it.toString().contains("Please call me") },
+        )
+        val plaintext = EventCipher().decryptWithAad(
+            h.cek,
+            NudgeEnvelope.aad("pair-1", "n1", "uid-1"),
+            Base64.getDecoder().decode(envelope),
+        )
+        assertEquals("Please call me", NudgeEnvelope.messageOf(plaintext))
+    }
+
     // --- retry: byte-identical replay, never a second encryption ----------------------------
 
     @Test

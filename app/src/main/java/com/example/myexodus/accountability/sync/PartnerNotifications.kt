@@ -12,6 +12,8 @@ import com.example.myexodus.BuildConfig
 import com.example.myexodus.MainActivity
 import com.example.myexodus.R
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
+import com.example.myexodus.accountability.serialization.ActivityStateAfter
+import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.ui.partner.shortKeyId
 import java.text.DateFormat
@@ -44,7 +46,14 @@ object PartnerNotifications {
     /** Partner SOS (V1 Req 35, plan §8.2/§8 Step 7): the "Reach Out" nudge channel. Its
      *  presence + importance are two thirds of the §8.12 pushEligible formula; the channel
      *  itself is created by the Step 7 notification flow. */
-    const val CHANNEL_PARTNER_NUDGES = "partner_nudges"
+    /** `_v3`: the app can silently LOWER its own channel's importance but never raise it
+     *  (AOSP; device-confirmed both directions 2026-10-04). The pre-fix post path carried
+     *  DEFAULT and silently dented `partner_nudges_v2` 4→3 on every foreground nudge receipt,
+     *  and no in-place re-assert can undo that — so the id bumps again and v2 joins the
+     *  startup cleanup list. */
+    const val CHANNEL_PARTNER_NUDGES = "partner_nudges_v3"
+    const val CHANNEL_PARTNER_NUDGES_LEGACY = "partner_nudges"
+    const val CHANNEL_PARTNER_NUDGES_V2 = "partner_nudges_v2"
     const val NOTIF_PARTNER_NUDGE = 2005
 
     /** Plan §8 Step 16's third channel: LOW importance, "used only for internal/debug
@@ -68,32 +77,54 @@ object PartnerNotifications {
         )
     }
 
-    /** SOS §8.14 (V1 Req 35, plan Step 7): the `partner_nudges` channel, created at
-     *  application startup so the §8.12 pushEligible snapshot can report true before the
-     *  first nudge. IMPORTANCE_DEFAULT, private on the lockscreen, vibration on first
-     *  creation. Re-creation with the same id never overrides user-modified settings —
-     *  channel importance is not programmatically changed after creation. */
+    /** SOS §8.14 (V1 Req 35, plan Step 7): the check-ins channel, created at application
+     *  startup so the §8.12 pushEligible snapshot can report true before the first nudge.
+     *  IMPORTANCE_HIGH (deviation from the plan's DEFAULT, owner ruling 2026-10-04): a
+     *  reach-out must surface as a heads-up banner, and only importance >= HIGH produces
+     *  one. Android cannot raise an existing channel's importance in place — and, since an
+     *  app can silently LOWER its own channel (see the `_v3` const note), a dented channel
+     *  is retired by id version: the current id takes HIGH on every skin, and every prior
+     *  id is deleted at startup to avoid duplicate settings entries. Private on the
+     *  lockscreen, vibration on first creation. */
     fun ensurePartnerNudgesChannel(context: Context) {
-        context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
             NotificationChannel(
                 CHANNEL_PARTNER_NUDGES,
                 context.getString(R.string.partner_channel_nudges_name),
-                NotificationManager.IMPORTANCE_DEFAULT,
+                NotificationManager.IMPORTANCE_HIGH,
             ).apply {
                 lockscreenVisibility = NotificationCompat.VISIBILITY_PRIVATE
                 enableVibration(true)
             },
         )
+        manager.deleteNotificationChannel(CHANNEL_PARTNER_NUDGES_LEGACY)
+        manager.deleteNotificationChannel(CHANNEL_PARTNER_NUDGES_V2)
     }
 
     /** Partner-activity alert. The per-pair id collapses one partner's burst into a single
      *  tray entry; `onlyAlertOnce` additionally keeps that burst to one alert (a
      *  partner-activity pull can append several events at once) — the trade is that further
      *  updates while the user leaves the notification untouched are silent, which is the
-     *  non-spammy side of §11.7. A motivational message names the sender and shows the
-     *  message itself (owner feedback 2026-10-01) — unlocked only; the lockscreen public
-     *  version stays generic (FR-13). */
-    fun notifyPartnerEvent(context: Context, pairId: String, partnerName: String, messageBody: String? = null) =
+     *  non-spammy side of §11.7. Unlocked copy names the sender and, for a wire-v2 relapse
+     *  or milestone, states which streak and when it happened (owner mandate 2026-10-04); a
+     *  motivational message shows the message itself (owner feedback 2026-10-01). The
+     *  lockscreen public version stays generic (FR-13) — none of the rich copy reaches it. */
+    fun notifyPartnerEvent(context: Context, pairId: String, partnerName: String, payload: EventPayload) {
+        val rich = when (payload.type) {
+            EventPayload.TYPE_RELAPSE_RECORDED ->
+                context.getString(R.string.partner_relapse_title_named, partnerName) to
+                    relapseBody(context, payload.stateAfter)
+            EventPayload.TYPE_MILESTONE_REACHED ->
+                context.getString(R.string.partner_milestone_title_named, partnerName) to
+                    milestoneBody(context, payload.stateAfter)
+            EventPayload.TYPE_MOTIVATIONAL_MESSAGE ->
+                context.getString(R.string.partner_message_title_named, partnerName) to
+                    payload.text.takeIf { it.isNotBlank() }
+                        ?.let { context.getString(R.string.partner_message_quoted, it) }
+            else -> null to null
+        }
+        val richBody = rich.second
         post(
             context,
             CHANNEL_PARTNER_ALERTS,
@@ -103,13 +134,43 @@ object PartnerNotifications {
             R.string.partner_event_title,
             R.string.partner_event_text,
             onlyAlertOnce = true,
-            namedTitle = if (messageBody != null) {
-                context.getString(R.string.partner_message_title_named, partnerName)
+            // The rich title is only claimed when its details are actually present — a
+            // pre-wire-v2 sender's relapse degrades to the generic named copy, never a title
+            // that promises a streak name the body cannot show.
+            namedTitle = if (richBody != null) {
+                rich.first
             } else {
                 context.getString(R.string.partner_event_title_named, partnerName)
             },
-            namedText = messageBody?.let { context.getString(R.string.partner_message_quoted, it) },
+            namedText = richBody,
         )
+    }
+
+    /** Wire v2 (ADR #134): "«streak» · ended a N-day streak · «when»"; null when the sender's
+     *  body predates the wire — the caller then keeps the generic copy. */
+    private fun relapseBody(context: Context, state: ActivityStateAfter?): String? {
+        if (state == null) return null
+        val label = state.habitLabel ?: return null
+        val days = state.endedDays ?: return null
+        val ended = context.getString(R.string.partner_relapse_ended_days, days)
+        return withOccurredAt(context, "$label · $ended", state.eventOccurredAtMs)
+    }
+
+    private fun milestoneBody(context: Context, state: ActivityStateAfter?): String? {
+        if (state == null) return null
+        val label = state.habitLabel ?: return null
+        val day = state.milestoneDay ?: return null
+        val reached = context.resources.getQuantityString(
+            R.plurals.partner_milestone_reached_days, day, day,
+        )
+        return withOccurredAt(context, "$label · $reached", state.eventOccurredAtMs)
+    }
+
+    private fun withOccurredAt(context: Context, body: String, occurredAtMs: Long): String {
+        val at = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
+            .format(Date(occurredAtMs))
+        return context.getString(R.string.partner_event_time_suffix, body, at)
+    }
 
     /** A verified disable-approval request arrived — the responder's actionable item.
      *  Plan Step 16 channel spec: `approval_requests` is HIGH importance. */
@@ -153,13 +214,15 @@ object PartnerNotifications {
     /** SOS §8.17/FR-20: the foreground FCM receipt posts immediately — generic copy only
      *  (FR-19), the Step 7 channel, and the fixed FR-19 tag so a follow-up nudge replaces the
      *  tray entry (one replaceable entry by design). The tap carries the same launcher extras
-     *  the background system path delivers, so §8.18's routing is identical for both. */
+     *  the background system path delivers, so §8.18's routing is identical for both. HIGH
+     *  matches the channel's created importance: this call is also the background-wake
+     *  lazy-create path (§8.17), so it must never land below HIGH. */
     fun notifyPartnerNudge(context: Context, nudgeId: String) =
         post(
             context,
             CHANNEL_PARTNER_NUDGES,
             context.getString(R.string.partner_channel_nudges_name),
-            NotificationManager.IMPORTANCE_DEFAULT,
+            NotificationManager.IMPORTANCE_HIGH,
             NOTIF_PARTNER_NUDGE,
             R.string.partner_nudge_title,
             R.string.partner_nudge_text,
@@ -193,9 +256,16 @@ object PartnerNotifications {
         pushNudgeId: String? = null,
     ) {
         if (!NotificationAccess.canPost(context)) return
-        context.getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(channelId, channelName, importance),
-        )
+        // Create only when missing (device-observed 2026-10-04, both rig devices): re-creating
+        // an EXISTING channel with the poster's importance is not a no-op on XOS — a nudge post
+        // carrying DEFAULT rewrote partner_nudges_v2 from HIGH(4) to DEFAULT(3) on a
+        // non-user-locked channel, so every later post was tray-only, no heads-up banner.
+        // Importance belongs to the channel's creation (ensurePartnerNudgesChannel / the
+        // first lazy post), never to a later poster's call.
+        val channelManager = context.getSystemService(NotificationManager::class.java)
+        if (channelManager.getNotificationChannel(channelId) == null) {
+            channelManager.createNotificationChannel(NotificationChannel(channelId, channelName, importance))
+        }
         // Owner ask 2026-10-01: the tap lands on Home — the pinned message card (messages)
         // and the day hero live there, so that is where the partner event is visible. The
         // request code is this object's own (extras don't count toward PendingIntent

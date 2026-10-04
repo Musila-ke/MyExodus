@@ -163,6 +163,25 @@ class NudgeInboxRepositoryTest {
     }
 
     @Test
+    fun cardCarriesTheSendersMessage_v2Envelope_whileV1ShowsNone() = runTest {
+        val v2 = Harness().apply {
+            emissions = flowOf(
+                listOf(
+                    doc(
+                        "d-new",
+                        createdAtMs = 990_000L,
+                        envelope = NudgeEnvelope.seal(cipher, cek, "pair-1", "d-new", "sender-1", "Please call me"),
+                    ),
+                ),
+            )
+        }
+        assertEquals("Please call me", v2.repository.inbox().toList().single()?.message)
+
+        val v1 = Harness().apply { emissions = flowOf(listOf(doc("d-new", createdAtMs = 990_000L))) }
+        assertNull("a v1 envelope carries no message", v1.repository.inbox().toList().single()?.message)
+    }
+
+    @Test
     fun malformedOlderDoc_isNeverTouched_whenTheNewestIsReadable() = runTest {
         val h = Harness().apply {
             val garbage = doc("d-old", createdAtMs = 900_000L, envelope = "not base64!!")

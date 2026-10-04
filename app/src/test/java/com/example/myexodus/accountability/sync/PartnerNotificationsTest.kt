@@ -7,6 +7,10 @@ import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.R
+import com.example.myexodus.accountability.serialization.ActivityStateAfter
+import com.example.myexodus.accountability.serialization.EventPayload
+import java.text.DateFormat
+import java.util.Date
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -41,7 +45,9 @@ class PartnerNotificationsTest {
     @Test
     fun deniedPermission_postIsSilentNoOp() {
         shadowOf(context as Application).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
-        PartnerNotifications.notifyPartnerEvent(context, PAIR_ID, PARTNER_NAME)
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_STREAK_UPDATED),
+        )
         assertTrue(manager.activeNotifications.isEmpty())
         assertNull(manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_ALERTS))
     }
@@ -49,7 +55,9 @@ class PartnerNotificationsTest {
     @Test
     fun granted_partnerAlertsChannelIsHighImportance() {
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
-        PartnerNotifications.notifyPartnerEvent(context, PAIR_ID, PARTNER_NAME)
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_STREAK_UPDATED),
+        )
         assertEquals(
             NotificationManager.IMPORTANCE_HIGH,
             manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_ALERTS)!!.importance,
@@ -79,7 +87,9 @@ class PartnerNotificationsTest {
     fun partnerEvent_alertOnceDuringABurst_butApprovalAlwaysAlerts() {
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
 
-        PartnerNotifications.notifyPartnerEvent(context, PAIR_ID, PARTNER_NAME)
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_STREAK_UPDATED),
+        )
         PartnerNotifications.notifyApprovalRequest(context, PAIR_ID, PARTNER_NAME)
 
         val partnerEvent = manager.activeNotifications.first {
@@ -105,7 +115,9 @@ class PartnerNotificationsTest {
     fun partnerEvent_isPrivateWithAGenericPublicVersion() {
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
 
-        PartnerNotifications.notifyPartnerEvent(context, PAIR_ID, PARTNER_NAME)
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_STREAK_UPDATED),
+        )
 
         val notification = manager.activeNotifications.single().notification
         assertEquals(Notification.VISIBILITY_PRIVATE, notification.visibility)
@@ -130,7 +142,10 @@ class PartnerNotificationsTest {
     fun motivationalMessage_showsTheBodyUnlocked_lockscreenStaysGeneric() {
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
 
-        PartnerNotifications.notifyPartnerEvent(context, PAIR_ID, PARTNER_NAME, messageBody = "Thinking of you today.")
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME,
+            payload(EventPayload.TYPE_MOTIVATIONAL_MESSAGE, text = "Thinking of you today."),
+        )
 
         val notification = manager.activeNotifications.single().notification
         assertEquals(
@@ -151,6 +166,28 @@ class PartnerNotificationsTest {
             "the message body never reaches the lockscreen (FR-13)",
             context.getString(R.string.partner_event_text),
             publicVersion.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
+    /** A blank body (never our composer's output) must not render as an empty quotation —
+     *  the post degrades to the generic named copy. */
+    @Test
+    fun blankMotivationalBody_degradesToTheGenericCopy() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME,
+            payload(EventPayload.TYPE_MOTIVATIONAL_MESSAGE, text = "   "),
+        )
+
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_event_title_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(R.string.partner_event_text),
+            notification.extras.getString(Notification.EXTRA_TEXT),
         )
     }
 
@@ -194,19 +231,43 @@ class PartnerNotificationsTest {
         assertTrue(manager.activeNotifications.isEmpty())
     }
 
-    /** SOS §8.14: the check-ins channel is created at application startup with exactly the
-     *  plan's shape — IMPORTANCE_DEFAULT so a nudge alerts without heads-up priority,
-     *  VISIBILITY_PRIVATE for the lockscreen, vibration enabled on first creation. */
+    /** SOS §8.14: the check-ins channel is created at application startup — IMPORTANCE_HIGH
+     *  (owner ruling 2026-10-04: a reach-out must surface as a heads-up banner, the plan's
+     *  DEFAULT was device-verified as tray-only), VISIBILITY_PRIVATE for the lockscreen,
+     *  vibration enabled on first creation. */
     @Test
     fun ensurePartnerNudgesChannel_hasThePlanShape() {
         PartnerNotifications.ensurePartnerNudgesChannel(context)
         val channel = manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_NUDGES)!!
-        assertEquals(NotificationManager.IMPORTANCE_DEFAULT, channel.importance)
+        assertEquals(NotificationManager.IMPORTANCE_HIGH, channel.importance)
         assertEquals(Notification.VISIBILITY_PRIVATE, channel.lockscreenVisibility)
         assertTrue("vibration enabled on first creation", channel.shouldVibrate())
         assertEquals(
             context.getString(R.string.partner_channel_nudges_name),
             channel.name.toString(),
+        )
+    }
+
+    /** Device-observed 2026-10-04 (both rig devices): the nudge post's channel-create call
+     *  rewrote the LIVE v2 channel's importance HIGH→DEFAULT (XOS honors app importance
+     *  updates on non-user-locked channels), so every later post was tray-only — the exact
+     *  reported defect. The post path must create a channel only when missing, never rewrite
+     *  an existing one's importance. */
+    @Test
+    fun nudgePost_neverDemotesTheExistingChannel() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        PartnerNotifications.ensurePartnerNudgesChannel(context)
+        assertEquals(
+            NotificationManager.IMPORTANCE_HIGH,
+            manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_NUDGES)!!.importance,
+        )
+
+        PartnerNotifications.notifyPartnerNudge(context, "123e4567-e89b-42d3-a456-426614174000")
+
+        assertEquals(
+            "a nudge post must not rewrite the channel's importance",
+            NotificationManager.IMPORTANCE_HIGH,
+            manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_NUDGES)!!.importance,
         )
     }
 
@@ -258,8 +319,113 @@ class PartnerNotificationsTest {
         assertTrue(manager.activeNotifications.isEmpty())
     }
 
+    /** Owner mandate 2026-10-04: a relapse alert states which streak and when it happened —
+     *  unlocked copy only; the lockscreen public version stays fully generic (FR-13). */
+    @Test
+    fun relapse_namesTheStreakDaysAndTime_unlocked_lockscreenStaysGeneric() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val state = ActivityStateAfter(
+            daysFree = 0, relapseCount = 3, milestonesReached = emptyList(), coachingProgress = 0,
+            eventOccurredAtMs = OCCURRED_AT, habitLabel = "Gambling", endedDays = 5,
+        )
+
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME,
+            payload(EventPayload.TYPE_RELAPSE_RECORDED, stateAfter = state),
+        )
+
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_relapse_title_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(
+                R.string.partner_event_time_suffix,
+                "Gambling · " + context.getString(R.string.partner_relapse_ended_days, 5),
+                DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(OCCURRED_AT)),
+            ),
+            notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+        val publicVersion = notification.publicVersion
+        assertTrue("lockscreen renders the generic public copy", publicVersion != null)
+        assertEquals(
+            context.getString(R.string.partner_event_title),
+            publicVersion!!.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            "the streak name and day-count never reach the lockscreen (FR-13)",
+            context.getString(R.string.partner_event_text),
+            publicVersion.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
+    /** Wire-v1 degradation (ADR #134): a body without the v2 fields keeps the generic named
+     *  copy — never a title promising a streak name the body cannot show. */
+    @Test
+    fun relapse_withoutV2Fields_degradesToTheGenericCopy() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val state = ActivityStateAfter(
+            daysFree = 0, relapseCount = 3, milestonesReached = emptyList(), coachingProgress = 0,
+            eventOccurredAtMs = OCCURRED_AT,
+        )
+
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME,
+            payload(EventPayload.TYPE_RELAPSE_RECORDED, stateAfter = state),
+        )
+
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_event_title_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(R.string.partner_event_text),
+            notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
+    /** A milestone alert names the streak and the day reached (owner mandate 2026-10-04). */
+    @Test
+    fun milestone_namesTheStreakAndDay() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val state = ActivityStateAfter(
+            daysFree = 30, relapseCount = 1, milestonesReached = listOf(30), coachingProgress = 0,
+            eventOccurredAtMs = OCCURRED_AT, habitLabel = "Alcohol", milestoneDay = 30,
+        )
+
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME,
+            payload(EventPayload.TYPE_MILESTONE_REACHED, stateAfter = state),
+        )
+
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_milestone_title_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(
+                R.string.partner_event_time_suffix,
+                "Alcohol · " + context.resources.getQuantityString(
+                    R.plurals.partner_milestone_reached_days, 30, 30,
+                ),
+                DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(OCCURRED_AT)),
+            ),
+            notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
+    private fun payload(
+        type: String,
+        text: String = "streak:7",
+        stateAfter: ActivityStateAfter? = null,
+    ) = EventPayload(type = type, text = text, stateAfter = stateAfter)
+
     private companion object {
         const val PAIR_ID = "pair-alpha"
         const val PARTNER_NAME = "Mama"
+        const val OCCURRED_AT = 1_758_000_000_000L
     }
 }

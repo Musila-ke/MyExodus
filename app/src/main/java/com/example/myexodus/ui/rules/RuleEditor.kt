@@ -9,15 +9,19 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -32,6 +36,7 @@ import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -124,11 +129,20 @@ fun RuleEditorScreen(
         mutableStateOf(initial?.timeRangeStart != null && initial?.timeRangeEnd != null)
     }
     var limitEnabled by rememberSaveable { mutableStateOf((initial?.dailyLimitMs ?: 0L) > 0L) }
+    // New rules start with both fields blank — a prefilled "30" was a default the user had to
+    // notice and undo (owner 2026-10-04: "2 hrs means typing 00 in minutes"). Editing an
+    // existing rule prefills only the non-zero half; blank reads as 0 on save.
     var limitHours by rememberSaveable {
-        mutableStateOf(initial?.dailyLimitMs?.takeIf { it > 0L }?.div(60 * MINUTE_MS)?.toString() ?: "0")
+        mutableStateOf(
+            initial?.dailyLimitMs?.takeIf { it > 0L }?.div(60 * MINUTE_MS)?.takeIf { it > 0L }
+                ?.toString().orEmpty(),
+        )
     }
     var limitMinutes by rememberSaveable {
-        mutableStateOf(initial?.dailyLimitMs?.takeIf { it > 0L }?.div(MINUTE_MS)?.rem(60)?.toString() ?: "30")
+        mutableStateOf(
+            initial?.dailyLimitMs?.takeIf { it > 0L }?.div(MINUTE_MS)?.rem(60)?.takeIf { it > 0L }
+                ?.toString().orEmpty(),
+        )
     }
     var startMinutes by rememberSaveable { mutableLongStateOf(initial?.timeRangeStart ?: DEFAULT_START_MINUTES) }
     var endMinutes by rememberSaveable { mutableLongStateOf(initial?.timeRangeEnd ?: DEFAULT_END_MINUTES) }
@@ -144,8 +158,12 @@ fun RuleEditorScreen(
     LaunchedEffect(Unit) { if (isApp && targetValue.isBlank()) showPicker = true }
 
     // The banner sits above the form while Save sits below it: from the bottom of a long form
-    // a rejected save is otherwise invisible — the message has to come to the user.
-    LaunchedEffect(error) { if (error != null) scrollState.animateScrollTo(0) }
+    // a rejected save is otherwise invisible — the message has to come to the user. Keyed on
+    // the attempt too: a second save with the identical error value (data class equality)
+    // would otherwise skip recomposition, leaving the banner off-screen with zero feedback
+    // (device-caught 2026-10-04 — the "inert Save button" that was never inert).
+    var saveAttempt by remember { mutableIntStateOf(0) }
+    LaunchedEffect(error, saveAttempt) { if (error != null) scrollState.animateScrollTo(0) }
 
     // Resolved at composition — save() is a click handler, not a composable (lint: resource
     // reads on LocalContext are not configuration-aware).
@@ -155,6 +173,7 @@ fun RuleEditorScreen(
     val duplicateMessage = stringResource(R.string.editor_target_duplicate)
     val limitInvalidMessage = stringResource(R.string.editor_daily_limit_invalid)
     val limitTooLargeMessage = stringResource(R.string.editor_daily_limit_too_large)
+    val limitExceedsWindowMessage = stringResource(R.string.editor_limit_exceeds_window)
     val noModeMessage = stringResource(R.string.editor_mode_missing)
     val siteLimitInvalidMessage = stringResource(R.string.editor_site_limit_invalid)
     val siteLimitIpMessage = stringResource(R.string.editor_site_limit_ip)
@@ -167,6 +186,7 @@ fun RuleEditorScreen(
 
     fun save() {
         error = null
+        saveAttempt++
         val value = targetValue.trim()
         // A limit is stored only while no other mechanism overrides it — the same condition
         // `composeRuleFields` applies.
@@ -212,6 +232,7 @@ fun RuleEditorScreen(
             modeError == ModeError.SameTime -> sameTimeMessage
             modeError == ModeError.LimitInvalid -> limitInvalidMessage
             modeError == ModeError.LimitTooLarge -> limitTooLargeMessage
+            modeError == ModeError.LimitExceedsWindow -> limitExceedsWindowMessage
             else -> null
         }
         if (invalid != null) {
@@ -650,23 +671,46 @@ private fun SectionCard(content: @Composable () -> Unit) {
 @Composable
 private fun EndsRow(expiresAt: Long, onChange: (Long) -> Unit) {
     var picking by remember { mutableStateOf(false) }
-    Row(
+    // Settings-row grammar, the LinkRow family in single-line form. Design history (owner,
+    // 2026-10-04): the bare "Ends · Never" text row read as a static statement and the owner
+    // missed it was tappable; the full-width outlined field that replaced it fixed that but
+    // read as a heavy form control and was rejected on looks. The chevron does the affordance
+    // work here, and clearing lives inside the dialog so the row keeps one calm line.
+    Surface(
+        onClick = { picking = true },
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text(stringResource(R.string.editor_ends), style = MaterialTheme.typography.bodyLarge)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (expiresAt > 0) {
-                TextButton(onClick = { onChange(0L) }) { Text(stringResource(R.string.editor_clear)) }
-            }
-            TextButton(onClick = { picking = true }) {
-                Text(
-                    if (expiresAt > 0) formatDate(expiresAt) else stringResource(R.string.editor_never),
-                )
-            }
+        Row(
+            Modifier.padding(start = 16.dp, end = 12.dp, top = 16.dp, bottom = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                stringResource(R.string.editor_ends),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                if (expiresAt > 0) formatDate(expiresAt) else stringResource(R.string.editor_never),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (expiresAt > 0) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp),
+            )
         }
     }
+    Text(
+        stringResource(R.string.editor_ends_note),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
     if (picking) {
         ExpiryDateDialog(
             initialEpochMillis = expiresAt,
@@ -675,6 +719,11 @@ private fun EndsRow(expiresAt: Long, onChange: (Long) -> Unit) {
                 picking = false
             },
             onDismiss = { picking = false },
+            onClear = if (expiresAt > 0) {
+                { onChange(0L); picking = false }
+            } else {
+                null
+            },
         )
     }
 }
@@ -685,6 +734,7 @@ private fun ExpiryDateDialog(
     initialEpochMillis: Long,
     onConfirm: (Long) -> Unit,
     onDismiss: () -> Unit,
+    onClear: (() -> Unit)? = null,
 ) {
     val state = rememberDatePickerState(
         initialSelectedDateMillis = initialEpochMillis.toPickerDayMillis(),
@@ -701,7 +751,12 @@ private fun ExpiryDateDialog(
             ) { Text(stringResource(R.string.dialog_ok)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.rules_cancel)) }
+            Row {
+                if (onClear != null) {
+                    TextButton(onClick = onClear) { Text(stringResource(R.string.editor_clear)) }
+                }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.rules_cancel)) }
+            }
         },
     ) { DatePicker(state = state) }
 }
@@ -787,23 +842,35 @@ internal fun clampStoredLimitMs(dailyLimitMs: Long): Long =
     }
 
 /** Validation outcome of the block-mode form; the caller maps it to copy. */
-internal enum class ModeError { NoneSelected, SameTime, LimitInvalid, LimitTooLarge }
+internal enum class ModeError { NoneSelected, SameTime, LimitInvalid, LimitTooLarge, LimitExceedsWindow }
+
+/** Minutes a rule's window allows per active day — the usage a daily limit can possibly see.
+ *  end <= start is the engine's overnight form (equal times are rejected before this runs). */
+internal fun windowLengthMinutes(startMinutes: Long, endMinutes: Long): Long =
+    if (endMinutes > startMinutes) endMinutes - startMinutes
+    else MINUTES_PER_DAY - startMinutes + endMinutes
 
 /** A usage day is 24 h long, so a limit at or above this can never fire (user-reported
  *  2026-09-20: "30 hrs a day" was accepted and would have been an inert rule). */
 internal const val MINUTES_PER_DAY = 24 * 60
 
+/** A blank hours or minutes field reads as 0 when the other half carries a number (owner
+ *  2026-10-04: "what if i just want 2hrs? i have to type 00 in minutes" — bad UX). A fully
+ *  blank pair is still "no limit entered", and a non-numeric entry still fails. */
 internal fun parseLimitTotalMinutes(hours: String, minutes: String): Long? {
-    val h = hours.trim().toLongOrNull() ?: return null
-    val m = minutes.trim().toLongOrNull() ?: return null
+    if (hours.isBlank() && minutes.isBlank()) return null
+    val h = hours.trim().ifEmpty { "0" }.toLongOrNull() ?: return null
+    val m = minutes.trim().ifEmpty { "0" }.toLongOrNull() ?: return null
     val total = h * 60 + m
     return total.takeIf { it > 0 }
 }
 
 /**
  * The editor's rules: at least one mechanism selected, a selected window must not be zero-length
- * (equal start/end is the engine's overnight form, ambiguous as a new rule), and a selected
- * limit must total between 1 minute and one day. All checks are skipped for mechanisms
+ * (equal start/end is the engine's overnight form, ambiguous as a new rule), a selected
+ * limit must total between 1 minute and one day, and — #19, owner report 2026-10-04 — a limit
+ * beside a window must fit inside that window, or it is a setting that can never fire
+ * ("1h duration + 2h limit is incoherent"). All checks are skipped for mechanisms
  * "all the time" overrides.
  */
 internal fun validateBlockMode(
@@ -819,6 +886,8 @@ internal fun validateBlockMode(
     !alwaysOn && limitEnabled && limitTotalMinutes == null -> ModeError.LimitInvalid
     !alwaysOn && limitEnabled && limitTotalMinutes != null && limitTotalMinutes >= MINUTES_PER_DAY ->
         ModeError.LimitTooLarge
+    !alwaysOn && windowEnabled && limitEnabled && limitTotalMinutes != null &&
+        limitTotalMinutes > windowLengthMinutes(startMinutes, endMinutes) -> ModeError.LimitExceedsWindow
     else -> null
 }
 

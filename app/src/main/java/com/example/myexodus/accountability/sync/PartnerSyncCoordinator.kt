@@ -9,11 +9,17 @@ import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.dao.PartnerActivityDao
 import com.example.myexodus.data.db.entity.AttemptLog
+import com.example.myexodus.data.db.entity.HabitProgress
+import com.example.myexodus.data.db.entity.PairProfileSharing
+import com.example.myexodus.data.db.entity.PairStreakSharing
 import com.example.myexodus.data.db.entity.PartnerActivityOutbox
 import com.example.myexodus.data.db.entity.decodeMilestoneDays
 import com.example.myexodus.recovery.RecoveryMirror
+import com.example.myexodus.streaks.StreakTimer
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.sync.Mutex
@@ -203,30 +209,63 @@ class PartnerSyncCoordinator(
      *  rest.
      *
      *  [sinceMs] is this pair's enrollment time (owner ruling 2026-09-29): a newcomer must not
-     *  inherit history that predates them. Pairing itself writes a targeted state snapshot, so
-     *  the newcomer starts with one fresh row instead of up to 30 days of backlog. */
+     *  inherit history that predates them.
+     *
+     *  v16 consent (ADR #135, owner mandate 2026-10-04): every queue is gated against THIS
+     *  pair's matrix rows. Attempts need `pair_profile_sharing.share_checkins`, sessions
+     *  `share_recovery` — and each queue's effective since is additionally floored at its
+     *  switch's enable watermark, so an enable never delivers the while-off backlog. Activity
+     *  rows are filtered in SQL by [PartnerActivityDao.pendingForPair] against the same
+     *  matrix; the payload of each delivered row is then re-anchored and scrubbed per this
+     *  pair (see [payloadFor]) — the pair's projection must only ever reflect what this pair
+     *  consented to see. */
     private suspend fun reconcileEvents(pairId: String, sinceMs: Long): Int {
         val store = storeFactory.open() ?: return 0
+        val sharingDao = store.pairSharingDao()
+        val streakConsent = sharingDao.streakForPair(pairId)
+        val consentByHabit = streakConsent.associateBy { it.habitProgressId }
+        val profileConsent = sharingDao.profileFor(pairId)
         val attempts = store.attemptLogDao()
         var linked = 0
-        for (attempt in attempts.pendingEventCreation(pairId, sinceMs, RECONCILE_BATCH)) {
-            when (val emit = emitActivity(pairId, "attempt ${attempt.id}", eventText(attempt))) {
-                is Emit.Created -> { attempts.linkEvent(attempt.id, pairId, emit.sequence); linked++ }
-                Emit.Skip -> Unit
-                Emit.Stop -> return linked
+        if (profileConsent?.shareCheckins == true) {
+            val since = maxOf(sinceMs, profileConsent.checkinsEnabledSinceMs)
+            for (attempt in attempts.pendingEventCreation(pairId, since, RECONCILE_BATCH)) {
+                when (val emit = emitActivity(pairId, "attempt ${attempt.id}", eventText(attempt))) {
+                    is Emit.Created -> { attempts.linkEvent(attempt.id, pairId, emit.sequence); linked++ }
+                    Emit.Skip -> Unit
+                    Emit.Stop -> return linked
+                }
             }
         }
         val sessions = store.recoverySessionDao()
-        for (session in sessions.pendingMirror(pairId, sinceMs, RECONCILE_BATCH)) {
-            when (val emit = emitActivity(pairId, "session ${session.id}", RecoveryMirror.text(session.technique, session.state))) {
-                is Emit.Created -> { sessions.linkEvent(session.id, pairId, emit.sequence); linked++ }
-                Emit.Skip -> Unit
-                Emit.Stop -> return linked
+        if (profileConsent?.shareRecovery == true) {
+            val since = maxOf(sinceMs, profileConsent.recoveryEnabledSinceMs)
+            for (session in sessions.pendingMirror(pairId, since, RECONCILE_BATCH)) {
+                when (val emit = emitActivity(pairId, "session ${session.id}", RecoveryMirror.text(session.technique, session.state))) {
+                    is Emit.Created -> { sessions.linkEvent(session.id, pairId, emit.sequence); linked++ }
+                    Emit.Skip -> Unit
+                    Emit.Stop -> return linked
+                }
             }
         }
         val activity = store.partnerActivityDao()
+        // The pair's visible habits, in the app's display order (getForProfile's
+        // target_identifier COLLATE NOCASE) — the re-anchor pool for profile rows.
+        val visibleHabits = streakConsent
+            .filter { it.shareStreak }
+            .mapNotNull { store.habitProgressDao().getById(it.habitProgressId) }
+            .sortedBy { it.targetIdentifier.lowercase() }
         for (row in activity.pendingForPair(pairId, sinceMs, RECONCILE_BATCH)) {
-            when (val emit = emitPayload(pairId, "activity ${row.eventId}", row.toActivityPayload())) {
+            val payload = payloadFor(store, row, consentByHabit[row.habitProgressId], profileConsent, visibleHabits)
+            if (payload == null) {
+                // Structurally undeliverable for this pair (its anchor vanished between the
+                // SQL consent check and here — a mid-pass toggle). Recorded, never emitted:
+                // an unlinked phantom row would otherwise stall its batch window until the
+                // retention sweep. The next pass's SQL drops it before this point.
+                activity.linkEvent(row.eventId, pairId, 0L)
+                continue
+            }
+            when (val emit = emitPayload(pairId, "activity ${row.eventId}", payload)) {
                 is Emit.Created -> { activity.linkEvent(row.eventId, pairId, emit.sequence); linked++ }
                 Emit.Skip -> Unit
                 Emit.Stop -> return linked
@@ -235,45 +274,115 @@ class PartnerSyncCoordinator(
         return linked
     }
 
+    /** One row's aggregate as THIS pair may see it (v16, ADR #135).
+     *
+     *  Habit-anchored rows carry their event-time snapshot; profile-anchored rows (coaching,
+     *  message) are re-anchored to a habit this pair can actually see — the row's own anchor
+     *  when visible, else the first visible one — because the receiver applies the snapshot
+     *  wholesale: an aggregate from a hidden habit would leak its day count through a row
+     *  that itself is consented. Null = no truthful anchor exists; the caller records the row
+     *  as undeliverable for this pair.
+     *
+     *  Sub-content is scrubbed by the pair's own sub-switches: relapse count 0 and milestone
+     *  list empty when the corresponding switch is off, coaching count 0 without recovery
+     *  consent — the pair's projection must only ever reflect what it consented to see, on
+     *  every kind (the v15 wire leaked these fields on streak rows; this closes that). */
+    private suspend fun payloadFor(
+        store: AppRulesStore,
+        row: PartnerActivityOutbox,
+        consent: PairStreakSharing?,
+        profileConsent: PairProfileSharing?,
+        visibleHabits: List<HabitProgress>,
+    ): EventPayload? {
+        val isHabitRow = row.kind in EventPayload.HABIT_ANCHORED_ACTIVITY_TYPES
+        val anchor: HabitProgress?
+        val base: Aggregate
+        if (isHabitRow) {
+            anchor = null
+            base = Aggregate(
+                daysFree = row.daysFree,
+                relapseCount = row.relapseCount,
+                milestones = decodeMilestoneDays(row.milestonesReached),
+                coachingProgress = row.coachingProgress,
+                habitLabel = row.habitLabel,
+            )
+        } else {
+            anchor = row.habitProgressId?.let { id -> visibleHabits.firstOrNull { it.progressId == id } }
+                ?: visibleHabits.firstOrNull()
+                ?: return null
+            val streak = store.recoveryStreakDao().getActiveStreak(anchor.progressId)
+            base = Aggregate(
+                daysFree = streak?.let { (it.currentStreakElapsedMs / StreakTimer.DAY_MS).toInt() + 1 } ?: 0,
+                relapseCount = anchor.totalRelapses,
+                milestones = achievedDays(store, streak?.streakId),
+                coachingProgress = row.coachingProgress,
+                // Profile rows stay nameless (wire v2 contract).
+                habitLabel = null,
+            )
+        }
+        return EventPayload(
+            type = row.kind,
+            text = row.text,
+            protocolVersion = row.protocolVersion,
+            schemaVersion = row.schemaVersion,
+            stateAfter = ActivityStateAfter(
+                daysFree = base.daysFree,
+                relapseCount = if (consent?.shareRelapses == true) base.relapseCount else 0,
+                milestonesReached = if (consent?.shareMilestones == true) base.milestones else emptyList(),
+                coachingProgress = if (profileConsent?.shareRecovery == true) base.coachingProgress else 0,
+                eventOccurredAtMs = row.occurredAtMs,
+                habitLabel = base.habitLabel,
+                endedDays = row.endedDays,
+                milestoneDay = row.milestoneDay,
+            ),
+        )
+    }
+
+    private data class Aggregate(
+        val daysFree: Int,
+        val relapseCount: Int,
+        val milestones: List<Int>,
+        val coachingProgress: Int,
+        val habitLabel: String?,
+    )
+
+    private suspend fun achievedDays(store: AppRulesStore, streakId: String?): List<Int> {
+        if (streakId == null) return emptyList()
+        return store.milestoneEventDao().getForStreak(streakId)
+            .filter { it.achievedAt != null }
+            .map { it.milestoneDay }
+            .sorted()
+    }
+
     /**
      * Partner-activity retention and unpair cleanup (plan §8.17 delta, Appendix A.3):
      *  - journal rows past the mailbox-TTL window are dropped in bounded batches — a state
      *    snapshot that old is superseded by any newer event, and an undelivered one has long
      *    since missed its moment;
-     *  - projections/links for pair ids no longer enrolled are deleted, self-healing after an
-     *    unpair that never touched this store (no BilateralDeletion coupling).
+     *  - projections/links/consent rows for pair ids no longer enrolled are deleted,
+     *    self-healing after an unpair that never touched this store (no BilateralDeletion
+     *    coupling). Consent rows are candidates too (v16): a pair can hold them without
+     *    ever having produced a projection or link.
      */
     private suspend fun sweepActivity(enrolledPairIds: Set<String>) {
         val store = storeFactory.open() ?: return
         val dao = store.partnerActivityDao()
+        val sharingDao = store.pairSharingDao()
         val cutoff = System.currentTimeMillis() - ACTIVITY_RETENTION_MS
         repeat(SWEEP_BATCH_LIMIT) {
             if (dao.deleteJournalOlderThan(cutoff, RECONCILE_BATCH) == 0) return@repeat
         }
-        val orphans = (dao.projectedPairIds() + dao.linkedPairIds())
+        val orphans = (dao.projectedPairIds() + dao.linkedPairIds() + sharingDao.consentPairIds())
             .distinct()
             .filterNot { it in enrolledPairIds }
         if (orphans.isNotEmpty()) {
             Log.i(TAG, "pruning activity state for ${orphans.size} unpaired pair(s)")
             dao.deleteLinksFor(orphans)
             dao.deleteProjectionsFor(orphans)
+            sharingDao.deleteStreakFor(orphans)
+            sharingDao.deleteProfileFor(orphans)
         }
     }
-
-    /** The journal row's uniform wire shape (Appendix A.2): kind + version pair + snapshot. */
-    private fun PartnerActivityOutbox.toActivityPayload() = EventPayload(
-        type = kind,
-        text = text,
-        protocolVersion = protocolVersion,
-        schemaVersion = schemaVersion,
-        stateAfter = ActivityStateAfter(
-            daysFree = daysFree,
-            relapseCount = relapseCount,
-            milestonesReached = decodeMilestoneDays(milestonesReached),
-            coachingProgress = coachingProgress,
-            eventOccurredAtMs = occurredAtMs,
-        ),
-    )
 
     /** Signs and creates one `TYPE_ACTIVITY` event (attempts/sessions — the shipped shape). */
     private suspend fun emitActivity(pairId: String, label: String, text: String): Emit =

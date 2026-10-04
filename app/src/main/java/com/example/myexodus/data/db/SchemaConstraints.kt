@@ -19,8 +19,9 @@ object SchemaConstraints {
         // post-migration TableInfo validation on every open (caught 2026-08-29 device spike run
         // 19: "Migration didn't properly handle: user_profile"). MIGRATION_1_2 drops it. Single-
         // active-profile is a profile-management concern (to be enforced deactivate-on-activate
-        // in the V1 UI workstream); observeActive LIMIT 1 only defines which profile the
-        // engines consult.
+        // in the V1 UI workstream); observeActive's ORDER BY user_id LIMIT 1 defines which
+        // profile the engines consult, and getActiveRules() mirrors that pick exactly
+        // (2026-10-04) so a stray second active row can never enforce rules the UI cannot show.
     }
 
     private fun ensureRestrictionRuleChecks(connection: SQLiteConnection) {

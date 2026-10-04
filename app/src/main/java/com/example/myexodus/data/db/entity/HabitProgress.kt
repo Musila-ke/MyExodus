@@ -26,9 +26,10 @@ data class HabitProgress(
     @ColumnInfo(name = "habit_duration_years") val habitDurationYears: Int,
     @ColumnInfo(name = "onboarding_severity_level") val onboardingSeverityLevel: String,
     @ColumnInfo(name = "last_relapse_timestamp") val lastRelapseTimestamp: Long?,
-    @ColumnInfo(name = "share_access_attempts") val shareAccessAttempts: Boolean,
-    @ColumnInfo(name = "share_relapses") val shareRelapses: Boolean,
-    @ColumnInfo(name = "share_milestones") val shareMilestones: Boolean,
+    // Consent moved out of this row in v16 (ADR #135): sharing is now per (pair, habit) —
+    // `pair_streak_sharing`; the v15 global flags (share_streak/relapses/milestones and the
+    // dead share_access_attempts) were dropped. A habit with no consent row is shared with
+    // nobody.
     // No FK: the Partnership table is out of scope for the persistence plan (six entities).
     @ColumnInfo(name = "assigned_partnership_id") val assignedPartnershipId: String?,
     // Habit-level record surviving streak rollovers (habit-streaks plan §8 Step 2); the live

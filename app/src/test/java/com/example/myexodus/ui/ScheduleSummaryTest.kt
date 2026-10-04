@@ -153,6 +153,25 @@ class ScheduleSummaryTest {
         assertNull(state.label)
     }
 
+    @Test
+    fun rowState_lapsedDurationOutranksPause_becauseTheUserNeverPausedIt() {
+        // #18: the sweep flips a lapsed rule's toggle off — the pill must own that ("Expired")
+        // rather than blame a pause the user never made.
+        assertEquals(
+            RuleRowState(res.getString(R.string.state_expired), false),
+            ruleRowState(
+                rule(alwaysOn = true, expiresAt = utc(2026, 9, 1, 12, 0)).copy(isEnabled = false),
+                utc(2026, 9, 19, 12, 0),
+                res,
+            ),
+        )
+        assertEquals(
+            "a plain pause still says Paused",
+            RuleRowState(res.getString(R.string.state_paused), false),
+            ruleRowState(rule(alwaysOn = true).copy(isEnabled = false), utc(2026, 9, 19, 12, 0), res),
+        )
+    }
+
     private fun utc(y: Int, month: Int, day: Int, h: Int, min: Int): Long =
         Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
             clear()

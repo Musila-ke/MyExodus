@@ -13,7 +13,6 @@ import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.myexodus.R
-import com.example.myexodus.accountability.sync.PartnerNotifications
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.EnhancedModeTestEntryPoint
 import com.example.myexodus.notifications.NotificationAccess
@@ -41,8 +40,9 @@ import org.junit.runner.RunWith
  *    and the canPost ↔ OS-state mapping is pinned by NotificationAccessTest (JVM)).
  *  - Channel-mute state does not show the app-level notification-off banner — this bullet
  *    feeds the LIVE `NotificationAccess.canPost` read (the on-device positive control that the
- *    wire from the real system state into the banner exists) while the real `partner_nudges`
- *    channel is muted; the mute is restored in the same test.
+ *    wire from the real system state into the banner exists) while a fresh probe channel is
+ *    muted; the probe is deleted in the same test (see [muteFreshProbeChannel] for why the
+ *    probe is not the real `partner_nudges` channel).
  *
  * Why the app-level-off state is fed, not driven: the device-side toggle is
  * OP_POST_NOTIFICATION, and skins differ on whether a test harness may write it. Stock Android
@@ -92,14 +92,31 @@ class NudgeHomeSurfaceInstrumentedTest {
         assertEquals("the X must acknowledge through the same path", 2, acks)
     }
 
+    @Test
+    fun card_rendersTheSendersMessage() {
+        // §12.3 rev (owner mandate 2026-10-04): the message rides the card when the envelope
+        // carried one; the envelope → card.message half is NudgeInboxRepositoryTest (JVM) and
+        // the v1 "no message" half is the same repository test — this leg is the render path.
+        render(
+            partnerNotificationsEnabled = true,
+            card = NudgeInboxRepository.NudgeCard(
+                pairId = "pair-1",
+                createdAtMs = System.currentTimeMillis() - 60_000,
+                pendingNudgeIds = listOf("n1"),
+                message = "Please call me",
+            ),
+        )
+        compose.onNodeWithText(str(R.string.sos_card_title)).assertIsDisplayed()
+        compose.onNodeWithText("Please call me").assertIsDisplayed()
+    }
+
     // --- §12.3 bullets 10-11 ----------------------------------------------------------------
 
     @Test
     fun notificationsOn_noBanner() {
-        var namesLoaded = 0
-        render(partnerNotificationsEnabled = true, onNamesLoaded = { namesLoaded++ })
-        // Positive control: the banner is absent while its paired input is live in the frame.
-        compose.waitUntil(timeoutMillis = 5_000) { namesLoaded > 0 }
+        // Positive control: the banner is absent while its paired input (the roster) is live
+        // in the frame — names are structural now, so the absence assert cannot pass vacuously.
+        render(partnerNotificationsEnabled = true)
         compose.waitForIdle()
 
         compose.onNodeWithText(str(R.string.partner_notifications_checkins_body)).assertDoesNotExist()
@@ -121,25 +138,20 @@ class NudgeHomeSurfaceInstrumentedTest {
 
     @Test
     fun channelMute_doesNotShowTheBanner() {
-        mutePartnerNudgesChannel()
+        val probe = muteFreshProbeChannel()
         try {
             assertTrue(
                 "a muted channel must not read as app-level off",
                 NotificationAccess.canPost(context),
             )
-            var namesLoaded = 0
-            render(
-                partnerNotificationsEnabled = NotificationAccess.canPost(context),
-                onNamesLoaded = { namesLoaded++ },
-            )
-            // The banner's other input (a linked partner) must actually be in the frame —
-            // otherwise the absence assert below could pass vacuously.
-            compose.waitUntil(timeoutMillis = 5_000) { namesLoaded > 0 }
+            // The banner's other input (a linked partner) is structural now — names pass
+            // straight into the frame, so the absence assert below cannot pass vacuously.
+            render(partnerNotificationsEnabled = NotificationAccess.canPost(context))
             compose.waitForIdle()
 
             compose.onNodeWithText(str(R.string.partner_notifications_checkins_body)).assertDoesNotExist()
         } finally {
-            restorePartnerNudgesChannel()
+            manager.deleteNotificationChannel(probe)
         }
     }
 
@@ -149,7 +161,6 @@ class NudgeHomeSurfaceInstrumentedTest {
         partnerNotificationsEnabled: Boolean,
         card: NudgeInboxRepository.NudgeCard? = null,
         onAcknowledge: () -> Unit = {},
-        onNamesLoaded: () -> Unit = {},
     ) {
         val ep = EntryPointAccessors.fromApplication(context, EnhancedModeTestEntryPoint::class.java)
         val store = ep.appRulesStoreFactory().open()
@@ -170,7 +181,7 @@ class NudgeHomeSurfaceInstrumentedTest {
                 onAcknowledgeMilestone = {},
                 onSwitchHabit = {},
                 streakResolved = false,
-                loadPartnerNames = { onNamesLoaded(); mapOf("pair-1" to "Sam") },
+                partnerNames = mapOf("pair-1" to "Sam"),
                 partnerNotificationsEnabled = partnerNotificationsEnabled,
                 onFixPartnerNotifications = {},
                 nudgeCard = card,
@@ -181,23 +192,25 @@ class NudgeHomeSurfaceInstrumentedTest {
 
     // --- device state (restored in-test) -----------------------------------------------------
 
-    private fun mutePartnerNudgesChannel() {
-        manager.deleteNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_NUDGES)
+    /**
+     * Mutes a virgin probe channel and returns its id (caller deletes it in `finally`).
+     * Deliberately NOT the real `partner_nudges` channel: Android re-applies a deleted
+     * channel's remembered importance on re-creation (observed deterministic on the X6532,
+     * 2026-10-04 — delete + recreate-as-NONE reads back DEFAULT), so muting the real channel
+     * could neither establish the mute nor be fully restored. The bullet's claim — channel
+     * mute must not read as app-level off — is channel-agnostic: `canPost` is app-level, and
+     * a fresh id takes the requested IMPORTANCE_NONE on every skin.
+     */
+    private fun muteFreshProbeChannel(): String {
+        val id = "test_mute_probe_${System.currentTimeMillis()}"
         manager.createNotificationChannel(
-            NotificationChannel(
-                PartnerNotifications.CHANNEL_PARTNER_NUDGES,
-                context.getString(R.string.partner_channel_nudges_name),
-                NotificationManager.IMPORTANCE_NONE,
-            ),
+            NotificationChannel(id, "mute probe", NotificationManager.IMPORTANCE_NONE),
         )
         assertEquals(
+            "a virgin channel id must take the requested mute",
             NotificationManager.IMPORTANCE_NONE,
-            manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_NUDGES).importance,
+            manager.getNotificationChannel(id).importance,
         )
-    }
-
-    private fun restorePartnerNudgesChannel() {
-        manager.deleteNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_NUDGES)
-        PartnerNotifications.ensurePartnerNudgesChannel(context)
+        return id
     }
 }

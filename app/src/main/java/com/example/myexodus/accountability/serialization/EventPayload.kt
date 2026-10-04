@@ -74,12 +74,33 @@ data class EventPayload(
             TYPE_MOTIVATIONAL_MESSAGE,
         )
 
+        /** Wire v2 (ADR #134): the kinds that concern one habit — exactly these carry
+         *  [ActivityStateAfter.habitLabel]. */
+        val HABIT_ANCHORED_ACTIVITY_TYPES: Set<String> = setOf(
+            TYPE_STREAK_UPDATED,
+            TYPE_RELAPSE_RECORDED,
+            TYPE_MILESTONE_REACHED,
+        )
+
         const val ACTIVITY_PROTOCOL_VERSION = 1
-        const val ACTIVITY_SCHEMA_VERSION = 1
+        /** v2 (ADR #134): `stateAfter` gained optional `habitLabel` / `endedDays` /
+         *  `milestoneDay` — absent-when-null, so a v1-shaped body keeps byte-identical
+         *  encoding ([SUPPORTED_SCHEMA_VERSIONS] keeps v1 events receivable). */
+        const val ACTIVITY_SCHEMA_VERSION = 2
+
+        /** Every body schema this build understands. Emitters write [ACTIVITY_SCHEMA_VERSION];
+         *  receivers accept both — a v1 event (pre-2026-10-04) is complete without a habit
+         *  name, and declining it as UNSUPPORTED would silently hide history on upgrade. */
+        val SUPPORTED_SCHEMA_VERSIONS: Set<Int> = setOf(1, ACTIVITY_SCHEMA_VERSION)
 
         /** Req 15 composer bound (§10.6 bounded strings; the encoder does not enforce it —
          *  compose-time does, and decode-side projection refuses anything over it). */
         const val MAX_ACTIVITY_TEXT_LENGTH = 280
+
+        /** Wire bound for [ActivityStateAfter.habitLabel] (§10.6 bounded strings): a
+         *  longer-than-this label is declined to null at decode; the event itself still
+         *  applies — the name is the optional part, never the state. */
+        const val MAX_HABIT_LABEL_LENGTH = 80
     }
 }
 
@@ -89,7 +110,7 @@ fun classifyActivity(payload: EventPayload): ActivityEvent = when {
     payload.protocolVersion == null || payload.schemaVersion == null ->
         ActivityEvent.Malformed(payload.type)
     payload.protocolVersion != EventPayload.ACTIVITY_PROTOCOL_VERSION ||
-        payload.schemaVersion != EventPayload.ACTIVITY_SCHEMA_VERSION ->
+        payload.schemaVersion !in EventPayload.SUPPORTED_SCHEMA_VERSIONS ->
         ActivityEvent.Unsupported(payload.type, payload.protocolVersion, payload.schemaVersion)
     payload.stateAfter == null -> ActivityEvent.Malformed(payload.type)
     else -> ActivityEvent.Valid(payload)
@@ -132,6 +153,15 @@ data class ActivityStateAfter(
     val coachingProgress: Int,
     /** Sender wall-clock; display chronology only, never a sync cursor (§9.6). */
     val eventOccurredAtMs: Long,
+    /** v2 (ADR #134): the sender's own name for the habit this event concerns — the partner
+     *  sees *which* streak, not just a number. Null on v1 bodies and profile-anchored kinds;
+     *  travels only when the streak is shared (the consent gate suppresses the whole event). */
+    val habitLabel: String? = null,
+    /** v2, relapse rows only: the ordinal day-count of the streak that just ended (the same
+     *  number the sender's own relapse card shows). */
+    val endedDays: Int? = null,
+    /** v2, milestone rows only: the day reached (e.g. 30). */
+    val milestoneDay: Int? = null,
 )
 
 private const val K_TYPE = "ty"
@@ -149,6 +179,9 @@ private const val K_RELAPSE_COUNT = "rc"
 private const val K_MILESTONES = "ms"
 private const val K_COACHING_PROGRESS = "cp"
 private const val K_EVENT_OCCURRED_AT = "eo"
+private const val K_HABIT_LABEL = "hl"
+private const val K_ENDED_DAYS = "ed"
+private const val K_MILESTONE_DAY = "md"
 
 /** Defensive decode bounds (§8.5/§10.6): a malicious peer must not be able to make the
  *  receiver allocate unbounded state through a well-signed envelope. */
@@ -200,6 +233,9 @@ private fun encodeStateAfter(s: ActivityStateAfter): CBORObject = CBORObject.New
     )
     m.set(K_COACHING_PROGRESS, CanonicalCbor.int(s.coachingProgress.toLong()))
     m.set(K_EVENT_OCCURRED_AT, CanonicalCbor.int(s.eventOccurredAtMs))
+    s.habitLabel?.let { m.set(K_HABIT_LABEL, CanonicalCbor.text(it)) }
+    s.endedDays?.let { m.set(K_ENDED_DAYS, CanonicalCbor.int(it.toLong())) }
+    s.milestoneDay?.let { m.set(K_MILESTONE_DAY, CanonicalCbor.int(it.toLong())) }
 }
 
 private fun decodeStateAfterOrNull(obj: CBORObject): ActivityStateAfter? = try {
@@ -216,6 +252,14 @@ private fun decodeStateAfterOrNull(obj: CBORObject): ActivityStateAfter? = try {
             milestonesReached = milestones.getValues().map { it.AsInt32() },
             coachingProgress = obj[K_COACHING_PROGRESS].AsInt32(),
             eventOccurredAtMs = obj[K_EVENT_OCCURRED_AT].AsInt64(),
+            // Wire v2 optionals (ADR #134): the name/ordinal annotates the state — a bad
+            // value declines itself to null without rejecting the counts it rides on.
+            habitLabel = textOrNull(obj.get(K_HABIT_LABEL))
+                ?.takeIf { it.isNotBlank() && it.length <= EventPayload.MAX_HABIT_LABEL_LENGTH },
+            endedDays = obj.get(K_ENDED_DAYS)?.takeIf { !it.isNull }?.let(::intOrNull)
+                ?.takeIf { it >= 0 },
+            milestoneDay = obj.get(K_MILESTONE_DAY)?.takeIf { !it.isNull }?.let(::intOrNull)
+                ?.takeIf { it > 0 },
         )
     }
 } catch (e: RuntimeException) {
@@ -226,6 +270,13 @@ private fun decodeStateAfterOrNull(obj: CBORObject): ActivityStateAfter? = try {
  *  fields, whose only meaningful values are small. */
 private fun intOrNull(obj: CBORObject): Int? = try {
     obj.AsInt32()
+} catch (e: RuntimeException) {
+    null
+}
+
+/** Wrong-type or absent optional text degrades to null — never rejects the state it rides on. */
+private fun textOrNull(obj: CBORObject?): String? = try {
+    if (obj == null || obj.isNull) null else obj.AsString()
 } catch (e: RuntimeException) {
     null
 }

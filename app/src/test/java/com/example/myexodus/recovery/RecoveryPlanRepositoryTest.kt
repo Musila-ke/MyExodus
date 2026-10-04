@@ -14,6 +14,9 @@ import com.example.myexodus.data.db.KeyFailure
 import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.data.db.RulesStoreKeyManager
 import com.example.myexodus.data.db.entity.CoachingStep
+import com.example.myexodus.data.db.entity.HabitProgress
+import com.example.myexodus.data.db.entity.PairProfileSharing
+import com.example.myexodus.data.db.entity.PairStreakSharing
 import com.example.myexodus.data.db.entity.RiskWindow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
@@ -139,6 +142,31 @@ class RecoveryPlanRepositoryTest {
 
     @Test
     fun coachingEdits_journalTheItemCount_neverTheText() = runTest {
+        // v16 (ADR #135): coaching journaling needs this pair's recovery consent (write gate
+        // + reconcile filter) and some visible habit to anchor the profile row's snapshot.
+        val store = checkNotNull(factory.open())
+        store.habitProgressDao().insert(
+            HabitProgress(
+                progressId = "habit-plan-test",
+                profileId = profileId,
+                targetIdentifier = "Instagram",
+                currentCleanDaysStreak = 0,
+                totalRelapses = 0,
+                accessAttemptsCount = 0,
+                habitDurationYears = 1,
+                onboardingSeverityLevel = "MODERATE",
+                lastRelapseTimestamp = null,
+                assignedPartnershipId = null,
+                isSelected = true,
+            ),
+        )
+        store.pairSharingDao().upsertStreak(
+            PairStreakSharing(pairId = "pair-1", habitProgressId = "habit-plan-test", shareStreak = true),
+        )
+        store.pairSharingDao().upsertProfile(
+            PairProfileSharing(pairId = "pair-1", shareRecovery = true),
+        )
+
         repository.addItem(profileId, CoachingStep.KIND_STEP, "call Sam")
         repository.addItem(profileId, CoachingStep.KIND_STEP, "breathe")
         repository.deleteItem(checkNotNull(repository.items(profileId).find { it.actionText == "call Sam" }))

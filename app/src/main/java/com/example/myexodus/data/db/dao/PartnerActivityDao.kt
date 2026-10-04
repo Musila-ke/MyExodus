@@ -5,6 +5,7 @@ import androidx.room3.Insert
 import androidx.room3.OnConflictStrategy
 import androidx.room3.Query
 import androidx.room3.Transaction
+import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.data.db.entity.PartnerActivityOutbox
 import com.example.myexodus.data.db.entity.PartnerActivityProjection
 import kotlinx.coroutines.flow.Flow
@@ -18,24 +19,59 @@ interface PartnerActivityDao {
     suspend fun insertJournal(row: PartnerActivityOutbox)
 
     /**
-     * Journal rows with no link for THIS pair yet, oldest first. Per-pair: a row pending for one
-     * pair stays pending for every pair that has no link yet (§19.5 / ADR #111).
+     * Journal rows deliverable to THIS pair, oldest first — consent-aware since v16
+     * (ADR #135). Per-pair: a row pending for one pair stays pending for every pair that has
+     * no link yet (§19.5 / ADR #111).
      *
      * Addressing (#96, schema v14): a row with a null target fans out (state snapshots); a
-     * targeted row — a Req 15 message the user composed for the selected partner — is pending
-     * for that pair alone, so no other supported partner can ever be handed it.
+     * targeted row — a Req 15 message or the enable-time snapshot — is pending for that pair
+     * alone, so no other supported partner can ever be handed it.
      *
      * [sinceMs] is the pair's enrollment time (owner ruling 2026-09-29): a newcomer gets the
      * pairing-time snapshot (written at pair-complete, so on or after this bound) and
      * everything after it — never the pre-pairing backlog.
+     *
+     * The CASE is the per-(pair, habit, kind) consent rule, evaluated in SQL so a filtered
+     * row can never stall the batch window (the why lives in ADR #135):
+     *  - habit kinds need the pair's streak master for the row's own habit, plus the kind's
+     *    own switch, plus the row's write time at/after the switch's enable watermark —
+     *    events journaled while the switch was off are never delivered retroactively;
+     *  - rows with a null habit anchor (pre-v16 journal) match no branch and are skipped;
+     *  - coaching needs the pair's recovery switch (watermarked) and a visible habit — its
+     *    snapshot must anchor somewhere truthful;
+     *  - the motivational message needs only a visible habit (the user pressed send for
+     *    THIS pair; the composer is the message's own consent).
      */
     @Query(
-        "SELECT * FROM partner_activity_outbox WHERE created_at_ms >= :sinceMs " +
-            "AND NOT EXISTS (" +
-            "SELECT 1 FROM partner_activity_link l " +
-            "WHERE l.event_id = partner_activity_outbox.event_id AND l.pair_id = :pairId) " +
-            "AND (target_pair_id IS NULL OR target_pair_id = :pairId) " +
-            "ORDER BY created_at_ms ASC LIMIT :limit",
+        "SELECT * FROM partner_activity_outbox o WHERE o.created_at_ms >= :sinceMs " +
+            "AND NOT EXISTS (SELECT 1 FROM partner_activity_link l " +
+            "WHERE l.event_id = o.event_id AND l.pair_id = :pairId) " +
+            "AND (o.target_pair_id IS NULL OR o.target_pair_id = :pairId) " +
+            "AND CASE o.kind " +
+            "WHEN '${EventPayload.TYPE_STREAK_UPDATED}' THEN EXISTS (" +
+            "SELECT 1 FROM pair_streak_sharing s " +
+            "WHERE s.pair_id = :pairId AND s.habit_progress_id = o.habit_progress_id " +
+            "AND s.share_streak = 1 AND o.created_at_ms >= s.streak_enabled_since_ms) " +
+            "WHEN '${EventPayload.TYPE_MILESTONE_REACHED}' THEN EXISTS (" +
+            "SELECT 1 FROM pair_streak_sharing s " +
+            "WHERE s.pair_id = :pairId AND s.habit_progress_id = o.habit_progress_id " +
+            "AND s.share_streak = 1 AND s.share_milestones = 1 " +
+            "AND o.created_at_ms >= s.milestone_enabled_since_ms) " +
+            "WHEN '${EventPayload.TYPE_RELAPSE_RECORDED}' THEN EXISTS (" +
+            "SELECT 1 FROM pair_streak_sharing s " +
+            "WHERE s.pair_id = :pairId AND s.habit_progress_id = o.habit_progress_id " +
+            "AND s.share_streak = 1 AND s.share_relapses = 1 " +
+            "AND o.created_at_ms >= s.relapse_enabled_since_ms) " +
+            "WHEN '${EventPayload.TYPE_COACHING_STEP_UPDATED}' THEN EXISTS (" +
+            "SELECT 1 FROM pair_profile_sharing p WHERE p.pair_id = :pairId " +
+            "AND p.share_recovery = 1 AND o.created_at_ms >= p.recovery_enabled_since_ms) " +
+            "AND EXISTS (SELECT 1 FROM pair_streak_sharing s " +
+            "WHERE s.pair_id = :pairId AND s.share_streak = 1) " +
+            "WHEN '${EventPayload.TYPE_MOTIVATIONAL_MESSAGE}' THEN EXISTS (" +
+            "SELECT 1 FROM pair_streak_sharing s " +
+            "WHERE s.pair_id = :pairId AND s.share_streak = 1) " +
+            "ELSE 1 END " +
+            "ORDER BY o.created_at_ms ASC LIMIT :limit",
     )
     suspend fun pendingForPair(pairId: String, sinceMs: Long, limit: Int): List<PartnerActivityOutbox>
 

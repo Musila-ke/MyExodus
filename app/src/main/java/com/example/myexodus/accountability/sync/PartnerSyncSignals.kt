@@ -21,4 +21,15 @@ object PartnerSyncSignals {
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
+
+    /** Sender-side kick (owner mandate 2026-10-04): a local transition was journalled and the
+     *  partner should hear about it now, not at the next 15-min pass.
+     *  [com.example.myexodus.accountability.activity.PartnerActivityJournal] ticks this at its
+     *  single write choke point; the app scope turns ticks into an immediate sync run. Same
+     *  drop-when-nobody-collects contract as [pulledEvents] (a missed tick is healed by the
+     *  pass a later transition — or the cadence — triggers). */
+    val activityEmitted = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
 }

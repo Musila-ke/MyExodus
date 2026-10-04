@@ -8,6 +8,8 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.data.db.entity.AttemptLog
 import com.example.myexodus.data.db.entity.CoachingStep
+import com.example.myexodus.data.db.entity.HabitProgress
+import com.example.myexodus.data.db.entity.PairStreakSharing
 import com.example.myexodus.data.db.entity.PartnerActivityOutbox
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.data.db.entity.RiskWindow
@@ -217,13 +219,40 @@ class AppRulesStoreMigrationTest {
 
             // Partner-activity layer 12→13: journal + per-pair links + received-state
             // projection, all usable after the chain (and empty on fresh install — the
-            // pre-existing rows above must not leak into them).
+            // pre-existing rows above must not leak into them). v16 (ADR #135): a habit-kind
+            // row is pending only for a pair whose consent matrix covers this habit — seed
+            // the habit under the surviving v2 profile and a share_streak row per pair.
             val activity = store.partnerActivityDao()
             assertEquals(0, activity.deleteJournalOlderThan(Long.MAX_VALUE, 10))
+            store.habitProgressDao().insert(
+                HabitProgress(
+                    progressId = "h-1",
+                    profileId = "p-1",
+                    targetIdentifier = "Instagram",
+                    currentCleanDaysStreak = 0,
+                    totalRelapses = 0,
+                    accessAttemptsCount = 0,
+                    habitDurationYears = 1,
+                    onboardingSeverityLevel = "MODERATE",
+                    lastRelapseTimestamp = null,
+                    assignedPartnershipId = null,
+                    isSelected = true,
+                ),
+            )
+            for (pair in listOf("pair-a", "pair-b")) {
+                store.pairSharingDao().upsertStreak(
+                    PairStreakSharing(
+                        pairId = pair,
+                        habitProgressId = "h-1",
+                        shareStreak = true,
+                    ),
+                )
+            }
             activity.insertJournal(
                 PartnerActivityOutbox(
                     eventId = "evt-1",
                     kind = EventPayload.TYPE_STREAK_UPDATED,
+                    habitProgressId = "h-1",
                     text = "",
                     occurredAtMs = 1_700_000_000_000L,
                     daysFree = 3,
@@ -395,6 +424,128 @@ class AppRulesStoreMigrationTest {
         context.deleteDatabase("msg-addressing-test.db")
     }
 
+    /**
+     * The v16 consent matrix (ADR #135), direct invocation: 15→16 drops the legacy consent
+     * columns outright (recreate-table, no seed — "nothing until you choose" for every
+     * install) and adds the per-(pair, item) tables plus the journal's consent key; 16→15
+     * reconstructs each legacy flag as "any pair had it on" before dropping the pair tables,
+     * so a downgraded build still opens with the user's choices preserved as closely as a
+     * single column can hold them.
+     */
+    @Test
+    fun migration15to16AndBack_dropsLegacyConsentColumns_andReconstructsPerPairConsentOnRollback() {
+        val scratchPath = context.getDatabasePath("consent-matrix-test.db").absolutePath
+        AndroidSQLiteDriver().open(scratchPath).use { conn ->
+            conn.prepare(V15_DDL_HABIT_PROGRESS).use { it.step() }
+            conn.prepare(V15_DDL_USER_PROFILE).use { it.step() }
+            conn.prepare(V15_DDL_ACTIVITY_OUTBOX).use { it.step() }
+            conn.prepare(
+                "INSERT INTO user_profile (user_id, name, email, phone_number, date_of_birth, " +
+                    "has_accessibility_permission, has_usage_stats_permission, has_vpn_permission, " +
+                    "has_notification_permission, has_device_admin_permission, device_public_key, " +
+                    "recovery_escrow_key, is_active, share_check_ins, share_recovery) VALUES " +
+                    "('p-1', 'Test', 't@example.com', NULL, 0, 0, 0, 0, 0, 0, NULL, NULL, 1, 1, 1)",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO habit_progress (progress_id, profile_id, target_identifier, " +
+                    "current_clean_days_streak, total_relapses, access_attempts_count, habit_duration_years, " +
+                    "onboarding_severity_level, last_relapse_timestamp, share_access_attempts, " +
+                    "share_relapses, share_milestones, share_streak, assigned_partnership_id, " +
+                    "all_time_max_streak_elapsed_ms, is_selected) VALUES " +
+                    "('h-1', 'p-1', 'Instagram', 12, 3, 0, 2, 'MODERATE', NULL, 0, 1, 1, 1, NULL, 0, 1)",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO partner_activity_outbox (event_id, kind, target_pair_id, text, " +
+                    "occurred_at_ms, days_free, relapse_count, milestones_reached, habit_label, " +
+                    "ended_days, milestone_day, coaching_progress, protocol_version, schema_version, " +
+                    "created_at_ms) VALUES ('evt-legacy', 'streak_updated', NULL, '', 100, 12, 3, " +
+                    "'7', 'Instagram', NULL, NULL, 1, 1, 2, 100)",
+            ).use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_15_16.migrate(conn) }
+
+            assertFalse(
+                "the legacy per-habit consent columns must be physically gone",
+                columnNames(conn, "habit_progress").any { it in LEGACY_CONSENT_COLUMNS },
+            )
+            assertFalse(
+                "the legacy per-profile consent columns must be physically gone",
+                columnNames(conn, "user_profile").any { it == "share_check_ins" || it == "share_recovery" },
+            )
+            assertTrue(
+                "the journal gains its consent key",
+                "habit_progress_id" in columnNames(conn, "partner_activity_outbox"),
+            )
+            conn.prepare(
+                "SELECT habit_progress_id FROM partner_activity_outbox WHERE event_id = 'evt-legacy'",
+            ).use { stmt ->
+                assertTrue(stmt.step())
+                assertTrue("a pre-v16 row matches no pair's slice — null", stmt.isNull(0))
+            }
+            conn.prepare(
+                "SELECT target_identifier, total_relapses, is_selected FROM habit_progress WHERE progress_id = 'h-1'",
+            ).use { stmt ->
+                assertTrue(stmt.step())
+                assertEquals("the habit row survives the recreate intact", "Instagram", stmt.getText(0))
+                assertEquals(3L, stmt.getLong(1))
+                assertEquals(1L, stmt.getLong(2))
+            }
+            conn.prepare("SELECT name FROM user_profile WHERE user_id = 'p-1'").use { stmt ->
+                assertTrue(stmt.step())
+                assertEquals("Test", stmt.getText(0))
+            }
+
+            // v16-era choices: pair-1 shares nothing of the streak; pair-2 shares the streak
+            // and relapses but not milestones. Profile: pair-1 only, recovery only.
+            conn.prepare(
+                "INSERT INTO pair_streak_sharing (pair_id, habit_progress_id, share_streak, " +
+                    "share_relapses, share_milestones, streak_enabled_since_ms, " +
+                    "relapse_enabled_since_ms, milestone_enabled_since_ms) VALUES " +
+                    "('pair-1', 'h-1', 0, 0, 0, 0, 0, 0), " +
+                    "('pair-2', 'h-1', 1, 1, 0, 150, 160, 0)",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO pair_profile_sharing (pair_id, share_checkins, share_recovery, " +
+                    "checkins_enabled_since_ms, recovery_enabled_since_ms) VALUES ('pair-1', 0, 1, 0, 170)",
+            ).use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_16_15.migrate(conn) }
+
+            conn.prepare(
+                "SELECT share_access_attempts, share_relapses, share_milestones, share_streak, " +
+                    "total_relapses FROM habit_progress WHERE progress_id = 'h-1'",
+            ).use { stmt ->
+                assertTrue(stmt.step())
+                assertEquals("access attempts were never writable by any UI", 0L, stmt.getLong(0))
+                assertEquals("pair-2 had relapses on", 1L, stmt.getLong(1))
+                assertEquals("no pair had milestones on", 0L, stmt.getLong(2))
+                assertEquals("pair-2 had the streak on", 1L, stmt.getLong(3))
+                assertEquals("streak data survives the round trip", 3L, stmt.getLong(4))
+            }
+            conn.prepare(
+                "SELECT share_check_ins, share_recovery FROM user_profile WHERE user_id = 'p-1'",
+            ).use { stmt ->
+                assertTrue(stmt.step())
+                assertEquals("pair-1 had check-ins off", 0L, stmt.getLong(0))
+                assertEquals("pair-1 had recovery on", 1L, stmt.getLong(1))
+            }
+            conn.prepare(
+                "SELECT kind, days_free FROM partner_activity_outbox WHERE event_id = 'evt-legacy'",
+            ).use { stmt ->
+                assertTrue(stmt.step())
+                assertEquals("streak_updated", stmt.getText(0))
+                assertEquals("the journal row survives both recreates", 12L, stmt.getLong(1))
+            }
+            assertFalse(
+                "habit_progress_id is v16-only",
+                "habit_progress_id" in columnNames(conn, "partner_activity_outbox"),
+            )
+            assertTrue("pair tables dropped on rollback", columnNames(conn, "pair_streak_sharing").isEmpty())
+            assertTrue("pair tables dropped on rollback", columnNames(conn, "pair_profile_sharing").isEmpty())
+        }
+        context.deleteDatabase("consent-matrix-test.db")
+    }
+
     private fun columnNames(conn: androidx.sqlite.SQLiteConnection, table: String): List<String> {
         val names = mutableListOf<String>()
         conn.prepare("PRAGMA table_info($table)").use { stmt ->
@@ -548,6 +699,43 @@ class AppRulesStoreMigrationTest {
         private const val V13_DDL_ACTIVITY_OUTBOX_INDEX =
             "CREATE INDEX IF NOT EXISTS `index_partner_activity_outbox_created_at_ms` " +
                 "ON `partner_activity_outbox` (`created_at_ms`)"
+
+        /** Verbatim v15 DDL for the three tables the 15↔16 pair touches (from 15.json). */
+        private const val V15_DDL_HABIT_PROGRESS =
+            "CREATE TABLE IF NOT EXISTS `habit_progress` (`progress_id` TEXT NOT NULL, " +
+                "`profile_id` TEXT NOT NULL, `target_identifier` TEXT NOT NULL, " +
+                "`current_clean_days_streak` INTEGER NOT NULL, `total_relapses` INTEGER NOT NULL, " +
+                "`access_attempts_count` INTEGER NOT NULL, `habit_duration_years` INTEGER NOT NULL, " +
+                "`onboarding_severity_level` TEXT NOT NULL, `last_relapse_timestamp` INTEGER, " +
+                "`share_access_attempts` INTEGER NOT NULL, `share_relapses` INTEGER NOT NULL, " +
+                "`share_milestones` INTEGER NOT NULL, `share_streak` INTEGER NOT NULL DEFAULT 1, " +
+                "`assigned_partnership_id` TEXT, " +
+                "`all_time_max_streak_elapsed_ms` INTEGER NOT NULL DEFAULT 0, " +
+                "`is_selected` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`progress_id`), " +
+                "FOREIGN KEY(`profile_id`) REFERENCES `user_profile`(`user_id`) " +
+                "ON UPDATE NO ACTION ON DELETE CASCADE )"
+        private const val V15_DDL_USER_PROFILE =
+            "CREATE TABLE IF NOT EXISTS `user_profile` (`user_id` TEXT NOT NULL, " +
+                "`name` TEXT NOT NULL, `email` TEXT NOT NULL, `phone_number` TEXT, " +
+                "`date_of_birth` INTEGER NOT NULL, `has_accessibility_permission` INTEGER NOT NULL, " +
+                "`has_usage_stats_permission` INTEGER NOT NULL, `has_vpn_permission` INTEGER NOT NULL, " +
+                "`has_notification_permission` INTEGER NOT NULL, " +
+                "`has_device_admin_permission` INTEGER NOT NULL, `device_public_key` TEXT, " +
+                "`recovery_escrow_key` TEXT, `is_active` INTEGER NOT NULL, " +
+                "`share_check_ins` INTEGER NOT NULL DEFAULT 1, " +
+                "`share_recovery` INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(`user_id`))"
+        private const val V15_DDL_ACTIVITY_OUTBOX =
+            "CREATE TABLE IF NOT EXISTS `partner_activity_outbox` (`event_id` TEXT NOT NULL, " +
+                "`kind` TEXT NOT NULL, `target_pair_id` TEXT, `text` TEXT NOT NULL, " +
+                "`occurred_at_ms` INTEGER NOT NULL, `days_free` INTEGER NOT NULL, " +
+                "`relapse_count` INTEGER NOT NULL, `milestones_reached` TEXT NOT NULL, " +
+                "`habit_label` TEXT, `ended_days` INTEGER, `milestone_day` INTEGER, " +
+                "`coaching_progress` INTEGER NOT NULL, `protocol_version` INTEGER NOT NULL, " +
+                "`schema_version` INTEGER NOT NULL, `created_at_ms` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`event_id`))"
+
+        private val LEGACY_CONSENT_COLUMNS =
+            listOf("share_access_attempts", "share_relapses", "share_milestones", "share_streak")
 
         /** Verbatim v2 schema DDL from Room's generated AppRulesStore_Impl (v3 minus recovery_state). */
         private val V2_DDL = listOf(

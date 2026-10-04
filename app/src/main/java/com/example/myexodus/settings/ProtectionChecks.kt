@@ -114,12 +114,6 @@ fun notificationSettingsIntent(context: Context): Intent =
     Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
         .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
 
-/** SOS §8.14: the per-channel settings pane (API 26+; all Android targets are 26+). */
-fun notificationChannelSettingsIntent(context: Context, channelId: String): Intent =
-    Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
-        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-        .putExtra(Settings.EXTRA_CHANNEL_ID, channelId)
-
 /**
  * Plan §5.20: a device with no BIOMETRIC_STRONG-class authenticator cannot approve or unpair —
  * the one honest fix is enrolling one, so the explicit message routes here. API 30+ has the

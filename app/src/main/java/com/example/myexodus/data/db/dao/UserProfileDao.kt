@@ -19,9 +19,12 @@ interface UserProfileDao {
     @Query("SELECT * FROM user_profile WHERE user_id = :userId")
     suspend fun getById(userId: String): UserProfile?
 
-    @Query("SELECT * FROM user_profile WHERE is_active = 1 LIMIT 1")
+    /** The profile every engine consults. Single-active is the invariant (SchemaConstraints);
+     *  the ORDER BY makes the pick deterministic if a second active row ever appears, and
+     *  [RestrictionRuleDao.getActiveRules] mirrors this exact query. */
+    @Query("SELECT * FROM user_profile WHERE is_active = 1 ORDER BY user_id LIMIT 1")
     suspend fun getActive(): UserProfile?
 
-    @Query("SELECT * FROM user_profile WHERE is_active = 1 LIMIT 1")
+    @Query("SELECT * FROM user_profile WHERE is_active = 1 ORDER BY user_id LIMIT 1")
     fun observeActive(): Flow<UserProfile?>
 }

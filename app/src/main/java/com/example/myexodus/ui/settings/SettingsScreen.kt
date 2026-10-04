@@ -13,10 +13,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.MenuBook
-import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -41,7 +41,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.R
-import com.example.myexodus.accountability.sync.PartnerNotifications
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.usage.AccountingOutage
@@ -53,10 +52,9 @@ import com.example.myexodus.settings.IntegrityStatus
 import com.example.myexodus.settings.ProtectionChecks
 import com.example.myexodus.settings.StrictModeManager
 import com.example.myexodus.settings.WidgetSettings
-import com.example.myexodus.settings.notificationChannelSettingsIntent
-import com.example.myexodus.settings.notificationSettingsIntent
 import com.example.myexodus.settings.readProtectionChecks
 import com.example.myexodus.settings.requestBatteryExemption
+import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.ui.BrandMark
 import com.example.myexodus.ui.WindowWidth
@@ -84,6 +82,10 @@ fun SettingsScreen(
     onWidgetSettingsChanged: () -> Unit,
     planRepository: RecoveryPlanRepository,
     rulesRepository: RulesRepository,
+    /** Owner mandate 2026-10-04: the sharing pane's per-streak consent reads/writes. */
+    habitRepository: HabitRepository,
+    /** v16/ADR #135: the sharing pane's roster (pairId → partner name), read fresh at open. */
+    loadPartnerNames: suspend () -> Map<String, String>,
     recoveryPrefs: RecoveryPrefs,
     domainUsageEngine: DomainUsageEngine,
     accountingOutageSource: AccountingOutageSource,
@@ -91,6 +93,10 @@ fun SettingsScreen(
     partnerBlock: NudgeSettingsViewModel.UiState? = null,
     onPartnerBlockRefresh: () -> Unit = {},
     onPartnerBlockChange: (Boolean) -> Unit = {},
+    /** Cross-tab entry (owner ask 2026-10-04): the Partner hub's "nothing shared" card opens
+     *  this tab straight on the sharing pane. Consumed on arrival so back/re-entry behave. */
+    openPane: String? = null,
+    onOpenPaneConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -106,6 +112,12 @@ fun SettingsScreen(
     // System back leaves a pane the way its BackRow does; at the index the shell's own
     // handler takes over (tab → Home).
     BackHandler(enabled = pane != null) { pane = null }
+    LaunchedEffect(openPane) {
+        if (openPane != null) {
+            pane = openPane
+            onOpenPaneConsumed()
+        }
+    }
 
     // Permissions change in system Settings while this screen is backgrounded; re-read on
     // every resume so a granted permission is never shown as missing.
@@ -164,6 +176,12 @@ fun SettingsScreen(
             modifier = modifier,
         )
         PANE_ABOUT -> AboutScreen(onBack = { pane = null }, modifier = modifier)
+        PANE_SHARING -> SharingScreen(
+            habitRepository = habitRepository,
+            loadPartnerNames = loadPartnerNames,
+            onBack = { pane = null },
+            modifier = modifier,
+        )
         else -> SettingsIndex(
             modifier = modifier,
             serviceEnabled = serviceEnabled,
@@ -185,6 +203,7 @@ private const val PANE_PROTECTION = "protection"
 private const val PANE_COACHING_PLAN = "coaching_plan"
 private const val PANE_RISK_WINDOWS = "risk_windows"
 private const val PANE_ABOUT = "about"
+internal const val PANE_SHARING = "sharing"
 
 @Composable
 private fun SettingsIndex(
@@ -289,25 +308,6 @@ private fun SettingsIndex(
                     onClick = { onOpenPane(PANE_RISK_WINDOWS) },
                 )
 
-                RowDivider()
-                // SOS §8.14: straight to the partner_nudges channel pane; an OEM settings
-                // build that refuses the channel-scoped action gets the app-level pane.
-                IndexRow(
-                    icon = Icons.Outlined.Notifications,
-                    title = stringResource(R.string.settings_partner_checkins_title),
-                    subtitle = stringResource(R.string.settings_partner_checkins_body),
-                    onClick = {
-                        runCatching {
-                            context.startActivity(
-                                notificationChannelSettingsIntent(
-                                    context,
-                                    PartnerNotifications.CHANNEL_PARTNER_NUDGES,
-                                ),
-                            )
-                        }.onFailure { context.startActivity(notificationSettingsIntent(context)) }
-                    },
-                )
-
                 // SOS §8.19 (Step 11): the recipient's block switch — it configures exactly
                 // the pair the inbox listens on (§19.5 rule) and names that partner, and the
                 // write is one document: already-delivered notifications are never retracted.
@@ -330,6 +330,17 @@ private fun SettingsIndex(
                         },
                     )
                 }
+
+                RowDivider()
+                // Owner mandate 2026-10-04: the consent surface — which streaks and which
+                // other information a partner may see. Always present: the gates apply to
+                // whatever pairing exists now or later.
+                IndexRow(
+                    icon = Icons.Outlined.Visibility,
+                    title = stringResource(R.string.settings_sharing_title),
+                    subtitle = stringResource(R.string.settings_sharing_row_body),
+                    onClick = { onOpenPane(PANE_SHARING) },
+                )
 
                 RowDivider()
                 ToggleRow(

@@ -12,6 +12,7 @@ import com.example.myexodus.data.db.DatabaseKeyManager
 import com.example.myexodus.data.db.KeyFailure
 import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.data.db.RulesStoreKeyManager
+import com.example.myexodus.data.db.entity.PairStreakSharing
 import com.example.myexodus.data.db.entity.UserProfile
 import com.example.myexodus.streaks.HabitRepository.OnboardingResult.Rejected.Reason
 import java.io.File
@@ -112,6 +113,24 @@ class HabitRepositoryTest {
         severity = severity,
         recoveryStartAt = recoveryStartAt,
     )
+
+    /** v16/ADR #135: nothing journals without an explicit per-(pair, habit) consent row;
+     *  watermarks 0 so the emission at any test clock clears the enable bound. */
+    private suspend fun seedStreakConsent(
+        habitId: String,
+        shareStreak: Boolean = true,
+        shareRelapses: Boolean = false,
+        shareMilestones: Boolean = false,
+    ) {
+        store.pairSharingDao().upsertStreak(
+            PairStreakSharing(
+                pairId = "pair-1", habitProgressId = habitId,
+                shareStreak = shareStreak, shareRelapses = shareRelapses,
+                shareMilestones = shareMilestones,
+                streakEnabledSinceMs = 0, relapseEnabledSinceMs = 0, milestoneEnabledSinceMs = 0,
+            ),
+        )
+    }
 
     @Test
     fun onboard_writesHabitAnchorAndMilestones_andEmitsState() = runBlocking {
@@ -514,6 +533,7 @@ class HabitRepositoryTest {
     fun evaluate_dayCrossing_journalsOneStreakUpdated_forThatDayOnly() = runBlocking {
         seedProfile()
         onboard()
+        seedStreakConsent(habitIdOf())
 
         now = TimeReadings(tWallMillis = T0 + StreakTimer.DAY_MS, rBootMillis = RB0 + StreakTimer.DAY_MS, bootCount = 7)
         // One completed day = ordinal Day 2 — the count the user's own surfaces show (ADR #128).
@@ -533,6 +553,7 @@ class HabitRepositoryTest {
     fun evaluate_milestoneCrossing_journalsMilestoneReached_oncePerCrossedDay() = runBlocking {
         seedProfile()
         onboard()
+        seedStreakConsent(habitIdOf(), shareMilestones = true)
 
         now = TimeReadings(tWallMillis = T0 + 7 * StreakTimer.DAY_MS, rBootMillis = RB0 + 7 * StreakTimer.DAY_MS, bootCount = 7)
         repository.evaluate(habitIdOf())
@@ -551,16 +572,9 @@ class HabitRepositoryTest {
     @Test
     fun logRelapse_journalsRelapseRecorded_withAPostRolloverSnapshot_whenConsentShared() = runBlocking {
         seedProfile()
-        val habitId = (
-            repository.onboard(
-                profileId = PROFILE_ID,
-                targetIdentifier = "Instagram",
-                habitDurationYears = 2,
-                severity = WithdrawalSeverity.MODERATE,
-                recoveryStartAt = T0,
-                shareRelapses = true,
-            ) as HabitRepository.OnboardingResult.Ready
-            ).state.habitId
+        onboard()
+        val habitId = habitIdOf()
+        seedStreakConsent(habitId, shareRelapses = true)
 
         now = TimeReadings(tWallMillis = T0 + 5 * StreakTimer.DAY_MS, rBootMillis = RB0 + 5 * StreakTimer.DAY_MS, bootCount = 7)
         repository.evaluate(habitId)
@@ -575,13 +589,96 @@ class HabitRepositoryTest {
     @Test
     fun logRelapse_withoutRelapseConsent_journalsNothing() = runBlocking {
         seedProfile()
-        onboard() // shareRelapses defaults to false
+        onboard() // v16: no consent row at all — nothing may journal
 
         now = TimeReadings(tWallMillis = T0 + 5 * StreakTimer.DAY_MS, rBootMillis = RB0 + 5 * StreakTimer.DAY_MS, bootCount = 7)
         repository.evaluate(habitIdOf())
         assertTrue(repository.logRelapse(habitIdOf()) is HabitRepository.RelapseResult.RolledOver)
 
         assertTrue(journalRows().none { it.kind == EventPayload.TYPE_RELAPSE_RECORDED })
+    }
+
+    // --- Consent matrix write API (v16/ADR #135) ----------------------------------------------
+
+    /** The owner-visible promise of the master toggle: the pair that just enabled sees the
+     *  streak's current state immediately (one targeted snapshot that clears the watermark),
+     *  and only that pair sees it. */
+    @Test
+    fun setPairStreakSharing_masterRise_journalsOneTargetedSnapshot_thatClearsTheWatermark() = runBlocking {
+        seedProfile()
+        onboard()
+        val habitId = habitIdOf()
+        val riseAt = now.tWallMillis
+
+        assertTrue(
+            repository.setPairStreakSharing("pair-1", habitId, shareStreak = true, shareRelapses = false, shareMilestones = false),
+        )
+
+        val row = journalRows().single()
+        assertEquals(EventPayload.TYPE_STREAK_UPDATED, row.kind)
+        assertEquals("the pair that just enabled is the only recipient", "pair-1", row.targetPairId)
+        assertEquals("the new streak reports Day 1, never 0 (ADR #128)", 1, row.daysFree)
+        assertEquals(riseAt, row.occurredAtMs)
+        assertEquals(
+            "the watermark is pinned at the rise so the snapshot itself delivers",
+            riseAt, store.pairSharingDao().streakFor("pair-1", habitId)!!.streakEnabledSinceMs,
+        )
+        assertTrue(
+            "another pair sees nothing — no consent row, and the snapshot is targeted",
+            store.partnerActivityDao().pendingForPair("pair-2", sinceMs = 0L, limit = 100).isEmpty(),
+        )
+
+        assertTrue(
+            repository.setPairStreakSharing("pair-1", habitId, shareStreak = true, shareRelapses = false, shareMilestones = false),
+        )
+        assertEquals("re-enabling an already-on master adds no second snapshot", 1, journalRows().size)
+    }
+
+    @Test
+    fun setPairProfileSharing_roundTripsThroughTheMatrix_andPinsEachWatermarkAtItsRise() = runBlocking {
+        seedProfile()
+        onboard()
+        val habitId = habitIdOf()
+        val firstAt = now.tWallMillis
+
+        assertTrue(repository.setPairProfileSharing("pair-1", shareCheckIns = true, shareRecovery = false))
+        val afterFirst = store.pairSharingDao().profileFor("pair-1")!!
+        assertEquals(firstAt, afterFirst.checkinsEnabledSinceMs)
+        assertEquals("a switch that was never on has no watermark", 0L, afterFirst.recoveryEnabledSinceMs)
+
+        now = TimeReadings(tWallMillis = firstAt + 3_600_000, rBootMillis = RB0 + 3_600_000, bootCount = 7)
+        assertTrue(repository.setPairProfileSharing("pair-1", shareCheckIns = true, shareRecovery = true))
+        val afterSecond = store.pairSharingDao().profileFor("pair-1")!!
+        assertEquals("a category that stayed on keeps its original watermark", firstAt, afterSecond.checkinsEnabledSinceMs)
+        assertEquals("the rise pins the new watermark", firstAt + 3_600_000, afterSecond.recoveryEnabledSinceMs)
+
+        val matrix = checkNotNull(repository.sharingMatrix())
+        assertEquals(ProfileSharingFlags(shareCheckIns = true, shareRecovery = true), matrix.profile["pair-1"])
+        val item = matrix.habits.single()
+        assertEquals(habitId, item.progressId)
+        assertEquals("Instagram", item.label)
+        assertNull("a habit with no consent row shows as not shared for every pair", item.perPair["pair-1"])
+    }
+
+    /** Owner ask 2026-10-04: the hub's "nothing shared yet" card gate — true until ANY
+     *  category rises for THAT pair, and per-pair, not global. */
+    @Test
+    fun sharesNothingWith_isTrueUntilAnyCategoryRises_perPair() = runBlocking {
+        seedProfile()
+        onboard()
+        val habitId = habitIdOf()
+
+        assertEquals("a fresh pair shares nothing", true, repository.sharesNothingWith("pair-1"))
+        assertEquals("no consent row for pair-2 either", true, repository.sharesNothingWith("pair-2"))
+
+        assertTrue(repository.setPairProfileSharing("pair-1", shareCheckIns = true, shareRecovery = false))
+        assertEquals("one profile category on counts as sharing", false, repository.sharesNothingWith("pair-1"))
+        assertEquals("and only for that pair", true, repository.sharesNothingWith("pair-2"))
+
+        assertTrue(
+            repository.setPairStreakSharing("pair-2", habitId, shareStreak = true, shareRelapses = false, shareMilestones = false),
+        )
+        assertEquals("a streak master on counts as sharing", false, repository.sharesNothingWith("pair-2"))
     }
 
     private suspend fun journalRows() =

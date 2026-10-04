@@ -2,6 +2,7 @@ package com.example.myexodus.ui.home
 
 import com.example.myexodus.accountability.crypto.EventCipher
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
+import com.example.myexodus.accountability.sos.NudgeEnvelope
 import com.example.myexodus.accountability.sos.NudgeRepository
 import com.example.myexodus.accountability.sync.FunctionErrors
 import com.example.myexodus.accountability.sync.PARTNER_SOS_CONFIG_KEY
@@ -180,6 +181,37 @@ class SosViewModelTest {
         assertEquals(SosViewModel.SosSendState.Sent, vm.state.value)
         assertEquals("retry must replay the byte-identical request", sender.calls[0], sender.calls[1])
         assertEquals("no second encryption on retry", 1, sender.deriveCekCount)
+    }
+
+    @Test
+    fun tap_carriesTheDialogMessage_andARetryIgnoresAMessageEdit() = runTest {
+        val sender = FakeSender().apply { outcome = { throw RuntimeException("connection reset") } }
+        val vm = viewModel(sender)
+        advanceUntilIdle()
+
+        vm.onTap("Please call me")
+        runCurrent()
+        assertEquals(SosViewModel.SosSendState.CouldNotConfirm, vm.state.value)
+
+        // A "retry" whose dialog text was edited: the sealed envelope is authoritative —
+        // the edit must never re-encrypt or leak into the replayed request.
+        vm.onTap("edited text that must be ignored")
+        runCurrent()
+        sender.outcome = null
+        vm.onTap("yet another edit")
+        runCurrent()
+        assertEquals(SosViewModel.SosSendState.Sent, vm.state.value)
+        assertEquals("every retry replays the original envelope verbatim", sender.calls[0], sender.calls[1])
+        assertEquals(sender.calls[0], sender.calls[2])
+        assertEquals("exactly one encryption: the fresh send", 1, sender.deriveCekCount)
+
+        val wire = sender.calls.first()
+        val plaintext = EventCipher().decryptWithAad(
+            sender.cek,
+            NudgeEnvelope.aad("pair-1", wire["nudgeId"] as String, "uid-1"),
+            java.util.Base64.getDecoder().decode(wire["envelope"] as String),
+        )
+        assertEquals("Please call me", NudgeEnvelope.messageOf(plaintext))
     }
 
     @Test

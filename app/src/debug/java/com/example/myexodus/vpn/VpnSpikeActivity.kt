@@ -11,7 +11,6 @@ import android.widget.TextView
 import android.util.Log
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.data.db.entity.RestrictionRule
-import com.example.myexodus.data.db.entity.UserProfile
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
 import java.net.NetworkInterface
@@ -23,7 +22,9 @@ import kotlinx.coroutines.runBlocking
 /**
  * Slice 3 spike harness (plan §7 step 3): drives the consent flow, starts the sinkhole,
  * then runs its gates and reports each via MARKER log lines + the on-screen status.
- * The host script (scripts/dns-sinkhole-device-test.sh) reacts to the MARKERs.
+ * The host script (scripts/dns-sinkhole-device-test.sh) reacts to the MARKERs. The harness
+ * owns its policy lifecycle: it seeds under the active profile and deletes its rules when
+ * the gates finish, so no run leaves enforcement residue behind.
  *
  * Scope note (S8/INV-9): the builder excluded this app from its own TUN, so the app's own
  * sockets bypass the sinkhole — the traffic path can no longer be tested from the inside.
@@ -41,6 +42,7 @@ class VpnSpikeActivity : androidx.activity.ComponentActivity() {
     companion object {
         const val TAG = "MyExodusVpnSpike"
         private const val REQ_VPN_CONSENT = 1
+        // The pre-2026-10-04 harness profile id; swept on launch if a device still carries it.
         private const val SPIKE_PROFILE_ID = "spike-harness-profile"
         private const val HOST_DONE_FILE = "spike-host-done"
         private const val HOST_WINDOW_MS = 120_000L
@@ -71,35 +73,26 @@ class VpnSpikeActivity : androidx.activity.ComponentActivity() {
         }
     }
 
-    /** Seeds the spike profile + WEBSITE rules; run in a background thread (Room I/O). The host
-     *  script waits for the `policy-seeded` marker before running its traffic-path gates. */
+    /** Seeds WEBSITE rules under the ACTIVE profile; run in a background thread (Room I/O).
+     *  The host script waits for the `policy-seeded` marker before running its traffic-path
+     *  gates. 2026-10-04: rules go under `observeActive`'s profile — the engines and the rules
+     *  UI both consult only that pick, so a harness-owned second profile's rules were
+     *  publisher-enforced but invisible in the UI (device-found on the rig); that second
+     *  profile, if present from an older run, is swept here. */
     private fun seedPolicy() {
         val seeded = runBlocking(Dispatchers.IO) {
             try {
                 val store = storeFactory.open()
                 if (store == null) { Log.e(TAG, "policy seed: rules store unavailable"); return@runBlocking false }
-                if (store.userProfileDao().getById(SPIKE_PROFILE_ID) == null) {
-                    store.userProfileDao().insert(
-                        UserProfile(
-                            userId = SPIKE_PROFILE_ID,
-                            name = "Spike Harness",
-                            email = "",
-                            phoneNumber = null,
-                            dateOfBirth = 0L,
-                            hasAccessibilityPermission = false,
-                            hasUsageStatsPermission = false,
-                            hasVpnPermission = true,
-                            hasNotificationPermission = false,
-                            hasDeviceAdminPermission = false,
-                            devicePublicKey = null,
-                            recoveryEscrowKey = null,
-                            isActive = true,
-                        ),
-                    )
-                }
-                val existing = rulesRepository.getActiveRules().map { it.blockedPackage }.toSet()
+                // Rules first: the profile FK would reject deleting a referenced profile.
+                val staleRules = SPIKE_DOMAINS.mapNotNull { store.restrictionRuleDao().getById("spike-$it") }
+                if (staleRules.isNotEmpty()) rulesRepository.deleteRules(staleRules)
+                store.userProfileDao().getById(SPIKE_PROFILE_ID)?.let { store.userProfileDao().delete(it) }
+                val activeId = store.userProfileDao().getActive()?.userId
+                if (activeId == null) { Log.e(TAG, "policy seed: no active profile"); return@runBlocking false }
+                val existing = rulesRepository.getActiveRules().map { it.ruleId }.toSet()
                 for (domain in SPIKE_DOMAINS) {
-                    if (domain !in existing) rulesRepository.insertRule(profileRule(domain))
+                    if ("spike-$domain" !in existing) rulesRepository.insertRule(profileRule(domain, activeId))
                 }
                 true
             } catch (e: Exception) {
@@ -110,9 +103,23 @@ class VpnSpikeActivity : androidx.activity.ComponentActivity() {
         Log.i(TAG, "MARKER: policy-seeded success=$seeded")
     }
 
-    private fun profileRule(domain: String): RestrictionRule = RestrictionRule(
+    /** The harness leaves zero policy residue: its rules go once the gates are done. Runs
+     *  after the `spike-done` marker — the host script's post-stop probe is a socket-layer
+     *  check and does not depend on these rows. */
+    private suspend fun cleanupPolicy() {
+        try {
+            val store = storeFactory.open() ?: return
+            val stale = SPIKE_DOMAINS.mapNotNull { store.restrictionRuleDao().getById("spike-$it") }
+            if (stale.isNotEmpty()) rulesRepository.deleteRules(stale)
+            Log.i(TAG, "MARKER: policy-cleaned rules=${stale.size}")
+        } catch (e: Exception) {
+            Log.e(TAG, "policy cleanup failed", e)
+        }
+    }
+
+    private fun profileRule(domain: String, profileId: String): RestrictionRule = RestrictionRule(
         ruleId = "spike-$domain",
-        profileId = SPIKE_PROFILE_ID,
+        profileId = profileId,
         blockedPackage = domain,
         targetType = "WEBSITE",
         isAlwaysOn = true,
@@ -153,6 +160,7 @@ class VpnSpikeActivity : androidx.activity.ComponentActivity() {
         val detail = results.joinToString(" ") { "${it.first}=${it.second}" }
         append(if (all) "ALL GATES PASSED" else "GATES FAILED: $detail")
         Log.i(TAG, "MARKER: spike-done ALL=${if (all) "PASS" else "FAIL"} $detail")
+        runBlocking(Dispatchers.IO) { cleanupPolicy() }
     }
 
     private fun waitForActive(): Boolean {

@@ -1,10 +1,15 @@
 package com.example.myexodus.ui
 
+import android.content.Context
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Handshake
@@ -13,27 +18,38 @@ import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.WavingHand
 import androidx.compose.material.icons.outlined.Handshake as HandshakeOutlined
 import androidx.compose.material.icons.outlined.Home as HomeOutlined
 import androidx.compose.material.icons.outlined.LocalFireDepartment as FlameOutlined
 import androidx.compose.material.icons.outlined.SelfImprovement as LotusOutlined
 import androidx.compose.material.icons.outlined.Settings as SettingsOutlined
 import androidx.compose.material.icons.outlined.Shield as ShieldOutlined
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -47,6 +63,8 @@ import com.example.myexodus.blocking.recovery.RecoveryStateStore
 import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.blocking.usage.PlatformUsageReader
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
+import com.example.myexodus.accountability.sos.NudgeEnvelope
+import com.example.myexodus.accountability.sos.NudgeRepository
 import com.example.myexodus.accountability.sync.MessageSendOutcome
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.domainusage.DomainUsageEngine
@@ -56,6 +74,7 @@ import com.example.myexodus.recovery.RecoverySessionRepository
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.StrictModeManager
 import com.example.myexodus.settings.WidgetSettings
+import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.ui.home.HomeScreen
 import com.example.myexodus.ui.home.NudgeInboxViewModel
@@ -69,10 +88,13 @@ import com.example.myexodus.ui.recovery.RecoveryPrefs
 import com.example.myexodus.ui.recovery.RecoveryScreen
 import com.example.myexodus.ui.rules.RulesScreen
 import com.example.myexodus.ui.settings.NudgeSettingsViewModel
+import com.example.myexodus.ui.settings.PANE_SHARING
 import com.example.myexodus.ui.settings.SettingsScreen
 import com.example.myexodus.ui.streaks.HabitPickerSheet
 import com.example.myexodus.ui.streaks.StreaksScreen
 import com.example.myexodus.ui.streaks.StreaksViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private val Tabs = listOf(
     NavTab(NavKeys.HOME, R.string.home_title, Icons.Outlined.HomeOutlined, Icons.Default.Home),
@@ -148,6 +170,8 @@ fun AppShell(
     requestedHabit: String? = null,
     onHabitConsumed: () -> Unit = {},
     planRepository: RecoveryPlanRepository,
+    /** Owner mandate 2026-10-04: the Settings sharing pane's per-streak consent writes. */
+    habitRepository: HabitRepository,
     sessions: RecoverySessionRepository,
     prefs: RecoveryPrefs,
     recoveryEntry: String? = null,
@@ -160,6 +184,9 @@ fun AppShell(
     val contentTab = tab.coerceIn(0, Tabs.lastIndex)
     var pickerOpen by rememberSaveable { mutableStateOf(false) }
     var openRuleId by rememberSaveable { mutableStateOf<String?>(null) }
+    // Owner ask 2026-10-04: cross-tab pane entry — the Partner hub's "nothing shared" card
+    // lands on Settings with the sharing pane already open (consumed by SettingsScreen).
+    var settingsPane by rememberSaveable { mutableStateOf<String?>(null) }
     val expanded = rememberWindowWidth() == WindowWidth.EXPANDED
 
     // System back at a tab's root returns to the start destination before exiting (Android's
@@ -181,6 +208,31 @@ fun AppShell(
     // SOS §8.15 (Step 8): the Reach out control's client flag and sender state.
     val sosEnabled by sos.enabled.collectAsStateWithLifecycle()
     val sosState by sos.state.collectAsStateWithLifecycle()
+
+    // FAB rev (owner mandate 2026-10-04): one roster read per Home entry feeds the pinned
+    // card's sender names and the FAB's FR-1 active-pair gate. Pairs only change on the
+    // Partner tab, so each Home entry is the freshness boundary.
+    var partnerNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // Owner mandate 2026-10-04 (Q4): who the Reach-out will actually go to — the §19.5 target
+    // the sender resolves at tap time, read in the same Home-entry pass as the roster above.
+    var sosTargetName by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(contentTab) {
+        if (contentTab == 0) {
+            partnerNames = withContext(Dispatchers.IO) {
+                runCatching { partnerSource.partnerDisplayNames() }.getOrDefault(emptyMap())
+            }
+            sosTargetName = withContext(Dispatchers.IO) {
+                runCatching { partnerSource.targetPartnerName(partnerSelection.selectedPairId) }.getOrNull()
+            }
+        }
+    }
+    var sosConfirmOpen by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    LaunchedEffect(sosState) {
+        val message = sosStateMessage(context, sosState) ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(message)
+    }
 
     // SOS §8.16 (Step 9): "attach the listener during Home lifecycle" — the §6.9 query runs
     // only while Home is the visible tab.
@@ -210,6 +262,14 @@ fun AppShell(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        // SOS §8.15 rev (owner mandate 2026-10-04): Reach out as a FAB, gated like the old
+        // card — flag on (FR-1), a live pair, Home visible.
+        floatingActionButton = {
+            if (contentTab == 0 && sosEnabled && partnerNames.isNotEmpty()) {
+                ReachOutFab(state = sosState, onClick = { sosConfirmOpen = true })
+            }
+        },
         bottomBar = {
             if (!expanded) {
                 NotchedNavBar(
@@ -268,18 +328,14 @@ fun AppShell(
                         onRetryStreak = streaks::refresh,
                         streakLoadFailed = streakLoadFailed,
                         encryptionPending = encryptionPending,
-                        // #12: the pinned card's sender line — the same roster read the
-                        // Partner tab folds in, kept to names only.
-                        loadPartnerNames = partnerSource::partnerDisplayNames,
+                        // #12: the pinned card's sender line — the same hoisted roster read
+                        // that gates the Reach out FAB.
+                        partnerNames = partnerNames,
                         // SOS §8.14: the check-ins-off banner shares the Partner tab's
                         // notification state and fix path.
                         partnerNotificationsEnabled = partnerNotificationsEnabled,
                         partnerNotificationsRequestable = partnerNotificationsRequestable,
                         onFixPartnerNotifications = onFixNotifications,
-                        // SOS §8.15: the Reach out card's flag, state, and tap path.
-                        sosEnabled = sosEnabled,
-                        sosState = sosState,
-                        onSosTap = sos::onTap,
                         // SOS §8.16: the recipient card + its acknowledge path.
                         nudgeCard = nudgeCard,
                         onNudgeAcknowledge = nudgeInbox::acknowledge,
@@ -322,6 +378,7 @@ fun AppShell(
                     )
                     contentTab == 4 -> PartnerScreen(
                         source = partnerSource,
+                        habitRepository = habitRepository,
                         selection = partnerSelection,
                         ceremony = ceremonyDeps,
                         notificationsEnabled = partnerNotificationsEnabled,
@@ -333,6 +390,10 @@ fun AppShell(
                         onDismissUnpair = onDismissUnpair,
                         onRenameUser = onRenameUser,
                         onSendMessage = onSendMessage,
+                        onOpenSharing = {
+                            settingsPane = PANE_SHARING
+                            tab = Tabs.indexOfFirst { it.key == NavKeys.SETTINGS }
+                        },
                         modifier = contentModifier,
                     )
                     contentTab == 5 -> SettingsScreen(
@@ -344,6 +405,8 @@ fun AppShell(
                         onWidgetSettingsChanged = onWidgetSettingsChanged,
                         planRepository = planRepository,
                         rulesRepository = repository,
+                        habitRepository = habitRepository,
+                        loadPartnerNames = { partnerSource.partnerDisplayNames() },
                         recoveryPrefs = prefs,
                         domainUsageEngine = domainUsageEngine,
                         accountingOutageSource = accountingOutage,
@@ -351,11 +414,23 @@ fun AppShell(
                         partnerBlock = partnerBlock,
                         onPartnerBlockRefresh = nudgeSettings::refresh,
                         onPartnerBlockChange = nudgeSettings::setBlocked,
+                        openPane = settingsPane,
+                        onOpenPaneConsumed = { settingsPane = null },
                         modifier = contentModifier,
                     )
                 }
             }
         }
+    }
+
+    // FAB rev (owner mandate 2026-10-04): explicit confirmation before a check-in goes out —
+    // this supersedes FR-2's "no confirmation dialog": one extra tap beats an accidental send.
+    if (sosConfirmOpen) {
+        SosConfirmDialog(
+            targetName = sosTargetName,
+            onSend = { msg -> sosConfirmOpen = false; sos.onTap(msg) },
+            onDismiss = { sosConfirmOpen = false },
+        )
     }
 
     // One shared habit picker for both entry points (Home hero + Streaks summary card);
@@ -376,3 +451,102 @@ fun AppShell(
         )
     }
 }
+
+/**
+ * FAB rev (owner mandate 2026-10-04, Q4): the reach-out confirmation. Names the partner the
+ * send will reach (§19.5 target; falls back to the generic title when no name resolves), and
+ * carries the message — prefilled with the default, fully editable, capped at the envelope's
+ * char bound; a cleared field sends the v1 no-text nudge. Extracted from AppShell so the
+ * §12.3 device leg can render it in isolation (NudgeDialogInstrumentedTest).
+ */
+@Composable
+internal fun SosConfirmDialog(
+    targetName: String?,
+    onSend: (String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val defaultMessage = stringResource(R.string.sos_default_message)
+    var message by remember { mutableStateOf(defaultMessage) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                targetName?.let { stringResource(R.string.sos_confirm_title_named, it) }
+                    ?: stringResource(R.string.sos_confirm_title),
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.sos_reach_out_body))
+                OutlinedTextField(
+                    value = message,
+                    onValueChange = { message = it.take(NudgeEnvelope.MAX_TEXT_CHARS) },
+                    label = { Text(stringResource(R.string.sos_message_label)) },
+                    supportingText = {
+                        Text(
+                            stringResource(
+                                R.string.sos_message_counter,
+                                message.length,
+                                NudgeEnvelope.MAX_TEXT_CHARS,
+                            ),
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSend(message.trim().takeIf { it.isNotEmpty() }) }) {
+                Text(stringResource(R.string.sos_confirm_send))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.sos_confirm_cancel))
+            }
+        },
+    )
+}
+
+/**
+ * SOS §8.15 rev (owner mandate 2026-10-04): the Reach out control is a FAB, not a Home card —
+ * one tap raises the confirmation dialog; the sender state machine behind it is unchanged.
+ * Dimmed and inert while a result is on screen (the old card's disabled-button rule); a
+ * spinner replaces the icon mid-send.
+ */
+@Composable
+private fun ReachOutFab(state: SosViewModel.SosSendState, onClick: () -> Unit) {
+    val actionable = state == SosViewModel.SosSendState.Idle ||
+        state == SosViewModel.SosSendState.CouldNotConfirm
+    val sending = state == SosViewModel.SosSendState.Sending
+    ExtendedFloatingActionButton(
+        onClick = { if (actionable) onClick() },
+        icon = {
+            if (sending) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            } else {
+                Icon(Icons.Filled.WavingHand, contentDescription = null)
+            }
+        },
+        text = { Text(stringResource(R.string.sos_reach_out)) },
+        modifier = Modifier.alpha(if (actionable || sending) 1f else 0.6f),
+    )
+}
+
+/** The sender state machine's user-visible results (plan §8.15 copy); null while Idle/Sending. */
+private fun sosStateMessage(context: Context, state: SosViewModel.SosSendState): String? =
+    when (state) {
+        SosViewModel.SosSendState.Sent -> context.getString(R.string.sos_check_in_sent)
+        SosViewModel.SosSendState.NotSentOffline -> context.getString(R.string.sos_state_offline)
+        SosViewModel.SosSendState.CouldNotConfirm -> context.getString(R.string.sos_state_could_not_confirm)
+        SosViewModel.SosSendState.Unavailable -> context.getString(R.string.sos_state_unavailable)
+        is SosViewModel.SosSendState.RateLimited -> when (state.reason) {
+            NudgeRepository.RateLimitReason.COOLDOWN -> context.getString(
+                R.string.sos_rate_limited_cooldown,
+                SosViewModel.cooldownMinutes(state.retryAfterSeconds),
+            )
+            NudgeRepository.RateLimitReason.DAILY_CAP -> context.getString(R.string.sos_rate_limited_daily_cap)
+            NudgeRepository.RateLimitReason.UNKNOWN -> context.getString(R.string.sos_rate_limited_unknown)
+        }
+        else -> null
+    }

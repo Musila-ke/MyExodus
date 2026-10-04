@@ -41,12 +41,14 @@ class NudgeInboxRepository(
         val expiresAtMillis: Long?,
     )
 
-    /** The card's whole state: the newest readable nudge's age and every fetched pending id
-     *  (the ack batch covers all of them — §6.9 step 1 — not just the displayed one). */
+    /** The card's whole state: the newest readable nudge's age, its optional message (null for
+     *  a v1 envelope or a blank one), and every fetched pending id (the ack batch covers all
+     *  of them — §6.9 step 1 — not just the displayed one). */
     data class NudgeCard(
         val pairId: String,
         val createdAtMs: Long,
         val pendingNudgeIds: List<String>,
+        val message: String? = null,
     )
 
     /** Emits the card state for the current pair; null whenever no card may render (no
@@ -93,10 +95,11 @@ class NudgeInboxRepository(
         }
         // Only the newest document is ever decrypted (§6.9); a failure suppresses the card —
         // no fallback to older documents, nothing displayed, no silent ack.
-        if (NudgeEnvelope.open(cipher, cek, pairId, newest.nudgeId, senderUid, envelope) == null) {
-            reportUnreadable("decrypt")
-            return null
-        }
-        return NudgeCard(pairId, createdAtMs, docs.map { it.nudgeId })
+        val plaintext = NudgeEnvelope.open(cipher, cek, pairId, newest.nudgeId, senderUid, envelope)
+            ?: run {
+                reportUnreadable("decrypt")
+                return null
+            }
+        return NudgeCard(pairId, createdAtMs, docs.map { it.nudgeId }, NudgeEnvelope.messageOf(plaintext))
     }
 }

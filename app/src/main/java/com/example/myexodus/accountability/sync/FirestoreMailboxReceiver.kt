@@ -123,14 +123,11 @@ class FirestoreMailboxReceiver(
         }
 
         // §6 step 3 expedited path: the wake's own id, before the watermark query can miss it.
-        // §19.5 multi-pair: the wake carries no pair id, so every pair's pass sees the same id.
-        // Only the message's own pair may read it here — under another pair's keys it would
-        // fail verification and pollute that pair's tamper counters. (Every message doc is
-        // written with a pairId; null means a non-conforming writer, which is not ours.)
+        // §19.5 multi-pair: the wake carries no pair id, so every pair's pass sees the same id;
+        // only the message's own pair applies it — every other pair's [handler] call loads it
+        // and its pair gate turns it into MISSING before any verification.
         if (messageId != null) {
-            handle(messageId) {
-                fetchDocument(myUid, messageId)?.takeIf { it.pairId == pairId }
-            }
+            handle(messageId) { fetchDocument(myUid, messageId) }
             if (deletionRequested) return result
         }
 
@@ -143,6 +140,9 @@ class FirestoreMailboxReceiver(
         val snapshot = query.limit(limit.toLong()).get().await()
         var watermark = enrollment.mailboxWatermarkTsEpochMillis
         for (doc in snapshot.documents) {
+            // Foreign pairs' documents still advance the watermark — they can never be
+            // processed here (the handler gate skips them), so moving past them is pure
+            // quota: the next pass stops re-reading them from the shared mailbox.
             doc.getTimestamp("timestamp")?.let { ts ->
                 watermark = maxOf(watermark ?: 0L, ts.toDate().time)
             }

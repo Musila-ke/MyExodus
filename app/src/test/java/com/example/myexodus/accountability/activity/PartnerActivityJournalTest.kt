@@ -16,6 +16,8 @@ import com.example.myexodus.data.db.RulesStoreKeyManager
 import com.example.myexodus.data.db.entity.CoachingStep
 import com.example.myexodus.data.db.entity.HabitProgress
 import com.example.myexodus.data.db.entity.MilestoneEvent
+import com.example.myexodus.data.db.entity.PairProfileSharing
+import com.example.myexodus.data.db.entity.PairStreakSharing
 import com.example.myexodus.data.db.entity.PartnerActivityOutbox
 import com.example.myexodus.data.db.entity.RecoveryStreak
 import com.example.myexodus.data.db.entity.UserProfile
@@ -35,12 +37,14 @@ import org.robolectric.annotation.Config
 /**
  * Journal-first emission contract (partner-activity plan §7 Step 5, Appendix A.3) on a real
  * Room store: the snapshot is the committed post-transition state (achieved milestones of the
- * *current* streak only), the shipped consent flags gate the habits kinds, coaching/motivational
- * are user-initiated and ungated, and an emission inside a rolled-back transaction leaves no
- * journal row behind.
+ * *current* streak only), the v16 consent matrix gates every kind (per (pair, habit)
+ * `pair_streak_sharing` for the habit kinds, per-pair `pair_profile_sharing` for coaching; the
+ * Req 15 message needs the addressed pair to have a visible habit), wire v2 carries the
+ * streak's name and the relapse/milestone day counts, and an emission inside a rolled-back
+ * transaction leaves no journal row behind.
  *
- * Rows are read back through `pendingForPair` — before any pair links exist, every journal row
- * is pending for every pair, which is exactly the reconcile view (Step 6).
+ * Rows are read back through `pendingForPair` — the reconcile view, consent filter included:
+ * a row is listed only for a pair whose switch is on and whose enable watermark predates it.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
@@ -72,7 +76,8 @@ class PartnerActivityJournalTest {
     @Test
     fun emitForHabit_snapshotIsTheCommittedStreakState() = runBlocking {
         seedProfile()
-        val habitId = seedHabit(daysElapsed = 7, relapses = 2, shareMilestones = true)
+        val habitId = seedHabit(daysElapsed = 7, relapses = 2)
+        seedStreakConsent()
         store.coachingStepDao().insert(coachingStep("c-1", PROFILE_ID))
         store.coachingStepDao().insert(coachingStep("c-2", PROFILE_ID))
 
@@ -82,6 +87,7 @@ class PartnerActivityJournalTest {
 
         val row = journalRows().single()
         assertEquals(EventPayload.TYPE_STREAK_UPDATED, row.kind)
+        assertEquals("the consent key the reconcile filter joins on (v16)", HABIT_ID, row.habitProgressId)
         assertEquals("7 completed days = ordinal Day 8 (ADR #128)", 8, row.daysFree)
         assertEquals(2, row.relapseCount)
         assertEquals("7", row.milestonesReached)
@@ -96,7 +102,8 @@ class PartnerActivityJournalTest {
     @Test
     fun emitForHabit_occurredAndCreatedClocksAreIndependent() = runBlocking {
         seedProfile()
-        val habitId = seedHabit(shareRelapses = true)
+        val habitId = seedHabit()
+        seedStreakConsent(shareRelapses = true)
 
         PartnerActivityJournal.emitForHabit(
             store, habitId, EventPayload.TYPE_RELAPSE_RECORDED,
@@ -111,7 +118,8 @@ class PartnerActivityJournalTest {
     @Test
     fun emitForHabit_unachievedMilestonesAreNotReported() = runBlocking {
         seedProfile()
-        val habitId = seedHabit(daysElapsed = 35, shareMilestones = true)
+        val habitId = seedHabit(daysElapsed = 35)
+        seedStreakConsent(shareMilestones = true)
 
         PartnerActivityJournal.emitForHabit(store, habitId, EventPayload.TYPE_MILESTONE_REACHED, NOW)
 
@@ -119,50 +127,135 @@ class PartnerActivityJournalTest {
         assertEquals("7,30", journalRows().single().milestonesReached)
     }
 
-    // --- Consent matrix (Appendix A.3) --------------------------------------------------------
+    // --- Consent matrix (v16/ADR #135) --------------------------------------------------------
 
+    /** "Nothing until you choose": no consent row for any pair → nothing journals, so nothing
+     *  can ever deliver. */
     @Test
-    fun consentFlags_gateTheHabitsKinds() = runBlocking {
+    fun consentRows_absent_refusesEveryHabitKind() = runBlocking {
         seedProfile()
-        val closed = seedHabit(shareMilestones = false, shareRelapses = false)
+        val habitId = seedHabit()
 
-        assertFalse(PartnerActivityJournal.emitForHabit(store, closed, EventPayload.TYPE_STREAK_UPDATED, NOW))
-        assertFalse(PartnerActivityJournal.emitForHabit(store, closed, EventPayload.TYPE_MILESTONE_REACHED, NOW))
-        assertFalse(PartnerActivityJournal.emitForHabit(store, closed, EventPayload.TYPE_RELAPSE_RECORDED, NOW))
+        assertFalse(PartnerActivityJournal.emitForHabit(store, habitId, EventPayload.TYPE_STREAK_UPDATED, NOW))
+        assertFalse(PartnerActivityJournal.emitForHabit(store, habitId, EventPayload.TYPE_MILESTONE_REACHED, NOW))
+        assertFalse(PartnerActivityJournal.emitForHabit(store, habitId, EventPayload.TYPE_RELAPSE_RECORDED, NOW))
         assertTrue("a refused emission must write nothing", journalRows().isEmpty())
+    }
+
+    /** v16: the per-streak master gates every habit-anchored kind — category flags that are on
+     *  cannot leak anything (name included) while the master is off. */
+    @Test
+    fun shareStreakMaster_off_silencesEveryHabitKindAndItsName() = runBlocking {
+        seedProfile()
+        val muted = seedHabit()
+        seedStreakConsent(shareStreak = false, shareMilestones = true, shareRelapses = true)
+
+        assertFalse(PartnerActivityJournal.emitForHabit(store, muted, EventPayload.TYPE_STREAK_UPDATED, NOW))
+        assertFalse(PartnerActivityJournal.emitForHabit(store, muted, EventPayload.TYPE_MILESTONE_REACHED, NOW))
+        assertFalse(PartnerActivityJournal.emitForHabit(store, muted, EventPayload.TYPE_RELAPSE_RECORDED, NOW))
+        assertTrue("no row may carry the streak's name while the master is off", journalRows().isEmpty())
     }
 
     @Test
     fun consentFlags_arePerKindNotAllOrNothing() = runBlocking {
         seedProfile()
-        val milestonesOnly = seedHabit(shareMilestones = true, shareRelapses = false)
+        val milestonesOnly = seedHabit()
+        seedStreakConsent(shareStreak = true, shareMilestones = true, shareRelapses = false)
 
         assertTrue(PartnerActivityJournal.emitForHabit(store, milestonesOnly, EventPayload.TYPE_STREAK_UPDATED, NOW))
         assertFalse(PartnerActivityJournal.emitForHabit(store, milestonesOnly, EventPayload.TYPE_RELAPSE_RECORDED, NOW))
     }
 
+    /** v16: coaching needs the pair's recovery consent AND a visible habit to anchor its
+     *  snapshot to — either one missing refuses the row (its aggregate must be truthful). */
     @Test
-    fun emitForProfile_isUngated_andToleratesAProfileWithNoHabit() = runBlocking {
+    fun coachingStep_needsRecoveryConsent_andAVisibleHabit() = runBlocking {
         seedProfile()
         store.coachingStepDao().insert(coachingStep("c-1", PROFILE_ID))
 
+        assertFalse(
+            "no consent at all — refused",
+            PartnerActivityJournal.emitForProfile(store, PROFILE_ID, EventPayload.TYPE_COACHING_STEP_UPDATED, NOW),
+        )
+        seedProfileConsent(shareRecovery = true)
+        assertFalse(
+            "recovery consent but no visible habit — no truthful anchor",
+            PartnerActivityJournal.emitForProfile(store, PROFILE_ID, EventPayload.TYPE_COACHING_STEP_UPDATED, NOW),
+        )
+        seedHabit()
+        seedStreakConsent(shareStreak = true, shareMilestones = false, shareRelapses = false)
         assertTrue(
-            PartnerActivityJournal.emitForProfile(
-                store, PROFILE_ID, EventPayload.TYPE_COACHING_STEP_UPDATED, NOW,
+            PartnerActivityJournal.emitForProfile(store, PROFILE_ID, EventPayload.TYPE_COACHING_STEP_UPDATED, NOW),
+        )
+        assertEquals(
+            listOf(EventPayload.TYPE_COACHING_STEP_UPDATED),
+            journalRows().map { it.kind },
+        )
+    }
+
+    // --- Wire v2 (ADR #134) -------------------------------------------------------------------
+
+    /** The partner learns *which* streak a relapse concerns and how long it ran. */
+    @Test
+    fun relapseRow_carriesTheEndedDayCount_andTheStreakName() = runBlocking {
+        seedProfile()
+        val habitId = seedHabit()
+        seedStreakConsent(shareRelapses = true)
+
+        assertTrue(
+            PartnerActivityJournal.emitForHabit(
+                store, habitId, EventPayload.TYPE_RELAPSE_RECORDED, NOW, endedDays = 12,
             ),
         )
 
         val row = journalRows().single()
-        assertEquals(0, row.daysFree)
-        assertEquals(0, row.relapseCount)
-        assertEquals("", row.milestonesReached)
-        assertEquals(1, row.coachingProgress)
+        assertEquals(12, row.endedDays)
+        assertEquals("Instagram", row.habitLabel)
+        assertNull(row.milestoneDay)
+    }
+
+    @Test
+    fun milestoneRow_carriesTheDayReached_andTheStreakName() = runBlocking {
+        seedProfile()
+        val habitId = seedHabit(daysElapsed = 30)
+        seedStreakConsent(shareMilestones = true)
+
+        assertTrue(
+            PartnerActivityJournal.emitForHabit(
+                store, habitId, EventPayload.TYPE_MILESTONE_REACHED, NOW, milestoneDay = 30,
+            ),
+        )
+
+        val row = journalRows().single()
+        assertEquals(30, row.milestoneDay)
+        assertEquals("Instagram", row.habitLabel)
+        assertNull(row.endedDays)
+    }
+
+    /** Profile-anchored kinds carry no streak identity on the wire. */
+    @Test
+    fun motivationalMessage_ridesNameless() = runBlocking {
+        seedProfile()
+        seedHabit()
+        seedStreakConsent()
+
+        assertTrue(
+            PartnerActivityJournal.emitForProfile(
+                store, PROFILE_ID, EventPayload.TYPE_MOTIVATIONAL_MESSAGE, NOW, text = "hi",
+            ),
+        )
+
+        val row = journalRows().single()
+        assertNull(row.habitLabel)
+        assertNull(row.endedDays)
+        assertNull(row.milestoneDay)
     }
 
     @Test
     fun motivationalMessage_carriesItsText_underTheUniformSnapshot() = runBlocking {
         seedProfile()
-        seedHabit(daysElapsed = 3, shareMilestones = false, shareRelapses = false)
+        seedHabit(daysElapsed = 3)
+        seedStreakConsent(shareStreak = true, shareMilestones = false, shareRelapses = false)
 
         assertTrue(
             PartnerActivityJournal.emitForProfile(
@@ -181,19 +274,23 @@ class PartnerActivityJournalTest {
     @Test
     fun targetedMessage_pendsOnlyForItsPair_whileSnapshotsStillFanOut() = runBlocking {
         seedProfile()
-        val habitId = seedHabit(daysElapsed = 4, shareMilestones = true)
+        val habitId = seedHabit(daysElapsed = 4)
+        // Both pairs consented to the streak: consent is orthogonal to addressing, and this
+        // test isolates the addressing — pair-2 sees the fan-out row, never the message.
+        seedStreakConsent(pairId = PAIR_ID)
+        seedStreakConsent(pairId = "pair-2")
 
         assertTrue(
             PartnerActivityJournal.emitForProfile(
                 store, PROFILE_ID, EventPayload.TYPE_MOTIVATIONAL_MESSAGE, NOW,
-                text = "For you only", targetPairId = "pair-1",
+                text = "For you only", targetPairId = PAIR_ID,
             ),
         )
         assertTrue(PartnerActivityJournal.emitForHabit(store, habitId, EventPayload.TYPE_STREAK_UPDATED, NOW))
 
-        val target = store.partnerActivityDao().pendingForPair("pair-1", sinceMs = 0L, limit = 100)
+        val target = store.partnerActivityDao().pendingForPair(PAIR_ID, sinceMs = 0L, limit = 100)
         val message = target.single { it.kind == EventPayload.TYPE_MOTIVATIONAL_MESSAGE }
-        assertEquals("the addressed row carries its recipient", "pair-1", message.targetPairId)
+        assertEquals("the addressed row carries its recipient", PAIR_ID, message.targetPairId)
         assertNull(
             "the state snapshot stays untargeted — every pair receives it",
             target.single { it.kind == EventPayload.TYPE_STREAK_UPDATED }.targetPairId,
@@ -205,47 +302,44 @@ class PartnerActivityJournalTest {
         )
     }
 
-    // --- Pairing snapshot (owner ruling 2026-09-29) -------------------------------------------
+    // --- Enable watermark (v16) ---------------------------------------------------------------
 
-    /**
-     * The newcomer's dashboard starts populated: one targeted STREAK_UPDATED row at
-     * pair-complete carrying the sender's committed state, addressed to the new pair alone so
-     * an existing partner is never handed a duplicate of it.
-     */
+    /** Enabling a switch never leaks the while-off backlog: rows written before the false→true
+     *  transition carry an earlier `created_at_ms` than the watermark and are filtered per pair,
+     *  while a pair that consented all along still receives them. */
     @Test
-    fun pairingSnapshot_isOneTargetedStreakUpdate_carryingTheCurrentState() = runBlocking {
+    fun enableWatermark_filtersTheWhileOffBacklog_perPair() = runBlocking {
         seedProfile()
-        seedHabit(daysElapsed = 12, relapses = 1, shareMilestones = true)
+        val habitId = seedHabit()
+        seedStreakConsent(pairId = "pair-2", shareStreak = true)
+        assertTrue(PartnerActivityJournal.emitForHabit(store, habitId, EventPayload.TYPE_STREAK_UPDATED, NOW))
 
-        assertTrue(PartnerActivityJournal.emitPairingSnapshot(store, "pair-new", atMs = NOW))
-
-        val row = store.partnerActivityDao().pendingForPair("pair-new", sinceMs = 0L, limit = 10).single()
-        assertEquals(EventPayload.TYPE_STREAK_UPDATED, row.kind)
-        assertEquals("pair-new", row.targetPairId)
-        assertEquals("12 completed days = ordinal Day 13 (ADR #128)", 13, row.daysFree)
-        assertEquals(1, row.relapseCount)
-        assertEquals("7", row.milestonesReached)
-        assertEquals(
-            "written at pair-complete, so the enrollment bound cannot exclude it",
-            NOW, row.createdAtMs,
+        // pair-1 enables the streak master only now — the watermark sits after the first row.
+        store.pairSharingDao().upsertStreak(
+            PairStreakSharing(
+                pairId = PAIR_ID, habitProgressId = HABIT_ID,
+                shareStreak = true, shareRelapses = false, shareMilestones = false,
+                streakEnabledSinceMs = NOW + 1_000,
+                relapseEnabledSinceMs = 0, milestoneEnabledSinceMs = 0,
+            ),
         )
-        assertEquals(NOW, row.occurredAtMs)
+
         assertTrue(
-            "addressed to the new pair: an existing partner is never handed the same snapshot",
-            store.partnerActivityDao().pendingForPair("pair-existing", sinceMs = 0L, limit = 10).isEmpty(),
+            "the pre-enable row must not be handed to pair-1",
+            store.partnerActivityDao().pendingForPair(PAIR_ID, sinceMs = 0L, limit = 100).isEmpty(),
         )
-    }
+        assertEquals(
+            "the pair that consented all along still receives it",
+            1,
+            store.partnerActivityDao().pendingForPair("pair-2", sinceMs = 0L, limit = 100).size,
+        )
 
-    /** Appendix A.3: no consent, no snapshot — the ruling adds a delivery, never a share the
-     *  user withheld, and an unresolvable habit cannot have consented. */
-    @Test
-    fun pairingSnapshot_isGatedByTheShippedConsentFlag_andNeedsAProfile() = runBlocking {
-        assertFalse("no profile yet — nothing to snapshot", PartnerActivityJournal.emitPairingSnapshot(store, "pair-new", NOW))
-        seedProfile()
-        seedHabit(daysElapsed = 5, shareMilestones = false)
-
-        assertFalse(PartnerActivityJournal.emitPairingSnapshot(store, "pair-new", NOW))
-        assertTrue("a refused snapshot must write nothing", journalRows().isEmpty())
+        assertTrue(PartnerActivityJournal.emitForHabit(store, habitId, EventPayload.TYPE_STREAK_UPDATED, NOW + 2_000))
+        assertEquals(
+            "a row written after the enable watermark delivers",
+            1,
+            store.partnerActivityDao().pendingForPair(PAIR_ID, sinceMs = 0L, limit = 100).size,
+        )
     }
 
     // --- Atomicity (Step 5 validation) --------------------------------------------------------
@@ -253,7 +347,8 @@ class PartnerActivityJournalTest {
     @Test
     fun emissionInsideARolledBackTransaction_leavesNoJournalRow() = runBlocking {
         seedProfile()
-        val habitId = seedHabit(shareMilestones = true)
+        val habitId = seedHabit()
+        seedStreakConsent()
 
         val thrown = runCatching {
             store.withWriteTransaction<Unit> {
@@ -269,7 +364,7 @@ class PartnerActivityJournalTest {
     // --- Harness ------------------------------------------------------------------------------
 
     private suspend fun journalRows(): List<PartnerActivityOutbox> =
-        store.partnerActivityDao().pendingForPair("pair-1", sinceMs = 0L, limit = 100)
+        store.partnerActivityDao().pendingForPair(PAIR_ID, sinceMs = 0L, limit = 100)
 
     private suspend fun seedProfile() {
         store.userProfileDao().insert(
@@ -291,13 +386,39 @@ class PartnerActivityJournalTest {
         )
     }
 
+    /** The v16 consent row for ([pairId], the seeded habit); watermarks 0 so rows at [NOW]
+     *  clear the enable bound and the test isolates the flag. */
+    private suspend fun seedStreakConsent(
+        pairId: String = PAIR_ID,
+        shareStreak: Boolean = true,
+        shareRelapses: Boolean = false,
+        shareMilestones: Boolean = false,
+    ) {
+        store.pairSharingDao().upsertStreak(
+            PairStreakSharing(
+                pairId = pairId, habitProgressId = HABIT_ID,
+                shareStreak = shareStreak, shareRelapses = shareRelapses,
+                shareMilestones = shareMilestones,
+                streakEnabledSinceMs = 0, relapseEnabledSinceMs = 0, milestoneEnabledSinceMs = 0,
+            ),
+        )
+    }
+
+    private suspend fun seedProfileConsent(
+        pairId: String = PAIR_ID,
+        shareCheckIns: Boolean = false,
+        shareRecovery: Boolean = false,
+    ) {
+        store.pairSharingDao().upsertProfile(
+            PairProfileSharing(
+                pairId = pairId, shareCheckins = shareCheckIns, shareRecovery = shareRecovery,
+                checkinsEnabledSinceMs = 0, recoveryEnabledSinceMs = 0,
+            ),
+        )
+    }
+
     /** Habit + one active streak + its 7/30/90 rows; milestones up to [daysElapsed] stamped. */
-    private suspend fun seedHabit(
-        daysElapsed: Int = 0,
-        relapses: Int = 0,
-        shareMilestones: Boolean = true,
-        shareRelapses: Boolean = true,
-    ): String {
+    private suspend fun seedHabit(daysElapsed: Int = 0, relapses: Int = 0): String {
         store.habitProgressDao().insert(
             HabitProgress(
                 progressId = HABIT_ID,
@@ -309,9 +430,6 @@ class PartnerActivityJournalTest {
                 habitDurationYears = 2,
                 onboardingSeverityLevel = "MODERATE",
                 lastRelapseTimestamp = null,
-                shareAccessAttempts = false,
-                shareRelapses = shareRelapses,
-                shareMilestones = shareMilestones,
                 assignedPartnershipId = null,
                 isSelected = true,
             ),
@@ -353,6 +471,7 @@ class PartnerActivityJournalTest {
         const val PROFILE_ID = "profile-1"
         const val HABIT_ID = "habit-1"
         const val STREAK_ID = "streak-1"
+        const val PAIR_ID = "pair-1"
         const val NOW = 1_800_000_000_000L
     }
 }

@@ -126,6 +126,18 @@
     <string name="partner_event_text">Open MyExodus to see what changed.</string>
     <string name="partner_message_title_named">%1$s sent you a message</string>
     <string name="partner_message_quoted">“%1$s”</string>
+    <!-- Owner mandate 2026-10-04: a relapse/milestone alert states which streak and when,
+         using the wire-v2 fields (ADR #134). Unlocked copy only — the plain forms above stay
+         the lockscreen public version (FR-13). Pre-v2 bodies lack the fields and degrade to
+         partner_event_title_named/_text unchanged. -->
+    <string name="partner_relapse_title_named">%1$s logged a relapse</string>
+    <string name="partner_relapse_ended_days">ended a %1$d-day streak</string>
+    <string name="partner_milestone_title_named">%1$s reached a milestone</string>
+    <plurals name="partner_milestone_reached_days">
+        <item quantity="one">reached %1$d day</item>
+        <item quantity="other">reached %1$d days</item>
+    </plurals>
+    <string name="partner_event_time_suffix">%1$s · %2$s</string>
     <!-- #16: the responder's announcement that the partner ended the partnership. States who,
          when, and the erasure that just ran on this phone; the plain forms stay the
          lockscreen-safe public version (FR-13). The no-time form covers a document with no
@@ -173,6 +185,17 @@
     <string name="rules_delete_body">“%1$s” will be removed and no longer enforced. It stops blocking immediately.</string>
     <string name="rules_delete_confirm">Delete</string>
     <string name="rules_cancel">Cancel</string>
+    <!-- #18 (owner report 2026-10-04): rules whose duration lapsed switch themselves off and
+         collect here, beside the ones the user paused. -->
+    <string name="rules_deactivated_header">Deactivated</string>
+    <string name="rules_deactivated_caption">Switched off, or ended when their duration lapsed. Turn one back on, or clear them all.</string>
+    <string name="rules_cleanup">Remove all</string>
+    <string name="rules_cleanup_title">Remove all deactivated rules?</string>
+    <plurals name="rules_cleanup_body">
+        <item quantity="one">%1$d rule will be deleted permanently. This can’t be undone.</item>
+        <item quantity="other">%1$d rules will be deleted permanently. This can’t be undone.</item>
+    </plurals>
+    <string name="rules_cleanup_confirm">Remove</string>
 
     <!-- Rule editor -->
     <string name="editor_new_app">New app block</string>
@@ -198,6 +221,7 @@
     <string name="editor_limit_preview">= blocked after %1$s a day</string>
     <string name="editor_daily_limit_invalid">Enter at least 1 minute for the daily limit.</string>
     <string name="editor_daily_limit_too_large">A daily limit must be under 24 hours. A day only has 24 hours, so this would never block — pick a shorter limit.</string>
+    <string name="editor_limit_exceeds_window">This limit is longer than the rule’s time window, so it could never fire — the window closes first. Shorten the limit or widen the window.</string>
     <!-- Website daily limits: save-time validation, scope notices (plan §8 S9, FR-2/FR-10) -->
     <string name="editor_site_limit_has_path">Limits apply to a whole site. Use “%1$s” instead.</string>
     <string name="editor_site_limit_use_it">Use it</string>
@@ -219,6 +243,7 @@
     <string name="editor_days_weekends">Weekends</string>
     <string name="editor_same_time_error">Start and end time can’t be the same. Pick a different end time.</string>
     <string name="editor_ends">Ends</string>
+    <string name="editor_ends_note">The rule switches off by itself once this date has passed.</string>
     <string name="editor_never">Never</string>
     <string name="editor_clear">Clear</string>
     <string name="editor_timezone_note">Times use %1$s.</string>
@@ -438,6 +463,10 @@
     <string name="partner_check_now">Check now</string>
     <string name="partner_check_now_running">Checking…</string>
     <string name="partner_check_now_failed">Couldn’t reach the server. Check your connection and try again.</string>
+    <string name="partner_check_now_ok">Checked just now — you’re up to date.</string>
+    <string name="partner_nothing_shared_title">Nothing shared yet</string>
+    <string name="partner_nothing_shared_body">%1$s can’t see your streaks, check-ins or recovery updates until you choose what to share.</string>
+    <string name="partner_nothing_shared_action">Choose what to share</string>
     <string name="partner_activity_title">Recent activity (%1$d)</string>
     <string name="partner_activity_today">Today</string>
     <string name="partner_activity_week">This week</string>
@@ -494,6 +523,9 @@
     <string name="partner_switch_close">Close</string>
     <string name="partner_alert_blocked">Blocked</string>
     <string name="partner_alert_override">Override used</string>
+    <string name="partner_alert_relapse">Relapsed</string>
+    <string name="partner_alert_milestone_plain">Reached a milestone</string>
+    <string name="partner_alert_streak_unnamed">Their streak</string>
     <string name="partner_chain_catching_up_title">Catching up</string>
     <string name="partner_chain_catching_up_body">Some recent events are still coming in. This usually clears up on its own.</string>
     <string name="partner_chain_incomplete_title">Some history missing</string>
@@ -514,8 +546,37 @@
     <string name="partner_channel_nudges_name">Accountability Check-ins</string>
     <string name="partner_notifications_checkins_body">Notifications are off, so you’ll miss check-ins.</string>
     <string name="partner_ceremony_notifications_body">Turn on notifications so your partner’s check-ins reach you.</string>
-    <string name="settings_partner_checkins_title">Check-in notifications</string>
-    <string name="settings_partner_checkins_body">Open the Accountability Check-ins channel settings.</string>
+
+    <!-- Partner sharing pane (owner mandate 2026-10-04, v16/ADR #135): every decision is per
+         (item, partner) — three levels, middle one collapsed with a single partner. Nothing is
+         shared until a switch is on; master off hides the streak's name too; category switches
+         grey out under an off master. -->
+    <string name="settings_sharing_title">Partner sharing</string>
+    <string name="settings_sharing_row_body">Choose what each partner can see</string>
+    <string name="settings_sharing_intro">Nothing is shared until you choose it. You pick, streak by streak and partner by partner, who sees what. Changes apply right away, and anything switched off is never sent — not even a streak’s name.</string>
+    <string name="settings_sharing_streaks_header">Streaks</string>
+    <string name="settings_sharing_other_header">Other information</string>
+    <string name="settings_sharing_other_title">Blocked apps &amp; recovery</string>
+    <string name="settings_sharing_choose_partner">Which partner sees this?</string>
+    <string name="settings_sharing_with_partner">Sharing with %1$s</string>
+    <string name="settings_sharing_shared_with_one">Shared with %1$s</string>
+    <string name="settings_sharing_shared_with_many">Shared with %1$d partners</string>
+    <string name="settings_sharing_no_partners">No partner yet. Pair with someone from the Partner tab, then choose here what they can see.</string>
+    <string name="settings_sharing_master_title">Share this streak</string>
+    <string name="settings_sharing_streak_body">Its day count and name go to your partner</string>
+    <string name="settings_sharing_summary_off">Not shared</string>
+    <string name="settings_sharing_summary_streak">Day count &amp; name</string>
+    <string name="settings_sharing_relapses_title">Relapses</string>
+    <string name="settings_sharing_relapses_body">%1$s — your partner is told when it ends and how long it ran</string>
+    <string name="settings_sharing_milestones_title">Milestones</string>
+    <string name="settings_sharing_milestones_body">%1$s — your partner hears which days you reach</string>
+    <string name="settings_sharing_checkins_title">Blocked apps</string>
+    <string name="settings_sharing_checkins_body">Your partner hears when you try a blocked app and when you use an override.</string>
+    <string name="settings_sharing_recovery_title">Recovery &amp; coaching</string>
+    <string name="settings_sharing_recovery_body">Your partner hears when you finish a recovery session or update your coaching plan.</string>
+    <string name="settings_sharing_empty">No streaks yet. Set one up under Streaks, then choose here what your partner can see.</string>
+    <string name="settings_sharing_failed">Couldn’t save that change. MyExodus can’t reach its local database right now. Your data is safe — try again in a moment.</string>
+    <string name="settings_sharing_unavailable">Couldn’t read your sharing settings. MyExodus can’t reach its local database right now. Your data is safe — try again in a moment.</string>
     <!-- The recipient's block switch (plan §8.19 Step 11): names the partner the switch
          configures (§19.5 target), so the N-partner case is never ambiguous. -->
     <string name="settings_partner_block_title">Block check-ins</string>
@@ -539,11 +600,22 @@
     <string name="sos_rate_limited_cooldown">You’ve reached out recently. Try again in %1$d min.</string>
     <string name="sos_rate_limited_daily_cap">Daily limit reached. Try again tomorrow.</string>
     <string name="sos_rate_limited_unknown">You’ve reached the check-in limit. Try again later.</string>
+    <!-- FAB rev (owner mandate 2026-10-04): the confirmation dialog supersedes FR-2's
+         "no confirmation dialog" — one extra tap beats an accidental check-in. It names the
+         target partner and carries the message (default prefilled, editable, blank = none). -->
+    <string name="sos_confirm_title">Reach out to your partner?</string>
+    <string name="sos_confirm_title_named">Reach out to %1$s?</string>
+    <string name="sos_confirm_send">Send</string>
+    <string name="sos_confirm_cancel">Cancel</string>
+    <string name="sos_message_label">Message</string>
+    <string name="sos_default_message">I could use a check-in.</string>
+    <string name="sos_message_counter">%1$d/%2$d</string>
+    <string name="sos_check_in_sent">Check-in sent.</string>
     <!-- FR-25: help/onboarding text only — the tap path itself never displays this. -->
     <string name="sos_not_emergency">Reach out is a check-in, not an emergency service. If you need urgent help, call your local emergency number.</string>
-    <!-- The recipient card (plan §8.16 Step 9): title, relative send time, the "I'm here"
-         reply and the X (both acknowledge). The plaintext is constant by design, so the
-         card never quotes a message — it only says who reached out and when. -->
+    <!-- The recipient card (plan §8.16 Step 9): title, the sender's message when one was
+         written (v2 envelope; a v1 nudge has none), relative send time, the "I'm here"
+         reply and the X (both acknowledge). -->
     <string name="sos_card_title">Your partner reached out</string>
     <string name="sos_card_sent">Sent %1$s</string>
     <string name="sos_card_im_here">I’m here</string>
@@ -704,6 +776,13 @@
     <string name="rules_used_today">Used today: %1$d / %2$d min</string>
     <string name="domain_usage_banner_private_dns">Private DNS is on, so website limits may not apply. Set Private DNS to Off or Automatic in system settings.</string>
     <string name="domain_usage_banner_off">Website limits are temporarily off.</string>
+    <!-- #26 activation row (ADR #140). Copy is priming for the platform VPN-consent dialog
+         that the tap opens: states the concrete stake (blocks + limits both ride the tunnel),
+         names the system screen about to appear so it doesn't surprise, and says it's
+         reversible. -->
+    <string name="domain_usage_off_title">Website blocking is off</string>
+    <string name="domain_usage_off_body">Blocked websites and daily limits only apply while the app’s connection is on. Tap to turn it on — Android will ask about a VPN connection; choose OK there. You can turn it off anytime.</string>
+    <string name="domain_usage_off_retry">The connection couldn’t start. Another VPN app can block it. Tap to try again.</string>
 
     <!-- Streaks (ADR #85). The surface was the last one whose copy lived as Kotlin literals;
          "What to expect" alone existed as three separate literals across two files. Conversion

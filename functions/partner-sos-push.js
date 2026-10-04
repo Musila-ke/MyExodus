@@ -29,13 +29,21 @@ const REGION = 'us-central1';
 const ANDROID_PACKAGE = 'com.example.myexodus'; // §3.4 mapping (applicationId)
 const NOTIFICATION_TITLE = 'Accountability Check-in';
 const NOTIFICATION_BODY = 'Your partner reached out — check in when you can.';
-const CHANNEL_ID = 'partner_nudges';
+// `_v3`: Android cannot raise an existing channel's importance in place, and an app can even
+// silently LOWER its own channel (device-confirmed 2026-10-04 — the pre-fix client dented v2
+// 4→3 on foreground receipts), so a dented id is retired and a fresh one takes HIGH.
+const CHANNEL_ID = 'partner_nudges_v3';
 const NOTIFICATION_TAG = 'partner_nudge';
 const FCM_TTL_MS = 3_600_000;
 
-function nudgeFcmMessage(fids, nudgeId) {
+// Deviation from the plan's FID-targeted send, flagged 2026-10-04: FCM FID targeting only
+// addresses installations that re-registered via register()/onRegistered() (FCM SDK 25.1+);
+// with this app's legacy getToken() path every FID send returns installation-id-not-registered
+// on the rig while the same installations' full registration tokens deliver. Token targeting
+// is still supported during FCM's deprecation window; revisit when the client migrates.
+function nudgeFcmMessage(tokens, nudgeId) {
   return {
-    fids,
+    tokens,
     notification: { title: NOTIFICATION_TITLE, body: NOTIFICATION_BODY },
     data: { type: 'partner_nudge', nudge_id: nudgeId },
     android: {
@@ -247,26 +255,37 @@ function createPushNudge({ db, messaging, now = () => Date.now(), rand = Math.ra
     const deviceSnaps = await Promise.all(
       pendingIds.map((id) => deviceRefOf(recipientUid, id).get()),
     );
-    // §6.4 step 11: the installation document ID is the FID (§4.3 registry delta).
-    const fids = pendingIds.filter((id, i) => deviceSnaps[i].exists && deviceSnaps[i].get('pushEligible') === true);
-
+    // §6.4 step 11: the doc id is the FID (§4.3 registry delta) and stays the ledger key;
+    // the FCM call targets the stored registration token (see nudgeFcmMessage deviation note).
+    const eligible = pendingIds
+      .map((id, i) => ({ fid: id, snap: deviceSnaps[i] }))
+      .filter((t) => t.snap.exists && t.snap.get('pushEligible') === true);
     const newlySent = [];
     const invalidInstallIds = [];
+    // An eligible row with no token can never be addressed — same terminal class as an FCM
+    // invalid target, so it rides the same removal path.
+    const sendable = [];
+    for (const t of eligible) {
+      if (typeof t.snap.get('token') === 'string' && t.snap.get('token').length > 0) sendable.push(t);
+      else invalidInstallIds.push(t.fid);
+    }
     let transientCount = 0;
     let firstErrorCode = null;
     let payloadInvalid = false;
 
-    for (let i = 0; i < fids.length; i += FCM_FID_BATCH_MAX) {
-      const batch = fids.slice(i, i + FCM_FID_BATCH_MAX);
+    for (let i = 0; i < sendable.length; i += FCM_FID_BATCH_MAX) {
+      const batch = sendable.slice(i, i + FCM_FID_BATCH_MAX);
       try {
-        const response = await messaging.sendEachForMulticast(nudgeFcmMessage(batch, nudgeId));
+        const response = await messaging.sendEachForMulticast(
+          nudgeFcmMessage(batch.map((t) => t.snap.get('token')), nudgeId),
+        );
         response.responses.forEach((result, idx) => {
           if (result.success) {
-            newlySent.push(batch[idx]);
+            newlySent.push(batch[idx].fid);
             return;
           }
           const kind = classifyFcmError(result.error);
-          if (kind === 'invalid_target') invalidInstallIds.push(batch[idx]);
+          if (kind === 'invalid_target') invalidInstallIds.push(batch[idx].fid);
           else if (kind === 'payload') payloadInvalid = true;
           else transientCount += 1;
           if (!firstErrorCode) firstErrorCode = normalizeFcmCode(result.error);

@@ -1,6 +1,7 @@
 package com.example.myexodus.ui.partner
 
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
+import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainEvent
 import com.example.myexodus.accountability.state.ChainHead
@@ -95,7 +96,7 @@ class PartnerDashboardSourceTest {
         rows: List<ChainEvent> = emptyList(),
         rowsByPair: Map<String, List<ChainEvent>> = emptyMap(),
         rowsThrow: Boolean = false,
-        decode: (ByteArray) -> String? = { null },
+        decode: (ByteArray) -> EventPayload? = { null },
         decoderForThrows: Boolean = false,
         journal: List<UnpairState> = emptyList(),
         approvalRows: List<ApprovalRequest> = emptyList(),
@@ -129,7 +130,7 @@ class PartnerDashboardSourceTest {
             },
             decoderFor = {
                 if (decoderForThrows) throw IllegalStateException("no key material")
-                val decodeRow: (ByteArray) -> String? = { envelope -> decode(envelope) }
+                val decodeRow: (ByteArray) -> EventPayload? = { envelope -> decode(envelope) }
                 decodeRow
             },
             unpairRows = { journal },
@@ -225,7 +226,7 @@ class PartnerDashboardSourceTest {
         val paired = source(
             enrollments = listOf(enrollment(watermark = now - 60_000L)),
             rows = listOf(row(now - 3_600_000L)),
-            decode = { "blocked:com.x" },
+            decode = { EventPayload(type = EventPayload.TYPE_ACTIVITY, text = "blocked:com.x") },
         ).source.load(now) as PartnerDashboardUi.Paired
 
         assertEquals(PartnerChainStatus.HEALTHY, paired.chainStatus)
@@ -345,7 +346,7 @@ class PartnerDashboardSourceTest {
             rowsByPair = mapOf("pair-old" to listOf(row(now - 3_600_000L, pairId = "pair-old"))),
             approvalRows = listOf(approval(requestEventId = "req-old", pairId = "pair-old")),
             rejectionsByPair = mapOf("pair-old" to 1),
-            decode = { "blocked:com.x" },
+            decode = { EventPayload(type = EventPayload.TYPE_ACTIVITY, text = "blocked:com.x") },
         )
 
         val picked = recording.source.load(now, selectedPairId = "pair-old") as PartnerDashboardUi.Paired
@@ -465,5 +466,32 @@ class PartnerDashboardSourceTest {
         assertEquals(listOf("pair-old"), recording.approvalPairIds)
         assertTrue(paired.approvals.isEmpty())
         assertFalse(paired.rateLimitedRecently)
+    }
+
+    // --- Reach-out dialog naming (owner mandate 2026-10-04, Q4) ------------------------------
+
+    @Test
+    fun targetPartnerName_followsTheSameTargetRuleAsTheSend() = runTest {
+        val recording = source(
+            enrollments = listOf(
+                enrollment(pairId = "pair-old", createdAt = 100L, label = "Alex"),
+                enrollment(pairId = "pair-new", createdAt = 200L, label = "Sam"),
+            ),
+        )
+
+        assertEquals("no pick -> the newest pairing, exactly like the sender", "Sam", recording.source.targetPartnerName())
+        assertEquals("a live pick wins", "Alex", recording.source.targetPartnerName("pair-old"))
+        assertEquals("a stale pick degrades to newest, never to nothing", "Sam", recording.source.targetPartnerName("pair-gone"))
+    }
+
+    @Test
+    fun targetPartnerName_degradesLikeTheScreen_neverThrows() = runTest {
+        assertEquals(null, source(enrollments = emptyList()).source.targetPartnerName())
+        assertEquals(null, source(enrollmentsThrow = true).source.targetPartnerName())
+        assertEquals(
+            "a label-less partner falls back to the key fragment, not a fabricated name",
+            "partner-key",
+            source(enrollments = listOf(enrollment(label = null))).source.targetPartnerName(),
+        )
     }
 }

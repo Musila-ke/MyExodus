@@ -1,5 +1,6 @@
 package com.example.myexodus.ui.partner
 
+import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.recovery.RecoveryMirror
@@ -81,6 +82,21 @@ sealed interface PartnerAlert {
         val outcome: String,
         override val atEpochMillis: Long,
     ) : PartnerAlert
+
+    /** Wire v2 (ADR #134): a shared relapse — the streak's own name ([habitLabel], null on
+     *  pre-v2 bodies) and the ordinal day-count of the streak it ended ([endedDays], same). */
+    data class Relapse(
+        val habitLabel: String?,
+        val endedDays: Int?,
+        override val atEpochMillis: Long,
+    ) : PartnerAlert
+
+    /** Wire v2: a milestone the partner reached — the day and the streak's name. */
+    data class Milestone(
+        val habitLabel: String?,
+        val milestoneDay: Int?,
+        override val atEpochMillis: Long,
+    ) : PartnerAlert
 }
 
 /**
@@ -95,6 +111,24 @@ fun parseActivityText(text: String, atEpochMillis: Long): PartnerAlert? = when {
     else -> RecoveryMirror.parse(text)?.let { (technique, outcome) ->
         PartnerAlert.Recovery(technique, outcome, atEpochMillis)
     }
+}
+
+/**
+ * One decoded payload as a feed row. Wire-v2 kinds (ADR #134) render from their `stateAfter`
+ * — a relapse tells which streak ended and how long it ran, a milestone which day was reached
+ * — and are stamped with the sender's own occurrence time, so a backdated relapse reads as
+ * when it happened, not when the mailbox delivered it. Everything else keeps the shipped text
+ * parsing; payloads that are not feed material (daily streak snapshots — noise, by design —
+ * coaching count changes, sync plumbing) return null.
+ */
+fun alertOf(payload: EventPayload, atEpochMillis: Long): PartnerAlert? = when (payload.type) {
+    EventPayload.TYPE_RELAPSE_RECORDED -> payload.stateAfter?.let {
+        PartnerAlert.Relapse(it.habitLabel, it.endedDays, it.eventOccurredAtMs)
+    }
+    EventPayload.TYPE_MILESTONE_REACHED -> payload.stateAfter?.let {
+        PartnerAlert.Milestone(it.habitLabel, it.milestoneDay, it.eventOccurredAtMs)
+    }
+    else -> parseActivityText(payload.text, atEpochMillis)
 }
 
 /**
@@ -120,14 +154,18 @@ data class PartnerActivityUi(
     val pinnedMessageAtEpochMillis: Long? = null,
 )
 
-/** Dashboard summary over the decoded received events, newest first. */
+/** Dashboard summary over the decoded received events. */
 data class AlertSummary(val todayCount: Int, val weekCount: Int, val recent: List<PartnerAlert>)
 
-fun summarizeAlerts(parsedNewestFirst: List<PartnerAlert>, startOfTodayMillis: Long): AlertSummary =
+/** [parsed] arrives in mailbox order; wire-v2 rows carry the sender's own occurrence time,
+ *  which may differ from arrival (a backdated relapse). Everything time-based here — the
+ *  today count and which rows survive [RECENT_LIMIT] — reads that timestamp, so the feed
+ *  reports when things *happened*, never merely when the mail landed. */
+fun summarizeAlerts(parsed: List<PartnerAlert>, startOfTodayMillis: Long): AlertSummary =
     AlertSummary(
-        todayCount = parsedNewestFirst.count { it.atEpochMillis >= startOfTodayMillis },
-        weekCount = parsedNewestFirst.size,
-        recent = parsedNewestFirst.take(RECENT_LIMIT),
+        todayCount = parsed.count { it.atEpochMillis >= startOfTodayMillis },
+        weekCount = parsed.size,
+        recent = parsed.sortedByDescending { it.atEpochMillis }.take(RECENT_LIMIT),
     )
 
 /** Start of the local day containing [nowMillis] — the "today" boundary of the summary. */

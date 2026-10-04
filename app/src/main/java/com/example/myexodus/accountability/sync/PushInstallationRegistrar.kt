@@ -19,7 +19,7 @@ import kotlinx.coroutines.tasks.await
  * AD-18b's per-installation contract and is not a dispatchable FID).
  *
  * The registration also carries `pushEligible` (§8.12): app notifications enabled AND the
- * `partner_nudges` channel present with importance != NONE. It is the latest known device
+ * `partner_nudges_v3` channel present with importance != NONE. It is the latest known device
  * capability snapshot that reduces unnecessary sends — never authoritative truth.
  *
  * Idempotent: every call rewrites the row (full replace, so a server-written `stale: true`
@@ -104,7 +104,7 @@ class PushInstallationRegistrar(
         }.getOrNull()
 
         /**
-         * §8.12 pushEligible: app notifications enabled AND the `partner_nudges` channel
+         * §8.12 pushEligible: app notifications enabled AND the `partner_nudges_v3` channel
          * exists AND its importance is not NONE. The channel is created in the SOS
          * notification step; before that the formula reports false, which is accurate —
          * nothing could render a nudge yet. Re-evaluated on every registration refresh.

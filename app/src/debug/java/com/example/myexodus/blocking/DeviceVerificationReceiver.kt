@@ -67,7 +67,11 @@ import kotlinx.coroutines.launch
  * tables' counts and per-pair rows, and the legacy `event_sequence` marker census), and
  * `-a push-read` (§18's FCM matrix leg: the FCM registration token + the AD-18a installation id,
  * so a host-side `messages:send` can target this install; the delivery proof is the app's own
- * `MyExodusPush: wake for <messageId>` line in whatever state the device is in).
+ * `MyExodusPush: wake for <messageId>` line in whatever state the device is in), and
+ * `-a rules-expire --es pkg <pkg> [--es backMs <n>] [--es read 1]` (#18's device leg: backdate
+ * one rule's `block_expires_at` past now so the app's own sweep — not this seam — flips its
+ * toggle; the state the Rules screen then shows is entirely app-produced. `--es read 1` skips
+ * the plant and only logs enabled/expiresAt — the non-destructive read for the resume leg).
  */
 class DeviceVerificationReceiver : BroadcastReceiver() {
 
@@ -96,6 +100,12 @@ class DeviceVerificationReceiver : BroadcastReceiver() {
                     ACTION_PROTECTION_REENABLE -> protectionReenable(context)
                     ACTION_MIRROR_READ -> mirrorRead(context)
                     ACTION_PUSH_READ -> pushRead(context)
+                    ACTION_RULES_EXPIRE -> rulesExpire(
+                        context,
+                        pkg,
+                        intent.getStringExtra("backMs")?.toLongOrNull(),
+                        readOnly = intent.getStringExtra("read") == "1",
+                    )
                     else -> Log.w(TAG, "unknown action $action")
                 }
             } catch (t: Throwable) {
@@ -733,6 +743,39 @@ class DeviceVerificationReceiver : BroadcastReceiver() {
         }
     }
 
+    /**
+     * #18's plant (owner ruling 2026-10-04): backdate one rule's expiry so it reads
+     * lapsed-but-enabled — the exact state the Rules screen's own sweep exists to resolve. Raw
+     * UPDATE on purpose: no policy bump, and the flip under test is the app's, not this seam's.
+     */
+    private suspend fun rulesExpire(context: Context, pkg: String?, backMs: Long?, readOnly: Boolean) {
+        if (pkg == null) {
+            Log.e(TAG, "rules-expire: --es pkg required")
+            return
+        }
+        val store = entryPoint(context).appRulesStoreFactory().open() ?: error("store unavailable")
+        val lapsed = System.currentTimeMillis() - (backMs ?: 3_600_000L)
+        store.useWriterConnection { tx ->
+            if (!readOnly) {
+                tx.usePrepared("UPDATE restriction_rules SET block_expires_at = ? WHERE blocked_package = ?") { st ->
+                    st.bindLong(1, lapsed)
+                    st.bindText(2, pkg)
+                    st.step()
+                }
+            }
+            tx.usePrepared(
+                "SELECT is_enabled, block_expires_at FROM restriction_rules WHERE blocked_package = ?",
+            ) { st ->
+                st.bindText(1, pkg)
+                if (st.step()) {
+                    Log.i(TAG, "rules-expire pkg=$pkg enabled=${st.getLong(0)} expiresAt=${st.getLong(1)}")
+                } else {
+                    Log.e(TAG, "rules-expire pkg=$pkg ABSENT")
+                }
+            }
+        }
+    }
+
     private suspend fun benchRun(n: Int, block: suspend (Int) -> Unit): LongArray {
         val out = LongArray(n)
         for (i in 0 until n) {
@@ -771,6 +814,7 @@ class DeviceVerificationReceiver : BroadcastReceiver() {
         const val ACTION_PROTECTION_REENABLE = "protection-reenable"
         const val ACTION_MIRROR_READ = "mirror-read"
         const val ACTION_PUSH_READ = "push-read"
+        const val ACTION_RULES_EXPIRE = "rules-expire"
         const val SEED_SOURCE = "device-verification-seed"
         const val INTERVAL_LOG_CAP = 120
         const val AGE_EVIDENCE_MAX_ATTEMPTS = 10

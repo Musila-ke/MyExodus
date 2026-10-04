@@ -2,6 +2,7 @@ package com.example.myexodus.ui.partner
 
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.enrollment.targetEnrollment
+import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.sync.displayNameOf
 import com.example.myexodus.accountability.state.ChainEvent
@@ -24,7 +25,7 @@ class PartnerDashboardSource(
     private val enrollments: suspend () -> List<EnrollmentRecord>,
     private val head: suspend (pairId: String, senderKeyId: String) -> ChainHead?,
     private val receivedSince: suspend (pairId: String, sinceEpochMillis: Long) -> List<ChainEvent>,
-    private val decoderFor: (EnrollmentRecord) -> (envelope: ByteArray) -> String?,
+    private val decoderFor: (EnrollmentRecord) -> (envelope: ByteArray) -> EventPayload?,
     /** Step 13: recent approval rows (both roles, newest first) — local Room read only. */
     private val approvals: suspend (pairId: String) -> List<ApprovalRequest> = { emptyList() },
     /** Step 14: the unpair journal — once the enrollment is gone, this survives the wipe and
@@ -96,7 +97,7 @@ class PartnerDashboardSource(
         val alerts = rows.mapNotNull { row ->
             runCatching { decode(row.envelope) }
                 .getOrNull()
-                ?.let { parseActivityText(it, row.createdAtEpochMillis) }
+                ?.let { alertOf(it, row.createdAtEpochMillis) }
         }
         val chainHead = head(enrollment.pairId, enrollment.partnerSigningKeyId)
         val approvalRows = runCatching { approvals(enrollment.pairId) }.getOrElse { emptyList() }
@@ -150,6 +151,15 @@ class PartnerDashboardSource(
     suspend fun partnerDisplayNames(): Map<String, String> =
         runCatching { enrollments() }.getOrNull().orEmpty()
             .associate { it.pairId to displayNameOf(it) }
+
+    /**
+     * Owner mandate 2026-10-04 (Q4): who the Reach-out confirmation will actually go to —
+     * the same §19.5 target rule the sender resolves at tap time, so the dialog can name the
+     * partner. Null = no live pair (the dialog then never opens — its FAB gate needs one).
+     */
+    suspend fun targetPartnerName(selectedPairId: String? = null): String? =
+        runCatching { enrollments() }.getOrNull().orEmpty()
+            .targetEnrollment(selectedPairId)?.let { displayNameOf(it) }
 
     private companion object {
         const val WEEK_MILLIS = 7 * 24 * 60 * 60 * 1000L

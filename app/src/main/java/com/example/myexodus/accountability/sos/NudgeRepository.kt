@@ -42,14 +42,15 @@ class NudgeRepository(
         data object NotSentOffline : SendResult
     }
 
-    /** A fresh attempt: [nudgeId] is minted by the ViewModel (§6.1 step 2, UUIDv4). */
-    suspend fun sendNew(nudgeId: String): SendResult {
+    /** A fresh attempt: [nudgeId] is minted by the ViewModel (§6.1 step 2, UUIDv4). [message]
+     *  is the owner-written optional text (FAB dialog); null/blank seals the v1 constant. */
+    suspend fun sendNew(nudgeId: String, message: String? = null): SendResult {
         if (!validatedNetwork()) return SendResult.NotSentOffline
         val enrollment = runCatching { resolveTargetPair() }.getOrNull()
             ?: return SendResult.Unavailable
         val uid = runCatching { ensureUid() }.getOrNull() ?: return SendResult.Unavailable
         val cek = runCatching { deriveCek(enrollment) }.getOrNull() ?: return SendResult.Unavailable
-        val envelope = NudgeEnvelope.seal(cipher, cek, enrollment.pairId, nudgeId, uid)
+        val envelope = NudgeEnvelope.seal(cipher, cek, enrollment.pairId, nudgeId, uid, message)
         return call(PendingNudge(enrollment.pairId, nudgeId, envelope))
     }
 

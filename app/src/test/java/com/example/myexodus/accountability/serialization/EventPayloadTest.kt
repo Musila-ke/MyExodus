@@ -151,6 +151,87 @@ class EventPayloadTest {
         }
     }
 
+    /** Wire v2 (ADR #134): the streak's name and the relapse/milestone day counts survive the
+     *  wire cycle — this is what lets the partner's feed name the streak and count its days. */
+    @Test
+    fun activityStateAfter_v2Fields_roundTrip() {
+        val relapse = ActivityStateAfter(
+            daysFree = 1,
+            relapseCount = 4,
+            milestonesReached = emptyList(),
+            coachingProgress = 0,
+            eventOccurredAtMs = 1_787_000_000_000L,
+            habitLabel = "Instagram",
+            endedDays = 12,
+        )
+        val milestone = relapse.copy(habitLabel = "Instagram", endedDays = null, milestoneDay = 30)
+        listOf(relapse, milestone).forEach { state ->
+            val decoded = decodePayload(
+                encodePayload(
+                    EventPayload(
+                        type = EventPayload.TYPE_RELAPSE_RECORDED,
+                        text = "",
+                        protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
+                        schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,
+                        stateAfter = state,
+                    ),
+                ),
+            )
+            assertEquals(state, decoded.stateAfter)
+        }
+    }
+
+    /** The §8.5 byte-stability discipline extended to the state map: a body without v2 fields
+     *  encodes exactly the v1 key set — no `hl`/`ed`/`md` materializes as null. */
+    @Test
+    fun activityStateAfter_withoutV2Fields_encodesTheV1KeySet() {
+        val bytes = encodePayload(
+            EventPayload(
+                type = EventPayload.TYPE_STREAK_UPDATED,
+                text = "",
+                protocolVersion = 1,
+                schemaVersion = 1,
+                stateAfter = ActivityStateAfter(5, 1, listOf(7), 2, 42L),
+            ),
+        )
+        val state = CanonicalCbor.decodeMap(bytes)["st"]
+        assertEquals(
+            setOf("df", "rc", "ms", "cp", "eo"),
+            state.getKeys().map { it.AsString() }.toSet(),
+        )
+    }
+
+    /** A malformed v2 field declines itself to null without rejecting the counts it annotates
+     *  (§8.5: the body stays Valid) — the receiver then degrades to generic unnamed copy. */
+    @Test
+    fun decode_badV2Fields_declineThemselves_notTheCounts() {
+        val good = encodePayload(
+            EventPayload(
+                type = EventPayload.TYPE_RELAPSE_RECORDED,
+                text = "",
+                protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
+                schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,
+                stateAfter = ActivityStateAfter(
+                    1, 4, emptyList(), 0, 42L,
+                    habitLabel = "Instagram", endedDays = 12, milestoneDay = 7,
+                ),
+            ),
+        )
+        val obj = CanonicalCbor.decodeMap(good)
+        val state = obj["st"]
+        state.set("hl", CanonicalCbor.text(" "))
+        state.set("ed", CanonicalCbor.int(-1L))
+        state.set("md", CanonicalCbor.int(0L))
+        val decoded = decodePayload(CanonicalCbor.encode(obj))
+
+        val after = decoded.stateAfter!!
+        assertEquals(null, after.habitLabel)
+        assertEquals(null, after.endedDays)
+        assertEquals(null, after.milestoneDay)
+        assertEquals(4, after.relapseCount)
+        assertTrue(classifyActivity(decoded) is ActivityEvent.Valid)
+    }
+
     @Test
     fun activityStateAfter_emptyMilestones_roundTrip() {
         val state = ActivityStateAfter(
@@ -233,7 +314,7 @@ class EventPayloadTest {
         obj["st"] = CanonicalCbor.text("not-a-map")
         val decoded = decodePayload(CanonicalCbor.encode(obj))
         assertEquals(null, decoded.stateAfter)
-        assertEquals(EventPayload.ACTIVITY_SCHEMA_VERSION, decoded.schemaVersion)
+        assertEquals("the declared version decodes intact; only the body was garbage", 1, decoded.schemaVersion)
         assertTrue(classifyActivity(decoded) is ActivityEvent.Malformed)
     }
 

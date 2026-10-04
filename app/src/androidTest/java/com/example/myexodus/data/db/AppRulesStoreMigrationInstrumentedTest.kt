@@ -624,6 +624,115 @@ class AppRulesStoreMigrationInstrumentedTest {
         }
     }
 
+    /**
+     * The v16 consent matrix (ADR #135) on the real SQLCipher stack: Room validates the whole
+     * migrated file against 16.json (the strongest drift check for the hand-written recreate),
+     * the legacy consent columns are physically gone, the pair tables exist empty ("nothing
+     * until you choose"), pre-existing data survives, and the pre-v16 journal row reads back
+     * with a NULL consent key (it will match no pair's slice).
+     */
+    @Test
+    fun migrate15To16_dropsLegacyConsentColumns_andCreatesThePairMatrix() = runTest {
+        val v15 = helper.createDatabase(15)
+        seedProfileAndHabit(v15)
+        seedCoachingStep(v15)
+        exec(v15, "UPDATE habit_progress SET share_relapses = 0, share_milestones = 1 WHERE progress_id = 'h-1'")
+        exec(v15, "UPDATE user_profile SET share_check_ins = 0, share_recovery = 1 WHERE user_id = 'profile-1'")
+        exec(
+            v15,
+            "INSERT INTO partner_activity_outbox (event_id, kind, target_pair_id, text, " +
+                "occurred_at_ms, days_free, relapse_count, milestones_reached, habit_label, " +
+                "ended_days, milestone_day, coaching_progress, protocol_version, schema_version, " +
+                "created_at_ms) VALUES ('evt-legacy', 'streak_updated', NULL, '', 100, 4, 1, " +
+                "'7,30', 'Instagram', NULL, NULL, 2, 1, 2, 100)",
+        )
+
+        val v16 = helper.runMigrationsAndValidate(16, listOf(AppRulesStoreFactory.MIGRATION_15_16))
+
+        listOf("share_access_attempts", "share_relapses", "share_milestones", "share_streak").forEach { col ->
+            assertTrue(
+                "the legacy per-habit column $col must be gone",
+                runCatching {
+                    v16.prepare("SELECT $col FROM habit_progress LIMIT 1").use { it.step() }
+                }.isFailure,
+            )
+        }
+        listOf("share_check_ins", "share_recovery").forEach { col ->
+            assertTrue(
+                "the legacy per-profile column $col must be gone",
+                runCatching {
+                    v16.prepare("SELECT $col FROM user_profile LIMIT 1").use { it.step() }
+                }.isFailure,
+            )
+        }
+        assertEquals("the matrix starts empty — nothing until you choose", 0L, count(v16, "pair_streak_sharing"))
+        assertEquals(0L, count(v16, "pair_profile_sharing"))
+        assertEquals("the pre-v16 journal row survives", 1L, count(v16, "partner_activity_outbox"))
+        v16.prepare(
+            "SELECT habit_progress_id FROM partner_activity_outbox WHERE event_id = 'evt-legacy'",
+        ).use { stmt ->
+            assertTrue(stmt.step())
+            assertTrue("a pre-v16 row carries no consent key", stmt.isNull(0))
+        }
+        assertPreExistingDataSurvives(v16, "after the v16 upgrade")
+    }
+
+    /**
+     * The v16 rollback: a v15 build reinstalled over a briefly-v16 database must open. Each
+     * legacy flag is reconstructed as "any pair had it on" before the pair tables are dropped —
+     * exercised with two pairs whose flags disagree, so the aggregation (not a single row) is
+     * what's pinned. `share_access_attempts` was never writable by any UI → 0.
+     */
+    @Test
+    fun migrate16To15_reconstructsLegacyFlags_andDropsOnlyThePairTables() = runTest {
+        val v15 = helper.createDatabase(15)
+        seedProfileAndHabit(v15)
+        seedCoachingStep(v15)
+
+        val v16 = helper.runMigrationsAndValidate(16, listOf(AppRulesStoreFactory.MIGRATION_15_16))
+        exec(
+            v16,
+            "INSERT INTO pair_streak_sharing (pair_id, habit_progress_id, share_streak, " +
+                "share_relapses, share_milestones, streak_enabled_since_ms, " +
+                "relapse_enabled_since_ms, milestone_enabled_since_ms) VALUES " +
+                "('pair-1', 'h-1', 0, 0, 0, 0, 0, 0), ('pair-2', 'h-1', 1, 1, 0, 150, 160, 0)",
+        )
+        exec(
+            v16,
+            "INSERT INTO pair_profile_sharing (pair_id, share_checkins, share_recovery, " +
+                "checkins_enabled_since_ms, recovery_enabled_since_ms) VALUES ('pair-1', 0, 1, 0, 170)",
+        )
+
+        val down = helper.runMigrationsAndValidate(15, listOf(AppRulesStoreFactory.MIGRATION_16_15))
+
+        assertTrue(
+            "the downgrade must drop pair_streak_sharing",
+            runCatching { count(down, "pair_streak_sharing") }.isFailure,
+        )
+        assertTrue(
+            "the downgrade must drop pair_profile_sharing",
+            runCatching { count(down, "pair_profile_sharing") }.isFailure,
+        )
+        down.prepare(
+            "SELECT share_relapses, share_milestones, share_streak, share_access_attempts " +
+                "FROM habit_progress WHERE progress_id = 'h-1'",
+        ).use { stmt ->
+            assertTrue(stmt.step())
+            assertEquals("pair-2 had relapses on", 1L, stmt.getLong(0))
+            assertEquals("no pair had milestones on", 0L, stmt.getLong(1))
+            assertEquals("pair-2 had the streak on", 1L, stmt.getLong(2))
+            assertEquals("access attempts were never writable", 0L, stmt.getLong(3))
+        }
+        down.prepare(
+            "SELECT share_check_ins, share_recovery FROM user_profile WHERE user_id = 'profile-1'",
+        ).use { stmt ->
+            assertTrue(stmt.step())
+            assertEquals("pair-1 had check-ins off", 0L, stmt.getLong(0))
+            assertEquals("pair-1 had recovery on", 1L, stmt.getLong(1))
+        }
+        assertPreExistingDataSurvives(down, "after the v16 downgrade")
+    }
+
     @Test
     fun migrate10To9_dropsOnlyTheUsageTable_leavingAValidV9Database() = runTest {
         val v10 = helper.createDatabase(10)

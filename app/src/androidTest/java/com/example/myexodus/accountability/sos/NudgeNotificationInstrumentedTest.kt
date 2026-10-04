@@ -93,7 +93,9 @@ class NudgeNotificationInstrumentedTest {
         val channel = manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_NUDGES)
         assertNotNull("the channel must exist before the first nudge", channel)
         assertEquals(context.getString(R.string.partner_channel_nudges_name), channel!!.name)
-        assertEquals(NotificationManager.IMPORTANCE_DEFAULT, channel.importance)
+        // Owner ruling 2026-10-04 (plan deviation, see PartnerNotifications.ensurePartnerNudgesChannel):
+        // a reach-out must surface as a heads-up banner — HIGH, not the plan's DEFAULT.
+        assertEquals(NotificationManager.IMPORTANCE_HIGH, channel.importance)
         // The channel-level lockscreenVisibility we REQUEST (VISIBILITY_PRIVATE, PartnerNotifications)
         // is pinned by the Robolectric test (PartnerNotificationsTest) — on-device the platform may
         // echo VISIBILITY_NO_OVERRIDE for every channel (X6532/XOS: -1000 for all, incl. WhatsApp's),

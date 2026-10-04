@@ -33,7 +33,8 @@ class MailboxMessageHandlerTest {
         messageId: String = "m1",
         senderId: String? = "partner-sender",
         payload: String? = Base64.getEncoder().encodeToString(byteArrayOf(9, 8, 7)),
-    ) = MailboxDocument(messageId, senderId, payload, 1_700_000_000_000L)
+        pairId: String? = "pair-1",
+    ) = MailboxDocument(messageId, senderId, payload, 1_700_000_000_000L, pairId)
 
     private class Fake {
         var alreadyProcessed = false
@@ -50,7 +51,7 @@ class MailboxMessageHandlerTest {
         val appended = mutableListOf<Triple<String, String, Long>>()
         val acks = mutableListOf<Pair<String, String>>()
         val notified = mutableListOf<Pair<String, String>>()
-        val notifyBodies = mutableListOf<String?>()
+        val notifyPayloads = mutableListOf<EventPayload>()
         val repairResponses = mutableListOf<Triple<String, Long, ByteArray>>()
         val deletionRequests = mutableListOf<Triple<String, String, Long?>>()
         var tamperChecks = 0
@@ -70,10 +71,12 @@ class MailboxMessageHandlerTest {
                 deletionRequests += Triple(pairId, messageId, atEpochMillis)
                 deletionShredded
             },
-            notify = { pairId, payloadType, messageBody ->
+            // The decoded payload rides through untouched — copy selection (titles, bodies,
+            // blank-text degradation) is PartnerNotifications' concern, pinned there.
+            notify = { pairId, payload ->
                 notifyError?.let { throw it }
-                notified += pairId to payloadType
-                notifyBodies += messageBody
+                notified += pairId to payload.type
+                notifyPayloads += payload
             },
             respondToRequest = { pairId, sequence, hash -> repairResponses += Triple(pairId, sequence, hash) },
             flagTamperIfRepairing = { tamperChecks++; tamperRepairing },
@@ -135,6 +138,23 @@ class MailboxMessageHandlerTest {
         assertEquals(emptyList<Pair<String, String>>(), fake.notified)
     }
 
+    /** #18(c): one mailbox backs every pair — another pair's document must be skipped before
+     *  verification, or it logs SIGNATURE_INVALID under every enrolled pair and, mid-repair,
+     *  counts as a false TAMPER_SUSPECTED. Null pairId is foreign too (hand-written docs). */
+    @Test
+    fun foreignPairDocument_isSkipped_beforeVerification() {
+        val foreign = Fake()
+        val result = on(foreign, doc(pairId = "other-pair"))
+        assertEquals(MailboxMessageHandler.Kind.MISSING, result.kind)
+        assertEquals(emptyList<Triple<String, String, Long>>(), foreign.appended)
+        assertEquals(emptyList<Pair<String, String>>(), foreign.acks)
+        assertEquals("a foreign document must not reach verification", 0, foreign.tamperChecks)
+
+        val nullPair = Fake()
+        assertEquals(MailboxMessageHandler.Kind.MISSING, on(nullPair, doc(pairId = null)).kind)
+        assertEquals(0, nullPair.tamperChecks)
+    }
+
     @Test
     fun ownSenderId_isSkipped_neverTouchesTheChain() {
         val fake = Fake()
@@ -189,10 +209,14 @@ class MailboxMessageHandlerTest {
         assertEquals(listOf(Triple("pair-1", "m1", 42L)), fake.appended)
         assertEquals(listOf("uid-me" to "m1"), fake.acks)
         assertEquals(listOf("pair-1" to EventPayload.TYPE_ACTIVITY), fake.notified)
-        assertEquals("non-message kinds carry no body", listOf<String?>(null), fake.notifyBodies)
+        assertEquals(
+            "the handler passes the decoded payload through — copy selection lives in PartnerNotifications",
+            listOf("blocked:x"),
+            fake.notifyPayloads.map { it.text },
+        )
     }
 
-    /** #11: only a motivational message's text is tray copy; it rides the notify hook. */
+    /** #11: the motivational message's text rides the notify hook as part of its payload. */
     @Test
     fun motivationalMessage_carriesItsBodyIntoNotify() {
         val fake = Fake().apply {
@@ -205,22 +229,7 @@ class MailboxMessageHandlerTest {
         on(fake, doc())
 
         assertEquals(listOf("pair-1" to EventPayload.TYPE_MOTIVATIONAL_MESSAGE), fake.notified)
-        assertEquals(listOf<String?>("Thinking of you"), fake.notifyBodies)
-    }
-
-    /** A blank body (never our composer's output) must not render as an empty quotation. */
-    @Test
-    fun blankMotivationalBody_staysNullInNotify() {
-        val fake = Fake().apply {
-            outcome = MailboxEventProcessor.EnvelopeResult.Valid(
-                Fake.envelope(),
-                EventPayload(type = EventPayload.TYPE_MOTIVATIONAL_MESSAGE, text = "   "),
-            )
-        }
-
-        on(fake, doc())
-
-        assertEquals(listOf<String?>(null), fake.notifyBodies)
+        assertEquals(listOf("Thinking of you"), fake.notifyPayloads.map { it.text })
     }
 
     @Test

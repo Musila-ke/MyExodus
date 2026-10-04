@@ -1,0 +1,1453 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 16,
+    "identityHash": "31a135262fa559e6ba0ae340e53be3d8",
+    "entities": [
+      {
+        "tableName": "user_profile",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`user_id` TEXT NOT NULL, `name` TEXT NOT NULL, `email` TEXT NOT NULL, `phone_number` TEXT, `date_of_birth` INTEGER NOT NULL, `has_accessibility_permission` INTEGER NOT NULL, `has_usage_stats_permission` INTEGER NOT NULL, `has_vpn_permission` INTEGER NOT NULL, `has_notification_permission` INTEGER NOT NULL, `has_device_admin_permission` INTEGER NOT NULL, `device_public_key` TEXT, `recovery_escrow_key` TEXT, `is_active` INTEGER NOT NULL, PRIMARY KEY(`user_id`))",
+        "fields": [
+          {
+            "fieldPath": "userId",
+            "columnName": "user_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "email",
+            "columnName": "email",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "phoneNumber",
+            "columnName": "phone_number",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "dateOfBirth",
+            "columnName": "date_of_birth",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hasAccessibilityPermission",
+            "columnName": "has_accessibility_permission",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hasUsageStatsPermission",
+            "columnName": "has_usage_stats_permission",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hasVpnPermission",
+            "columnName": "has_vpn_permission",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hasNotificationPermission",
+            "columnName": "has_notification_permission",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hasDeviceAdminPermission",
+            "columnName": "has_device_admin_permission",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "devicePublicKey",
+            "columnName": "device_public_key",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "recoveryEscrowKey",
+            "columnName": "recovery_escrow_key",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isActive",
+            "columnName": "is_active",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "user_id"
+          ]
+        }
+      },
+      {
+        "tableName": "restriction_rules",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`rule_id` TEXT NOT NULL, `profile_id` TEXT NOT NULL, `blocked_package` TEXT NOT NULL, `target_type` TEXT NOT NULL, `is_always_on` INTEGER NOT NULL, `daily_limit_ms` INTEGER NOT NULL, `time_range_start` INTEGER, `time_range_end` INTEGER, `active_days_of_week` TEXT NOT NULL, `timezone` TEXT NOT NULL DEFAULT 'UTC', `block_expires_at` INTEGER NOT NULL, `severity_level` TEXT NOT NULL, `is_enabled` INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(`rule_id`), FOREIGN KEY(`profile_id`) REFERENCES `user_profile`(`user_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "ruleId",
+            "columnName": "rule_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileId",
+            "columnName": "profile_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "blockedPackage",
+            "columnName": "blocked_package",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetType",
+            "columnName": "target_type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isAlwaysOn",
+            "columnName": "is_always_on",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dailyLimitMs",
+            "columnName": "daily_limit_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timeRangeStart",
+            "columnName": "time_range_start",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "timeRangeEnd",
+            "columnName": "time_range_end",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "activeDaysOfWeek",
+            "columnName": "active_days_of_week",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezone",
+            "columnName": "timezone",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'UTC'"
+          },
+          {
+            "fieldPath": "blockExpiresAt",
+            "columnName": "block_expires_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "severityLevel",
+            "columnName": "severity_level",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isEnabled",
+            "columnName": "is_enabled",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "1"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "rule_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_restriction_rules_profile_id_blocked_package",
+            "unique": true,
+            "columnNames": [
+              "profile_id",
+              "blocked_package"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_restriction_rules_profile_id_blocked_package` ON `${TABLE_NAME}` (`profile_id`, `blocked_package`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "user_profile",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "profile_id"
+            ],
+            "referencedColumns": [
+              "user_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "daily_usage_tracker",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`tracker_id` TEXT NOT NULL, `profile_id` TEXT NOT NULL, `package_name` TEXT NOT NULL, `local_date_anchor` TEXT NOT NULL, `timezone_id_at_anchor` TEXT NOT NULL, `ms_used_today` INTEGER NOT NULL, `warning1_state` TEXT NOT NULL, `warning2_state` TEXT NOT NULL, `blocked_today` INTEGER NOT NULL, PRIMARY KEY(`tracker_id`), FOREIGN KEY(`profile_id`) REFERENCES `user_profile`(`user_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "trackerId",
+            "columnName": "tracker_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileId",
+            "columnName": "profile_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "packageName",
+            "columnName": "package_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "localDateAnchor",
+            "columnName": "local_date_anchor",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timezoneIdAtAnchor",
+            "columnName": "timezone_id_at_anchor",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "msUsedToday",
+            "columnName": "ms_used_today",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "warning1State",
+            "columnName": "warning1_state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "warning2State",
+            "columnName": "warning2_state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "blockedToday",
+            "columnName": "blocked_today",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "tracker_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_daily_usage_tracker_profile_id_package_name_local_date_anchor",
+            "unique": true,
+            "columnNames": [
+              "profile_id",
+              "package_name",
+              "local_date_anchor"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_daily_usage_tracker_profile_id_package_name_local_date_anchor` ON `${TABLE_NAME}` (`profile_id`, `package_name`, `local_date_anchor`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "user_profile",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "profile_id"
+            ],
+            "referencedColumns": [
+              "user_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "habit_progress",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`progress_id` TEXT NOT NULL, `profile_id` TEXT NOT NULL, `target_identifier` TEXT NOT NULL, `current_clean_days_streak` INTEGER NOT NULL, `total_relapses` INTEGER NOT NULL, `access_attempts_count` INTEGER NOT NULL, `habit_duration_years` INTEGER NOT NULL, `onboarding_severity_level` TEXT NOT NULL, `last_relapse_timestamp` INTEGER, `assigned_partnership_id` TEXT, `all_time_max_streak_elapsed_ms` INTEGER NOT NULL DEFAULT 0, `is_selected` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`progress_id`), FOREIGN KEY(`profile_id`) REFERENCES `user_profile`(`user_id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "progressId",
+            "columnName": "progress_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileId",
+            "columnName": "profile_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetIdentifier",
+            "columnName": "target_identifier",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentCleanDaysStreak",
+            "columnName": "current_clean_days_streak",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalRelapses",
+            "columnName": "total_relapses",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accessAttemptsCount",
+            "columnName": "access_attempts_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "habitDurationYears",
+            "columnName": "habit_duration_years",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "onboardingSeverityLevel",
+            "columnName": "onboarding_severity_level",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastRelapseTimestamp",
+            "columnName": "last_relapse_timestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "assignedPartnershipId",
+            "columnName": "assigned_partnership_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "allTimeMaxStreakElapsedMs",
+            "columnName": "all_time_max_streak_elapsed_ms",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "isSelected",
+            "columnName": "is_selected",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "progress_id"
+          ]
+        },
+        "foreignKeys": [
+          {
+            "table": "user_profile",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "profile_id"
+            ],
+            "referencedColumns": [
+              "user_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "coaching_step",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`step_id` TEXT NOT NULL, `profile_id` TEXT NOT NULL, `step_order` INTEGER NOT NULL, `action_text` TEXT NOT NULL, `associated_trigger_window` TEXT NOT NULL, `kind` TEXT NOT NULL DEFAULT 'STEP', PRIMARY KEY(`step_id`), FOREIGN KEY(`profile_id`) REFERENCES `user_profile`(`user_id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "stepId",
+            "columnName": "step_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "profileId",
+            "columnName": "profile_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stepOrder",
+            "columnName": "step_order",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "actionText",
+            "columnName": "action_text",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "associatedTriggerWindow",
+            "columnName": "associated_trigger_window",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'STEP'"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "step_id"
+          ]
+        },
+        "foreignKeys": [
+          {
+            "table": "user_profile",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "profile_id"
+            ],
+            "referencedColumns": [
+              "user_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "policy_version",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `version` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "version",
+            "columnName": "version",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "recovery_policy",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `default_friction_seconds` INTEGER NOT NULL, `override_cooldown_seconds` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "defaultFrictionSeconds",
+            "columnName": "default_friction_seconds",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "overrideCooldownSeconds",
+            "columnName": "override_cooldown_seconds",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "recovery_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `rule_id` TEXT NOT NULL, `deadline_wall_clock_utc_millis` INTEGER NOT NULL, `deadline_elapsed_realtime_this_boot` INTEGER NOT NULL, `boot_session_id` INTEGER NOT NULL, `last_override_start_wall_utc_millis` INTEGER, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ruleId",
+            "columnName": "rule_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deadlineWallClockUtcMillis",
+            "columnName": "deadline_wall_clock_utc_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deadlineElapsedRealtimeThisBoot",
+            "columnName": "deadline_elapsed_realtime_this_boot",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bootSessionId",
+            "columnName": "boot_session_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastOverrideStartWallUtcMillis",
+            "columnName": "last_override_start_wall_utc_millis",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "attempt_log",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `occurred_at_epoch_millis` INTEGER NOT NULL, `rule_id` TEXT NOT NULL, `blocked_target` TEXT NOT NULL, `outcome` TEXT NOT NULL, `event_sequence` INTEGER)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "occurredAtEpochMillis",
+            "columnName": "occurred_at_epoch_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ruleId",
+            "columnName": "rule_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "blockedTarget",
+            "columnName": "blocked_target",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "outcome",
+            "columnName": "outcome",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventSequence",
+            "columnName": "event_sequence",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "recovery_streak",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`streak_id` TEXT NOT NULL, `habit_id` TEXT NOT NULL, `recovery_start_at` INTEGER NOT NULL, `relapsed_at` INTEGER, `relapse_boot_count` INTEGER, `relapse_elapsed_realtime_ms` INTEGER, `t_wall_last_observed` INTEGER NOT NULL, `r_boot_last_observed` INTEGER NOT NULL, `boot_count_last_observed` INTEGER NOT NULL, `current_streak_elapsed_ms` INTEGER NOT NULL, `row_version` INTEGER NOT NULL, PRIMARY KEY(`streak_id`), FOREIGN KEY(`habit_id`) REFERENCES `habit_progress`(`progress_id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "streakId",
+            "columnName": "streak_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "habitId",
+            "columnName": "habit_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recoveryStartAt",
+            "columnName": "recovery_start_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "relapsedAt",
+            "columnName": "relapsed_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "relapseBootCount",
+            "columnName": "relapse_boot_count",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "relapseElapsedRealtimeMs",
+            "columnName": "relapse_elapsed_realtime_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "tWallLastObserved",
+            "columnName": "t_wall_last_observed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rBootLastObserved",
+            "columnName": "r_boot_last_observed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bootCountLastObserved",
+            "columnName": "boot_count_last_observed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentStreakElapsedMs",
+            "columnName": "current_streak_elapsed_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rowVersion",
+            "columnName": "row_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "streak_id"
+          ]
+        },
+        "foreignKeys": [
+          {
+            "table": "habit_progress",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "habit_id"
+            ],
+            "referencedColumns": [
+              "progress_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "milestone_events",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`streak_id` TEXT NOT NULL, `milestone_day` INTEGER NOT NULL, `achieved_at` INTEGER, `notification_sent_at` INTEGER, `acknowledged_at` INTEGER, PRIMARY KEY(`streak_id`, `milestone_day`), FOREIGN KEY(`streak_id`) REFERENCES `recovery_streak`(`streak_id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "streakId",
+            "columnName": "streak_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "milestoneDay",
+            "columnName": "milestone_day",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "achievedAt",
+            "columnName": "achieved_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "notificationSentAt",
+            "columnName": "notification_sent_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "acknowledgedAt",
+            "columnName": "acknowledged_at",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "streak_id",
+            "milestone_day"
+          ]
+        },
+        "foreignKeys": [
+          {
+            "table": "recovery_streak",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "streak_id"
+            ],
+            "referencedColumns": [
+              "streak_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "recovery_session",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `technique` TEXT NOT NULL, `intensity_start` INTEGER, `intensity_end` INTEGER, `state` TEXT NOT NULL, `started_at_epoch_ms` INTEGER NOT NULL, `ended_at_epoch_ms` INTEGER, `duration_sec` INTEGER, `zone_id` TEXT NOT NULL, `entry` TEXT NOT NULL, `false_alarm` INTEGER NOT NULL, `event_sequence` INTEGER, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "technique",
+            "columnName": "technique",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "intensityStart",
+            "columnName": "intensity_start",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "intensityEnd",
+            "columnName": "intensity_end",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAtEpochMs",
+            "columnName": "started_at_epoch_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endedAtEpochMs",
+            "columnName": "ended_at_epoch_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "durationSec",
+            "columnName": "duration_sec",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "zoneId",
+            "columnName": "zone_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entry",
+            "columnName": "entry",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "falseAlarm",
+            "columnName": "false_alarm",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventSequence",
+            "columnName": "event_sequence",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_recovery_session_started_at_epoch_ms",
+            "unique": false,
+            "columnNames": [
+              "started_at_epoch_ms"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_recovery_session_started_at_epoch_ms` ON `${TABLE_NAME}` (`started_at_epoch_ms`)"
+          },
+          {
+            "name": "index_recovery_session_event_sequence",
+            "unique": false,
+            "columnNames": [
+              "event_sequence"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_recovery_session_event_sequence` ON `${TABLE_NAME}` (`event_sequence`)"
+          }
+        ]
+      },
+      {
+        "tableName": "risk_window",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `start_minute` INTEGER NOT NULL, `end_minute` INTEGER NOT NULL, `days_mask` INTEGER NOT NULL, `enabled` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startMinute",
+            "columnName": "start_minute",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endMinute",
+            "columnName": "end_minute",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "daysMask",
+            "columnName": "days_mask",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "enabled",
+            "columnName": "enabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "rule_usage_daily",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`rule_id` TEXT NOT NULL, `revision` INTEGER NOT NULL, `day_key` TEXT NOT NULL, `active_ms` INTEGER NOT NULL, PRIMARY KEY(`rule_id`, `revision`, `day_key`))",
+        "fields": [
+          {
+            "fieldPath": "ruleId",
+            "columnName": "rule_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dayKey",
+            "columnName": "day_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "activeMs",
+            "columnName": "active_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "rule_id",
+            "revision",
+            "day_key"
+          ]
+        }
+      },
+      {
+        "tableName": "usage_ledger",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `event_id` TEXT NOT NULL, `kind` INTEGER NOT NULL, `wall_clock_ts_ms` INTEGER NOT NULL, `elapsed_start_ms` INTEGER NOT NULL, `elapsed_end_ms` INTEGER NOT NULL, `boot_count` INTEGER NOT NULL, `package_name` TEXT NOT NULL, `day_key` TEXT NOT NULL, `credited_ms` INTEGER NOT NULL, `source` TEXT NOT NULL, `source_version` TEXT NOT NULL, `references_event_id` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventId",
+            "columnName": "event_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "wallClockTsMs",
+            "columnName": "wall_clock_ts_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elapsedStartMs",
+            "columnName": "elapsed_start_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elapsedEndMs",
+            "columnName": "elapsed_end_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bootCount",
+            "columnName": "boot_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "packageName",
+            "columnName": "package_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dayKey",
+            "columnName": "day_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "creditedMs",
+            "columnName": "credited_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceVersion",
+            "columnName": "source_version",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "referencesEventId",
+            "columnName": "references_event_id",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_usage_ledger_event_id",
+            "unique": true,
+            "columnNames": [
+              "event_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_usage_ledger_event_id` ON `${TABLE_NAME}` (`event_id`)"
+          },
+          {
+            "name": "index_usage_ledger_package_name_day_key_kind_credited_ms",
+            "unique": false,
+            "columnNames": [
+              "package_name",
+              "day_key",
+              "kind",
+              "credited_ms"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_usage_ledger_package_name_day_key_kind_credited_ms` ON `${TABLE_NAME}` (`package_name`, `day_key`, `kind`, `credited_ms`)"
+          },
+          {
+            "name": "index_usage_ledger_wall_clock_ts_ms",
+            "unique": false,
+            "columnNames": [
+              "wall_clock_ts_ms"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_usage_ledger_wall_clock_ts_ms` ON `${TABLE_NAME}` (`wall_clock_ts_ms`)"
+          }
+        ]
+      },
+      {
+        "tableName": "attempt_mirror_link",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`attempt_id` INTEGER NOT NULL, `pair_id` TEXT NOT NULL, `sequence` INTEGER NOT NULL, PRIMARY KEY(`attempt_id`, `pair_id`))",
+        "fields": [
+          {
+            "fieldPath": "attemptId",
+            "columnName": "attempt_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pairId",
+            "columnName": "pair_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sequence",
+            "columnName": "sequence",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "attempt_id",
+            "pair_id"
+          ]
+        }
+      },
+      {
+        "tableName": "recovery_mirror_link",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`session_id` TEXT NOT NULL, `pair_id` TEXT NOT NULL, `sequence` INTEGER NOT NULL, PRIMARY KEY(`session_id`, `pair_id`))",
+        "fields": [
+          {
+            "fieldPath": "sessionId",
+            "columnName": "session_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pairId",
+            "columnName": "pair_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sequence",
+            "columnName": "sequence",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "session_id",
+            "pair_id"
+          ]
+        }
+      },
+      {
+        "tableName": "partner_activity_outbox",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`event_id` TEXT NOT NULL, `kind` TEXT NOT NULL, `habit_progress_id` TEXT, `target_pair_id` TEXT, `text` TEXT NOT NULL, `occurred_at_ms` INTEGER NOT NULL, `days_free` INTEGER NOT NULL, `relapse_count` INTEGER NOT NULL, `milestones_reached` TEXT NOT NULL, `habit_label` TEXT, `ended_days` INTEGER, `milestone_day` INTEGER, `coaching_progress` INTEGER NOT NULL, `protocol_version` INTEGER NOT NULL, `schema_version` INTEGER NOT NULL, `created_at_ms` INTEGER NOT NULL, PRIMARY KEY(`event_id`))",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "event_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "habitProgressId",
+            "columnName": "habit_progress_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "targetPairId",
+            "columnName": "target_pair_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "text",
+            "columnName": "text",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "occurredAtMs",
+            "columnName": "occurred_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "daysFree",
+            "columnName": "days_free",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "relapseCount",
+            "columnName": "relapse_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "milestonesReached",
+            "columnName": "milestones_reached",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "habitLabel",
+            "columnName": "habit_label",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "endedDays",
+            "columnName": "ended_days",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "milestoneDay",
+            "columnName": "milestone_day",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "coachingProgress",
+            "columnName": "coaching_progress",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "protocolVersion",
+            "columnName": "protocol_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "schemaVersion",
+            "columnName": "schema_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMs",
+            "columnName": "created_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "event_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_partner_activity_outbox_created_at_ms",
+            "unique": false,
+            "columnNames": [
+              "created_at_ms"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_partner_activity_outbox_created_at_ms` ON `${TABLE_NAME}` (`created_at_ms`)"
+          }
+        ]
+      },
+      {
+        "tableName": "partner_activity_link",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`event_id` TEXT NOT NULL, `pair_id` TEXT NOT NULL, `sequence` INTEGER NOT NULL, PRIMARY KEY(`event_id`, `pair_id`))",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "event_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pairId",
+            "columnName": "pair_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sequence",
+            "columnName": "sequence",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "event_id",
+            "pair_id"
+          ]
+        }
+      },
+      {
+        "tableName": "partner_activity_projection",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`pair_id` TEXT NOT NULL, `days_free` INTEGER NOT NULL, `relapse_count` INTEGER NOT NULL, `milestones_reached` TEXT NOT NULL, `coaching_progress` INTEGER NOT NULL, `last_event_occurred_at_ms` INTEGER NOT NULL, `last_sequence` INTEGER NOT NULL, `pinned_message_text` TEXT, `pinned_message_at_ms` INTEGER, PRIMARY KEY(`pair_id`))",
+        "fields": [
+          {
+            "fieldPath": "pairId",
+            "columnName": "pair_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "daysFree",
+            "columnName": "days_free",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "relapseCount",
+            "columnName": "relapse_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "milestonesReached",
+            "columnName": "milestones_reached",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "coachingProgress",
+            "columnName": "coaching_progress",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastEventOccurredAtMs",
+            "columnName": "last_event_occurred_at_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSequence",
+            "columnName": "last_sequence",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pinnedMessageText",
+            "columnName": "pinned_message_text",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pinnedMessageAtMs",
+            "columnName": "pinned_message_at_ms",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "pair_id"
+          ]
+        }
+      },
+      {
+        "tableName": "pair_streak_sharing",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`pair_id` TEXT NOT NULL, `habit_progress_id` TEXT NOT NULL, `share_streak` INTEGER NOT NULL, `share_relapses` INTEGER NOT NULL, `share_milestones` INTEGER NOT NULL, `streak_enabled_since_ms` INTEGER NOT NULL, `relapse_enabled_since_ms` INTEGER NOT NULL, `milestone_enabled_since_ms` INTEGER NOT NULL, PRIMARY KEY(`pair_id`, `habit_progress_id`), FOREIGN KEY(`habit_progress_id`) REFERENCES `habit_progress`(`progress_id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "pairId",
+            "columnName": "pair_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "habitProgressId",
+            "columnName": "habit_progress_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "shareStreak",
+            "columnName": "share_streak",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "shareRelapses",
+            "columnName": "share_relapses",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "shareMilestones",
+            "columnName": "share_milestones",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "streakEnabledSinceMs",
+            "columnName": "streak_enabled_since_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "relapseEnabledSinceMs",
+            "columnName": "relapse_enabled_since_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "milestoneEnabledSinceMs",
+            "columnName": "milestone_enabled_since_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "pair_id",
+            "habit_progress_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_pair_streak_sharing_habit_progress_id",
+            "unique": false,
+            "columnNames": [
+              "habit_progress_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_pair_streak_sharing_habit_progress_id` ON `${TABLE_NAME}` (`habit_progress_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "habit_progress",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "habit_progress_id"
+            ],
+            "referencedColumns": [
+              "progress_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "pair_profile_sharing",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`pair_id` TEXT NOT NULL, `share_checkins` INTEGER NOT NULL, `share_recovery` INTEGER NOT NULL, `checkins_enabled_since_ms` INTEGER NOT NULL, `recovery_enabled_since_ms` INTEGER NOT NULL, PRIMARY KEY(`pair_id`))",
+        "fields": [
+          {
+            "fieldPath": "pairId",
+            "columnName": "pair_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "shareCheckins",
+            "columnName": "share_checkins",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "shareRecovery",
+            "columnName": "share_recovery",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "checkinsEnabledSinceMs",
+            "columnName": "checkins_enabled_since_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recoveryEnabledSinceMs",
+            "columnName": "recovery_enabled_since_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "pair_id"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '31a135262fa559e6ba0ae340e53be3d8')"
+    ]
+  }
+}

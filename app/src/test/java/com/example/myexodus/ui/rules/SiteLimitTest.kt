@@ -123,6 +123,28 @@ class SiteLimitTest {
         )
     }
 
+    @Test
+    fun tunnelGate_needsOneLiveWebsiteRule_blockOnlyCounts() {
+        val now = 1_700_000_000_000L
+        // #26: a block-only rule ("Always on", no limit) rides the same tunnel — it must
+        // start it exactly like a limited one does.
+        assertTrue(hasLiveWebsiteRule(listOf(website("a", "example.com")), now))
+        assertTrue(hasLiveWebsiteRule(listOf(website("a", "example.com", dailyLimitMs = 600_000L)), now))
+        assertFalse(
+            "Paused website rule is not published",
+            hasLiveWebsiteRule(listOf(website("a", "example.com", enabled = false)), now),
+        )
+        assertFalse(
+            "Expired website rule is not published",
+            hasLiveWebsiteRule(listOf(website("a", "example.com", expiresAt = now - 1)), now),
+        )
+        assertFalse(
+            "App rules are the other engine's concern",
+            hasLiveWebsiteRule(listOf(appRule("a", dailyLimitMs = 600_000L)), now),
+        )
+        assertFalse("No rules at all", hasLiveWebsiteRule(emptyList(), now))
+    }
+
     private fun website(
         id: String,
         host: String,

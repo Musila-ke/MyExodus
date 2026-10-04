@@ -1,5 +1,6 @@
 package com.example.myexodus.ui.rules
 
+import com.example.myexodus.data.db.entity.RestrictionRule
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -19,8 +20,14 @@ class RuleModeTest {
         assertEquals(30L, parseLimitTotalMinutes("0", "30"))
         assertEquals(30L, parseLimitTotalMinutes(" 0 ", "30"))
         assertNull("zero total is not a limit", parseLimitTotalMinutes("0", "0"))
-        assertNull("blank hours", parseLimitTotalMinutes("", "30"))
-        assertNull("blank minutes", parseLimitTotalMinutes("2", ""))
+        assertEquals(
+            "owner 2026-10-04: blank minutes beside hours is 2 hrs exactly, no 00 needed",
+            2 * 60L,
+            parseLimitTotalMinutes("2", ""),
+        )
+        assertEquals("and a blank hours field beside minutes reads as 0", 30L, parseLimitTotalMinutes("", "30"))
+        assertEquals("whitespace counts as blank", 30L, parseLimitTotalMinutes(" ", "30"))
+        assertNull("both blank is no limit entered", parseLimitTotalMinutes("", ""))
         assertNull("non-numeric", parseLimitTotalMinutes("two", "30"))
     }
 
@@ -86,6 +93,74 @@ class RuleModeTest {
     fun validate_tooLargeLimit_besideAlwaysOn_isInert_likeTheOtherLimitChecks() {
         assertNull(validateBlockMode(true, false, true, 22 * 60L, 7 * 60L, 30 * 60L))
     }
+
+    @Test
+    fun validate_limitLongerThanItsWindow_isRejected() {
+        // Owner report 2026-10-04: "1h duration + 2h limit is incoherent" — the window's
+        // allowed hour is all the usage there can ever be, so a 2h limit can never fire.
+        assertEquals(
+            ModeError.LimitExceedsWindow,
+            validateBlockMode(false, true, true, 18 * 60L, 19 * 60L, 120L),
+        )
+        assertNull(
+            "a limit equal to the window can still fire at its edge",
+            validateBlockMode(false, true, true, 18 * 60L, 19 * 60L, 60L),
+        )
+        assertEquals(
+            "overnight 22:00–07:00 is a 9h window — a 10h limit cannot fit",
+            ModeError.LimitExceedsWindow,
+            validateBlockMode(false, true, true, 22 * 60L, 7 * 60L, 10 * 60L),
+        )
+        assertNull(
+            "8h fits inside the 9h overnight window",
+            validateBlockMode(false, true, true, 22 * 60L, 7 * 60L, 8 * 60L),
+        )
+        assertNull(
+            "a limit with no window has nothing to contradict",
+            validateBlockMode(false, false, true, 22 * 60L, 7 * 60L, 20 * 60L),
+        )
+        assertNull(
+            "always-on overrides both mechanisms, so the pair is inert like the other checks",
+            validateBlockMode(true, true, true, 22 * 60L, 7 * 60L, 10 * 60L),
+        )
+    }
+
+    @Test
+    fun windowLengthMinutes_countsOvernightWindowsToMidnightAndOn() {
+        assertEquals(60L, windowLengthMinutes(18 * 60L, 19 * 60L))
+        assertEquals(9 * 60L, windowLengthMinutes(22 * 60L, 7 * 60L))
+        assertEquals(MINUTES_PER_DAY - 1L, windowLengthMinutes(60L, 59L))
+    }
+
+    @Test
+    fun resumedRule_clearsALapsedExpiry_butKeepsAFutureOne() {
+        // #18 resume semantics: re-enabling a lapsed rule must not be a dead toggle — "on"
+        // after the end date means on again with no end date.
+        val now = 1_700_000_000_000L
+        val lapsed = rule().copy(blockExpiresAt = now - 1_000L)
+        assertEquals(0L, resumedRule(lapsed, now).blockExpiresAt)
+        val future = rule().copy(blockExpiresAt = now + 3_600_000L)
+        assertEquals(now + 3_600_000L, resumedRule(future, now).blockExpiresAt)
+        assertEquals(
+            "a never-expiring rule is returned unchanged",
+            0L,
+            resumedRule(rule(), now).blockExpiresAt,
+        )
+    }
+
+    private fun rule() = RestrictionRule(
+        ruleId = "r-resume",
+        profileId = "p-1",
+        blockedPackage = "com.example.app",
+        targetType = "APP",
+        isAlwaysOn = true,
+        dailyLimitMs = 0L,
+        timeRangeStart = null,
+        timeRangeEnd = null,
+        activeDaysOfWeek = "1111111",
+        blockExpiresAt = 0L,
+        severityLevel = "HIGH",
+    )
 
     @Test
     fun compose_limitAlone_storesNoWindow_andKeepsTheDays() {

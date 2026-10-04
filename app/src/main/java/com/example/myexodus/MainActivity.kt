@@ -49,12 +49,14 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.example.myexodus.blocking.AttemptRecorder
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.EnforcementForegroundService
 import com.example.myexodus.blocking.ProtectionStatusMonitor
 import com.example.myexodus.blocking.ProtectionStatusStore
 import com.example.myexodus.blocking.RulesRepository
+import com.example.myexodus.blocking.RulesSnapshotPublisher
 import com.example.myexodus.accountability.BilateralDeletion
 import com.example.myexodus.accountability.activity.PartnerActivityJournal
 import com.example.myexodus.accountability.approval.ApprovalFlow
@@ -75,6 +77,7 @@ import com.example.myexodus.accountability.sync.MessageSendOutcome
 import com.example.myexodus.accountability.sync.PairUidResolver
 import com.example.myexodus.accountability.sync.messageSendOutcome
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
+import com.example.myexodus.accountability.sync.PartnerLiveSync
 import com.example.myexodus.accountability.sync.PartnerNudgePush
 import com.example.myexodus.accountability.sync.PartnerRolloutGate
 import com.example.myexodus.accountability.sync.PushInstallationRegistrar
@@ -99,6 +102,8 @@ import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.SetupStateStore
 import com.example.myexodus.settings.notificationSettingsIntent
 import com.example.myexodus.settings.StrictModeManager
+import com.example.myexodus.vpn.VpnLifecycle
+import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.settings.WidgetSettings
 import com.example.myexodus.settings.readProtectionChecks
 import com.example.myexodus.telemetry.CrashReporting
@@ -122,6 +127,7 @@ import java.security.Signature
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -201,6 +207,9 @@ class MainActivity : FragmentActivity() {
     // RuleEditor's save-time normalization needs.
     @Inject lateinit var domainUsageEngine: DomainUsageEngine
     @Inject lateinit var publicSuffixList: PublicSuffixList
+    /** #26: "is there anything to enforce" for the tunnel ensure-pass — the blocking policy
+     *  SSOT itself, so activation and the sinkhole's own blocklist can never disagree. */
+    @Inject lateinit var rulesSnapshotPublisher: RulesSnapshotPublisher
     @Inject lateinit var recoveryStore: RecoveryStateStore
     @Inject lateinit var attemptRecorder: AttemptRecorder
     @Inject lateinit var recoveryManager: RecoveryManager
@@ -240,6 +249,9 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var partnerSyncCoordinator: PartnerSyncCoordinator
     @Inject lateinit var pushInstallationRegistrar: PushInstallationRegistrar
     @Inject lateinit var partnerRolloutGate: PartnerRolloutGate
+    // Owner mandate 2026-10-04 (realtime): the foreground mailbox doorbell — its ring lands
+    // in [startPartnerLiveSync]'s collector below as the same in-process pass.
+    @Inject lateinit var partnerLiveSync: PartnerLiveSync
     // Send-kick (owner UX ruling 2026-10-01): after a message is journaled, the composer's
     // outcome is derived from whether the pair's queues actually cleared — the outbox half
     // lives in this database.
@@ -252,6 +264,8 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var recoveryPlanRepository: RecoveryPlanRepository
     @Inject lateinit var recoverySessions: RecoverySessionRepository
     @Inject lateinit var recoveryPrefs: RecoveryPrefs
+    // Owner mandate 2026-10-04: the Settings sharing pane's per-streak consent reads/writes.
+    @Inject lateinit var habitRepository: HabitRepository
 
     private val streaksViewModel: StreaksViewModel by viewModels()
 
@@ -285,6 +299,28 @@ class MainActivity : FragmentActivity() {
         // pass the periodic worker and the dashboard's manual path run (the cold-auth-window
         // case stops cleanly inside the pass; no biometric prompt is ever raised from here).
         refreshPartnerPushRegistration()
+        // #26: the website tunnel follows the rules — up when any live website rule exists
+        // (consent permitting), down when the last one leaves. Runs at this boundary so a
+        // return from the consent dialog or system settings lands the freshly-valid answer.
+        refreshWebsiteLimitTunnel()
+    }
+
+    /**
+     * #26 SSOT for "should the website tunnel run": the publisher's url rules — the blocking
+     * policy itself (enabled, unexpired, limit or block-only). The fast path loads the on-disk
+     * cache first (a cold app process has nothing published yet — an empty read must never
+     * stop a healthy tunnel), then the authoritative rebuild lands the current truth,
+     * including a rule that expired overnight.
+     */
+    private fun refreshWebsiteLimitTunnel() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                rulesSnapshotPublisher.loadFastPath()
+                rulesSnapshotPublisher.loadFromDb()
+                val hasRules = rulesSnapshotPublisher.snapshot.urlRules.isNotEmpty()
+                VpnLifecycle.ensure(applicationContext, hasRules)
+            }.onFailure { Log.w(TAG, "tunnel ensure-pass failed", it) }
+        }
     }
 
     /**
@@ -308,12 +344,45 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    /**
+     * Owner mandate 2026-10-04 (realtime receive): while this screen is started, a Firestore
+     * snapshot listener on our own mailbox rings the moment the partner's relay writes
+     * something new, and each ring runs the same in-process pass the periodic worker runs — so
+     * "hasn't even arrived" becomes "arrived in seconds". The pairing gate is re-checked here
+     * because a ceremony can complete without a stop/start transition; once live, the listener
+     * outlives pairing changes (the mailbox is keyed by uid, which never changes).
+     */
+    private fun startPartnerLiveSync() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                var liveUid: String? = null
+                while (liveUid == null) {
+                    liveUid = partnerLiveSync.myUidIfLive()
+                    if (liveUid == null) delay(PARTNER_LIVE_RECHECK_MILLIS)
+                }
+                val uid = liveUid
+                partnerLiveSync.changes(uid).collect {
+                    runCatching {
+                        if (isOnline()) {
+                            runPartnerSyncPass(
+                                pushInstallationRegistrar,
+                                partnerRolloutGate,
+                                partnerSyncCoordinator,
+                            )
+                        }
+                    }.onFailure { Log.w(TAG, "live-sync pass failed", it) }
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestedTab = intent.getStringExtra(EXTRA_START_TAB)
         requestedHabit = intent.getStringExtra(EXTRA_START_HABIT)
         requestedRecoveryEntry = intent.getStringExtra(EXTRA_RECOVERY_ENTRY)
         handlePartnerNudgeIntent(intent)
+        startPartnerLiveSync()
         enableEdgeToEdge()
         setContent {
             MyExodusTheme {
@@ -441,6 +510,8 @@ class MainActivity : FragmentActivity() {
                         // §14 bullet 1 (task #37): one outcome event per ceremony terminal,
                         // on the same Crashlytics rail as every other §14 client metric.
                         telemetry = PairingCeremonyTelemetry { event -> crashReporting.nonFatal(event) },
+                        // §19.5: the freshly created pair becomes the shown partner.
+                        onPaired = { pairId -> partnerSelection.selectedPairId = pairId },
                     )
                 }
                 // Local read: a delegated property cannot be smart-cast, and AppShell now takes
@@ -556,6 +627,7 @@ class MainActivity : FragmentActivity() {
                         requestedHabit = requestedHabit,
                         onHabitConsumed = { requestedHabit = null },
                         planRepository = recoveryPlanRepository,
+                        habitRepository = habitRepository,
                         sessions = recoverySessions,
                         prefs = recoveryPrefs,
                         recoveryEntry = requestedRecoveryEntry,
@@ -678,12 +750,11 @@ class MainActivity : FragmentActivity() {
      * (PIN/pattern/password) authorizes the key through the platform's confirm-credential
      * flow. The explicit-message dialog shows only when neither can produce a signature.
      *
-     * Owner ruling 2026-10-01, revised same day (#17): the screen-lock route must be
-     * reachable whenever the user chooses — and in ONE dialog. The biometric sheet itself
-     * carries the credential affordance (DEVICE_CREDENTIAL joins BIOMETRIC_STRONG), so
-     * "Use PIN/pattern" opens credential entry inline instead of chaining a second system
-     * dialog. `chooseSigningPath` still routes the no-biometrics case straight to the
-     * confirm flow — that is already a single dialog.
+     * Owner ruling 2026-10-01 (#17) made the credential affordance in-sheet — one dialog,
+     * no chaining. (An app-rendered picker in front of the sheet was tried 2026-10-04 and
+     * owner-rejected the same day — the sheet's own affordance is the single prompt; the
+     * light-mode XOS text-invisibility finding is parked for research, not worked around
+     * in-app.)
      */
     private suspend fun signWithAuthPrompt(title: String): Signature? {
         val status = BiometricManager.from(this)
@@ -705,9 +776,9 @@ class MainActivity : FragmentActivity() {
 
             is SigningPath.Biometric -> when (val outcome = biometricSign(title)) {
                 is BiometricOutcome.Signed -> outcome.signature
-                // Lockout routing survives for OEM sheets that still raise it (the credential
-                // affordance itself is in-prompt, #17); a plain cancel stays a cancel — the
-                // underlying action reads as nothing having happened.
+                // Lockout routing survives for OEM sheets that still raise it; a plain
+                // cancel stays a cancel — the underlying action reads as nothing
+                // having happened.
                 BiometricOutcome.LockedOut ->
                     if (deviceCredentialPossible) signWithDeviceCredential(title) else null
 
@@ -730,29 +801,32 @@ class MainActivity : FragmentActivity() {
     }
 
     /**
-     * BiometricPrompt signing, same two-path contract the pairing harness proved on the
-     * X6532: when initSign succeeds, authenticate with the Signature as a CryptoObject;
-     * when keystore2 rejects initSign without a fresh auth token, prompt WITHOUT crypto and
-     * initSign inside the success callback (the 900s window, §NFR4, makes that valid).
+     * BiometricPrompt signing that never binds a CryptoObject (owner ruling 2026-10-04):
+     * a crypto-bound prompt can only be answered by a biometric — the sheet cannot render the
+     * "Use PIN/pattern" affordance, so anyone whose fingerprint won't read had no way through.
+     * The combined sheet (BIOMETRIC_STRONG or DEVICE_CREDENTIAL, #17) plus the key's 900s auth
+     * window (setUserAuthenticationParameters, §NFR4) make the no-crypto path correct — the
+     * prompt authorizes the key and initSign runs in the success callback (the harness-proven
+     * path, 2026-09-28; device-differential found 2026-10-04: a live keystore window made the
+     * old code take the crypto branch on one phone and the sheet lost its fallback — and its
+     * continuation, fingerprint-only and unresumable).
+     *
+     * initSign is still attempted once before the prompt, ONLY to detect a permanently
+     * invalidated key early (§9 — a dead key cannot be revived by any prompt).
      *
      * The prompt must be raised on the main thread: every caller reaches this from
      * `Dispatchers.IO`, and BiometricPrompt's FragmentManager throws "Must be called from main
-     * thread of fragment host" if constructed or authenticated off-main. Keystore work stays on
-     * the caller's dispatcher (NFR3).
+     * thread of fragment host" if constructed or authenticated off-main.
      */
     private suspend fun biometricSign(title: String): BiometricOutcome {
         val signature = Signature.getInstance(AccountabilitySigner.SIGNATURE_ALGORITHM)
-        val beforePrompt = runCatching { signature.initSign(accountabilityKeyStore.signingPrivateKey()) }
-        val failure = beforePrompt.exceptionOrNull()
-        if (failure != null) {
-            // §9: a permanently dead key cannot be revived by any prompt — no point raising one.
+        val probe = runCatching { signature.initSign(accountabilityKeyStore.signingPrivateKey()) }
+        probe.exceptionOrNull()?.let { failure ->
             if (accountabilitySigner.isPermanentlyInvalidated(failure)) {
                 Log.w(TAG, "signing key permanently invalidated before the prompt", failure)
                 return BiometricOutcome.PermanentlyInvalidated
             }
-            Log.w(TAG, "initSign before the prompt failed — asserting without CryptoObject", failure)
         }
-        val cryptoReady = beforePrompt.isSuccess
         return withContext(Dispatchers.Main.immediate) {
             suspendCancellableCoroutine { cont ->
                 val prompt = BiometricPrompt(
@@ -760,33 +834,25 @@ class MainActivity : FragmentActivity() {
                     ContextCompat.getMainExecutor(this@MainActivity),
                     object : BiometricPrompt.AuthenticationCallback() {
                         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                            if (cryptoReady) {
-                                val signed = result.cryptoObject?.signature
-                                cont.resume(
-                                    if (signed != null) BiometricOutcome.Signed(signed)
-                                    else BiometricOutcome.Cancelled,
-                                )
-                            } else {
-                                // A failure here is read as "cancelled" upstream; keep the
-                                // real reason in logcat (diagnosed blind on the missing-key rig,
-                                // 2026-09-28). A permanent invalidation is the exception — it
-                                // cannot be a cancel, the caller must migrate (§9).
-                                val signed = runCatching {
-                                    signature.initSign(accountabilityKeyStore.signingPrivateKey())
-                                }
-                                    .fold(
-                                        onSuccess = { BiometricOutcome.Signed(signature) as BiometricOutcome },
-                                        onFailure = { e ->
-                                            Log.w(TAG, "biometric sign after authentication failed", e)
-                                            if (accountabilitySigner.isPermanentlyInvalidated(e)) {
-                                                BiometricOutcome.PermanentlyInvalidated
-                                            } else {
-                                                BiometricOutcome.Cancelled
-                                            }
-                                        },
-                                    )
-                                cont.resume(signed)
+                            // A failure here is read as "cancelled" upstream; keep the
+                            // real reason in logcat (diagnosed blind on the missing-key rig,
+                            // 2026-09-28). A permanent invalidation is the exception — it
+                            // cannot be a cancel, the caller must migrate (§9).
+                            val signed = runCatching {
+                                signature.initSign(accountabilityKeyStore.signingPrivateKey())
                             }
+                                .fold(
+                                    onSuccess = { BiometricOutcome.Signed(signature) as BiometricOutcome },
+                                    onFailure = { e ->
+                                        Log.w(TAG, "biometric sign after authentication failed", e)
+                                        if (accountabilitySigner.isPermanentlyInvalidated(e)) {
+                                            BiometricOutcome.PermanentlyInvalidated
+                                        } else {
+                                            BiometricOutcome.Cancelled
+                                        }
+                                    },
+                                )
+                            cont.resume(signed)
                         }
 
                         override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
@@ -813,22 +879,17 @@ class MainActivity : FragmentActivity() {
                     .setSubtitle(getString(R.string.partner_approval_prompt_subtitle))
                     // #17 owner ruling 2026-10-01: DEVICE_CREDENTIAL joins the sheet, so
                     // "Use PIN/pattern" is an in-prompt affordance entering credential mode
-                    // inline — one dialog, no KeyguardManager hand-off. androidx 1.1.0 refuses
-                    // crypto + credential only below API 30 (verified in the 1.1.0 sources:
-                    // auth gate in BiometricPrompt.authenticate), and the signing surfaces
-                    // cannot run below API 31 (in-Keystore ECDH floor), so the combined warm
-                    // path is safe. A negative button is forbidden with DEVICE_CREDENTIAL
-                    // (PromptInfo.build() throws).
+                    // inline — one dialog, no KeyguardManager hand-off. The prompt is never
+                    // crypto-bound (owner ruling 2026-10-04): a CryptoObject prompt admits only
+                    // biometrics, hiding the fallback; the key's 900s window authorizes the
+                    // initSign in the success callback instead. A negative button is forbidden
+                    // with DEVICE_CREDENTIAL (PromptInfo.build() throws).
                     .setAllowedAuthenticators(
                         BiometricManager.Authenticators.BIOMETRIC_STRONG or
                             BiometricManager.Authenticators.DEVICE_CREDENTIAL,
                     )
                     .build()
-                if (cryptoReady) {
-                    prompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(signature))
-                } else {
-                    prompt.authenticate(promptInfo)
-                }
+                prompt.authenticate(promptInfo)
             }
         }
     }
@@ -992,6 +1053,10 @@ class MainActivity : FragmentActivity() {
     companion object {
         const val EXTRA_START_TAB = "extra_start_tab"
 
+        /** How often [startPartnerLiveSync] re-checks its gate while visible but not yet live
+         *  (no pairing yet, or the kill switch is off). */
+        private const val PARTNER_LIVE_RECHECK_MILLIS = 30_000L
+
         /** Milestone notification deep link: which habit's Home to show. */
         const val EXTRA_START_HABIT = "extra_start_habit"
 
@@ -1014,6 +1079,10 @@ class MainActivity : FragmentActivity() {
         /** Enforcement degradation alerts (§8 Step 6) land here: the Settings protection
          *  rows name each mechanism and carry its fix. */
         const val TAB_SETTINGS = NavKeys.SETTINGS
+
+        /** #26: tunnel paused/revoked notifications land here — the Rules screen holds the
+         *  activation row whose tap re-opens the system consent dialog. */
+        const val TAB_RULES = NavKeys.RULES
 
         private const val TAG = "MyExodus"
     }

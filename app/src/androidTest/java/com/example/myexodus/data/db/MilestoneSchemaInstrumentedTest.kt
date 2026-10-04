@@ -152,9 +152,6 @@ class MilestoneSchemaInstrumentedTest {
         habitDurationYears = 2,
         onboardingSeverityLevel = "MODERATE",
         lastRelapseTimestamp = 150L,
-        shareAccessAttempts = false,
-        shareRelapses = false,
-        shareMilestones = true,
         assignedPartnershipId = null,
     )
 

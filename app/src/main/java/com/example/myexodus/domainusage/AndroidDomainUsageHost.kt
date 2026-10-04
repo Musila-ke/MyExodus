@@ -3,12 +3,15 @@ package com.example.myexodus.domainusage
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import com.example.myexodus.MainActivity
 import com.example.myexodus.R
 
 /** §8 S7.4/S7.5: [DomainUsageHost] over the app's real services. */
@@ -42,6 +45,18 @@ class AndroidDomainUsageHost(private val context: Context) : DomainUsageHost {
                     .setSmallIcon(android.R.drawable.stat_sys_warning)
                     .setContentTitle(context.getString(R.string.domain_usage_vpn_stopped_title))
                     .setContentText(context.getString(R.string.domain_usage_vpn_stopped_text))
+                    // #26: "paused" copy — the tap lands on Rules where the tunnel is
+                    // re-enabled (or the failure retried).
+                    .setContentIntent(
+                        PendingIntent.getActivity(
+                            context,
+                            0,
+                            Intent(context, MainActivity::class.java)
+                                .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_RULES)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                        ),
+                    )
                     .setAutoCancel(true)
                     .build(),
             )

@@ -47,12 +47,12 @@ There is no sender-facing `Delivered`, `Displayed`, `Seen`, or `Acknowledged` st
 | ID | Requirement |
 |---|---|
 | FR-1 | Show the `Reach out` control only when the client Remote Config parameter `partner_sos_enabled` is true and the user has one active accountability pair. |
-| FR-2 | The control sends immediately with no confirmation dialog, PIN, timer, delay, or Strict Mode challenge. |
+| FR-2 | ~~The control sends immediately with no confirmation dialog, PIN, timer, delay, or Strict Mode challenge.~~ **Superseded 2026-10-04 (owner mandate):** the control is a FAB that raises one confirmation dialog (Send/Cancel) before dispatching — no PIN, timer, delay, or Strict Mode challenge remain banned as before. |
 | FR-3 | The client performs a validated-network preflight. When no validated network exists at tap time, show `No connection. Not sent.` and make no backend call. The client must not queue an offline callable request. |
 | FR-4 | The server enforces a **sliding 10-minute cooldown** between accepted nudges for `(pairId, senderUid)`, using server time. A tap at exactly 10 minutes or later is eligible. |
 | FR-5 | The server enforces a **daily cap of 12 accepted nudges** per `(pairId, senderUid)` using the `Africa/Nairobi` calendar day. Blocked/suppressed nudges consume the cooldown and daily cap exactly like delivered nudges. |
 | FR-6 | Every send attempt has a client-generated UUIDv4 `nudgeId`. Repeating the same logical request with the same `nudgeId` is idempotent. Reusing a `nudgeId` with a different envelope is rejected. |
-| FR-7 | The sender encrypts the constant plaintext `{"v":1,"kind":"nudge"}` using the existing versioned pair envelope format and AAD `partner_nudge|v1|{pairId}|{nudgeId}|{senderUid}`. |
+| FR-7 | The sender encrypts the constant plaintext `{"v":1,"kind":"nudge"}` using the existing versioned pair envelope format and AAD `partner_nudge|v1|{pairId}|{nudgeId}|{senderUid}`. **Rev 2026-10-04 (owner mandate):** v1 stays the no-message fallback; an optional user-written message travels as a **v2 plaintext inside the same seal** — deterministic CBOR `{v:2, kind:"nudge", text:…}`, NFC-normalized, ≤280 chars (EventPayload bound) and byte-bounded so the wire stays ≤1024 base64 chars. AAD unchanged (versioning lives inside the ciphertext); a v1 receiver opens a v2 envelope exactly as before (it null-checks the plaintext), and a v1 envelope has no message. The server still never parses the plaintext. |
 | FR-8 | The ciphertext is stored in Firestore and never sent through FCM. |
 | FR-9 | The server returns `accepted` after the nudge has been durably recorded, not after FCM delivery completes. |
 | FR-10 | A recipient with `blocked=true` receives no push and no in-app card for the affected nudge. The sender receives the same `accepted` result as an unblocked recipient. |
@@ -64,7 +64,7 @@ There is no sender-facing `Delivered`, `Displayed`, `Seen`, or `Acknowledged` st
 | FR-16 | After acknowledgment, the client cancels notifications on the `partner_nudges` channel. |
 | FR-17 | Each partner device has an installation registration. The server attempts push to all installation records that are eligible at the time the nudge's first dispatch claim snapshots its targets. |
 | FR-18 | Android devices without Google Play services are supported for app-open Firestore synchronization only and do not receive FCM push. |
-| FR-19 | The system notification uses channel `partner_nudges`, default importance, private lock-screen visibility, generic English text, and fixed Android tag `partner_nudge`. |
+| FR-19 | The system notification uses channel `partner_nudges`, default importance, private lock-screen visibility, generic English text, and fixed Android tag `partner_nudge`. **Rev 2026-10-04 (owner mandate):** the channel id is `partner_nudges_v3` at **IMPORTANCE_HIGH** — DEFAULT was device-verified as tray-only (no heads-up banner), Android cannot raise an existing channel's importance in place, and the app can even silently LOWER its own channel (the pre-fix post path dented `_v2` 4→3 on every foreground receipt, device-confirmed on both rig devices) — so a versioned id takes HIGH and every prior id (`partner_nudges`, `partner_nudges_v2`) is deleted at startup; the post path creates a channel only when missing (recorded as D14 in the mapping doc). Channel-id mentions in FR-12/FR-16 and Step 7/10/11 text read `partner_nudges_v3` accordingly; fixed tag `partner_nudge`, private visibility, generic text unchanged. |
 | FR-20 | Foreground FCM receipt must result in a locally posted notification. The existing `FirebaseMessagingService` must not simply return for `partner_nudge`. |
 | FR-21 | Background notification+data delivery uses the normal Android system notification path. The data payload is `type=partner_nudge` and `nudge_id=<UUID>`. |
 | FR-22 | The feature is disabled by either the client Remote Config flag or the authoritative server kill switch. The server kill switch is checked on every `sendNudge` request and is not cached. |
@@ -339,6 +339,15 @@ updatedAt: Timestamp
 ```
 
 The push service targets **FIDs**, not the deprecated token field, when the installed Admin SDK supports FID targeting. The existing `fcmToken` field remains for compatibility with other application features.
+
+> **Rev 2026-10-04 (verified on the rig):** FID sends fail with `installation-id-not-registered`
+> for every installation registered through the app's legacy `getToken()` path (FID targeting
+> only reaches installations that re-registered via `register()`/`onRegistered()`, FCM SDK
+> 25.1+) — while the same installations' stored registration tokens deliver. The dispatcher
+> therefore sends to the registry's stored `token` field (`messages.sendEachForMulticast`),
+> keeping the FID as the doc id / ledger / ack identity. Token targeting is supported during
+> FCM's deprecation window; revisit when the client migrates to the new registration API.
+> Recorded as D13 in `app/docs/partner-sos-mapping.md`; code comment on `nudgeFcmMessage`.
 
 #### `/config/features`
 
@@ -1164,12 +1173,20 @@ After the change, ordinary traffic from other applications must remain subject t
 Create the notification channel at application startup for API 26+.
 
 ```text
-id: partner_nudges
+id: partner_nudges_v3
 name: Accountability Check-ins
-importance: IMPORTANCE_DEFAULT
+importance: IMPORTANCE_HIGH
 lockscreenVisibility: VISIBILITY_PRIVATE
 vibration: enabled on first creation
 ```
+
+> **Rev 2026-10-04 (owner mandate):** id + importance changed from the block above's original
+> `partner_nudges`/`IMPORTANCE_DEFAULT` — a reach-out must surface as an on-screen heads-up
+> banner (device-verified: DEFAULT = tray-only), and Android neither raises an existing
+> channel's importance in place nor restores one the app itself has silently lowered — so the
+> id is versioned and every prior id (`partner_nudges`, `partner_nudges_v2`) is deleted at
+> startup (D14 in `app/docs/partner-sos-mapping.md`; FCM payload + client post read the
+> current const; `pushEligible` reads it).
 
 Add `POST_NOTIFICATIONS` permission declaration.
 
@@ -1191,6 +1208,25 @@ Official references:
 - [Android notification channels](https://developer.android.com/develop/ui/views/notifications/channels)
 
 ### 8.15 Step 8 — Sender UI
+
+> **Rev 2026-10-04 (owner mandate):** the sender control is a shell-level **FAB** ("Reach
+> out", waving-hand icon) with an explicit **confirmation dialog** (Send/Cancel), replacing
+> the Home card — accidental sends were ruled worse than one extra tap. The state machine,
+> its 5-second auto-returns, retry semantics, and result copy are unchanged: terminal
+> results now surface as snackbars and the FAB is dimmed/inert while a result shows. Gating
+> is unchanged (FR-1: flag + active pair); the roster read is hoisted to AppShell so the
+> FAB and Home's pinned card share one read. FR-25 still holds — the dialog shows the body
+> copy only, never the emergency warning.
+>
+> **Rev 2026-10-04 second pass (owner mandate — the message):** the dialog names the partner
+> the send will actually reach (the §19.5 target rule, same resolution as tap time; generic
+> title as fallback) and carries a **message field prefilled with a default** ("I could use
+> a check-in."), fully editable, char-capped at the envelope bound; a cleared field sends
+> the v1 no-text nudge. A retry (`CouldNotConfirm`) replays the sealed envelope verbatim —
+> a message edited between attempts is ignored, never re-encrypted. Realtime path, rate
+> limits and notifications are unchanged; the tray copy stays content-free by privacy
+> design (FR-13) — the message is visible only inside the app, from the decrypted Firestore
+> document.
 
 States:
 
@@ -1247,7 +1283,7 @@ The card displays:
 - button: `I'm here`;
 - dismiss `X`.
 
-The card does not show the plaintext envelope because the plaintext is constant and contains no free-form message.
+The card does not show the plaintext envelope itself. Rev 2026-10-04 (owner mandate): when the envelope is v2 and carries a message, the card renders that message as its body line; a v1 (or blank-message) nudge has none and the card stands as before. The repository's `cardOf` opens the newest document exactly once and extracts the message from the opened plaintext — receiver-side sanitized (control characters stripped, trimmed, re-bounded), never trusted as-is.
 
 ### 8.17 Step 10 — Existing FCM service
 
@@ -1461,6 +1497,10 @@ Official references:
 - The server stores ciphertext as an opaque string.
 - FCM contains no ciphertext.
 - Do not introduce a new crypto primitive, new key store, or new pair secret.
+- Rev 2026-10-04 (owner mandate): the optional message lives **inside** the sealed plaintext
+  as a v2 CBOR map (see FR-7 rev) — the AAD string stays `partner_nudge|v1|…`, the wire stays
+  `nonce || ciphertext` base64, and the server's ≤1024-char opaque-string contract is
+  enforced client-side by a byte bound on the text. No server, rules, or key changes.
 
 The symmetric pair key demonstrates possession of the pair secret; Firebase Auth establishes the sender's server identity. Do not describe the symmetric envelope as non-repudiating sender identity.
 
@@ -1717,6 +1757,8 @@ Partner side:
 
 The VPN test passes only if the SOS path works **and** unrelated application blocking still functions.
 
+> **Rev 2026-10-04 (device-run, two-device rig):** sender side executed on the X6532 end-to-end — Strict + blocker on, ordinary blocked traffic stayed blocked, the callable succeeded under the VPN (step 5), and the recipient-inbox leg ran green (`NudgeInboxDeviceInstrumentedTest` OK(1), 11.48 s). Partner side executed on the X6532C (GMS, notifications enabled, blocker active, FCM received). Honest gap: the FAB-*tap* was not drivable inside the window (client RC refetch stuck at the stale `false`); the callable leg covers step 5, and the FAB's dialog/send path is separately device-pinned (mapping §5.1). Record: mapping doc §5.3. **Parked same night (owner time-box):** the FAB-tap leg + the repair-sweep leg (`resumePendingNudges` on a stalled `nudgePushQueue` doc) were deferred to the next session — the kill-switch window was opened via API and **both switches restored false + verified** (RC v7, Firestore doc) before parking; the live pair (epoch 9) is intentionally kept for these legs.
+
 ### 12.5 Device matrix
 
 Minimum devices:
@@ -1749,6 +1791,8 @@ Record:
 - app-open card presence;
 - card timestamp correctness;
 - device-specific anomalies.
+
+> **Rev 2026-10-04 (device-run):** the partner-state matrix ran on the X6532C via host FCM v1 pushes — states 1–5, 7, 9–11 executed with results (doze delivered, recents delivered, restricted-only-after-unwhitelist delivered, notifications-off suppressed-but-woke, offline queued→delivered on reconnect, force-stop correctly undelivered, blocker-active delivered). Honest gaps: state 6 (OEM battery restriction) is not drivable via adb on this XOS build; state 8 (channel mute) is not drivable via adb either — its distinct claim (mute ≠ app-level banner) is already device-pinned by §12.3 bullet 11; the offline window was cut to ~20 s twice by manual wi-fi reconnects (mechanism duration-independent — FCM queues). Card presence/timestamp rows are §12.3's legs (host pushes carry no envelope). Min-device matrix: **Transsion only** in the rig — Pixel/Samsung/Xiaomi/non-GMS not available, recorded as a limit, not claimed. Full table + anomalies: mapping doc §5.3.
 
 ### 12.6 App Check tests
 
@@ -1999,7 +2043,7 @@ Official documentation used to close platform details:
 ## 17. Acceptance Criteria
 
 1. The Reach out control appears only for an active pair when the client flag is enabled.
-2. Tapping Reach out does not display a dialog, PIN, timer or confirmation.
+2. ~~Tapping Reach out does not display a dialog, PIN, timer or confirmation.~~ **Superseded 2026-10-04:** tapping the FAB displays exactly one confirmation dialog (Send/Cancel; no PIN, timer, delay, or challenge), and dispatch happens only on Send.
 3. With no validated network, the app displays `No connection. Not sent.` and makes no backend call.
 4. The first valid request returns `accepted` and creates exactly one nudge and one queue document.
 5. A second request within 10 minutes is rate-limited by the server without creating another nudge.

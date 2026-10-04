@@ -28,7 +28,6 @@ import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,7 +59,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.R
 import com.example.myexodus.accountability.sos.NudgeInboxRepository
-import com.example.myexodus.accountability.sos.NudgeRepository
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.ProtectionAuthority
 import com.example.myexodus.blocking.ProtectionDegradation
@@ -69,6 +67,7 @@ import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.streaks.HabitState
+import com.example.myexodus.ui.AppMark
 import com.example.myexodus.ui.RuleRowState
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.formatDuration
@@ -123,16 +122,14 @@ fun HomeScreen(
     modifier: Modifier = Modifier,
     encryptionPending: Boolean = false,
     /** #12: pairId -> shown partner name for the pinned card's sender line. A failed read
-     *  degrades to no names — the card falls back to its generic title, never a wrong name. */
-    loadPartnerNames: suspend () -> Map<String, String> = { emptyMap() },
+     *  degrades to no names — the card falls back to its generic title, never a wrong name.
+     *  Hoisted to the shell 2026-10-04: the pinned card and the Reach out FAB share one
+     *  roster read per Home entry. */
+    partnerNames: Map<String, String> = emptyMap(),
     /** SOS §8.14: the check-ins-off banner inputs — notification state and its fix path. */
     partnerNotificationsEnabled: Boolean = true,
     partnerNotificationsRequestable: Boolean = false,
     onFixPartnerNotifications: () -> Unit = onOpenSettings,
-    /** SOS §8.15 (Step 8): the Reach out card — client flag, sender state machine, tap path. */
-    sosEnabled: Boolean = false,
-    sosState: SosViewModel.SosSendState = SosViewModel.SosSendState.Idle,
-    onSosTap: () -> Unit = {},
     /** SOS §8.16 (Step 9): the recipient card — newest pending reach-out, or null. Both of
      *  its actions ("I'm here" and X) acknowledge through the one callback (§6.9). */
     nudgeCard: NudgeInboxRepository.NudgeCard? = null,
@@ -156,16 +153,9 @@ fun HomeScreen(
     }
     // Req 15 / #12: every partner's newest pinned message, newest first, as a Flow — a message
     // delivered by a background sync pass must reach a card that is already on screen, and the
-    // card pages across senders. Names resolve on each pinned-list change (the app's existing
-    // per-screen-entry freshness bar for partner labels).
+    // card pages across senders. Names arrive from the shell (one roster read per Home entry).
     val pinnedRows by store.partnerActivityDao().observePinnedMessages()
         .collectAsStateWithLifecycle(initialValue = null)
-    var partnerNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-    LaunchedEffect(pinnedRows) {
-        partnerNames = withContext(Dispatchers.IO) {
-            runCatching { loadPartnerNames() }.getOrElse { emptyMap() }
-        }
-    }
     var pinnedIndex by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(pinnedRows?.size) {
         if (pinnedIndex > (pinnedRows?.size ?: 1) - 1) pinnedIndex = 0
@@ -289,14 +279,8 @@ fun HomeScreen(
                 )
             }
         }
-        // SOS §8.15 (V1 Req 35): the one-tap Reach out control, after the partner-communication
-        // block and before the streak hero. Absent without an active pair or with the feature
-        // flag off (FR-1) — never a dead control.
-        if (sosEnabled && partnerNames.isNotEmpty()) {
-            item(key = "sos") {
-                ReachOutCard(state = sosState, onTap = onSosTap)
-            }
-        }
+        // SOS §8.15 rev (owner mandate 2026-10-04): Reach out is now a shell-level FAB with a
+        // confirmation dialog — it left this column; the flag/pair gate lives in AppShell.
         item(key = "streak") {
             StreakHeroCard(
                 days = streakDays,
@@ -740,11 +724,11 @@ private fun BlockRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Icon(
-            imageVector = if (rule.targetType == "WEBSITE") Icons.Default.Language else Icons.Default.Apps,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(24.dp),
+        // The real app icon, same mark the Rules rows use (owner 2026-10-04: the two lists
+        // read as different designs while this was a generic glyph).
+        AppMark(
+            packageName = if (rule.targetType == "WEBSITE") null else rule.blockedPackage,
+            fallback = if (rule.targetType == "WEBSITE") Icons.Default.Language else Icons.Default.Apps,
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
@@ -1028,8 +1012,8 @@ private fun PartnerCheckInsNotificationsBanner(requestable: Boolean, onFix: () -
  * SOS §8.16 (V1 Req 35, Step 9): the recipient's card for the newest unacknowledged
  * reach-out. Both actions acknowledge — §6.9's batch covers every fetched pending nudge and
  * the tray entry is cancelled after it commits (repository); the card then clears through
- * the listener. No inner text: a nudge's plaintext is constant by design, so the card never
- * implies a message was written.
+ * the listener. The sender's message renders when one was written (v2 envelope); a v1 nudge
+ * has none and the card simply shows the title — it never implies a message was written.
  */
 @Composable
 private fun NudgeCardView(
@@ -1060,87 +1044,15 @@ private fun NudgeCardView(
                     )
                 }
             }
+            card.message?.let {
+                Text(it, style = MaterialTheme.typography.bodyLarge)
+            }
             Text(
                 stringResource(R.string.sos_card_sent, relativeTimeText(nowMillis, card.createdAtMs)),
                 style = MaterialTheme.typography.bodySmall,
             )
             Button(onClick = onAcknowledge) {
                 Text(stringResource(R.string.sos_card_im_here))
-            }
-        }
-    }
-}
-
-/**
- * SOS §8.15 (V1 Req 35): single-tap check-in to the active partner. The body line is the
- * state machine's one user-visible surface; the button disables while a result is showing —
- * the plan's tap path is a plain immediate call, never a dialog, timer, or confirmation.
- */
-@Composable
-private fun ReachOutCard(state: SosViewModel.SosSendState, onTap: () -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(
-            Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(
-                stringResource(R.string.sos_reach_out),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = when (state) {
-                    SosViewModel.SosSendState.Idle,
-                    SosViewModel.SosSendState.Sending,
-                    -> stringResource(R.string.sos_reach_out_body)
-
-                    SosViewModel.SosSendState.Sent ->
-                        stringResource(R.string.sos_state_sent)
-
-                    SosViewModel.SosSendState.NotSentOffline ->
-                        stringResource(R.string.sos_state_offline)
-
-                    SosViewModel.SosSendState.CouldNotConfirm ->
-                        stringResource(R.string.sos_state_could_not_confirm)
-
-                    SosViewModel.SosSendState.Unavailable ->
-                        stringResource(R.string.sos_state_unavailable)
-
-                    is SosViewModel.SosSendState.RateLimited -> when (state.reason) {
-                        NudgeRepository.RateLimitReason.COOLDOWN ->
-                            stringResource(
-                                R.string.sos_rate_limited_cooldown,
-                                SosViewModel.cooldownMinutes(state.retryAfterSeconds),
-                            )
-
-                        NudgeRepository.RateLimitReason.DAILY_CAP ->
-                            stringResource(R.string.sos_rate_limited_daily_cap)
-
-                        NudgeRepository.RateLimitReason.UNKNOWN ->
-                            stringResource(R.string.sos_rate_limited_unknown)
-                    }
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Button(
-                onClick = onTap,
-                enabled = state == SosViewModel.SosSendState.Idle ||
-                    state == SosViewModel.SosSendState.CouldNotConfirm,
-            ) {
-                if (state == SosViewModel.SosSendState.Sending) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(8.dp))
-                }
-                Text(
-                    stringResource(
-                        if (state == SosViewModel.SosSendState.CouldNotConfirm) R.string.sos_try_again
-                        else R.string.sos_reach_out,
-                    ),
-                )
             }
         }
     }

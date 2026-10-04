@@ -19,10 +19,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.GppBad
 import androidx.compose.material.icons.outlined.Handshake
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.SelfImprovement
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Timeline
@@ -70,6 +72,7 @@ import com.example.myexodus.accountability.state.UnpairPhase
 import com.example.myexodus.accountability.state.UnpairState
 import com.example.myexodus.accountability.sync.MessageSendOutcome
 import com.example.myexodus.accountability.sync.PartnerSyncSignals
+import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.ui.AppMark
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.NavTile
@@ -198,6 +201,8 @@ private fun ChainVerdictMark(status: PartnerChainStatus) {
 @Composable
 fun PartnerScreen(
     source: PartnerDashboardSource,
+    /** Owner ask 2026-10-04: the sharing-matrix read behind the "nothing shared yet" card. */
+    habitRepository: HabitRepository,
     notificationsEnabled: Boolean,
     onFixNotifications: () -> Unit,
     onCheckNow: suspend () -> Boolean,
@@ -229,6 +234,9 @@ fun PartnerScreen(
      *  = saved, leaves on the retry cadence; [MessageSendOutcome.FAILED] = nothing written. */
     onSendMessage: suspend (pairId: String, text: String) -> MessageSendOutcome =
         { _, _ -> MessageSendOutcome.FAILED },
+    /** Owner ask 2026-10-04: the "nothing shared yet" card's one action — the shell opens
+     *  Settings straight on the sharing pane. */
+    onOpenSharing: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -240,6 +248,7 @@ fun PartnerScreen(
     var selectedPairId by rememberSaveable { mutableStateOf(selection?.selectedPairId) }
     var checking by remember { mutableStateOf(false) }
     var checkFailed by remember { mutableStateOf(false) }
+    var checkOk by remember { mutableStateOf(false) }
     var respondingTo by remember { mutableStateOf<String?>(null) }
     var respondFailed by remember { mutableStateOf(false) }
     var confirmingUnpair by remember { mutableStateOf(false) }
@@ -251,6 +260,9 @@ fun PartnerScreen(
     var composing by remember { mutableStateOf(false) }
     var messageSending by remember { mutableStateOf(false) }
     var messageOutcome by remember { mutableStateOf<MessageSendOutcome?>(null) }
+    // Owner ask 2026-10-04: true = paired but nothing is being shared with the active partner.
+    // Null = not paired, or the store refused a read — no honest claim, so no card.
+    var sharesNothing by remember { mutableStateOf<Boolean?>(null) }
 
     suspend fun reload() {
         state = runCatching { source.load(selectedPairId = selectedPairId, nowMillis = System.currentTimeMillis()) }
@@ -264,6 +276,12 @@ fun PartnerScreen(
                 selectedPairId = paired.pairId
                 selection?.selectedPairId = paired.pairId
             }
+        }
+        // Owner ask 2026-10-04 ("you have added a partner... but not shared anything"): computed
+        // inside reload() because this is the one refresh path every repaint routes through —
+        // pulls, resume, pair switches. A failure reads as "unknown", never as a false claim.
+        sharesNothing = (state as? PartnerDashboardUi.Paired)?.let { paired ->
+            runCatching { habitRepository.sharesNothingWith(paired.pairId) }.getOrNull()
         }
     }
 
@@ -280,9 +298,13 @@ fun PartnerScreen(
         scope.launch(Dispatchers.IO) {
             checking = true
             checkFailed = false
+            checkOk = false
             val ok = runCatching { onCheckNow() }.getOrDefault(false)
             checking = false
             checkFailed = !ok
+            // A successful check with nothing new leaves the "last synced" watermark
+            // unchanged, so without a receipt the button looks like it did nothing.
+            checkOk = ok
             reload()
         }
     }
@@ -494,6 +516,7 @@ fun PartnerScreen(
                         state = current,
                         checking = checking,
                         checkFailed = checkFailed,
+                        checkOk = checkOk,
                         onCheckNow = runCheckNow,
                         unpairing = unpairing,
                         unpairFailed = unpairFailed,
@@ -529,6 +552,15 @@ fun PartnerScreen(
                         onRename = { renaming = it },
                     )
                 }
+                // Owner ask 2026-10-04: a pair with every switch off looks identical to an
+                // active one, and the partner silently receives nothing. Said once, with the
+                // one route to fixing it.
+                if (sharesNothing == true) {
+                    NothingSharedCard(
+                        partnerName = current.partnerLabel ?: shortKeyId(current.partnerKeyId),
+                        onOpenSharing = onOpenSharing,
+                    )
+                }
                 // OPD #30: the pairing's document denies this device, so nothing has synced and
                 // nothing can until a new pairing exists. Verdict before content — a pairing
                 // that cannot sync makes every number below it a stale claim.
@@ -561,6 +593,7 @@ fun PartnerScreen(
                         state = current,
                         checking = checking,
                         checkFailed = checkFailed,
+                        checkOk = checkOk,
                         onCheckNow = runCheckNow,
                         tone = CardTone.NOTICE,
                         prominentAction = false,
@@ -1357,6 +1390,29 @@ private fun PartnerIdentityCard(state: PartnerDashboardUi.Paired) {
 }
 
 /**
+ * Owner ask 2026-10-04: pairing is not sharing. Nothing is shared until a switch is turned on
+ * (v16/ADR #135), so a fresh pair can sit for days with the partner seeing nothing and no
+ * surface saying why. This card is the one place that says it, and its action lands on the
+ * sharing pane — not the Settings index — because the next step is one decision, not browsing.
+ */
+@Composable
+private fun NothingSharedCard(partnerName: String, onOpenSharing: () -> Unit) {
+    PartnerSurface {
+        Text(
+            stringResource(R.string.partner_nothing_shared_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            stringResource(R.string.partner_nothing_shared_body, partnerName),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        TextButton(onClick = onOpenSharing) {
+            Text(stringResource(R.string.partner_nothing_shared_action))
+        }
+    }
+}
+
+/**
  * Sync detail. The same card serves two jobs, so it takes its emphasis from the caller: the hub
  * shows it only when something needs attention, and there a filled button would make a routine
  * resync the loudest control on a page whose real subject is the partner.
@@ -1374,6 +1430,7 @@ private fun SyncCard(
     state: PartnerDashboardUi.Paired,
     checking: Boolean,
     checkFailed: Boolean,
+    checkOk: Boolean,
     onCheckNow: () -> Unit,
     tone: CardTone = CardTone.CALM,
     prominentAction: Boolean = true,
@@ -1419,11 +1476,14 @@ private fun SyncCard(
             HorizontalDivider()
         }
         Text(
-            stringResource(
-                if (state.lastSyncedAtEpochMillis == null) R.string.partner_never_synced
-                else R.string.partner_last_synced,
-                relativeTimeText(System.currentTimeMillis(), state.lastSyncedAtEpochMillis),
-            ),
+            if (state.lastSyncedAtEpochMillis == null) {
+                stringResource(R.string.partner_never_synced)
+            } else {
+                stringResource(
+                    R.string.partner_last_synced,
+                    relativeTimeText(System.currentTimeMillis(), state.lastSyncedAtEpochMillis),
+                )
+            },
             style = MaterialTheme.typography.titleSmall,
         )
         // An unreachable pairing is not a delayed sync: "check your connection" would send the
@@ -1474,6 +1534,13 @@ private fun SyncCard(
                 stringResource(R.string.partner_check_now_failed),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
+            )
+        }
+        if (checkOk) {
+            Text(
+                stringResource(R.string.partner_check_now_ok),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -1582,11 +1649,25 @@ private fun StatColumn(label: String, value: String, modifier: Modifier = Modifi
 private fun AlertRow(alert: PartnerAlert) {
     // Non-shaming by design (W5): a recovery row states what was practised, never that the
     // partner "failed" — the outcome labels are the neutral ones the history screen uses.
-    val (label, kindRes) = when (alert) {
-        is PartnerAlert.AppActivity -> rememberAppLabel(alert.target) to
-            (if (alert.isOverride) R.string.partner_alert_override else R.string.partner_alert_blocked)
-        is PartnerAlert.Recovery -> stringResource(techniqueTitle(alert.technique)) to
-            outcomeLabel(alert.outcome.uppercase())
+    // Wire v2 (ADR #134): a relapse/milestone row leads with the streak's own name and
+    // states the day-count; "Their streak" covers a v1 body with no name rather than a gap.
+    val label = when (alert) {
+        is PartnerAlert.AppActivity -> rememberAppLabel(alert.target)
+        is PartnerAlert.Recovery -> stringResource(techniqueTitle(alert.technique))
+        is PartnerAlert.Relapse -> alert.habitLabel
+            ?: stringResource(R.string.partner_alert_streak_unnamed)
+        is PartnerAlert.Milestone -> alert.habitLabel
+            ?: stringResource(R.string.partner_alert_streak_unnamed)
+    }
+    val kind = when (alert) {
+        is PartnerAlert.AppActivity ->
+            stringResource(if (alert.isOverride) R.string.partner_alert_override else R.string.partner_alert_blocked)
+        is PartnerAlert.Recovery -> stringResource(outcomeLabel(alert.outcome.uppercase()))
+        is PartnerAlert.Relapse -> stringResource(R.string.partner_alert_relapse) +
+            (alert.endedDays?.let { " · " + stringResource(R.string.partner_relapse_ended_days, it) }.orEmpty())
+        is PartnerAlert.Milestone -> alert.milestoneDay
+            ?.let { pluralStringResource(R.plurals.partner_milestone_reached_days, it, it) }
+            ?: stringResource(R.string.partner_alert_milestone_plain)
     }
     Row(
         Modifier.fillMaxWidth(),
@@ -1604,6 +1685,16 @@ private fun AlertRow(alert: PartnerAlert) {
                 fallback = Icons.Outlined.SelfImprovement,
                 size = 28.dp,
             )
+            is PartnerAlert.Relapse -> AppMark(
+                packageName = null,
+                fallback = Icons.Outlined.RestartAlt,
+                size = 28.dp,
+            )
+            is PartnerAlert.Milestone -> AppMark(
+                packageName = null,
+                fallback = Icons.Outlined.EmojiEvents,
+                size = 28.dp,
+            )
         }
         Text(
             label,
@@ -1613,7 +1704,7 @@ private fun AlertRow(alert: PartnerAlert) {
             modifier = Modifier.weight(1f),
         )
         Text(
-            stringResource(kindRes) + " · " + relativeTimeText(System.currentTimeMillis(), alert.atEpochMillis),
+            kind + " · " + relativeTimeText(System.currentTimeMillis(), alert.atEpochMillis),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1665,6 +1756,7 @@ private fun PairingView(
     state: PartnerDashboardUi.Paired,
     checking: Boolean,
     checkFailed: Boolean,
+    checkOk: Boolean,
     onCheckNow: () -> Unit,
     unpairing: Boolean,
     unpairFailed: Boolean,
@@ -1685,6 +1777,7 @@ private fun PairingView(
         state = state,
         checking = checking,
         checkFailed = checkFailed,
+        checkOk = checkOk,
         onCheckNow = onCheckNow,
         showIdentity = true,
         // #14: the manual check appears only when the state needs it — routine freshness is

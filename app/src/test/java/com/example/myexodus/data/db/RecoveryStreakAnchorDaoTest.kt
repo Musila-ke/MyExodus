@@ -147,9 +147,6 @@ class RecoveryStreakAnchorDaoTest {
                 habitDurationYears = 2,
                 onboardingSeverityLevel = "MODERATE",
                 lastRelapseTimestamp = null,
-                shareAccessAttempts = false,
-                shareRelapses = false,
-                shareMilestones = true,
                 assignedPartnershipId = null,
             ),
         )

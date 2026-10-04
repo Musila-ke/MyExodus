@@ -472,6 +472,331 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * Sharing settings (ADR #134, 2026-10-04). Additive columns only — no table rebuild:
+         *
+         *  - `habit_progress.share_streak`: per-streak master visibility (the "which streaks
+         *    the partner can see" switch). Default 1 (visible) matches the shipped default the
+         *    new sharing surface presents.
+         *  - `share_relapses` is FLIPPED to 1 on every existing row: the stored 0 could only
+         *    ever have been the onboard non-choice default (no UI ever wrote this flag), and
+         *    it was silently suppressing every relapse ever logged — the owner-reported defect
+         *    this migration repairs. The value the user now sees and controls is the default
+         *    the surface ships with.
+         *  - `user_profile.share_check_ins` / `share_recovery`: profile-wide consent for the
+         *    two categories that carry no habit link.
+         *  - `partner_activity_outbox.habit_label` / `ended_days` / `milestone_day`: per-event
+         *    display facts for the partner (which streak, how long it ran, which day reached).
+         *    Nullable — rows journaled before this version simply have no name to show.
+         */
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE habit_progress ADD COLUMN share_streak INTEGER NOT NULL DEFAULT 1",
+                ).use { it.step() }
+                connection.prepare(
+                    "UPDATE habit_progress SET share_relapses = 1",
+                ).use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE user_profile ADD COLUMN share_check_ins INTEGER NOT NULL DEFAULT 1",
+                ).use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE user_profile ADD COLUMN share_recovery INTEGER NOT NULL DEFAULT 1",
+                ).use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE partner_activity_outbox ADD COLUMN habit_label TEXT",
+                ).use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE partner_activity_outbox ADD COLUMN ended_days INTEGER",
+                ).use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE partner_activity_outbox ADD COLUMN milestone_day INTEGER",
+                ).use { it.step() }
+            }
+        }
+
+        /**
+         * The v15 rollback path, same rationale as [MIGRATION_14_13]: a v14 build reinstalled
+         * over a database that briefly ran at v15 must still open. `ALTER TABLE … DROP COLUMN`
+         * needs SQLite ≥ 3.35 (not guaranteed on every supported device), so the three tables
+         * are recreated from the v14 DDL and their rows copied; the dropped consent/display
+         * columns degrade exactly to v14 semantics (relapses unshared again, no names on wire).
+         */
+        val MIGRATION_15_14 = object : Migration(15, 14) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS habit_progress_old (" +
+                        "progress_id TEXT NOT NULL, profile_id TEXT NOT NULL, " +
+                        "target_identifier TEXT NOT NULL, current_clean_days_streak INTEGER NOT NULL, " +
+                        "total_relapses INTEGER NOT NULL, access_attempts_count INTEGER NOT NULL, " +
+                        "habit_duration_years INTEGER NOT NULL, " +
+                        "onboarding_severity_level TEXT NOT NULL, last_relapse_timestamp INTEGER, " +
+                        "share_access_attempts INTEGER NOT NULL, share_relapses INTEGER NOT NULL, " +
+                        "share_milestones INTEGER NOT NULL, assigned_partnership_id TEXT, " +
+                        "all_time_max_streak_elapsed_ms INTEGER NOT NULL DEFAULT 0, " +
+                        "is_selected INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(progress_id), " +
+                        "FOREIGN KEY(profile_id) REFERENCES user_profile(user_id) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE)",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO habit_progress_old (progress_id, profile_id, target_identifier, " +
+                        "current_clean_days_streak, total_relapses, access_attempts_count, " +
+                        "habit_duration_years, onboarding_severity_level, last_relapse_timestamp, " +
+                        "share_access_attempts, share_relapses, share_milestones, " +
+                        "assigned_partnership_id, all_time_max_streak_elapsed_ms, is_selected) " +
+                        "SELECT progress_id, profile_id, target_identifier, current_clean_days_streak, " +
+                        "total_relapses, access_attempts_count, habit_duration_years, " +
+                        "onboarding_severity_level, last_relapse_timestamp, share_access_attempts, " +
+                        "share_relapses, share_milestones, assigned_partnership_id, " +
+                        "all_time_max_streak_elapsed_ms, is_selected FROM habit_progress",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS habit_progress").use { it.step() }
+                connection.prepare("ALTER TABLE habit_progress_old RENAME TO habit_progress").use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS user_profile_old (" +
+                        "user_id TEXT NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL, " +
+                        "phone_number TEXT, date_of_birth INTEGER NOT NULL, " +
+                        "has_accessibility_permission INTEGER NOT NULL, " +
+                        "has_usage_stats_permission INTEGER NOT NULL, has_vpn_permission INTEGER NOT NULL, " +
+                        "has_notification_permission INTEGER NOT NULL, " +
+                        "has_device_admin_permission INTEGER NOT NULL, device_public_key TEXT, " +
+                        "recovery_escrow_key TEXT, is_active INTEGER NOT NULL, PRIMARY KEY(user_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO user_profile_old (user_id, name, email, phone_number, date_of_birth, " +
+                        "has_accessibility_permission, has_usage_stats_permission, has_vpn_permission, " +
+                        "has_notification_permission, has_device_admin_permission, device_public_key, " +
+                        "recovery_escrow_key, is_active) " +
+                        "SELECT user_id, name, email, phone_number, date_of_birth, " +
+                        "has_accessibility_permission, has_usage_stats_permission, has_vpn_permission, " +
+                        "has_notification_permission, has_device_admin_permission, device_public_key, " +
+                        "recovery_escrow_key, is_active FROM user_profile",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS user_profile").use { it.step() }
+                connection.prepare("ALTER TABLE user_profile_old RENAME TO user_profile").use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_activity_outbox_old (" +
+                        "event_id TEXT NOT NULL, kind TEXT NOT NULL, target_pair_id TEXT, " +
+                        "text TEXT NOT NULL, occurred_at_ms INTEGER NOT NULL, days_free INTEGER NOT NULL, " +
+                        "relapse_count INTEGER NOT NULL, milestones_reached TEXT NOT NULL, " +
+                        "coaching_progress INTEGER NOT NULL, protocol_version INTEGER NOT NULL, " +
+                        "schema_version INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, " +
+                        "PRIMARY KEY(event_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO partner_activity_outbox_old (event_id, kind, target_pair_id, text, " +
+                        "occurred_at_ms, days_free, relapse_count, milestones_reached, " +
+                        "coaching_progress, protocol_version, schema_version, created_at_ms) " +
+                        "SELECT event_id, kind, target_pair_id, text, occurred_at_ms, days_free, " +
+                        "relapse_count, milestones_reached, coaching_progress, protocol_version, " +
+                        "schema_version, created_at_ms FROM partner_activity_outbox",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS partner_activity_outbox").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE partner_activity_outbox_old RENAME TO partner_activity_outbox",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_activity_outbox_created_at_ms " +
+                        "ON partner_activity_outbox (created_at_ms)",
+                ).use { it.step() }
+            }
+        }
+
+        /**
+         * v15 → v16 (ADR #135): consent moves from per-habit / per-profile columns to a per
+         * (pair, item) matrix — `pair_streak_sharing` / `pair_profile_sharing`. The legacy
+         * consent columns are dropped outright, with no seed: the owner ruling is "nothing
+         * until you choose" for every install, and a pre-v16 flag was written by a surface
+         * that never asked per partner — seeding any pair from it would share on the user's
+         * behalf. Recreate-table style because `DROP COLUMN` needs SQLite ≥ 3.35.
+         *
+         * `partner_activity_outbox` gains the consent key `habit_progress_id` (null on
+         * pre-v16 rows — the reconcile filter matches them to no branch and skips them,
+         * the conservative answer for rows whose habit slice can't be proven).
+         */
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS habit_progress_old (" +
+                        "progress_id TEXT NOT NULL, profile_id TEXT NOT NULL, " +
+                        "target_identifier TEXT NOT NULL, current_clean_days_streak INTEGER NOT NULL, " +
+                        "total_relapses INTEGER NOT NULL, access_attempts_count INTEGER NOT NULL, " +
+                        "habit_duration_years INTEGER NOT NULL, " +
+                        "onboarding_severity_level TEXT NOT NULL, last_relapse_timestamp INTEGER, " +
+                        "assigned_partnership_id TEXT, " +
+                        "all_time_max_streak_elapsed_ms INTEGER NOT NULL DEFAULT 0, " +
+                        "is_selected INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(progress_id), " +
+                        "FOREIGN KEY(profile_id) REFERENCES user_profile(user_id) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE)",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO habit_progress_old (progress_id, profile_id, target_identifier, " +
+                        "current_clean_days_streak, total_relapses, access_attempts_count, " +
+                        "habit_duration_years, onboarding_severity_level, last_relapse_timestamp, " +
+                        "assigned_partnership_id, all_time_max_streak_elapsed_ms, is_selected) " +
+                        "SELECT progress_id, profile_id, target_identifier, current_clean_days_streak, " +
+                        "total_relapses, access_attempts_count, habit_duration_years, " +
+                        "onboarding_severity_level, last_relapse_timestamp, " +
+                        "assigned_partnership_id, all_time_max_streak_elapsed_ms, is_selected " +
+                        "FROM habit_progress",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS habit_progress").use { it.step() }
+                connection.prepare("ALTER TABLE habit_progress_old RENAME TO habit_progress").use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS user_profile_old (" +
+                        "user_id TEXT NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL, " +
+                        "phone_number TEXT, date_of_birth INTEGER NOT NULL, " +
+                        "has_accessibility_permission INTEGER NOT NULL, " +
+                        "has_usage_stats_permission INTEGER NOT NULL, has_vpn_permission INTEGER NOT NULL, " +
+                        "has_notification_permission INTEGER NOT NULL, " +
+                        "has_device_admin_permission INTEGER NOT NULL, device_public_key TEXT, " +
+                        "recovery_escrow_key TEXT, is_active INTEGER NOT NULL, PRIMARY KEY(user_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO user_profile_old (user_id, name, email, phone_number, date_of_birth, " +
+                        "has_accessibility_permission, has_usage_stats_permission, has_vpn_permission, " +
+                        "has_notification_permission, has_device_admin_permission, device_public_key, " +
+                        "recovery_escrow_key, is_active) " +
+                        "SELECT user_id, name, email, phone_number, date_of_birth, " +
+                        "has_accessibility_permission, has_usage_stats_permission, has_vpn_permission, " +
+                        "has_notification_permission, has_device_admin_permission, device_public_key, " +
+                        "recovery_escrow_key, is_active FROM user_profile",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS user_profile").use { it.step() }
+                connection.prepare("ALTER TABLE user_profile_old RENAME TO user_profile").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE partner_activity_outbox ADD COLUMN habit_progress_id TEXT",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS pair_streak_sharing (" +
+                        "pair_id TEXT NOT NULL, habit_progress_id TEXT NOT NULL, " +
+                        "share_streak INTEGER NOT NULL, share_relapses INTEGER NOT NULL, " +
+                        "share_milestones INTEGER NOT NULL, " +
+                        "streak_enabled_since_ms INTEGER NOT NULL, " +
+                        "relapse_enabled_since_ms INTEGER NOT NULL, " +
+                        "milestone_enabled_since_ms INTEGER NOT NULL, " +
+                        "PRIMARY KEY(pair_id, habit_progress_id), " +
+                        "FOREIGN KEY(habit_progress_id) REFERENCES habit_progress(progress_id) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_pair_streak_sharing_habit_progress_id " +
+                        "ON pair_streak_sharing (habit_progress_id)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS pair_profile_sharing (" +
+                        "pair_id TEXT NOT NULL, share_checkins INTEGER NOT NULL, " +
+                        "share_recovery INTEGER NOT NULL, " +
+                        "checkins_enabled_since_ms INTEGER NOT NULL, " +
+                        "recovery_enabled_since_ms INTEGER NOT NULL, PRIMARY KEY(pair_id))",
+                ).use { it.step() }
+            }
+        }
+
+        /**
+         * The v16 rollback path, same rationale as [MIGRATION_15_14]: a v15 build reinstalled
+         * over a database that briefly ran at v16 must still open. The pair tables carry the
+         * only record of the user's choices, so each v15 flag is reconstructed as "any pair
+         * has it on" before the pair tables are dropped — the closest single-column value
+         * v15 can hold. `share_access_attempts` was never written by any UI: zero.
+         */
+        val MIGRATION_16_15 = object : Migration(16, 15) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS habit_progress_old (" +
+                        "progress_id TEXT NOT NULL, profile_id TEXT NOT NULL, " +
+                        "target_identifier TEXT NOT NULL, current_clean_days_streak INTEGER NOT NULL, " +
+                        "total_relapses INTEGER NOT NULL, access_attempts_count INTEGER NOT NULL, " +
+                        "habit_duration_years INTEGER NOT NULL, " +
+                        "onboarding_severity_level TEXT NOT NULL, last_relapse_timestamp INTEGER, " +
+                        "share_access_attempts INTEGER NOT NULL, share_relapses INTEGER NOT NULL, " +
+                        "share_milestones INTEGER NOT NULL, " +
+                        "share_streak INTEGER NOT NULL DEFAULT 1, assigned_partnership_id TEXT, " +
+                        "all_time_max_streak_elapsed_ms INTEGER NOT NULL DEFAULT 0, " +
+                        "is_selected INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(progress_id), " +
+                        "FOREIGN KEY(profile_id) REFERENCES user_profile(user_id) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE)",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO habit_progress_old (progress_id, profile_id, target_identifier, " +
+                        "current_clean_days_streak, total_relapses, access_attempts_count, " +
+                        "habit_duration_years, onboarding_severity_level, last_relapse_timestamp, " +
+                        "share_access_attempts, share_relapses, share_milestones, share_streak, " +
+                        "assigned_partnership_id, all_time_max_streak_elapsed_ms, is_selected) " +
+                        "SELECT progress_id, profile_id, target_identifier, current_clean_days_streak, " +
+                        "total_relapses, access_attempts_count, habit_duration_years, " +
+                        "onboarding_severity_level, last_relapse_timestamp, 0, " +
+                        "EXISTS (SELECT 1 FROM pair_streak_sharing s " +
+                        "WHERE s.habit_progress_id = habit_progress.progress_id AND s.share_relapses = 1), " +
+                        "EXISTS (SELECT 1 FROM pair_streak_sharing s " +
+                        "WHERE s.habit_progress_id = habit_progress.progress_id AND s.share_milestones = 1), " +
+                        "EXISTS (SELECT 1 FROM pair_streak_sharing s " +
+                        "WHERE s.habit_progress_id = habit_progress.progress_id AND s.share_streak = 1), " +
+                        "assigned_partnership_id, all_time_max_streak_elapsed_ms, is_selected " +
+                        "FROM habit_progress",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS habit_progress").use { it.step() }
+                connection.prepare("ALTER TABLE habit_progress_old RENAME TO habit_progress").use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS user_profile_old (" +
+                        "user_id TEXT NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL, " +
+                        "phone_number TEXT, date_of_birth INTEGER NOT NULL, " +
+                        "has_accessibility_permission INTEGER NOT NULL, " +
+                        "has_usage_stats_permission INTEGER NOT NULL, has_vpn_permission INTEGER NOT NULL, " +
+                        "has_notification_permission INTEGER NOT NULL, " +
+                        "has_device_admin_permission INTEGER NOT NULL, device_public_key TEXT, " +
+                        "recovery_escrow_key TEXT, is_active INTEGER NOT NULL, " +
+                        "share_check_ins INTEGER NOT NULL DEFAULT 1, " +
+                        "share_recovery INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(user_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO user_profile_old (user_id, name, email, phone_number, date_of_birth, " +
+                        "has_accessibility_permission, has_usage_stats_permission, has_vpn_permission, " +
+                        "has_notification_permission, has_device_admin_permission, device_public_key, " +
+                        "recovery_escrow_key, is_active, share_check_ins, share_recovery) " +
+                        "SELECT user_id, name, email, phone_number, date_of_birth, " +
+                        "has_accessibility_permission, has_usage_stats_permission, has_vpn_permission, " +
+                        "has_notification_permission, has_device_admin_permission, device_public_key, " +
+                        "recovery_escrow_key, is_active, " +
+                        "EXISTS (SELECT 1 FROM pair_profile_sharing WHERE share_checkins = 1), " +
+                        "EXISTS (SELECT 1 FROM pair_profile_sharing WHERE share_recovery = 1) " +
+                        "FROM user_profile",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS user_profile").use { it.step() }
+                connection.prepare("ALTER TABLE user_profile_old RENAME TO user_profile").use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_activity_outbox_old (" +
+                        "event_id TEXT NOT NULL, kind TEXT NOT NULL, target_pair_id TEXT, " +
+                        "text TEXT NOT NULL, occurred_at_ms INTEGER NOT NULL, days_free INTEGER NOT NULL, " +
+                        "relapse_count INTEGER NOT NULL, milestones_reached TEXT NOT NULL, " +
+                        "habit_label TEXT, ended_days INTEGER, milestone_day INTEGER, " +
+                        "coaching_progress INTEGER NOT NULL, protocol_version INTEGER NOT NULL, " +
+                        "schema_version INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, " +
+                        "PRIMARY KEY(event_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO partner_activity_outbox_old (event_id, kind, target_pair_id, text, " +
+                        "occurred_at_ms, days_free, relapse_count, milestones_reached, habit_label, " +
+                        "ended_days, milestone_day, coaching_progress, protocol_version, " +
+                        "schema_version, created_at_ms) " +
+                        "SELECT event_id, kind, target_pair_id, text, occurred_at_ms, days_free, " +
+                        "relapse_count, milestones_reached, habit_label, ended_days, milestone_day, " +
+                        "coaching_progress, protocol_version, schema_version, created_at_ms " +
+                        "FROM partner_activity_outbox",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS partner_activity_outbox").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE partner_activity_outbox_old RENAME TO partner_activity_outbox",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_activity_outbox_created_at_ms " +
+                        "ON partner_activity_outbox (created_at_ms)",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS pair_streak_sharing").use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS pair_profile_sharing").use { it.step() }
+            }
+        }
+
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override suspend fun migrate(connection: SQLiteConnection) {
                 // Recovery resource UI (plan v3 W7): the urge/recovery session log and the
@@ -684,8 +1009,9 @@ class AppRulesStoreFactory(
         val ALL_MIGRATIONS = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14,
-            MIGRATION_10_9, MIGRATION_12_11, MIGRATION_13_12, MIGRATION_14_13,
+            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
+            MIGRATION_10_9, MIGRATION_12_11, MIGRATION_13_12, MIGRATION_14_13, MIGRATION_15_14,
+            MIGRATION_16_15,
         )
     }
 }

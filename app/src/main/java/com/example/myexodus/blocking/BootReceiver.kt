@@ -6,6 +6,7 @@ import android.content.Intent
 import android.util.Log
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.settings.EnhancedModeSettings
+import com.example.myexodus.vpn.VpnLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -37,7 +38,16 @@ class BootReceiver : BroadcastReceiver() {
         // incl. Infinix/TECNO) — the device matrix needs to see this fire (2026-08-28 research).
         if (BuildConfig.DEBUG) Log.i(TAG, "${intent.action} received")
         publisher.loadFastPath()
-        scope.launch { publisher.loadFromDb() }
+        scope.launch {
+            publisher.loadFromDb()
+            // #26: same SSOT as the in-app pass — the publisher's url rules (the blocking
+            // policy itself). Runs after the authoritative load so a rule edit that predates
+            // the reboot is seen.
+            runCatching {
+                val hasRules = publisher.snapshot.urlRules.isNotEmpty()
+                VpnLifecycle.ensure(context.applicationContext, hasRules)
+            }.onFailure { Log.w(TAG, "tunnel ensure-pass failed", it) }
+        }
         if (settings.enhancedModeEnabled) {
             EnforcementForegroundService.start(context)
         }

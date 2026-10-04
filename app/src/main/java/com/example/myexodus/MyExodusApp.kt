@@ -20,7 +20,12 @@ import androidx.work.WorkManager
 import com.example.myexodus.accountability.state.LocalWipeDetector
 import com.example.myexodus.accountability.sync.AppCheckInstaller
 import com.example.myexodus.accountability.sync.PartnerNotifications
+import com.example.myexodus.accountability.sync.PartnerRolloutGate
+import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
+import com.example.myexodus.accountability.sync.PartnerSyncSignals
+import com.example.myexodus.accountability.sync.PushInstallationRegistrar
 import com.example.myexodus.accountability.sync.enqueuePartnerSync
+import com.example.myexodus.accountability.sync.runPartnerSyncPass
 import com.example.myexodus.blocking.BootReconciliationStore
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.HealthCheckWorker
@@ -59,6 +64,13 @@ class MyExodusApp : Application(), Configuration.Provider {
     @Inject lateinit var bootReconciliation: BootReconciliationStore
     @Inject lateinit var localWipeDetector: LocalWipeDetector
     @Inject lateinit var recoverySessions: RecoverySessionRepository
+    // Owner mandate 2026-10-04 (realtime): the sender kick's three collaborators — a shared
+    // transition must move off-device the moment it is journalled, not at the next 15-minute
+    // tick (see the collector below). Lazy on purpose: the chain reaches the keystore-backed
+    // signer, and app startup must not construct that before the first actual tick.
+    @Inject lateinit var partnerSyncCoordinator: dagger.Lazy<PartnerSyncCoordinator>
+    @Inject lateinit var pushInstallationRegistrar: dagger.Lazy<PushInstallationRegistrar>
+    @Inject lateinit var partnerRolloutGate: dagger.Lazy<PartnerRolloutGate>
     // Widget snapshot writer (widget spec §7 Step 3). Field injection here is the construction
     // trigger, not decoration: nothing calls into the writer from the app — its collectors and
     // its heartbeat only run while this process is alive, and this line is what starts them.
@@ -98,7 +110,7 @@ class MyExodusApp : Application(), Configuration.Provider {
         AppCheckInstaller.install(this)
         // Plan §8 Step 16's sync_status channel: debug-only (never user-visible in release).
         PartnerNotifications.ensureSyncStatusChannel(this)
-        // SOS §8.14: the partner_nudges channel exists from startup — the §8.12 pushEligible
+        // SOS §8.14: the partner_nudges_v3 channel exists from startup — the §8.12 pushEligible
         // snapshot reads its presence/importance, so it cannot wait for the first nudge.
         PartnerNotifications.ensurePartnerNudgesChannel(this)
         // Decision 12 opt-out: FirebaseInitProvider ran before this call, so this is what the
@@ -112,6 +124,22 @@ class MyExodusApp : Application(), Configuration.Provider {
                 if (state !is DatabaseHealth.Opening && state !is DatabaseHealth.Ready) {
                     crashReporting.nonFatal("db_health", cause = state::class.simpleName)
                 }
+            }
+        }
+        // Owner mandate 2026-10-04 (realtime): PartnerActivityJournal emits one tick per shared
+        // transition (relapse, milestone, streak, message); this is its only consumer. Ring
+        // straight into an in-process pass so a relapse left the device seconds ago rather than
+        // "hasn't even arrived". Ticks can only fire from post-unlock UI work, so this starts
+        // unconditionally; a failed pass (offline) is dropped, and the periodic run heals it.
+        applicationScope.launch {
+            PartnerSyncSignals.activityEmitted.collect {
+                runCatching {
+                    runPartnerSyncPass(
+                        pushInstallationRegistrar.get(),
+                        partnerRolloutGate.get(),
+                        partnerSyncCoordinator.get(),
+                    )
+                }.onFailure { Log.w(TAG, "activity kick pass failed", it) }
             }
         }
         // Eager open off the main thread; failure lands in a defined DatabaseHealth state, not a crash.

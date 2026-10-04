@@ -27,8 +27,12 @@ import com.example.myexodus.data.db.KeyFailure
 import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.data.db.RulesStoreKeyManager
 import com.example.myexodus.data.db.entity.AttemptLog
+import com.example.myexodus.data.db.entity.HabitProgress
+import com.example.myexodus.data.db.entity.PairProfileSharing
+import com.example.myexodus.data.db.entity.PairStreakSharing
 import com.example.myexodus.data.db.entity.PartnerActivityOutbox
 import com.example.myexodus.data.db.entity.RecoverySession
+import com.example.myexodus.data.db.entity.UserProfile
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
@@ -132,6 +136,7 @@ class PartnerSyncCoordinatorTest {
     @Test
     fun blockedAttempt_warmWindow_becomesLinkedDrainedEvent() = runTest {
         enroll()
+        seedConsent(shareCheckins = true)
         recorder.recordBlocked("r-1", "com.instagram.android")
 
         val report = coordinator.syncOnce()
@@ -164,6 +169,7 @@ class PartnerSyncCoordinatorTest {
     @Test
     fun overrideAttempt_producesOverridePayload() = runTest {
         enroll()
+        seedConsent(shareCheckins = true)
         recorder.recordOverride("r-1", "com.instagram.android")
 
         coordinator.syncOnce()
@@ -191,6 +197,7 @@ class PartnerSyncCoordinatorTest {
     @Test
     fun secondRun_createsNoDuplicateEvent() = runTest {
         enroll()
+        seedConsent(shareCheckins = true)
         recorder.recordBlocked("r-1", "com.a")
         val first = coordinator.syncOnce()
         assertEquals(1, first.eventsLinked)
@@ -279,6 +286,7 @@ class PartnerSyncCoordinatorTest {
     @Test
     fun recoverySession_warmWindow_becomesLinkedRecoveryEvent() = runTest {
         enroll()
+        seedConsent(shareRecovery = true)
         insertSession()
 
         val report = coordinator.syncOnce()
@@ -373,6 +381,8 @@ class PartnerSyncCoordinatorTest {
         enroll()
         enroll(secondPair, partnerSigningKey = secondPartnerSigning.public, partnerAgreementKey = secondPartnerAgreement.public)
         uids[secondPair] = "me" to "partner-two"
+        seedConsent(pairId, shareCheckins = true, shareRecovery = true)
+        seedConsent(secondPair, shareCheckins = true, shareRecovery = true)
         recorder.recordBlocked("r-1", "com.instagram.android")
         insertSession()
 
@@ -436,7 +446,12 @@ class PartnerSyncCoordinatorTest {
         enroll()
         enroll(secondPair, partnerSigningKey = secondPartnerSigning.public, partnerAgreementKey = secondPartnerAgreement.public)
         uids[secondPair] = "me" to "partner-two"
-        insertActivity(eventId = "ev-1", kind = EventPayload.TYPE_MILESTONE_REACHED, daysFree = 30, milestones = "7,30")
+        seedConsent(pairId, shareStreak = true, shareMilestones = true)
+        seedConsent(secondPair, shareStreak = true, shareMilestones = true)
+        insertActivity(
+            eventId = "ev-1", kind = EventPayload.TYPE_MILESTONE_REACHED, daysFree = 30,
+            milestones = "7,30", habitProgressId = TEST_HABIT_ID,
+        )
 
         val report = coordinator.syncOnce()
 
@@ -464,6 +479,9 @@ class PartnerSyncCoordinatorTest {
     @Test
     fun motivationalMessage_carriesItsBodyOnTheWire() = runTest {
         enroll()
+        // The v16 message branch needs this pair to hold a visible habit (share_streak row +
+        // a real habit row) — the re-anchor source when the row itself carries no anchor.
+        seedConsent(shareStreak = true)
         insertActivity(eventId = "ev-msg", kind = EventPayload.TYPE_MOTIVATIONAL_MESSAGE, text = "Proud of you.")
 
         coordinator.syncOnce()
@@ -480,8 +498,12 @@ class PartnerSyncCoordinatorTest {
     @Test
     fun activityJournal_coldWindow_leavesTheRowPending() = runTest {
         enroll()
+        seedConsent(shareStreak = true)
         coordinator = coordinator(coldSigner())
-        insertActivity(eventId = "ev-cold", kind = EventPayload.TYPE_STREAK_UPDATED)
+        insertActivity(
+            eventId = "ev-cold", kind = EventPayload.TYPE_STREAK_UPDATED,
+            habitProgressId = TEST_HABIT_ID,
+        )
 
         val report = coordinator.syncOnce()
 
@@ -505,6 +527,7 @@ class PartnerSyncCoordinatorTest {
     fun reconcile_boundsEveryQueueToThePairingMoment() = runTest {
         val pairedAt = System.currentTimeMillis()
         enroll(enrolledAt = pairedAt)
+        seedConsent(shareStreak = true, shareCheckins = true, shareRecovery = true)
         val store = factory.open()!!
         val attempts = store.attemptLogDao()
         val beforeAttempt = attempts.insert(attemptAt(pairedAt - 1_000L))
@@ -512,10 +535,12 @@ class PartnerSyncCoordinatorTest {
         insertActivity(
             eventId = "ev-before", kind = EventPayload.TYPE_STREAK_UPDATED,
             occurredAtMs = pairedAt - 1_000L, createdAtMs = pairedAt - 1_000L,
+            habitProgressId = TEST_HABIT_ID,
         )
         insertActivity(
             eventId = "ev-at", kind = EventPayload.TYPE_STREAK_UPDATED,
             occurredAtMs = pairedAt, createdAtMs = pairedAt,
+            habitProgressId = TEST_HABIT_ID,
         )
         insertSession(id = "s-before", startedAt = pairedAt - 1_000L)
         insertSession(id = "s-at", startedAt = pairedAt)
@@ -561,10 +586,21 @@ class PartnerSyncCoordinatorTest {
     @Test
     fun sweep_prunesExpiredRows_andOrphanedPairState_keepingTheLivePair() = runTest {
         enroll()
+        // Probing pair: enrolled (so its v16 consent row survives the orphan prune) with a
+        // pairing moment after both rows (so reconcile's pairing bound consumes neither) —
+        // the probe then reads the journal's own state, which is what this test is about.
+        enroll("pair-probe", enrolledAt = System.currentTimeMillis() + 60_000L)
+        seedConsent("pair-probe", shareStreak = true)
         val dao = factory.open()!!.partnerActivityDao()
         val now = System.currentTimeMillis()
-        insertActivity(eventId = "ev-old", kind = EventPayload.TYPE_STREAK_UPDATED, createdAtMs = now - 31L * 24 * 60 * 60 * 1000)
-        insertActivity(eventId = "ev-fresh", kind = EventPayload.TYPE_STREAK_UPDATED, createdAtMs = now)
+        insertActivity(
+            eventId = "ev-old", kind = EventPayload.TYPE_STREAK_UPDATED,
+            createdAtMs = now - 31L * 24 * 60 * 60 * 1000, habitProgressId = TEST_HABIT_ID,
+        )
+        insertActivity(
+            eventId = "ev-fresh", kind = EventPayload.TYPE_STREAK_UPDATED,
+            createdAtMs = now, habitProgressId = TEST_HABIT_ID,
+        )
         dao.linkEvent("ev-old", "pair-gone", 1L)
         dao.applyStateAfter("pair-gone", 5, 0, "", 0, now, 1L)
         dao.linkEvent("ev-fresh", pairId, 1L)
@@ -572,11 +608,10 @@ class PartnerSyncCoordinatorTest {
 
         coordinator.syncOnce()
 
-        // Probed from a pair that has no links at all, so the answer is the journal's own state.
         assertEquals(
             "expired row swept, fresh row survives",
             listOf("ev-fresh"),
-            dao.pendingForPair("pair-never", sinceMs = 0L, limit = 10).map { it.eventId },
+            dao.pendingForPair("pair-probe", sinceMs = 0L, limit = 10).map { it.eventId },
         )
         assertEquals("live pair's card kept", 7, dao.projection(pairId)!!.daysFree)
         assertNull("orphan link pruned", dao.linkSequence("ev-old", "pair-gone"))
@@ -618,6 +653,81 @@ class PartnerSyncCoordinatorTest {
 
     // ---- helpers ----
 
+    /** v16 (ADR #135): nothing reconciles for a pair without its own consent rows — seeding
+     *  the full chain (profile → habit → per-pair flags, watermarks 0 so "now"-stamped
+     *  fixtures clear the enable bound) is the precondition every emission test shares. */
+    private suspend fun seedConsent(
+        pairId: String = this.pairId,
+        shareStreak: Boolean = false,
+        shareRelapses: Boolean = false,
+        shareMilestones: Boolean = false,
+        shareCheckins: Boolean = false,
+        shareRecovery: Boolean = false,
+    ) {
+        val store = factory.open()!!
+        if (store.userProfileDao().getById(TEST_PROFILE_ID) == null) {
+            store.userProfileDao().insert(
+                UserProfile(
+                    userId = TEST_PROFILE_ID,
+                    name = "Sync Test",
+                    email = "sync-test@example.com",
+                    phoneNumber = null,
+                    dateOfBirth = 0L,
+                    hasAccessibilityPermission = false,
+                    hasUsageStatsPermission = false,
+                    hasVpnPermission = false,
+                    hasNotificationPermission = false,
+                    hasDeviceAdminPermission = false,
+                    devicePublicKey = null,
+                    recoveryEscrowKey = null,
+                    isActive = false,
+                ),
+            )
+        }
+        if (store.habitProgressDao().getById(TEST_HABIT_ID) == null) {
+            store.habitProgressDao().insert(
+                HabitProgress(
+                    progressId = TEST_HABIT_ID,
+                    profileId = TEST_PROFILE_ID,
+                    targetIdentifier = "Instagram",
+                    currentCleanDaysStreak = 0,
+                    totalRelapses = 0,
+                    accessAttemptsCount = 0,
+                    habitDurationYears = 1,
+                    onboardingSeverityLevel = "MODERATE",
+                    lastRelapseTimestamp = null,
+                    assignedPartnershipId = null,
+                    isSelected = true,
+                ),
+            )
+        }
+        if (shareStreak || shareRelapses || shareMilestones) {
+            store.pairSharingDao().upsertStreak(
+                PairStreakSharing(
+                    pairId = pairId,
+                    habitProgressId = TEST_HABIT_ID,
+                    shareStreak = shareStreak,
+                    shareRelapses = shareRelapses,
+                    shareMilestones = shareMilestones,
+                    streakEnabledSinceMs = 0,
+                    relapseEnabledSinceMs = 0,
+                    milestoneEnabledSinceMs = 0,
+                ),
+            )
+        }
+        if (shareCheckins || shareRecovery) {
+            store.pairSharingDao().upsertProfile(
+                PairProfileSharing(
+                    pairId = pairId,
+                    shareCheckins = shareCheckins,
+                    shareRecovery = shareRecovery,
+                    checkinsEnabledSinceMs = 0,
+                    recoveryEnabledSinceMs = 0,
+                ),
+            )
+        }
+    }
+
     // Defaults are "just written": a fixture timestamped years in the past is a row the
     // 30-day retention sweep deletes before reconcile can emit it (the sweep runs first in
     // syncOnce), which would make every emission test fail for the wrong reason.
@@ -631,10 +741,12 @@ class PartnerSyncCoordinatorTest {
         relapseCount: Int = 0,
         milestones: String = "",
         coachingProgress: Int = 0,
+        habitProgressId: String? = null,
     ) = factory.open()!!.partnerActivityDao().insertJournal(
         PartnerActivityOutbox(
             eventId = eventId,
             kind = kind,
+            habitProgressId = habitProgressId,
             text = text,
             occurredAtMs = occurredAtMs,
             daysFree = daysFree,
@@ -766,6 +878,10 @@ class PartnerSyncCoordinatorTest {
         /** Fixture pairing time: every hand-built row is stamped at or after it, so the
          *  enrollment bound is exercised rather than bypassed. */
         private const val ENROLLMENT_AT = 1_700_000_000_000L
+
+        /** Consent-chain fixtures: one shared inactive profile + habit for every seed. */
+        private const val TEST_PROFILE_ID = "sync-test-profile"
+        private const val TEST_HABIT_ID = "sync-test-habit"
 
         private fun ecKeyPair(): KeyPair = KeyPairGenerator.getInstance("EC").apply {
             initialize(ECGenParameterSpec("secp256r1"))

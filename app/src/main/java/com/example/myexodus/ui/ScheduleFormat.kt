@@ -29,8 +29,10 @@ data class RuleRowState(val label: String?, val active: Boolean)
  * Paused and expired are decided before the engine — those rules aren't enforced at all.
  */
 fun ruleRowState(rule: RestrictionRule, nowEpochMillis: Long, res: Resources): RuleRowState {
-    if (!rule.isEnabled) return RuleRowState(res.getString(R.string.state_paused), active = false)
+    // Expired wins over paused: a rule the #18 sweep flipped off is off *because its duration
+    // lapsed*, and "Paused" would blame the user for a switch they never touched.
     if (rule.isExpiredAt(nowEpochMillis)) return RuleRowState(res.getString(R.string.state_expired), active = false)
+    if (!rule.isEnabled) return RuleRowState(res.getString(R.string.state_paused), active = false)
     val blocking = BlockDecisionEngine.blocksNow(
         isAlwaysOn = rule.isAlwaysOn,
         dailyLimitMs = rule.dailyLimitMs,

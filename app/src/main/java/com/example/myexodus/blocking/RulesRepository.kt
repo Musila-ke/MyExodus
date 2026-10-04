@@ -3,6 +3,7 @@ package com.example.myexodus.blocking
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.UserProfile
+import com.example.myexodus.data.db.entity.isExpiredAt
 import kotlinx.coroutines.flow.Flow
 
 /** Rejects a rule write past the snapshot caps (plan §8 Step 2); the UI maps [message]. */
@@ -60,6 +61,30 @@ class RulesRepository(
      *  enforcement snapshot republishes immediately and the engine stops/starts deciding. */
     suspend fun setEnabled(rule: RestrictionRule, enabled: Boolean) =
         updateRule(rule.copy(isEnabled = enabled))
+
+    /**
+     * #18 (owner ruling 2026-10-04): a lapsed duration flips the rule's own toggle off, so the
+     * switch tells the same truth enforcement already acts on (engine Rule 3 ignores expired
+     * rules). Idempotent and best-effort at its call sites: if a write fails the engine is
+     * still correct, the next screen visit sweeps again.
+     */
+    suspend fun sweepExpired(nowMillis: Long) {
+        getActiveRules()
+            .filter { it.isEnabled && it.isExpiredAt(nowMillis) }
+            .forEach { updateRule(it.copy(isEnabled = false)) }
+    }
+
+    /** #18 cleanup: delete a whole batch behind one snapshot reload — per-rule [deleteRule]
+     *  would reload the enforcement snapshot once per rule. Each delete still bumps the policy
+     *  version in its own transaction; the version only feeds change detection, so N bumps
+     *  before the single reload are equivalent to one. */
+    suspend fun deleteRules(rules: List<RestrictionRule>) {
+        if (rules.isEmpty()) return
+        val db = store()
+        val versionDao = db.policyVersionDao()
+        rules.forEach { db.restrictionRuleDao().deleteAndBump(it, versionDao) }
+        publisher.loadFromDb()
+    }
 
     /**
      * Every rule FK-references a profile (`profile_id` is NOT NULL), but V1 ships no

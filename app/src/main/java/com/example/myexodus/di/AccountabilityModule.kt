@@ -41,6 +41,7 @@ import com.example.myexodus.accountability.sync.PairingRegistration
 import com.example.myexodus.accountability.sync.PairingReachabilityStore
 import com.example.myexodus.accountability.sync.PairUidResolver
 import com.example.myexodus.accountability.sync.PartnerNotifications
+import com.example.myexodus.accountability.sync.PartnerLiveSync
 import com.example.myexodus.accountability.sync.displayNameOf
 import com.example.myexodus.accountability.activity.PartnerActivityJournal
 import com.example.myexodus.accountability.activity.PartnerActivityReceiver
@@ -583,16 +584,14 @@ object AccountabilityModule {
         agreementPublicKey = keystore::pairAgreementPublicKey,
         agreementPrivateKey = keystore::pairAgreementPrivateKey,
         destroyAgreementKey = keystore::destroyPairAgreementKey,
-        // Owner ruling 2026-09-29: the newcomer gets one fresh snapshot at pair-complete
-        // (reconcile no longer hands them the pre-pairing backlog).
+        // Owner mandate 2026-10-04 (v16/ADR #135): a fresh pair owns no consent rows, so the
+        // pair-complete snapshot it replaced is gone by construction — the catch-up snapshot
+        // now fires from the sharing toggle that first makes a habit visible to the pair.
         onEnrolled = { pairId ->
             // OPD #30(b): AD-02 pair ids are deterministic, so re-pairing reuses the id — a
             // denial flag from the orphaned pairing would otherwise outlive the fix and put a
             // false re-pair card on a brand-new, working pairing.
             reachability.markReachable(pairId)
-            storeFactory.open()?.let {
-                PartnerActivityJournal.emitPairingSnapshot(it, pairId, System.currentTimeMillis())
-            }
         },
     )
 
@@ -612,6 +611,20 @@ object AccountabilityModule {
         firestore: FirebaseFirestore,
         reachability: PairingReachabilityStore,
     ): PairUidResolver = PairUidResolver(context, firestore, reachability)
+
+    /** Owner mandate 2026-10-04: the foreground realtime doorbell (see [PartnerLiveSync]). */
+    @Provides @Singleton
+    fun providePartnerLiveSync(
+        firestore: FirebaseFirestore,
+        enrollmentDao: EnrollmentDao,
+        rollout: PartnerRolloutGate,
+        resolver: PairUidResolver,
+    ): PartnerLiveSync = PartnerLiveSync(
+        firestore = firestore,
+        enrollmentDao = enrollmentDao,
+        rollout = rollout,
+        ensureUid = resolver::ensureUid,
+    )
 
     /** Plan §8 Step 10 / AD-08: requester-side cadence + escalation and the AD-08b responder. */
     @Provides @Singleton
@@ -685,7 +698,7 @@ object AccountabilityModule {
                     decodePublicKey(enrollment.partnerAgreementPubKey),
                 )
                 val partnerSigningKey = decodePublicKey(enrollment.partnerSigningPubKey)
-                val decode: (ByteArray) -> String? = { envelope ->
+                val decode: (ByteArray) -> EventPayload? = { envelope ->
                     // Step 15: stored rows may span epochs. This is a local re-read of the
                     // device's own history, not an ingress decision — resolve whatever epoch
                     // the envelope declares (the receive policy governs new traffic only).
@@ -694,7 +707,7 @@ object AccountabilityModule {
                         { epoch -> cekDerivation.deriveSessionKey(cek, epoch) },
                         envelope,
                     )
-                    (result as? MailboxEventProcessor.EnvelopeResult.Valid)?.payload?.text
+                    (result as? MailboxEventProcessor.EnvelopeResult.Valid)?.payload
                 }
                 decode
             },
@@ -788,14 +801,15 @@ object AccountabilityModule {
             // Step 13: approval messages own their notifications (ApprovalFlow posts them with
             // the right channel); the generic partner-event post skips those types. The other
             // party's label is read per post so the tray names which partner it concerns, and
-            // a motivational message's body rides along so the tray shows the message itself.
-            notify = { pairId, payloadType, messageBody ->
-                if (payloadType != EventPayload.TYPE_APPROVAL_REQUEST &&
-                    payloadType != EventPayload.TYPE_APPROVAL_RESPONSE
+            // the decoded payload rides along — a motivational message's own text, or a
+            // wire-v2 relapse/milestone's streak name + time (owner mandate 2026-10-04).
+            notify = { pairId, payload ->
+                if (payload.type != EventPayload.TYPE_APPROVAL_REQUEST &&
+                    payload.type != EventPayload.TYPE_APPROVAL_RESPONSE
                 ) {
                     enrollmentDao.getByPairId(pairId)?.let { enrollment ->
                         PartnerNotifications.notifyPartnerEvent(
-                            context, pairId, displayNameOf(enrollment), messageBody,
+                            context, pairId, displayNameOf(enrollment), payload,
                         )
                     }
                 }

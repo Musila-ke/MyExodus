@@ -159,6 +159,32 @@ log `/tmp/i12b-run2.log`.
   seconds later. Fixed to `sleep 60` (device-caught, comment in the script) and re-run → the
   verbatim PASS above.
 
+### 3.5 Production activation legs (task #26, X6532C, ran 2026-10-04)
+
+Through S11 the tunnel could only be started by debug harnesses; task #26 built the production
+path (ADRs #140/#142: `VpnLifecycle` policy + call sites in `MainActivity.onResume`, Rules screen,
+and `BootReceiver`). All legs below ran on the X6532C (the second device), debug `ENFORCE` build,
+driven through the real UI, evidence read from logcat + the device shell.
+
+- **Create → block:** created `example.com` through the real Rules UI → `Authoritative snapshot v13`
+  → `policy blocklist: 1 host rules` → `MARKER: vpn-state ACTIVE` with `tun0` up; `ping example.com`
+  → `unknown host` with `nxdomain example.com v4 rule=policy written=true`; an unrelated domain
+  resolves normally. Consent ask = the platform's `VpnService.prepare` dialog, launched from the
+  Rules engine-off row (rig grant path for re-runs: `cmd appops set … ACTIVATE_VPN allow`).
+- **Delete → stop:** deleted the rule through the real UI (row → Edit block → Delete → confirm) →
+  snapshot v14 → `policy blocklist: 0 host rules` → `MyExodusVpnLifecycle: stopping website tunnel
+  (no live website rules left)` → `vpn-state STOPPED`, `tun0` gone, `example.com` resolves again.
+- **Receiver path (boot / update):** `install -r` on the current debug APK →
+  `MyExodusBoot: MY_PACKAGE_REPLACED received` → cold DB load (10–16 s device-measured) →
+  `Authoritative snapshot v15: 0 app, 1 url rules` → `starting website tunnel (live website rules
+  present)` → `policy blocklist: 1 host rules` → `ACTIVE`. The path that previously dead-ended in
+  sticky `REVOKED` (defect §5.2 item 3) now recovers fully on the fixed build.
+- **Engine-off card:** after "Forget VPN" (XOS) the Rules card renders the not-consented state with
+  the turn-on row; the system consent dialog verifiably launches (its XOS auto-decline in the
+  appop-`ignore` state is recorded in §5.2 item 3 / ADR #142).
+- JVM at this landing: **1,553 tests / 176 classes, 0 failures, 0 errors, 0 skipped**
+  (`VpnLifecycleTest` — 6 new, pinning the decide() matrix).
+
 ## 4. §12.3 — Performance gates (PF-1…PF-8)
 
 Method per §11: same network, `OFF` vs `ACCOUNT`, 3 enabled rules, **median of 3 runs each**
@@ -426,6 +452,15 @@ against the fixed tree; the two marked *device-caught* produced the correspondin
     the guard tested only `USB powered|AC powered`, so a device on a Qi pad (`Wireless powered:
     true`) would have run the drain legs while being charged — arithmetic on a filling battery,
     reported as a valid measurement. Fixed: the pattern now covers all three paths.
+17. **VPN spike harness seeded under its own profile and left residue** *(caught 2026-10-04 during
+    the §3.5 legs)* — `VpnSpikeActivity` created a second `is_active=1` profile
+    (`spike-harness-profile`) to seed rules under, which (a) made the receiver-path snapshot read a
+    cross-profile union the UI could never show (product fix — §5.2 item 4) and (b) outlived its
+    session on the device. Fixed: the harness seeds under the **active** profile (the
+    policy-seeded run now exercises the real read path, `rule=policy` NXDOMAIN proof), sweeps any
+    old `spike-harness-profile` rows, and deletes its own rules after the gates. Device proof:
+    pre-fix receiver snapshot `0 app, 3 url rules` → post-fix `0 app, 0 url rules`; harness run
+    green end-to-end with self-clean leaving 0 app / 0 url.
 
 ### 5.2 Product defects *(device-caught by the I-1…I-3 legs)* — the
    baseline `DomainBlocklist` answered NXDOMAIN for every host-level website rule, including plain
@@ -440,6 +475,25 @@ against the fixed tree; the two marked *device-caught* produced the correspondin
    (`DnsSinkholeVpnService.dnsReceiveLoop`: "observe the real answer first"). Writing first let the
    client open its TCP connection before the observation existed, losing DNS-fallback attribution
    for the very flow the answer described.
+3. **Revoke→re-consent dead-end** *(device-caught 2026-10-04 during the §3.5 legs, ADR #142)* —
+   after a revoke the engine state goes sticky `REVOKED`; `VpnLifecycle.decide()` excluded
+   `REVOKED` from START, so once the user re-granted consent (which makes the Rules turn-on row
+   disappear) nothing ever restarted the tunnel — a permanent dead end. Same class, found reading
+   the service: `onStartCommand` accepted `ACTION_START` only from `STOPPED`, silently dropping the
+   explicit start from `FAILED` (the retry row) and `REVOKED`. Fixed: `REVOKED` is startable given
+   consent; START is accepted from every non-live state. Verified on the fixed build's receiver
+   path (sticky REVOKED → `install -r` → `starting website tunnel` → `ACTIVE`, §3.5) + JVM pins
+   (`VpnLifecycleTest`). XOS note recorded in ADR #142: in the "Forget VPN" appop-`ignore` state the
+   platform's own consent dialog self-destroys ~100 ms after launch — the app-side launch path is
+   correct; the auto-decline is the platform's.
+4. **Two active profiles ⇒ engines enforced rules the UI could never show** *(found from rig residue
+   2026-10-04, ADR #141)* — `RestrictionRuleDao.getActiveRules()` was a JOIN-union over every
+   `is_active = 1` profile row, while the rules UI and `observeActive` pick `ORDER BY user_id
+   LIMIT 1`. With a stray second active profile (here: harness residue) the receiver-path snapshot
+   read `0 app, 3 url rules` while the UI showed nothing. Fixed: `getActiveRules()` mirrors the
+   one pick (`getActive()` gained the same explicit ORDER BY), so engine truth and UI truth cannot
+   diverge. Verified: JVM `PolicyDomainTest.activeProfileQueries_agreeUnder_aStraySecondActiveRow`
+   + the device receiver-path flip (§3.5); harness half in §5.1 item 17.
 
 ## 6. Deviations from the plan (explicit, no silent divergence)
 
@@ -576,6 +630,9 @@ open-by-design, or dead (product decision):
 - Device matrix: 19 PASS / 1 FAIL (harness, fixed, re-run pending) / 3 SKIP (environment) — §3.1,
   snapshot at S10. Since then: I-17/I-11b/I-13b PASS (2026-09-22, §4.2), I-9/I-10 PASS (§3.3),
   I-12b PASS (§3.4) — every leg closed.
+- 2026-10-04 (post-S10 additions, X6532C): §3.5 production-activation legs green; two product
+  defects found and fixed during them (§5.2 items 3–4) plus the harness fix (§5.1 item 17); JVM
+  suite at that landing **1,553 tests / 176 classes, 0 failures, 0 errors, 0 skipped**.
 
 ## 12. Plan §17 acceptance criteria (AC-1…AC-22) — verdict table
 

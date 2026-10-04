@@ -2,6 +2,7 @@ package com.example.myexodus.vpn
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
@@ -11,6 +12,7 @@ import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.myexodus.BuildConfig
+import com.example.myexodus.MainActivity
 import com.example.myexodus.R
 import com.example.myexodus.blocking.RulesSnapshotPublisher
 import com.example.myexodus.blocking.SnapshotState
@@ -151,7 +153,14 @@ class DnsSinkholeVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> stopSinkhole()
-            else -> if (state == VpnEngineState.STOPPED) thread(name = "vpn-start") { startSinkhole() }
+            // START is accepted from any non-running terminal state: STOPPED (fresh), FAILED
+            // (the retry row), REVOKED (post re-consent recovery). STARTING/ACTIVE/DEGRADED
+            // are already up — a second establish would only churn the tunnel.
+            else -> if (state != VpnEngineState.STARTING && state != VpnEngineState.ACTIVE &&
+                state != VpnEngineState.DEGRADED
+            ) {
+                thread(name = "vpn-start") { startSinkhole() }
+            }
         }
         // START_NOT_STICKY: no auto-restart — plan §8.4 forbids rebind loops.
         return START_NOT_STICKY
@@ -776,6 +785,18 @@ class DnsSinkholeVpnService : VpnService() {
                     .setSmallIcon(android.R.drawable.stat_sys_warning)
                     .setContentTitle(getString(R.string.vpn_revoked_title))
                     .setContentText(getString(R.string.vpn_revoked_text))
+                    // #26: the copy says "re-open the app to turn it back on" — the tap must
+                    // land on Rules, where the activation row and consent dialog live.
+                    .setContentIntent(
+                        PendingIntent.getActivity(
+                            this,
+                            0,
+                            Intent(this, MainActivity::class.java)
+                                .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_RULES)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                        ),
+                    )
                     .setAutoCancel(true)
                     .build(),
             )

@@ -84,6 +84,13 @@ class NudgeInboxDeviceInstrumentedTest {
         val pairId = EnrollmentTranscript.durablePairIdOf(uidA, uidB)
         harnessLog("nudge leg: A=$uidA B=$uidB pair=$pairId")
         pairDeviceWith(ep, identity, uidA, uidB, "Musila", "Nudge Partner")
+        // §19.5 targeting: a persisted selection beats "newest pairing". Once the device
+        // holds a production pair (X6532↔X6532C, 2026-10-04), the inbox follows the selected
+        // partner and this test's virtual-pair nudge never renders (card timeout, observed).
+        // Select the pair the way a user would before expecting its card. Keys mirror
+        // PartnerSelection.kt (partner_selection / selected_pair_id).
+        context.getSharedPreferences("partner_selection", Context.MODE_PRIVATE)
+            .edit().putString("selected_pair_id", pairId).apply()
 
         // B seals the constant envelope under the pair CEK (mirrored derivation) and sends it
         // through the production callable — the only writer of a nudge document.

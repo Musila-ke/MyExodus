@@ -104,6 +104,10 @@ data class PairingCeremonyDeps(
     val sign: suspend (title: String) -> Signature?,
     /** §14 bullet 1: one outcome event per terminal, on the Crashlytics rail. */
     val telemetry: PairingCeremonyTelemetry,
+    /** §19.5: the pair just went live — persist it as the active selection so the hub comes
+     *  up on the partner the user just paired with, not a stale earlier pick (defect found
+     *  two-device 2026-10-04: pairing never wrote the selection). */
+    val onPaired: (pairId: String) -> Unit,
 )
 
 /**
@@ -196,6 +200,7 @@ fun PairingCeremonyScreen(
             when (outcome) {
                 is PairingFlow.Outcome.Paired -> {
                     reportOnce(PairingCeremonyTelemetry.Outcome.PAIRED)
+                    deps.onPaired(outcome.pairId)
                     step = CeremonyStep.Paired(
                         pairId = outcome.pairId,
                         partnerLabel = when (current) {

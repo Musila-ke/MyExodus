@@ -19,4 +19,6 @@ data class UserProfile(
     @ColumnInfo(name = "device_public_key") val devicePublicKey: String?,
     @ColumnInfo(name = "recovery_escrow_key") val recoveryEscrowKey: String?,
     @ColumnInfo(name = "is_active") val isActive: Boolean,
+    // Partner-sharing consent moved out of this row in v16 (ADR #135): the profile-wide
+    // categories (check-ins, recovery) are chosen per pair — `pair_profile_sharing`.
 )

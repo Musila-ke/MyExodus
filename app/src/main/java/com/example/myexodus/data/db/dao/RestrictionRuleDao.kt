@@ -35,8 +35,15 @@ abstract class RestrictionRuleDao {
     @Query("SELECT count(*) FROM restriction_rules WHERE profile_id = :profileId AND target_type = :targetType")
     abstract suspend fun countByProfileAndType(profileId: String, targetType: String): Long
 
-    /** Rules of the single active profile — the only ones the blocking engine enforces. */
-    @Query("SELECT r.* FROM restriction_rules r JOIN user_profile u ON u.user_id = r.profile_id WHERE u.is_active = 1")
+    /** Rules of the single active profile — the only ones any engine enforces. The profile is
+     *  resolved with the same `ORDER BY user_id LIMIT 1` pick as [UserProfileDao.observeActive];
+     *  a JOIN over `is_active = 1` would union a second active row's rules (spike-harness
+     *  residue on the rig, 2026-10-04) into enforcement while the UI shows only the first
+     *  profile's rules. Keep the two queries aligned. */
+    @Query(
+        "SELECT * FROM restriction_rules WHERE profile_id = " +
+            "(SELECT user_id FROM user_profile WHERE is_active = 1 ORDER BY user_id LIMIT 1)",
+    )
     abstract suspend fun getActiveRules(): List<RestrictionRule>
 
     /** The accounting engine's per-package rule read; unique index guarantees at most one. */

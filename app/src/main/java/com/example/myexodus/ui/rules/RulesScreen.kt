@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -41,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -62,11 +64,15 @@ import com.example.myexodus.domainusage.PublicSuffixList
 import com.example.myexodus.ui.APP_MARK_SIZE
 import com.example.myexodus.ui.AppMark
 import com.example.myexodus.ui.BackRow
+import com.example.myexodus.ui.LinkRow
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.rememberWindowWidth
 import com.example.myexodus.ui.ruleRowState
 import com.example.myexodus.ui.scheduleSummary
+import com.example.myexodus.vpn.DnsSinkholeVpnService
+import com.example.myexodus.vpn.VpnEngineState
+import com.example.myexodus.vpn.VpnLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.Dispatchers
@@ -143,6 +149,23 @@ fun RulesScreen(
         }
     }
 
+    // #18 (owner ruling 2026-10-04): a rule whose duration lapsed flips its own toggle off in
+    // the DB — the switch then tells the same truth the engine already acts on (Rule 3 ignores
+    // expired rules). Keyed on the exact id set, so it fires when any rule crosses its end
+    // (not every 5 s tick), and a failed sweep retries when the set changes again.
+    val expiredEnabledIds = rules.orEmpty()
+        .filter { it.isEnabled && it.isExpiredAt(nowMillis) }
+        .map { it.ruleId }
+        .sorted()
+    LaunchedEffect(expiredEnabledIds) {
+        if (expiredEnabledIds.isNotEmpty()) {
+            runCatching { repository.sweepExpired(System.currentTimeMillis()) }
+                .onFailure { Log.w(TAG, "Expired-rule sweep failed", it) }
+        }
+    }
+
+    var confirmCleanup by remember { mutableStateOf(false) }
+
     // S9.4 banner copy. The engine's own status is the source; an unknown future reason falls
     // back to the generic line rather than showing nothing.
     val engineStatus by domainUsageEngine.status.collectAsStateWithLifecycle()
@@ -152,6 +175,35 @@ fun RulesScreen(
             EngineStatus.Reason.DB_ERROR, EngineStatus.Reason.INTERNAL_ERROR ->
                 stringResource(R.string.domain_usage_banner_off)
         }
+        else -> null
+    }
+
+    // #26 (activation): does anything live need the tunnel, and is it up? The tunnel serves
+    // every website rule — block-only ("Always on") as much as daily-limited.
+    val hasLiveWebsite = rules?.let { hasLiveWebsiteRule(it, nowMillis) } ?: false
+    // The engine/usage surfaces below stay limit-scoped (S9.4): with no limited rule the
+    // engine's status explains nothing.
+    val hasLimitedSite = rules?.let { hasLimitedSiteRule(it, nowMillis) } ?: false
+    // Consent is re-read whenever the rule set or the engine status changes — a status flip
+    // is exactly what returning from the consent dialog (grant) or a revoke produces.
+    var engineConsented by remember { mutableStateOf(VpnLifecycle.consented(context)) }
+    // Keyed on the list itself (not on a predicate): while it is still loading, `rules` is
+    // null and the effect must NOT decide — an unknown rule set is not "no rules", and
+    // deciding on it would stop a healthy tunnel (device-found 2026-10-04).
+    LaunchedEffect(rules, engineStatus) {
+        val loaded = rules ?: return@LaunchedEffect
+        engineConsented = VpnLifecycle.consented(context)
+        // Starts a consented tunnel the moment the first website rule appears (or on entry,
+        // if it was down); stops it the moment the last one leaves. Consent-less is a NONE
+        // inside `ensure` — the row below is the only path into the system dialog, never
+        // automatic.
+        VpnLifecycle.ensure(context, hasRules = hasLiveWebsiteRule(loaded, System.currentTimeMillis()))
+    }
+    val engineOffMessage = when {
+        !hasLiveWebsite -> null
+        !engineConsented -> stringResource(R.string.domain_usage_off_body)
+        DnsSinkholeVpnService.state == VpnEngineState.FAILED ->
+            stringResource(R.string.domain_usage_off_retry)
         else -> null
     }
 
@@ -183,13 +235,21 @@ fun RulesScreen(
             if (loaded == null) {
                 Box(modifier.fillMaxSize())
             } else {
-                val hasLimitedSite = hasLimitedSiteRule(loaded, nowMillis)
                 RulesList(
                     rules = loaded,
                     pendingPause = pendingPause,
                     nowMillis = nowMillis,
                     domainUsageEngine = domainUsageEngine,
                     engineBannerMessage = engineBannerMessage.takeIf { hasLimitedSite },
+                    engineOffMessage = engineOffMessage,
+                    onEnableEngine = {
+                        if (engineConsented) {
+                            // FAILED retry: consent is on file, the establish failed.
+                            VpnLifecycle.start(context)
+                        } else {
+                            VpnLifecycle.consentIntent(context)?.let(context::startActivity)
+                        }
+                    },
                     errorMessage = errorMessage,
                     onDismissError = { errorMessage = null },
                     onAddApp = {
@@ -211,9 +271,10 @@ fun RulesScreen(
                         route = ROUTE_EDIT
                     },
                     onTogglePause = { rule, enable ->
+                        val target = if (enable) resumedRule(rule, System.currentTimeMillis()) else rule
                         pendingPause = pendingPause + (rule.ruleId to enable)
                         scope.launch(Dispatchers.IO) {
-                            runCatching { repository.setEnabled(rule, enable) }
+                            runCatching { repository.setEnabled(target, enable) }
                                 .onSuccess {
                                     // OPD #28(a): enabling is a start-of-counting seam — whatever
                                     // the app did while paused (or before the rule existed) is
@@ -234,10 +295,40 @@ fun RulesScreen(
                                 }
                         }
                     },
+                    onCleanup = { confirmCleanup = true },
                     modifier = modifier,
                 )
             }
         }
+    }
+
+    // #18 cleanup (#rule list's "Remove all"): one confirm, then the batch delete. Count is
+    // read at confirm time, so the dialog copy can never disagree with what's deleted.
+    if (confirmCleanup) {
+        val doomed = rules.orEmpty().filter { !it.isEnabled }
+        AlertDialog(
+            onDismissRequest = { confirmCleanup = false },
+            title = { Text(stringResource(R.string.rules_cleanup_title)) },
+            text = { Text(pluralStringResource(R.plurals.rules_cleanup_body, doomed.size, doomed.size)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmCleanup = false
+                    scope.launch(Dispatchers.IO) {
+                        runCatching { repository.deleteRules(doomed) }
+                            .onFailure { errorMessage = notSavedMessage(it, context) }
+                    }
+                }) {
+                    // Destructive confirm wears the error role (finding #18).
+                    Text(
+                        stringResource(R.string.rules_cleanup_confirm),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmCleanup = false }) { Text(stringResource(R.string.rules_cancel)) }
+            },
+        )
     }
 }
 
@@ -252,6 +343,25 @@ internal fun hasLimitedSiteRule(rules: List<RestrictionRule>, nowMillis: Long): 
         it.targetType == "WEBSITE" && it.dailyLimitMs > 0L &&
             it.isEnabled && !it.isExpiredAt(nowMillis)
     }
+
+/**
+ * #26: "the tunnel has something to do" — any website rule the publisher would publish
+ * (enabled, unexpired), limit or block-only. One predicate per purpose: the limited variant
+ * above still gates the engine's own status surfaces.
+ */
+internal fun hasLiveWebsiteRule(rules: List<RestrictionRule>, nowMillis: Long): Boolean =
+    rules.any {
+        it.targetType == "WEBSITE" && it.isEnabled && !it.isExpiredAt(nowMillis)
+    }
+
+/**
+ * #18 resume semantics (owner ruling 2026-10-04): "on" after a lapsed end date means "on
+ * again, no end date" — keeping the old expiry would make the toggle dead (the engine treats
+ * the rule as expired and the sweep would flip it right back off). A future expiry is the
+ * user's own setting and survives.
+ */
+internal fun resumedRule(rule: RestrictionRule, nowMillis: Long): RestrictionRule =
+    if (rule.isExpiredAt(nowMillis)) rule.copy(blockExpiresAt = 0L) else rule
 
 /** Maps a write failure to copy that says what happened and what to do (plan §9). */
 internal fun notSavedMessage(failure: Throwable, context: android.content.Context): String {
@@ -285,17 +395,26 @@ private fun RulesList(
     nowMillis: Long,
     domainUsageEngine: DomainUsageEngine,
     engineBannerMessage: String?,
+    /** #26: non-null when live website rules exist but the tunnel can't serve them (consent
+     *  missing, or the last establish failed) — the row that walks back to the system
+     *  dialog / retry. */
+    engineOffMessage: String?,
+    onEnableEngine: () -> Unit,
     errorMessage: String?,
     onDismissError: () -> Unit,
     onAddApp: () -> Unit,
     onAddWebsite: () -> Unit,
     onEdit: (RestrictionRule) -> Unit,
     onTogglePause: (RestrictionRule, Boolean) -> Unit,
+    onCleanup: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val sidePadding: Dp = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
     val appsHeader = stringResource(R.string.rules_apps_header)
     val websitesHeader = stringResource(R.string.rules_websites_header)
+    val deactivatedHeader = stringResource(R.string.rules_deactivated_header)
+    val deactivatedCaption = stringResource(R.string.rules_deactivated_caption)
+    val cleanupLabel = stringResource(R.string.rules_cleanup)
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -316,6 +435,18 @@ private fun RulesList(
             // S9.4: a live status claim, so it has no dismiss — it leaves when its cause does.
             item(key = "engine-status") {
                 ErrorBanner(message = message, onDismiss = null)
+            }
+        }
+        engineOffMessage?.let { body ->
+            // #26: priming row for the platform's VPN consent (or an establish retry). It
+            // states why the consent screen that follows appears and that the choice is
+            // reversible — the tap itself is the only way into that dialog.
+            item(key = "engine-off") {
+                LinkRow(
+                    title = stringResource(R.string.domain_usage_off_title),
+                    body = body,
+                    onClick = onEnableEngine,
+                )
             }
         }
         errorMessage?.let { message ->
@@ -353,9 +484,11 @@ private fun RulesList(
                 }
             }
         } else {
+            // #18: Deactivated (paused + duration-lapsed) rules leave the live sections —
+            // their switches tell non-enforcement there, beside a way to sweep them out.
             ruleSection(
                 header = appsHeader,
-                rules = rules.filter { it.targetType == "APP" },
+                rules = rules.filter { it.targetType == "APP" && it.isEnabled },
                 pendingPause = pendingPause,
                 nowMillis = nowMillis,
                 domainUsageEngine = domainUsageEngine,
@@ -364,12 +497,27 @@ private fun RulesList(
             )
             ruleSection(
                 header = websitesHeader,
-                rules = rules.filter { it.targetType == "WEBSITE" },
+                rules = rules.filter { it.targetType == "WEBSITE" && it.isEnabled },
                 pendingPause = pendingPause,
                 nowMillis = nowMillis,
                 domainUsageEngine = domainUsageEngine,
                 onEdit = onEdit,
                 onTogglePause = onTogglePause,
+            )
+            ruleSection(
+                header = deactivatedHeader,
+                caption = deactivatedCaption,
+                rules = rules.filter { !it.isEnabled },
+                pendingPause = pendingPause,
+                nowMillis = nowMillis,
+                domainUsageEngine = domainUsageEngine,
+                onEdit = onEdit,
+                onTogglePause = onTogglePause,
+                footer = {
+                    TextButton(onClick = onCleanup) {
+                        Text(cleanupLabel, color = MaterialTheme.colorScheme.error)
+                    }
+                },
             )
         }
     }
@@ -391,6 +539,8 @@ private fun LazyListScope.ruleSection(
     domainUsageEngine: DomainUsageEngine,
     onEdit: (RestrictionRule) -> Unit,
     onTogglePause: (RestrictionRule, Boolean) -> Unit,
+    caption: String? = null,
+    footer: (@Composable () -> Unit)? = null,
 ) {
     if (rules.isEmpty()) return
     item(key = "header-$header") {
@@ -399,6 +549,15 @@ private fun LazyListScope.ruleSection(
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(top = 8.dp),
         )
+    }
+    caption?.let { text ->
+        item(key = "caption-$header") {
+            Text(
+                text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
     item(key = "card-$header") {
         Surface(
@@ -426,6 +585,9 @@ private fun LazyListScope.ruleSection(
                 }
             }
         }
+    }
+    footer?.let { content ->
+        item(key = "footer-$header") { content() }
     }
 }
 

@@ -85,6 +85,42 @@ class PolicyDomainTest {
     }
 
     @Test
+    fun sweepExpired_flipsOnlyLapsedEnabledRules() = runTest {
+        val now = 1_700_000_000_000L
+        repository.insertRule(appRule("com.a", "r-lapsed").copy(blockExpiresAt = now - 1_000L))
+        repository.insertRule(appRule("com.b", "r-future").copy(blockExpiresAt = now + 3_600_000L))
+        repository.insertRule(appRule("com.c", "r-never"))
+        repository.insertRule(
+            appRule("com.d", "r-paused-lapsed").copy(blockExpiresAt = now - 1_000L, isEnabled = false),
+        )
+
+        repository.sweepExpired(now)
+
+        val rules = repository.getActiveRules().associateBy { it.ruleId }
+        assertEquals("#18: a lapsed enabled rule flips itself off", false, rules.getValue("r-lapsed").isEnabled)
+        assertEquals("a future expiry is untouched", true, rules.getValue("r-future").isEnabled)
+        assertEquals("never-expiring stays on", true, rules.getValue("r-never").isEnabled)
+        assertEquals(
+            "an already-disabled lapsed rule stays off — the sweep claims nothing",
+            false,
+            rules.getValue("r-paused-lapsed").isEnabled,
+        )
+    }
+
+    @Test
+    fun deleteRules_removesTheBatch_andReloadsTheSnapshotOnce() = runTest {
+        repository.insertRule(appRule("com.a", "r-1"))
+        repository.insertRule(appRule("com.b", "r-2"))
+        repository.insertRule(appRule("com.c", "r-3"))
+
+        repository.deleteRules(repository.getActiveRules().filter { it.ruleId != "r-3" })
+
+        assertEquals(listOf("r-3"), repository.getActiveRules().map { it.ruleId })
+        assertEquals("both deletes bumped the Room version", 5L, factory.open()!!.policyVersionDao().current())
+        assertEquals("and one reload republished that version", 5L, publisher.snapshot.version)
+    }
+
+    @Test
     fun recoveryPolicy_seededWithDefaults() = runTest {
         val policy = factory.open()!!.recoveryPolicyDao().current()
         assertNotNull(policy)
@@ -98,6 +134,27 @@ class PolicyDomainTest {
         val policy = factory.open()!!.recoveryPolicyDao().current()
         assertEquals(120L, policy!!.defaultFrictionSeconds)
         assertEquals(900L, policy.overrideCooldownSeconds)
+    }
+
+    @Test
+    fun activeProfileQueries_agreeUnder_aStraySecondActiveRow() = runTest {
+        val store = factory.open()!!
+        // The 2026-10-04 rig residue shape: a second is_active=1 profile (the spike harness
+        // used to insert one). Engines must consult exactly the observeActive pick — a union
+        // over is_active rows would enforce rules the rules UI can never show.
+        store.userProfileDao().insert(profile().copy(userId = "spike-harness-profile", name = "Spike Harness"))
+        repository.insertRule(appRule("com.instagram.android", ruleId = "r-1"))
+        repository.insertRule(
+            appRule("com.instagram.android", ruleId = "r-2").copy(profileId = "spike-harness-profile"),
+        )
+
+        assertEquals("the deterministic pick is the lowest user_id", "p-1", store.userProfileDao().getActive()?.userId)
+        assertEquals(listOf("r-1"), store.restrictionRuleDao().getActiveRules().map { it.ruleId })
+        assertEquals(
+            setOf("com.instagram.android"),
+            publisher.snapshot.appRules.keys,
+        )
+        assertEquals("r-1", publisher.snapshot.appRules.getValue("com.instagram.android").ruleId)
     }
 
     private fun profile() = UserProfile(

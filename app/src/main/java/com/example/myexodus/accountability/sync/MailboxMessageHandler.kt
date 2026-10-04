@@ -53,12 +53,13 @@ class MailboxMessageHandler(
      *  hand-written document. */
     private val onDeletionRequest: suspend (pairId: String, messageId: String, atEpochMillis: Long?) -> Boolean = { _, _, _ -> false },
     /** Fired for an appended event other than a repair request; carries the pair so the post
-     *  can resolve the partner and key its notification id (§19.5 multi-partner), and the
-     *  motivational body (the one type whose [EventPayload.text] is message copy the tray may
-     *  show; null for every other type). Approval types reach this hook too — the composition
-     *  layer filters them, because the approval flows post their own dedicated, named
-     *  notifications (§8 Step 12). */
-    private val notify: suspend (pairId: String, payloadType: String, messageBody: String?) -> Unit = { _, _, _ -> },
+     *  can resolve the partner and key its notification id (§19.5 multi-partner), and the full
+     *  decoded [EventPayload] — the composition layer derives every partner-facing copy from it
+     *  (a motivational message's body, a wire-v2 relapse's streak name + ended day-count, a
+     *  milestone's day). Approval types reach this hook too — the composition layer filters
+     *  them, because the approval flows post their own dedicated, named notifications
+     *  (§8 Step 12). */
+    private val notify: suspend (pairId: String, payload: EventPayload) -> Unit = { _, _ -> },
     /** Step 11 responder: enqueue a replay of our chain after the requested anchor. */
     private val respondToRequest: suspend (pairId: String, expectedPreviousSequence: Long, expectedPreviousHash: ByteArray) -> Unit = { _, _, _ -> },
     /** Step 11 tamper correlation: true when a repair was in flight and is now blocked. */
@@ -73,7 +74,8 @@ class MailboxMessageHandler(
         /** Already in `processed_events` (AD-10b) — no fetch, no-op. */
         ALREADY_PROCESSED,
 
-        /** Mailbox document gone (cleanup/cap) or the wake id addresses nothing. */
+        /** Mailbox document gone (cleanup/cap), the wake id addresses nothing, or the
+         *  document belongs to another pair than the one pulling (§19.5 / #18(c)). */
         MISSING,
 
         /** Our own chain-scoping sender id — never ours to apply. */
@@ -131,6 +133,13 @@ class MailboxMessageHandler(
         if (processed(messageId)) return Result(Kind.ALREADY_PROCESSED)
 
         val doc = load() ?: return Result(Kind.MISSING)
+        // §19.5: one mailbox backs every pair this device holds, so a document for another
+        // pair is not ours to attempt — under this pair's keys it could only fail signature
+        // verification and count into this pair's tamper telemetry (#18(c): one foreign
+        // document logged SIGNATURE_INVALID under every enrolled pair, and mid-repair it
+        // classified as a false TAMPER_SUSPECTED). Null pairId (hand-written / pre-schema)
+        // is foreign too — the wake path always treated it so; now every path does.
+        if (doc.pairId != pairId) return Result(Kind.MISSING)
         if (doc.senderId == mySenderKeyId) return Result(Kind.SELF)
 
         val bytes = doc.payloadBase64
@@ -191,10 +200,7 @@ class MailboxMessageHandler(
                     if (outcome.payloadType == EventPayload.TYPE_SYNC_REQUEST) {
                         answerRepairRequest(pairId, messageId, outcome.payload)
                     } else {
-                        val messageBody = outcome.payload.text.takeIf {
-                            outcome.payloadType == EventPayload.TYPE_MOTIVATIONAL_MESSAGE && it.isNotBlank()
-                        }
-                        runCatching { notify(pairId, outcome.payloadType, messageBody) }
+                        runCatching { notify(pairId, outcome.payload) }
                             .onFailure { Log.w(TAG, "notify failed messageId=$messageId", it) }
                     }
                 }
@@ -236,6 +242,6 @@ data class MailboxDocument(
     val payloadBase64: String?,
     val timestampEpochMillis: Long?,
     /** The pair this message was sent under (§19.5 multi-pair mailboxes). Null only for a
-     *  hand-written or pre-schema document — the expedited wake path treats null as foreign. */
+     *  hand-written or pre-schema document — every path treats null as foreign. */
     val pairId: String? = null,
 )
