@@ -4,10 +4,12 @@ import com.example.myexodus.accountability.enrollment.PairingToken
 import com.google.firebase.firestore.Blob
 import com.google.firebase.firestore.CollectionReference
 import com.google.firebase.firestore.DocumentReference
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.Timestamp
+import kotlinx.coroutines.tasks.await
 import java.security.MessageDigest
 
 /**
@@ -57,6 +59,48 @@ object FirestoreSchema {
         recipientUid: String,
         messageId: String,
     ): DocumentReference = mailboxCollection(firestore, recipientUid).document(messageId)
+
+    /**
+     * §7 item 10 pull half: the watermark-ordered mailbox page — `timestamp` asc, strictly
+     * after the last pass's watermark (§7.5 quota: re-reading the whole 500-doc mailbox every
+     * 15 minutes would exhaust the free tier). Documents missing the field never appear in an
+     * `orderBy("timestamp")` result, so a null-timestamp document cannot poison the scan.
+     */
+    suspend fun mailboxDocsAfter(
+        firestore: FirebaseFirestore,
+        recipientUid: String,
+        afterEpochMillis: Long?,
+        limit: Int,
+    ): List<MailboxDocument> {
+        var query: Query = mailboxCollection(firestore, recipientUid).orderBy("timestamp")
+        if (afterEpochMillis != null) query = query.startAfter(timestampOf(afterEpochMillis))
+        return query.limit(limit.toLong()).get().await().documents.map(::mailboxDocumentOf)
+    }
+
+    /** §6 step 3 expedited path: the wake's own document, fetched before the watermark query
+     *  can miss it. Null when the document is gone (cleanup/cap) or the id addresses nothing. */
+    suspend fun mailboxDoc(
+        firestore: FirebaseFirestore,
+        recipientUid: String,
+        messageId: String,
+    ): MailboxDocument? {
+        val doc = mailboxMessageDocument(firestore, recipientUid, messageId).get().await()
+        return if (doc.exists()) mailboxDocumentOf(doc) else null
+    }
+
+    fun mailboxDocumentOf(doc: DocumentSnapshot): MailboxDocument = MailboxDocument(
+        messageId = doc.id,
+        senderId = doc.getString("senderId"),
+        payloadBase64 = doc.getString("payload"),
+        timestampEpochMillis = doc.getTimestamp("timestamp")?.toDate()?.time,
+        pairId = doc.getString("pairId"),
+    )
+
+    /** The watermark is persisted as epoch millis (server timestamps have microsecond
+     *  precision — sub-ms ties are not reachable in practice, so the truncation loses
+     *  nothing). */
+    private fun timestampOf(epochMillis: Long): Timestamp =
+        Timestamp(epochMillis / 1000, ((epochMillis % 1000) * 1_000_000).toInt())
 
     /**
      * Exactly the six keys the v2 rules' create `hasOnly` allows — an extra field fails every

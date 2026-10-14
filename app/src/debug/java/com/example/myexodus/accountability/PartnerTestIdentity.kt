@@ -178,12 +178,17 @@ class PartnerTestIdentity(
      * requester half needs (a verified `approval_response` moves B's REQUESTED row).
      */
     fun receiver(): FirestoreMailboxReceiver = FirestoreMailboxReceiver(
-        firestore = firestore,
         enrollmentDao = enrollmentDao,
         store = store,
         keystore = partnerKeystore,
         cekDerivation = cekDerivation,
         sessionKeyManager = SessionKeyManager(store),
+        queryMailbox = { myUid, afterEpochMillis, limit ->
+            FirestoreSchema.mailboxDocsAfter(firestore, myUid, afterEpochMillis, limit)
+        },
+        fetchMessage = { myUid, messageId ->
+            FirestoreSchema.mailboxDoc(firestore, myUid, messageId)
+        },
         handler = MailboxMessageHandler(
             processed = db.processedEventDao()::contains,
             process = MailboxEventProcessor(signer, eventCipher)::process,

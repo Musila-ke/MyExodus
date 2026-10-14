@@ -3,13 +3,8 @@ package com.example.myexodus.accountability.sync
 import com.example.myexodus.accountability.crypto.AccountabilityKeyStore
 import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
-import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.state.ChainStateStore
 import com.example.myexodus.accountability.state.SessionKeyManager
-import com.google.firebase.Timestamp
-import com.google.firebase.firestore.DocumentSnapshot
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.Query
 import java.security.KeyFactory
 import java.security.PublicKey
 import java.security.spec.X509EncodedKeySpec
@@ -28,13 +23,18 @@ import java.security.spec.X509EncodedKeySpec
  * path-scoped to `request.auth.uid == recipientUid`.
  */
 class FirestoreMailboxReceiver(
-    private val firestore: FirebaseFirestore,
     private val enrollmentDao: EnrollmentDao,
     private val store: ChainStateStore,
     private val keystore: AccountabilityKeyStore,
     private val cekDerivation: CekDerivation,
     private val sessionKeyManager: SessionKeyManager,
     private val handler: MailboxMessageHandler,
+    /** §7 item 10 + the house seam pattern (see [MailboxOutboxDrainer]): Firestore access is
+     *  two function seams so the watermark/ordering machinery is unit-testable without
+     *  Firestore. [queryMailbox] returns the watermark-filtered page (`timestamp` asc,
+     *  strictly after the given epoch millis); [fetchMessage] one wake-addressed document. */
+    private val queryMailbox: suspend (myUid: String, afterEpochMillis: Long?, limit: Int) -> List<MailboxDocument>,
+    private val fetchMessage: suspend (myUid: String, messageId: String) -> MailboxDocument?,
     private val limit: Int = 500,
 ) {
 
@@ -127,26 +127,20 @@ class FirestoreMailboxReceiver(
         // only the message's own pair applies it — every other pair's [handler] call loads it
         // and its pair gate turns it into MISSING before any verification.
         if (messageId != null) {
-            handle(messageId) { fetchDocument(myUid, messageId) }
+            handle(messageId) { fetchMessage(myUid, messageId) }
             if (deletionRequested) return result
         }
 
         // Quota: pulled after the last-pull watermark (§7.5) — one 500-doc re-read every 15
         // minutes would exhaust the free tier.
-        var query: Query = FirestoreSchema.mailboxCollection(firestore, myUid).orderBy("timestamp")
-        enrollment.mailboxWatermarkTsEpochMillis?.let {
-            query = query.startAfter(timestampOf(it))
-        }
-        val snapshot = query.limit(limit.toLong()).get().await()
+        val page = queryMailbox(myUid, enrollment.mailboxWatermarkTsEpochMillis, limit)
         var watermark = enrollment.mailboxWatermarkTsEpochMillis
-        for (doc in snapshot.documents) {
+        for (doc in page) {
             // Foreign pairs' documents still advance the watermark — they can never be
             // processed here (the handler gate skips them), so moving past them is pure
             // quota: the next pass stops re-reading them from the shared mailbox.
-            doc.getTimestamp("timestamp")?.let { ts ->
-                watermark = maxOf(watermark ?: 0L, ts.toDate().time)
-            }
-            handle(doc.id) { doc.toMailboxDocument() }
+            doc.timestampEpochMillis?.let { watermark = maxOf(watermark ?: 0L, it) }
+            handle(doc.messageId) { doc }
             // The pair is shredded — stop before any remaining document re-creates chain rows
             // for it (they belong to a wiped pairing and would never be readable again).
             if (deletionRequested) return result
@@ -157,24 +151,6 @@ class FirestoreMailboxReceiver(
 
         return result
     }
-
-    private suspend fun fetchDocument(myUid: String, messageId: String): MailboxDocument? {
-        val doc = FirestoreSchema.mailboxMessageDocument(firestore, myUid, messageId).get().await()
-        return if (doc.exists()) doc.toMailboxDocument() else null
-    }
-
-    private fun DocumentSnapshot.toMailboxDocument(): MailboxDocument = MailboxDocument(
-        messageId = id,
-        senderId = getString("senderId"),
-        payloadBase64 = getString("payload"),
-        timestampEpochMillis = getTimestamp("timestamp")?.toDate()?.time,
-        pairId = getString("pairId"),
-    )
-
-    /** Watermark is persisted as epoch millis (server timestamps have microsecond precision —
-     *  sub-ms ties are not reachable in practice, so the truncation loses nothing). */
-    private fun timestampOf(epochMillis: Long): Timestamp =
-        Timestamp(epochMillis / 1000, ((epochMillis % 1000) * 1_000_000).toInt())
 }
 
 /** DER SubjectPublicKeyInfo → public key. Top-level so the dashboard's re-decode path

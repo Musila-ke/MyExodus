@@ -26,6 +26,12 @@ import java.util.Base64
  * cause). Retrying is the only option that never drops a message; unpair clears the outbox
  * ([com.example.myexodus.accountability.state.ChainStateStore.deletePairData]), so a
  * permanently-rejected row cannot outlive the pair.
+ *
+ * Local bookkeeping writes ([markSent], [recordAttempt]) are best-effort: a Room/SQLCipher
+ * hiccup (disk full, locked DB) is logged, never thrown — [drain] always returns a
+ * [DrainResult], so a local-DB failure can never skip the coordinator's pull or a sibling
+ * pair's sync (both documented step-isolated). A row whose SENT mark was lost self-heals:
+ * the next pass re-drains into ALREADY_EXISTS and marks it then (doc id = message id).
  */
 class MailboxOutboxDrainer(
     private val pendingRows: suspend (pairId: String, limit: Int) -> List<PendingOutboxRow>,
@@ -76,11 +82,11 @@ class MailboxOutboxDrainer(
             } catch (e: FirebaseFirestoreException) {
                 if (e.code == FirebaseFirestoreException.Code.ALREADY_EXISTS) {
                     // A prior drain wrote the document but crashed before marking the row.
-                    markSent(row.messageId)
+                    bookkeeping("mark SENT", row.messageId) { markSent(row.messageId) }
                     sent++
                     continue
                 }
-                recordAttempt(row.messageId, now())
+                bookkeeping("attempt log", row.messageId) { recordAttempt(row.messageId, now()) }
                 return if (e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
                     Log.w(TAG, "mailbox write denied (${row.messageId}) — left pending")
                     DrainResult.PermissionDenied
@@ -88,13 +94,24 @@ class MailboxOutboxDrainer(
                     DrainResult.Failed(e.message ?: "mailbox write failed")
                 }
             } catch (e: Exception) {
-                recordAttempt(row.messageId, now())
+                bookkeeping("attempt log", row.messageId) { recordAttempt(row.messageId, now()) }
                 return DrainResult.Failed(e.message ?: "mailbox write failed")
             }
-            markSent(row.messageId)
+            bookkeeping("mark SENT", row.messageId) { markSent(row.messageId) }
             sent++
         }
         return DrainResult.Sent(sent)
+    }
+
+    /** The local-DB side of the drain must never out-throw the network side (class KDoc):
+     *  a lost SENT mark or attempt row self-heals on the next pass, a thrown exception would
+     *  skip the coordinator's pull and every remaining pair. */
+    private suspend fun bookkeeping(what: String, messageId: String, block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (e: Exception) {
+            Log.w(TAG, "$what failed for $messageId — self-heals on the next pass", e)
+        }
     }
 
     companion object {

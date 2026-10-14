@@ -34,7 +34,9 @@ import javax.inject.Singleton
 @Singleton
 open class AccountabilityKeyStore @Inject constructor() {
 
-    private val keyStore: KeyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+    // Lazy so harness subclasses (the ADR #46 open-method seam) construct in JVM tests, where
+    // the AndroidKeyStore provider does not exist — only methods that use it need it.
+    private val keyStore: KeyStore by lazy { KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) } }
 
     /** Result of key generation; [securityLevel] is where the keys actually landed. */
     sealed interface GenerationResult {

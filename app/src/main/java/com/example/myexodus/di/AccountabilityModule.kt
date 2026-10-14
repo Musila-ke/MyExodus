@@ -857,13 +857,18 @@ object AccountabilityModule {
         sessionKeyManager: SessionKeyManager,
         handler: MailboxMessageHandler,
     ): FirestoreMailboxReceiver = FirestoreMailboxReceiver(
-        firestore = firestore,
         enrollmentDao = enrollmentDao,
         store = store,
         keystore = keystore,
         cekDerivation = cekDerivation,
         sessionKeyManager = sessionKeyManager,
         handler = handler,
+        queryMailbox = { myUid, afterEpochMillis, limit ->
+            FirestoreSchema.mailboxDocsAfter(firestore, myUid, afterEpochMillis, limit)
+        },
+        fetchMessage = { myUid, messageId ->
+            FirestoreSchema.mailboxDoc(firestore, myUid, messageId)
+        },
     )
 }
 
