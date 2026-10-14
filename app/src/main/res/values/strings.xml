@@ -50,9 +50,18 @@
     <string name="protection_channel_alerts_name">MyExodus protection alerts</string>
     <string name="protection_ongoing_title">Protection active</string>
     <string name="protection_ongoing_text">Restricted apps are blocked as soon as they open.</string>
-    <string name="protection_stopped_title">Protection was stopped</string>
-    <string name="protection_stopped_text">MyExodus was stopped from the Task Manager. Time limits stay paused until you re-enable.</string>
+    <!-- Cause-agnostic by design: the detector counts every explicit stop shape (system
+         force-stop, Task-Manager Stop, Settings force-stop, recents swipe-kill — plan v2
+         §8.2 "do not conflate"), and the X6532 exit history shows system_server initiates
+         them — so naming one cause (the old "stopped from the Task Manager" copy) was wrong
+         for every real detection on this device. -->
+    <string name="protection_stopped_title">Protection is paused</string>
+    <string name="protection_stopped_text">Something on your phone closed MyExodus. Time limits stay paused until you re-enable.</string>
     <string name="protection_stopped_action">Re-enable</string>
+    <!-- Banner-only copies (the banner offers its own fix actions; the notification variants
+         above open the app instead of jumping into system screens). -->
+    <string name="protection_notif_off_banner_text">Notifications are off for MyExodus — protection status may be hidden. Turn them on in Settings.</string>
+    <string name="protection_notif_off_banner_action">Fix</string>
     <string name="protection_hidden_title">Protection status hidden</string>
     <string name="protection_hidden_text">Notifications are off for MyExodus — open the app to see protection status.</string>
     <string name="protection_hidden_action">Open app</string>
@@ -91,7 +100,10 @@
     <string name="home_greeting_evening">Good evening</string>
     <string name="home_stat_best_streak">Best streak</string>
     <string name="home_stat_blocks">Blocks</string>
-    <string name="home_stat_blocked">Blocked</string>
+    <!-- "Blocked" read as a state, not a count (owner finding 2026-10-14); this is the
+         all-time count of opens the block screen stopped. "Blocks" stays: the Shield tile
+         beside it counts the block rules themselves. -->
+    <string name="home_stat_blocked">Times blocked</string>
     <string name="home_blocks_section">Your blocks</string>
     <!-- Req 15 arrival surface: the partner's newest pinned message, on the user's own Home.
          The message body is partner-authored text, rendered verbatim; the label names the

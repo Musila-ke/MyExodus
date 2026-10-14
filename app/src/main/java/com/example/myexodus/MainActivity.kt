@@ -386,9 +386,9 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         setContent {
             MyExodusTheme {
-                // §8.2: permission/degradation state is re-checked on every resume of
-                // MainActivity — the banner never relies on a stale read.
-                var degradation by remember { mutableStateOf(protectionStatus.degradation) }
+                // §8.2: the monitor publishes degradation reactively — the banner updates the
+                // moment the FGS start() detection lands, not only on the next resume.
+                val degradation by protectionStatusMonitor.degradation.collectAsStateWithLifecycle()
                 // Finding #13: the status chip and the degradation banner must read the same
                 // authority in the same frame — the chip's own tri-state comes from here.
                 val authority by protectionStatusMonitor.authority.collectAsStateWithLifecycle()
@@ -422,7 +422,6 @@ class MainActivity : FragmentActivity() {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME) {
                             refreshProtectionChecks()
-                            degradation = protectionStatus.degradation
                             notificationsEnabled = NotificationAccess.canPost(this@MainActivity)
                         }
                     }
@@ -647,9 +646,9 @@ class MainActivity : FragmentActivity() {
                         onReenable = {
                             protectionStatus.reenable()
                             // Recompute right away: clearing APP_STOPPED can immediately
-                            // reveal another degraded reason (or none).
+                            // reveal another degraded reason (or none). The published flow
+                            // clears the banner in the same frame.
                             protectionStatusMonitor.refresh()
-                            degradation = protectionStatus.degradation
                         },
                     )
                 } else {

@@ -70,6 +70,16 @@ class ProtectionStatusMonitor @Inject constructor(
     /** Current authority; read by Path B's accounting/render gates on every poll. */
     val authority: StateFlow<ProtectionAuthority> = _authority.asStateFlow()
 
+    // Seeded from the store so a cold start renders a persisted banner immediately; kept
+    // reactive below so a state change lands on screen the moment it is published.
+    private val _degradation = MutableStateFlow(runCatching { store.degradation }.getOrNull())
+
+    /** The one user-visible degraded reason, reactive. The Home banner used to re-read the
+     *  store only on resume — but the FGS's start() runs the stop detection AFTER that read,
+     *  so a freshly detected stop showed no banner until the next resume/relaunch
+     *  (device-caught 2026-10-14: stop → open app → no banner, close/reopen → banner). */
+    val degradation: StateFlow<ProtectionDegradation?> = _degradation.asStateFlow()
+
     /**
      * Recompute + publish. Called on cold start, the maintenance worker's run, the foreground
      * service's 30s permission cycle, and the accessibility connect/disconnect callbacks
@@ -94,7 +104,7 @@ class ProtectionStatusMonitor @Inject constructor(
         return next
     }
 
-    /** Store + notification, change-gated, so repeated refreshes are free. */
+    /** Store + transition log are change-gated; the notification is re-asserted every refresh. */
     private fun publish(authority: ProtectionAuthority, cause: String) {
         // Pre-unlock process start: CE SharedPreferences throw until first unlock (same guard
         // as EnhancedModeHealthMonitor) — the in-memory authority above is still updated.
@@ -108,10 +118,17 @@ class ProtectionStatusMonitor @Inject constructor(
             authority = authority,
             notificationsDenied = notificationsDenied(),
         )
-        if (visible == prior) return
-        store.degradation = visible
+        if (visible != prior) {
+            store.degradation = visible
+            logTransition(prior, visible, authority, cause)
+        }
+        // Both below are unconditional (device-caught 2026-10-14). The StateFlow so a
+        // detection landing after the UI's resume read still reaches the banner in-session;
+        // the notification so an alert cleared out-of-band — a package update (the app's only
+        // distribution channel) or a swipe — cannot stay lost while the state persists.
+        // Re-posting identical content is free (ONLY_ALERT_ONCE).
+        _degradation.value = visible
         ProtectionNotifications.updateDegraded(appContext, visible)
-        logTransition(prior, visible, authority, cause)
     }
 
     private fun notificationsDenied(): Boolean {

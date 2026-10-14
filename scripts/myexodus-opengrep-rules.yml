@@ -29,6 +29,14 @@ rules:
       - pattern-not: Log.$LEVEL($TAG, "...")
       - pattern-not: Log.$LEVEL($TAG, $MSG, "...")
       - pattern-not: Log.$LEVEL($TAG, $MSG, $E, "...")
+      # Bundle/Map .keySet() is container enumeration, not "keyset" material —
+      # the 2026-10-14 FP on DesertDawnWidget's widget-options debug log. Scoped
+      # to the logged expression: a file-global or arg-level ellipsis exclusion
+      # silences the whole rule (both tried 2026-10-14).
+      - metavariable-pattern:
+          metavariable: $SECRET
+          patterns:
+            - pattern-not: <... $X.keySet() ...>
       - metavariable-regex:
           metavariable: $SECRET
           regex: (?i).*(dek|cek|secret|keystore|keyset|master.?key|token|escrow|passphrase|password|private.?key|auth.?key).*

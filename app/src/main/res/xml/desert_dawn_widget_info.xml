@@ -4,9 +4,13 @@
    The two declared sizes bracket what tested launchers actually report for a 2×1 and a 4×2 cell;
    `WidgetContent` branches on height alone, so any size in between still picks the right variant.
 
-   updatePeriodMillis="0": the app drives every refresh itself (snapshot writes, and the resize
-   callback Glance already wires to onAppWidgetOptionsChanged). The platform's own periodic
-   AppWidget update would only add wakeups that render an unchanged snapshot.
+   updatePeriodMillis=1800000 (the platform minimum — smaller values are clamped): a revision of
+   the original 0. The app still drives every refresh itself (snapshot writes, resize callback),
+   but the platform's periodic update is the backstop the original comment missed — when the app
+   process is dead or freezer-SIGSTOPped no app-side writer can run, and this broadcast is what
+   cold-starts/thaws it (only a force-stopped app is unreachable, which no widget mechanism can
+   fix). Found by the 2026-10-14 widget-staleness investigation. Glance's receiver handles
+   ACTION_APPWIDGET_UPDATE through the standard GlanceAppWidgetReceiver path.
 
    previewImage is a capture of the real 4×2 render (drawable-nodpi/widget_preview.png), not a
    mock-up: it is what the widget actually looks like in Desert Dawn, so the launcher picker cannot
@@ -22,6 +26,6 @@
     android:resizeMode="horizontal|vertical"
     android:targetCellHeight="1"
     android:targetCellWidth="2"
-    android:updatePeriodMillis="0"
+    android:updatePeriodMillis="1800000"
     android:widgetCategory="home_screen"
     tools:targetApi="31" />

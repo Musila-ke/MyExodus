@@ -110,6 +110,9 @@ object ProtectionNotifications {
             .setStyle(NotificationCompat.BigTextStyle().bigText(copy.text))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
+            // The monitor re-posts this on every refresh so it can never be silently lost
+            // (package update / swipe); alert only when the alert is new, not on re-asserts.
+            .setOnlyAlertOnce(true)
             .addAction(0, copy.actionLabel, copy.action)
             .build()
     }

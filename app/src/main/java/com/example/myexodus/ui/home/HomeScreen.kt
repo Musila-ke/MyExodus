@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -618,13 +619,17 @@ private fun StatTile(
                     )
                 }
             }
-            Text(
-                label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                softWrap = false,
-            )
+            // A two-line slot keeps the trio uniform: "Times blocked" wraps at compact widths
+            // (device-caught 2026-10-14 — a single line clipped it mid-word); heightIn so
+            // accessibility font scales can still grow the tile instead of cutting the label.
+            Box(Modifier.heightIn(min = 32.dp), contentAlignment = Alignment.TopStart) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                )
+            }
         }
     }
 }
@@ -944,15 +949,16 @@ private fun DegradationBanner(
         // The old copy claimed blocking was off while Path A (a11y) is typically still
         // live after a Task-Manager stop — can't claim that, and can't claim "everything
         // is fine": the poll path (time limits + fallback detection) stays off until
-        // re-enable. Name only the always-true loss (regression finding #1, 2026-09-16).
+        // re-enable. Name only the always-true loss (regression finding #1, 2026-09-16);
+        // the stop's cause is never named (which shapes it counts — see the string).
         ProtectionDegradation.APP_STOPPED -> Triple(
-            "MyExodus was stopped from the Task Manager. Time limits stay paused until you re-enable.",
-            "Re-enable",
+            stringResource(R.string.protection_stopped_text),
+            stringResource(R.string.protection_stopped_action),
             onReenable,
         )
         ProtectionDegradation.NOTIFICATIONS_OFF -> Triple(
-            "Notifications are off for MyExodus — protection status may be hidden. Turn them on in Settings.",
-            "Fix",
+            stringResource(R.string.protection_notif_off_banner_text),
+            stringResource(R.string.protection_notif_off_banner_action),
             {
                 context.startActivity(
                     Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
