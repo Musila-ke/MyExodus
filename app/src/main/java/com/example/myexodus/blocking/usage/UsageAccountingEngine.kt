@@ -342,6 +342,15 @@ class UsageAccountingEngine(
      * The §8.9 overlap check compares only rows in the same boot (§8.5: elapsed values from
      * different boots are not comparable, so an equal number from an old frame is a coincidence,
      * not coverage). Returns the credited closing-day share (0 when nothing was credited).
+     *
+     * [answeredThroughWallMs] is the wall of the window's END (windowToElapsedMs), not the
+     * write moment — and it is what the row stores. ADR #160's credit edge reads the newest
+     * credit's wall as "everything up to here is answered for"; a row that answered for a past
+     * window but stamped itself with the write moment would advance the edge past its own
+     * answer — device-proven 2026-10-15: a service-start audit during a genuine pause stamped
+     * write-now, pushing the edge 11 s past the user's stop, which disarmed the stop clip and
+     * let the re-enable audit claim the paused era. The caller owns the wall↔elapsed mapping
+     * (it derived the elapsed window from this same wall), so it passes the value back.
      */
     suspend fun creditReconciledWindow(
         packageName: String,
@@ -349,6 +358,7 @@ class UsageAccountingEngine(
         windowToElapsedMs: Long,
         foregroundMs: Long,
         source: String,
+        answeredThroughWallMs: Long,
     ): Long = withContext(dispatcher) {
         val span = windowToElapsedMs - windowFromElapsedMs
         if (span <= 0L || foregroundMs <= 0L) return@withContext 0L
@@ -399,7 +409,7 @@ class UsageAccountingEngine(
                         elapsedEndMs = windowToElapsedMs,
                         bootCount = bootCount,
                         source = source,
-                        wallClockTsMs = nowWallClockMs,
+                        wallClockTsMs = answeredThroughWallMs,
                     ),
                 )
             ) {
@@ -430,6 +440,22 @@ class UsageAccountingEngine(
             crashReporting.nonFatal("warning_pending_delivery", cause = "reconciliation_credit", "level" to "$it")
         }
         credited
+    }
+
+    /**
+     * ADR #160's credit-edge anchor: per package, the wall of the newest interval-owning
+     * credit (ACCOUNTING/RECONCILIATION — the same kinds §8.9's overlap check reads, because
+     * only those own an interval whose end the anchor may claim). A package absent from the
+     * map has no credit inside the range — its uncredited span starts at the range's floor.
+     */
+    suspend fun lastCreditWallPerPackage(
+        packageNames: Collection<String>,
+        sinceWallClockMs: Long,
+    ): Map<String, Long> = withContext(dispatcher) {
+        val db = storeFactory.open() ?: return@withContext emptyMap()
+        db.usageLedgerDao()
+            .creditEdges(packageNames, OVERLAP_KINDS, sinceWallClockMs)
+            .associate { it.packageName to it.creditWallMs }
     }
 
     /** (d) of the accounting cycle, shared by every crediting path (live observation and

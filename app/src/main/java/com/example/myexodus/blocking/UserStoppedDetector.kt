@@ -76,9 +76,19 @@ object UserStoppedDetector {
     fun wasUserStopped(
         exitReasons: List<ProcessExit>,
         watermarkEpochMillis: Long,
-    ): Boolean =
+    ): Boolean = latestUserStop(exitReasons, watermarkEpochMillis) != null
+
+    /** The latest exit a person actually caused after [watermarkEpochMillis] — the boundary
+     *  after which time belongs to the pause, not to the budget (ADR #160's credit clip).
+     *  Same adjudication as [wasUserStopped]: a candidate is only a stop when it is not
+     *  error-correlated. */
+    fun latestUserStop(
+        exitReasons: List<ProcessExit>,
+        watermarkEpochMillis: Long,
+    ): ProcessExit? =
         userStopCandidates(exitReasons, watermarkEpochMillis)
-            .any { !isErrorCorrelated(it, exitReasons) }
+            .filter { !isErrorCorrelated(it, exitReasons) }
+            .maxByOrNull { it.timestampEpochMillis }
 
     /** True when [candidate] is a kill by (or amid) the app's own failure. The candidate's
      *  reason is REASON_USER_REQUESTED, so an error row can never be the candidate itself. */

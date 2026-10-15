@@ -14,6 +14,13 @@ data class LedgerDayTotal(
     @ColumnInfo(name = "total_ms") val totalMs: Long,
 )
 
+/** The credit-edge audit's per-package anchor (ADR #160): the wall of the newest
+ *  interval-owning credit, so everything after it is by definition uncredited. */
+data class LedgerCreditEdge(
+    @ColumnInfo(name = "package_name") val packageName: String,
+    @ColumnInfo(name = "credit_wall_ms") val creditWallMs: Long,
+)
+
 /**
  * Reads and appends to the usage journal. Append-only by construction: there is no `@Update`
  * and no `@Delete` here, and the only deletion is the age-bounded retention sweep (§8.8).
@@ -49,6 +56,20 @@ interface UsageLedgerDao {
             "WHERE kind IN (:kinds) GROUP BY package_name, day_key",
     )
     suspend fun dayTotals(kinds: Collection<Int>): List<LedgerDayTotal>
+
+    /** The credit-edge audit's anchor query (ADR #160): the newest credit wall per package
+     *  among the interval-owning kinds, bounded by a wall cutoff so the audit can never
+     *  re-open a span older than the day it may credit. */
+    @Query(
+        "SELECT package_name AS package_name, MAX(wall_clock_ts_ms) AS credit_wall_ms " +
+            "FROM usage_ledger WHERE package_name IN (:packageNames) AND kind IN (:kinds) " +
+            "AND wall_clock_ts_ms >= :sinceWallClockMs GROUP BY package_name",
+    )
+    suspend fun creditEdges(
+        packageNames: Collection<String>,
+        kinds: Collection<Int>,
+        sinceWallClockMs: Long,
+    ): List<LedgerCreditEdge>
 
     /** Intervals already journaled for the package, for §8.9's overlap check. Bounded by the
      *  reconciliation window's own elapsed span, so the result set stays small. `boot_count`

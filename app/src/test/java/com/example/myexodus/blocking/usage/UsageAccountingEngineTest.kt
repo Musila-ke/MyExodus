@@ -396,7 +396,7 @@ class UsageAccountingEngineTest {
 
     @Test
     fun reconciledWindow_creditsAsReconciliation_andTheRebuildReproducesIt() = runTest {
-        val credited = engine.creditReconciledWindow(PKG, 100_000L, 100_000L + 5 * MIN, 5 * MIN, UsageLedgerSource.MAINTENANCE)
+        val credited = engine.creditReconciledWindow(PKG, 100_000L, 100_000L + 5 * MIN, 5 * MIN, UsageLedgerSource.MAINTENANCE, wallNowMs)
 
         assertEquals(5 * MIN, credited)
         assertEquals(5 * MIN, trackerRow()!!.msUsedToday)
@@ -417,7 +417,7 @@ class UsageAccountingEngineTest {
         // recovered window.
         engine.processUsageObservation(PKG, 5 * MIN, 600_000L, UsageLedgerSource.PATH_A)
 
-        val credited = engine.creditReconciledWindow(PKG, 300_000L, 900_000L, 10 * MIN, UsageLedgerSource.MAINTENANCE)
+        val credited = engine.creditReconciledWindow(PKG, 300_000L, 900_000L, 10 * MIN, UsageLedgerSource.MAINTENANCE, wallNowMs)
 
         // Half the window was already accounted → half the foreground credit survives.
         assertEquals(5 * MIN, credited)
@@ -428,7 +428,7 @@ class UsageAccountingEngineTest {
     fun reconciledWindow_fullyCoveredWindow_creditsNothingAndWritesNoRow() = runTest {
         engine.processUsageObservation(PKG, 5 * MIN, 600_000L, UsageLedgerSource.PATH_A)
 
-        val credited = engine.creditReconciledWindow(PKG, 300_000L, 600_000L, 5 * MIN, UsageLedgerSource.MAINTENANCE)
+        val credited = engine.creditReconciledWindow(PKG, 300_000L, 600_000L, 5 * MIN, UsageLedgerSource.MAINTENANCE, wallNowMs)
 
         assertEquals(0L, credited)
         assertEquals(5 * MIN, trackerRow()!!.msUsedToday)
@@ -437,11 +437,11 @@ class UsageAccountingEngineTest {
 
     @Test
     fun reconciledWindow_rerunInsideTheCreditedSpan_addsNothing() = runTest {
-        engine.creditReconciledWindow(PKG, 1_000_000L, 1_000_000L + 5 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE)
+        engine.creditReconciledWindow(PKG, 1_000_000L, 1_000_000L + 5 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE, wallNowMs)
 
         // The same recovery re-expressed with tighter bounds: covered, so nothing — the
         // overlap check (not the event id) is what absorbs it.
-        val rerun = engine.creditReconciledWindow(PKG, 1_010_000L, 1_000_000L + 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE)
+        val rerun = engine.creditReconciledWindow(PKG, 1_010_000L, 1_000_000L + 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE, wallNowMs)
 
         assertEquals(0L, rerun)
         assertEquals(4 * MIN, trackerRow()!!.msUsedToday)
@@ -451,7 +451,7 @@ class UsageAccountingEngineTest {
     fun reconciledWindow_canDeliverTheVerdictItsOutageSwallowed() = runTest {
         seedTracker(anchor = today.toString(), msUsed = 29 * MIN)
 
-        val credited = engine.creditReconciledWindow(PKG, 0L, 2 * MIN, 2 * MIN, UsageLedgerSource.MAINTENANCE)
+        val credited = engine.creditReconciledWindow(PKG, 0L, 2 * MIN, 2 * MIN, UsageLedgerSource.MAINTENANCE, wallNowMs)
 
         assertEquals(2 * MIN, credited)
         // 31 min against the 30 min limit: the recovered credit re-derives the block and
@@ -464,7 +464,7 @@ class UsageAccountingEngineTest {
     fun reconciledWindow_staleRow_rollsThenCredits() = runTest {
         seedTracker(anchor = today.minusDays(1).toString(), msUsed = 29 * MIN, blocked = true)
 
-        assertEquals(4 * MIN, engine.creditReconciledWindow(PKG, 0L, 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE))
+        assertEquals(4 * MIN, engine.creditReconciledWindow(PKG, 0L, 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE, wallNowMs))
 
         val row = trackerRow()!!
         assertEquals(today.toString(), row.localDateAnchor)
@@ -489,7 +489,7 @@ class UsageAccountingEngineTest {
             ),
         )
 
-        val credited = engine.creditReconciledWindow(PKG, 300_000L, 900_000L, 10 * MIN, UsageLedgerSource.MAINTENANCE)
+        val credited = engine.creditReconciledWindow(PKG, 300_000L, 900_000L, 10 * MIN, UsageLedgerSource.MAINTENANCE, wallNowMs)
 
         assertEquals(10 * MIN, credited)
     }
@@ -497,21 +497,119 @@ class UsageAccountingEngineTest {
     @Test
     fun reconciledWindow_untrackedOrDegenerateInputs_creditNothing() = runTest {
         // Zero/negative foreground or a non-positive span is not a recovery.
-        assertEquals(0L, engine.creditReconciledWindow(PKG, 0L, 4 * MIN, 0L, UsageLedgerSource.MAINTENANCE))
-        assertEquals(0L, engine.creditReconciledWindow(PKG, 4 * MIN, 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE))
+        assertEquals(0L, engine.creditReconciledWindow(PKG, 0L, 4 * MIN, 0L, UsageLedgerSource.MAINTENANCE, wallNowMs))
+        assertEquals(0L, engine.creditReconciledWindow(PKG, 4 * MIN, 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE, wallNowMs))
         // Untracked package, disabled rule, inactive day scope: no accrual, no row.
-        assertEquals(0L, engine.creditReconciledWindow("com.other.app", 0L, 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE))
+        assertEquals(0L, engine.creditReconciledWindow("com.other.app", 0L, 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE, wallNowMs))
         val rule = db.restrictionRuleDao().getById(RULE_ID)!!
         db.restrictionRuleDao().update(rule.copy(isEnabled = false))
-        assertEquals(0L, engine.creditReconciledWindow(PKG, 0L, 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE))
+        assertEquals(0L, engine.creditReconciledWindow(PKG, 0L, 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE, wallNowMs))
         db.restrictionRuleDao().update(rule.copy(isEnabled = true))
         setDayScope(daysExceptToday())
-        assertEquals(0L, engine.creditReconciledWindow(PKG, 0L, 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE))
+        assertEquals(0L, engine.creditReconciledWindow(PKG, 0L, 4 * MIN, 4 * MIN, UsageLedgerSource.MAINTENANCE, wallNowMs))
         assertNull(trackerRow())
         assertTrue(db.usageLedgerDao().rowsOfKindSince(UsageLedgerKind.RECONCILIATION, 0L).isEmpty())
     }
 
+    // --- lastCreditWallPerPackage (ADR #160's credit edge) ---------------------------------
+
+    @Test
+    fun lastCreditWallPerPackage_picksTheNewestIntervalOwningCredit() = runTest {
+        creditRow(UsageLedgerKind.ACCOUNTING, wallNowMs - 10 * MIN)
+        creditRow(UsageLedgerKind.RECONCILIATION, wallNowMs - 5 * MIN)
+        // Not interval-owning: a later carryover covers no span, so it cannot anchor the audit.
+        creditRow(UsageLedgerKind.MIGRATION_CARRYOVER, wallNowMs - MIN)
+
+        assertEquals(
+            mapOf(PKG to (wallNowMs - 5 * MIN)),
+            engine.lastCreditWallPerPackage(listOf(PKG), sinceWallClockMs = 0L),
+        )
+    }
+
+    @Test
+    fun lastCreditWallPerPackage_evidenceRowsDoNotAnchor() = runTest {
+        // ADR #156's trap in one assertion: heartbeats prove liveness, never a credit — a
+        // package whose only rows today are evidence must come back with no anchor.
+        creditRow(UsageLedgerKind.HEARTBEAT, wallNowMs - MIN)
+        creditRow(UsageLedgerKind.GAP_DETECTED, wallNowMs - MIN)
+        creditRow(UsageLedgerKind.RULE_EVALUATION, wallNowMs - MIN)
+
+        assertTrue(engine.lastCreditWallPerPackage(listOf(PKG), sinceWallClockMs = 0L).isEmpty())
+    }
+
+    @Test
+    fun lastCreditWallPerPackage_respectsTheWallCutoffAndThePackageScope() = runTest {
+        creditRow(UsageLedgerKind.ACCOUNTING, wallNowMs - 30 * MIN)
+        creditRow(UsageLedgerKind.ACCOUNTING, wallNowMs - MIN, packageName = TODAY_PKG)
+
+        // The cutoff (midnight-at-the-call-site) hides the stale credit; only requested
+        // packages appear in the map.
+        assertEquals(
+            mapOf(TODAY_PKG to (wallNowMs - MIN)),
+            engine.lastCreditWallPerPackage(listOf(PKG, TODAY_PKG), sinceWallClockMs = wallNowMs - 20 * MIN),
+        )
+    }
+
+    @Test
+    fun reconciledWindow_edgeStampsTheAnsweredEnd_neverTheWriteMoment() = runTest {
+        // Device leg 2 (2026-10-15): a service-start audit ran mid-pause and credited the
+        // pre-stop tail. Stamped with the write moment (that row carried 23:45:00), its edge
+        // landed 11 s past the user's stop (23:44:49), the stop clip could no longer anchor,
+        // and the re-enable audit claimed the paused era — a 336.8 s window where the pause
+        // promise says none. Stamped with the answered window end, the clip still bites.
+        val stopWall = wallNowMs - 3 * MIN
+        val credited = engine.creditReconciledWindow(
+            PKG,
+            100_000L,
+            100_000L + 5 * MIN,
+            5 * MIN,
+            UsageLedgerSource.MAINTENANCE,
+            answeredThroughWallMs = stopWall,
+        )
+
+        assertEquals(5 * MIN, credited)
+        assertEquals(stopWall, engine.lastCreditWallPerPackage(listOf(PKG), 0L)[PKG])
+        // The release audit's span, built exactly as the FGS builds it: edge == stop ⇒ the
+        // clip empties the window ⇒ nothing to repair, the paused era stays unclaimable.
+        assertNull(
+            UsageGapRepair.uncreditedWindow(
+                lastCreditWallMs = stopWall,
+                localMidnightEpochMillis = 0L,
+                bootOriginWallMs = 0L,
+                resumeWallMs = wallNowMs,
+                stopWallMs = stopWall,
+            ),
+        )
+    }
+
     // --- Helpers ---
+
+    /** One journal row with explicit kind and wall — the audit's raw material. Each kind gets
+     *  its own elapsed interval because §8.6's event identity is (source, package, interval,
+     *  boot) — kind is deliberately not part of it, so same-interval rows of different kinds
+     *  would collide, which distinct real observations never do. The landed-ness assert is the
+     *  scar: a silently collision-dropped fixture made an evidence-kinds test pass while only
+     *  one of its three rows existed. */
+    private suspend fun creditRow(
+        kind: Int,
+        wallMs: Long,
+        packageName: String = PKG,
+    ) {
+        val outcome = ledger.appendStandalone(
+            LedgerEventDraft(
+                kind = kind,
+                packageName = packageName,
+                creditedMs = if (kind == UsageLedgerKind.ACCOUNTING || kind == UsageLedgerKind.RECONCILIATION) MIN else 0L,
+                elapsedStartMs = 0L,
+                // MIGRATION_CARRYOVER's real shape: a zero-length interval (it owns no span).
+                elapsedEndMs = if (kind == UsageLedgerKind.MIGRATION_CARRYOVER) 0L else MIN * (kind + 1),
+                bootCount = BOOT,
+                source = UsageLedgerSource.PATH_A,
+                wallClockTsMs = wallMs,
+            ),
+        )
+        assertTrue("row rejected: $outcome", outcome is AppendOutcome.Written)
+    }
 
     private suspend fun trackerRow(): DailyUsageTracker? =
         db.dailyUsageTrackerDao().findByPackage(PROFILE_ID, PKG)

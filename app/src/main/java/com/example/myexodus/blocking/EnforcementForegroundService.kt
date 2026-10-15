@@ -129,6 +129,11 @@ class EnforcementForegroundService : Service() {
      *  clearing it here made every tick-originated verdict fail the render gate). */
     @Volatile private var lastObservedForegroundPackage: String? = null
 
+    /** Previous tick's view of [ProtectionStatus.requiresExplicitReEnable]; its true→false edge
+     *  is the pause release the credit-edge audit fires on (ADR #160). Ticks run strictly one
+     *  at a time through [tickWithTimeout]'s Future, so a plain field suffices. */
+    private var lastTickSawReenableRequired = false
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var pollingJob: Job? = null
     private var screenOffReceiver: BroadcastReceiver? = null
@@ -204,11 +209,12 @@ class EnforcementForegroundService : Service() {
             stopSelf()
             return
         }
-        val previousWatermark = checkForUserStop()
-        // v3 §5 D1/D3: a death the platform recorded is a window nothing observed — the
-        // ticker credited nothing and no block could run. Credit it from the platform's own
+        checkForUserStop()
+        // ADR #160: every interruption — death, stand-down, a heartbeat-fresh pipeline that
+        // stopped crediting, an OEM freezer — ends at this start, and everything after the
+        // ledger's own last credit is unaccounted time. Credit it from the platform's own
         // foreground record instead of letting the limit hold against a frozen counter.
-        scope.launch { repairAccountingGap(previousWatermark) }
+        scope.launch { reconcileUncreditedSpan(processStartWall()) }
         // §8 Step 6: publish the current authority + status at service start (covers the
         // master switch being turned on/off and any permission change while stopped).
         statusMonitor.refresh()
@@ -219,26 +225,13 @@ class EnforcementForegroundService : Service() {
     }
 
     /** §8.2: a Task-Manager Stop since the last known-good startup is an enforcement-loss
-     *  event — degraded state, blocking stays off until the user explicitly re-enables.
-     *
-     *  @return the previous known-good startup watermark, which bounds the gap repair to
-     *  exits that happened since the last service start. */
-    private fun checkForUserStop(): Long {
+     *  event — degraded state, blocking stays off until the user explicitly re-enables. The
+     *  watermark drives only this detection; the credit-edge audit bounds itself at the last
+     *  credit instead (ADR #160). */
+    private fun checkForUserStop() {
         val watermark = status.lastKnownGoodExitCheckEpochMillis
         status.lastKnownGoodExitCheckEpochMillis = System.currentTimeMillis()
-        val exitReasons = runCatching {
-            val manager = getSystemService(ActivityManager::class.java)
-            val packageName = packageName
-            // getHistoricalProcessExitReasons is API 30+; on older releases there is no
-            // Task-Manager Stop surface to detect.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                @Suppress("InlinedApi")
-                manager.getHistoricalProcessExitReasons(packageName, 0, 0)
-                    .map { ProcessExit(it.reason, it.timestamp, it.description.orEmpty()) }
-            } else {
-                emptyList()
-            }
-        }.getOrDefault(emptyList())
+        val exitReasons = processExits()
         val candidates = UserStoppedDetector.userStopCandidates(exitReasons, watermark)
         if (UserStoppedDetector.wasUserStopped(exitReasons, watermark)) {
             // The description is logged because it is the discriminator the detector reads —
@@ -261,28 +254,47 @@ class EnforcementForegroundService : Service() {
                     "not a deliberate pause (count=${candidates.size} desc=${seen?.description})",
             )
         }
-        return watermark
     }
 
+    /** The platform's process-exit record for this package; empty before API 30 (there is no
+     *  exit-history surface) or when the query fails. Shared by the user-stop check and the
+     *  credit-edge audit's pause clip — one read of the record, two judgments. */
+    private fun processExits(): List<ProcessExit> = runCatching {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return emptyList()
+        @Suppress("InlinedApi")
+        getSystemService(ActivityManager::class.java)
+            .getHistoricalProcessExitReasons(packageName, 0, 0)
+            .map { ProcessExit(it.reason, it.timestamp, it.description.orEmpty()) }
+    }.getOrDefault(emptyList())
+
     /**
-     * v3 §5 D1/D3: fill the accounting gap left by a process death.
+     * ADR #160's credit-edge audit: from the ledger's own last credit per package to this
+     * process start, everything is unaccounted time — death, stand-down, a pipeline still
+     * heartbeating but no longer crediting, an OEM freezer; the interruption's shape does not
+     * matter, only that the ledger stopped advancing. The platform's foreground record fills
+     * the span ([UsageGapRepair.uncreditedWindow] bounds it: never before today's midnight or
+     * this boot's origin, end-exclusive, floor-bounded).
      *
-     * The ticker is the only accountant, so a killed process credits nothing for the window
-     * it was gone, and no block can run in that window either — measured on the X6532 as up
-     * to ~17 minutes off-charger without the battery exemption. The platform already records
-     * the death ([ActivityManager.getHistoricalProcessExitReasons]), so the span is known
-     * exactly rather than inferred, and `queryEvents` supplies the foreground marks to fill
-     * it. The window starts at the last journal observation, not the death (v3 §5 D3's
-     * `(last_credited_wall_ms, now]`): a freezer SIGSTOPs the process minutes before the
-     * watchdog kill, and that prefix is exactly the under-counted class this path exists for.
-     * Runs once per service start, on the same transactional writer every other credit
-     * uses, and is bounded to a span this process demonstrably did not observe — so it can
-     * never overlap a span a live path already credited. The credit itself goes through
+     * Supersedes the death-anchored repair (ADR #147/#156): its `latestExitAfter` anchor and
+     * its observation clamp both pinned the window to journal evidence rows, and a heartbeat
+     * row proves liveness, never a credit — the 2026-10-15 flagged era had a fresh heartbeat
+     * baseline through it (repair credited 155.9 s of a 143.3 min platform-era) and an earlier
+     * 4.4 h dead era never fired the repair at all (ADR #156 honest limit (c)). The
+     * credit-edge anchor catches both by construction.
+     *
+     * The pause promise ("time limits stay paused until you re-enable") is enforced with the
+     * same exit record [checkForUserStop] reads: no credit ever crosses a genuine user-stop
+     * exit, and with the re-enable flag set and no stop record to bound the span, nothing is
+     * credited at all — paused time can never re-enter the budget.
+     *
+     * Runs at every service start and at every pause release (the re-enable transition the
+     * tick loop detects), on the same transactional writer every other credit uses, through
      * [UsageAccountingEngine.creditReconciledWindow]: platform-derived data is RECONCILIATION
-     * (§8.9/R4), and its overlap check dedupes this path against the heartbeat-driven one.
+     * (§8.9/R4), and its overlap check dedupes this path against the heartbeat-driven one and
+     * against a re-run of itself. [endWallMs] is the moment live accounting resumes — the
+     * process start at a service start, "now" at a pause release.
      */
-    @Suppress("InlinedApi") // getHistoricalProcessExitReasons is API 30+, gated below
-    private suspend fun repairAccountingGap(previousWatermark: Long) {
+    private suspend fun reconcileUncreditedSpan(endWallMs: Long) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         runCatching {
             if (!hasUsageAccess()) return
@@ -291,94 +303,115 @@ class EnforcementForegroundService : Service() {
                 .filter { it.isEnabled && it.dailyLimitMs > 0L }
             if (tracked.isEmpty()) return
             val midnight = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-            // v3 §5 D3's span starts at the last observation, not at the death: a freezer's
-            // SIGSTOP prefix (measured: 156 s on the X6532, 2026-09-28) has no other claimant.
-            val observedUntil = runCatching {
-                diagnostics.lastObservedWallClock(systemBootCount(this))
-            }.getOrNull()
+            val anchors = usageEngine.lastCreditWallPerPackage(
+                tracked.map { it.blockedPackage },
+                midnight,
+            )
             // Binder work on the isolated tick pool: a usage-stats or appops call can wedge
             // indefinitely on this device (2026-08-30 finding, see [tickWithTimeout]), and this
             // is the one place outside the poll loop that makes such calls.
-            val probe = onBinderThread<Pair<LongRange, Map<String, List<UsageMark>>>?> {
-                probeUnobservedWindow(previousWatermark, tracked, midnight, observedUntil)
+            val paused = status.requiresExplicitReEnable
+            val probe = onBinderThread<ReconcileProbe?> {
+                probeUncreditedWindows(tracked, anchors, midnight, paused, endWallMs)
             } ?: return
-            val window = probe.first
-            val marks = probe.second
-            val clipEnd = window.last + 1
-            // The recorded span is wall-clock; the ledger's interval is monotonic. Both derive
-            // from the same window, so the RECONCILIATION row's interval is the span the
-            // platform actually answered for.
+            if (probe.windows.isEmpty()) return
             val nowWall = System.currentTimeMillis()
             val nowElapsed = SystemClock.elapsedRealtime()
+            // A real platform answer over the span (ADR #149's semantic, applied to this
+            // path): whatever the span held was credited below or found empty — either way
+            // the outage report must stop counting windows inside it.
+            diagnostics.markResolvedThrough(nowWall)
             var repaired = 0
-            for (rule in tracked) {
+            for ((rule, window) in probe.windows) {
                 val credit = UsageGapRepair.foregroundMsWithin(
-                    marks[rule.blockedPackage].orEmpty(),
+                    probe.marks[rule.blockedPackage].orEmpty(),
                     window.first,
-                    clipEnd,
+                    window.last + 1,
                 )
                 if (credit <= 0L) continue
                 // §8.9/R4: platform-derived recovery is RECONCILIATION, never ACCOUNTING — and
                 // its overlap check makes a re-run (or a second recovery path over the same
-                // window, e.g. the heartbeat-driven one) credit nothing twice.
+                // window, e.g. the heartbeat-driven one) credit nothing twice. Wall-to-elapsed
+                // in one mapping, so the row's interval is the span the platform answered for.
                 val credited = usageEngine.creditReconciledWindow(
                     rule.blockedPackage,
                     nowElapsed - (nowWall - window.first),
-                    nowElapsed - (nowWall - clipEnd),
+                    nowElapsed - (nowWall - (window.last + 1)),
                     credit,
                     UsageLedgerSource.MAINTENANCE,
+                    // The row answers for the window, so its edge stamp is the window's end —
+                    // never the write moment, which would advance the edge past a genuine stop
+                    // still inside a flagged era (device leg 2, 2026-10-15).
+                    answeredThroughWallMs = window.last + 1,
                 )
                 if (credited <= 0L) continue
                 repaired++
                 Log.i(
                     TAG,
                     "gap repair: credited ${credited}ms to ${rule.blockedPackage} " +
-                        "over a ${window.last - window.first}ms unobserved window",
+                        "over a ${window.last - window.first}ms uncredited window",
                 )
             }
             if (repaired > 0) {
                 // §14 / Decision 12: counts only — no package names or durations leave the device.
                 crashReporting.nonFatal(
                     "accounting_gap_repaired",
-                    cause = "process_death",
+                    cause = "uncredited_span",
                     "packages" to repaired.toString(),
-                    "window_ms" to (window.last - window.first).toString(),
+                    "window_ms" to probe.widestMs.toString(),
                 )
             }
         }.onFailure { Log.w(TAG, "gap repair skipped", it) }
     }
 
+    /** The audit's per-package windows plus the one marks query that serves them all. */
+    private data class ReconcileProbe(
+        val windows: Map<RestrictionRule, LongRange>,
+        val marks: Map<String, List<UsageMark>>,
+        val widestMs: Long,
+    )
+
+    /** This process's wall-clock start — the end of the span a service-start audit repairs
+     *  (live ticks can only ever cover time after the process existed). Fully qualified:
+     *  a bare `Process` in this file resolves to java.lang.Process. */
+    private fun processStartWall(): Long = System.currentTimeMillis() -
+        (SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime())
+
     /**
-     * The binder half of the repair: read the platform's exit record, derive the span this
-     * process demonstrably did not observe, and pull the foreground marks for the tracked
-     * packages across it. Null = nothing safe to repair.
+     * The binder half of the audit. Per package the span runs from its credit edge to the
+     * audit's end moment [endWallMs] — clipped to the latest genuine user-stop exit, never
+     * past it, and skipped whole while the re-enable flag is set without a stop record to
+     * bound the span. Null = nothing to repair.
      */
-    @Suppress("InlinedApi") // getHistoricalProcessExitReasons is API 30+, gated by the caller
-    private fun probeUnobservedWindow(
-        previousWatermark: Long,
+    private fun probeUncreditedWindows(
         tracked: List<RestrictionRule>,
+        anchors: Map<String, Long>,
         midnightEpochMillis: Long,
-        observedUntilEpochMillis: Long?,
-    ): Pair<LongRange, Map<String, List<UsageMark>>>? {
-        val exits = getSystemService(ActivityManager::class.java)
-            .getHistoricalProcessExitReasons(packageName, 0, 0)
-            .map { ProcessExit(it.reason, it.timestamp, it.description.orEmpty()) }
-        val exit = UsageGapRepair.latestExitAfter(exits, previousWatermark) ?: return null
-        // Fully qualified: a bare `Process` here resolves to java.lang.Process.
-        val processStartWall = System.currentTimeMillis() -
-            (SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime())
-        val window = UsageGapRepair.repairWindow(
-            exit.timestampEpochMillis,
-            processStartWall,
-            midnightEpochMillis,
-            observedUntilEpochMillis = observedUntilEpochMillis,
-        ) ?: return null
+        paused: Boolean,
+        endWallMs: Long,
+    ): ReconcileProbe? {
+        val bootOriginWall = System.currentTimeMillis() - SystemClock.elapsedRealtime()
+        // Anchors are all ≥ midnight by their query's own floor, so midnight bounds the clip.
+        val stopWall = UserStoppedDetector.latestUserStop(processExits(), midnightEpochMillis)
+            ?.timestampEpochMillis
+        if (paused && stopWall == null) return null
+        val windows = tracked.mapNotNull { rule ->
+            UsageGapRepair.uncreditedWindow(
+                anchors[rule.blockedPackage],
+                midnightEpochMillis,
+                bootOriginWall,
+                endWallMs,
+                stopWallMs = stopWall,
+                paused = paused,
+            )?.let { rule to it }
+        }.toMap()
+        if (windows.isEmpty()) return null
         val marks = foregroundMarksByPackage(
             tracked.mapTo(HashSet()) { it.blockedPackage },
-            midnightEpochMillis,
-            processStartWall,
+            windows.values.minOf { it.first },
+            endWallMs,
         )
-        return window to marks
+        return ReconcileProbe(windows, marks, windows.values.maxOf { it.last - it.first })
     }
 
     /** Runs [block] on the isolated tick pool under the tick's hard bound, so a wedged binder
@@ -443,17 +476,31 @@ class EnforcementForegroundService : Service() {
         // ADR #149's one-time upgrade seed: with platform access present, the pre-fix backlog
         // stops being reported; each fresh gap is then resolved through recordRecovery below.
         if (hasAccess) diagnostics.seedResolvedThrough(System.currentTimeMillis())
+        // The pass moment is also the repaired window's wall end — the credit row stamps its
+        // edge at this value, never at the (later) write moment.
+        val passWallMs = System.currentTimeMillis()
         val request = diagnostics.pass(
             source,
             systemBootCount(this),
             SystemClock.elapsedRealtime(),
-            System.currentTimeMillis(),
+            passWallMs,
             trackingActive = tracked.isNotEmpty(),
         ) ?: return
         if (!hasAccess) {
             // §8.9: without the permission there is nothing to query and nothing to conclude —
             // the gap stands recorded, and the window is never escalated as corroborated.
             crashReporting.nonFatal("accounting_gap_unrecoverable", cause = "no_permission")
+            return
+        }
+        // ADR #160's pause guard: while the explicit-re-enable flag is set, the platform's
+        // foreground record cannot tell a deliberately paused era from a false flag — and a
+        // credit here (the 2026-10-15 shape: a death-sliver repair six seconds before the
+        // re-enable) advances the credit edge past the whole flag-voided era, sealing usage
+        // that belongs in the budget. No recovery may credit while paused; the gap stands
+        // recorded, and the credit-edge audit closes the era when the flag clears.
+        if (status.requiresExplicitReEnable) {
+            Log.w(TAG, "gap recovery deferred: explicit re-enable required")
+            crashReporting.nonFatal("accounting_gap_unrecoverable", cause = "reenable_required")
             return
         }
         val clipEnd = request.window.last + 1
@@ -481,6 +528,7 @@ class EnforcementForegroundService : Service() {
                 request.elapsedToMs,
                 foreground,
                 UsageLedgerSource.MAINTENANCE,
+                answeredThroughWallMs = passWallMs,
             )
             packages++
         }
@@ -569,10 +617,25 @@ class EnforcementForegroundService : Service() {
     private fun tick(tickNumber: Long, lastQueryEndMillisAtStart: Long): Long {
         var lastQueryEndMillis = lastQueryEndMillisAtStart
         val usageOk = hasUsageAccess()
+        val reenableRequired = status.requiresExplicitReEnable
+        // ADR #160's pause release: the flag's true→false edge is the user's explicit "count
+        // again" — the flagged era ends at this moment, and the credit-edge audit closes it
+        // with end = now. A genuine pause needs no special case: its stop clip makes the era
+        // credit nothing (the audit's own guard covers the flag-outlives-a-tick race, and a
+        // release missed here is still healed at the next service start).
+        if (lastTickSawReenableRequired && !reenableRequired) {
+            Log.i(TAG, "re-enable requirement cleared — running credit-edge audit")
+            val releasedAtWall = System.currentTimeMillis()
+            scope.launch {
+                runCatching { reconcileUncreditedSpan(releasedAtWall) }
+                    .onFailure { Log.w(TAG, "re-enable audit failed", it) }
+            }
+        }
+        lastTickSawReenableRequired = reenableRequired
         // Usage access revoked means queryEvents is impossible; APP_STOPPED means the user
         // stopped the app and blocking stays off until they explicitly re-enable. Either way
         // the scan is skipped — the status itself is §8 Step 6's job (statusMonitor below).
-        if (usageOk && !status.requiresExplicitReEnable) {
+        if (usageOk && !reenableRequired) {
             val end = System.currentTimeMillis()
             // First tick looks back far enough that the last ACTIVITY_RESUMED in the
             // window is the current foreground app (§8.1 startup recompute).

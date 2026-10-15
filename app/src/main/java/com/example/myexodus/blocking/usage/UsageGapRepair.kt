@@ -1,24 +1,26 @@
 package com.example.myexodus.blocking.usage
 
-import com.example.myexodus.blocking.ProcessExit
-
 /** One foreground mark, reduced from `UsageEvents` to what the gap repair needs. */
 data class UsageMark(val timestampMs: Long, val resumed: Boolean)
 
 /**
- * Bounded repair of accounting lost to a process death (enforcement plan v3 §5 D1/D3).
+ * Bounded repair of accounting lost to an interruption (enforcement plan v3 §5 D1/D3; the
+ * credit-edge anchor is ADR #160's amendment).
  *
- * The ticker is the only accountant, so a dead process is a window in which nothing was
- * credited *and* nothing could block — the one failure mode that leaves the counter below
- * Android's own record while the limit silently fails to hold. `ApplicationExitInfo`
- * supplies the death timestamp the platform already recorded, so the gap is known exactly
- * rather than inferred from a heartbeat; `queryEvents` then fills it from the platform's
- * own foreground record.
+ * The ticker is the only accountant, so any era it did not credit leaves the counter below
+ * Android's own record while the limit silently fails to hold. `queryEvents` fills the era
+ * from the platform's own foreground record. The service-start window is anchored at the
+ * ledger's own last credit per package ([uncreditedWindow]) — every interruption ends at a
+ * process/service start, and everything after the last credit is unaccounted time no matter
+ * which interruption produced it. The earlier death-anchored reading (ADR #147) and its
+ * observation clamp both deferred to journal evidence rows, and a heartbeat row proves
+ * liveness, never a credit: the 2026-10-15 flagged era had fresh heartbeats through it and
+ * 143.3 min of platform foreground against 19.5 min credited (ADR #156).
  *
  * Amendment scope: NFR3 admits this path only, and only within a single process lifetime.
- * It is a corrective top-up that runs once, over a span the process demonstrably did not
- * observe — never a primary accounting input, so Decision 4's rejection of "elapsed time
- * since the last event" as a duration source is untouched.
+ * It is a corrective top-up that runs once, over a span no credit covers — never a primary
+ * accounting input, so Decision 4's rejection of "elapsed time since the last event" as a
+ * duration source is untouched.
  *
  * [uncoveredMs] is the one piece here the heartbeat-driven gap repair also uses: both
  * recovery paths must check the same overlap rule before crediting (§8.9).
@@ -28,26 +30,21 @@ object UsageGapRepair {
      *  one tick) and repairing risks double-crediting a normal close-tick tail. */
     const val MIN_GAP_MS = 20_000L
 
-    /** Most recent process exit after [watermarkEpochMillis], any reason. Callers pass the
-     *  previous known-good startup watermark so old records are never replayed. */
-    fun latestExitAfter(exits: List<ProcessExit>, watermarkEpochMillis: Long): ProcessExit? =
-        exits.filter { it.timestampEpochMillis > watermarkEpochMillis }
-            .maxByOrNull { it.timestampEpochMillis }
-
     /**
-     * The span nothing observed: from the last observation — or the death, when the journal
-     * has no newer observation to point at — never earlier than today's local midnight (the
-     * credit lands on today's row), up to the process start. End-exclusive. Null when the span
-     * is too short to matter.
+     * The span nothing has credited: from [lastCreditWallMs] (or the process's first moment,
+     * when the journal holds no credit today), never earlier than today's local midnight (the
+     * credit lands on today's row) or this boot's wall origin (§8.5 — an elapsed-frame window
+     * cannot start before the monotonic clock did, so a boot-crossing window starts at zero),
+     * up to [resumeWallMs] — the moment live accounting resumes (this process's start at a
+     * service-start audit; the re-enable transition at a pause release) — clipped at
+     * [stopWallMs] when the latest genuine user stop falls inside the span. End-exclusive.
+     * Null when the span is too short to matter.
      *
-     * [observedUntilEpochMillis] is the wall of the newest journal row the process wrote:
-     * v3 §5 D3's span is `(last_credited_wall_ms, now]`, and a death-anchored window is its
-     * narrow reading. OEM freezers SIGSTOP the process minutes before the watchdog kills it —
-     * measured on the X6532 (2026-09-28): last row 06:00:17, ANR kill 06:02:41 — so the
-     * death-anchored window leaves that prefix permanently uncounted (no live path can credit
-     * a frozen process, and the next pass measures from a baseline the repair already moved).
-     * The overlap check is what keeps the wider window safe: it subtracts every interval the
-     * journal already credited, so the prefix only fills where nothing else has.
+     * The stop clip: a genuine pause's era ([stopWallMs] onward, until the user re-enables)
+     * must never be claimed — "time limits stay paused until you re-enable". A stop at or
+     * before the span's start is outside it (credits resumed after a later re-enable), so it
+     * does not shorten the span; while [paused] the stop always bounds, because a paused
+     * pipeline cannot have advanced its credit edge past it.
      *
      * No upper bound (enforcement plan v3 §5 D3, verbatim: "No cap. A cap would re-introduce
      * under-counting, which is the defect class this delta exists to remove. The floor and the
@@ -57,17 +54,39 @@ object UsageGapRepair {
      * The clip is what keeps it honest: credit can only ever land on today, and §8.9's overlap
      * check against the journal keeps a long window from double-crediting live-path rows.
      */
+    fun uncreditedWindow(
+        lastCreditWallMs: Long?,
+        localMidnightEpochMillis: Long,
+        bootOriginWallMs: Long,
+        resumeWallMs: Long,
+        stopWallMs: Long? = null,
+        paused: Boolean = false,
+        minGapMs: Long = MIN_GAP_MS,
+    ): LongRange? {
+        val start = maxOf(lastCreditWallMs ?: Long.MIN_VALUE, localMidnightEpochMillis, bootOriginWallMs)
+        val end = when {
+            stopWallMs == null -> resumeWallMs
+            paused || stopWallMs >= start -> minOf(resumeWallMs, stopWallMs)
+            else -> resumeWallMs
+        }
+        if (end - start < minGapMs) return null
+        return start until end
+    }
+
+    /**
+     * The span a diagnostics-detected silence leaves recoverable: from the silence's start —
+     * judged against today's local midnight, which the credit may not cross — up to the pass
+     * moment. End-exclusive. Null when the span is too short to matter.
+     */
     fun repairWindow(
-        exitEpochMillis: Long,
-        processStartEpochMillis: Long,
+        silenceStartEpochMillis: Long,
+        observedUntilEpochMillis: Long,
         localMidnightEpochMillis: Long,
         minGapMs: Long = MIN_GAP_MS,
-        observedUntilEpochMillis: Long? = null,
     ): LongRange? {
-        val lastObserved = minOf(exitEpochMillis, observedUntilEpochMillis ?: exitEpochMillis)
-        val start = maxOf(lastObserved, localMidnightEpochMillis)
-        if (processStartEpochMillis - start < minGapMs) return null
-        return start until processStartEpochMillis
+        val start = maxOf(silenceStartEpochMillis, localMidnightEpochMillis)
+        if (observedUntilEpochMillis - start < minGapMs) return null
+        return start until observedUntilEpochMillis
     }
 
     /**

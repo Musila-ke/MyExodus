@@ -3,6 +3,7 @@ package com.example.myexodus.blocking
 import android.app.ApplicationExitInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -307,5 +308,69 @@ class UserStoppedDetectorTest {
             listOf(3_000L),
             UserStoppedDetector.userStopCandidates(exits, watermark).map { it.timestampEpochMillis },
         )
+    }
+
+    // --- latestUserStop (ADR #160's pause clip) --------------------------------------------
+
+    @Test
+    fun latestUserStop_picksTheNewestGenuineStop() {
+        val exits = listOf(
+            exit(at = 2_000L, description = "remove task"),
+            exit(at = 900_000L, description = "fully stop com.example.myexodus/10411 by user request"),
+            exit(at = 60_000L, description = "remove task"),
+        )
+
+        assertEquals(
+            900_000L,
+            UserStoppedDetector.latestUserStop(exits, watermark)?.timestampEpochMillis,
+        )
+    }
+
+    @Test
+    fun latestUserStop_skipsErrorCorrelatedCandidates() {
+        // An ANR-era kill 8 s after the error row is exempt (ADR #156) — the clip must pass
+        // over it and land on the earlier genuine stop, never treat it as a pause boundary.
+        val exits = listOf(
+            exit(at = 100_000L, description = "remove task"),
+            exit(reason = ApplicationExitInfo.REASON_ANR, at = 850_000L),
+            exit(at = 858_000L, description = "stop com.example.myexodus due to from pid 4242"),
+        )
+
+        assertEquals(
+            100_000L,
+            UserStoppedDetector.latestUserStop(exits, watermark)?.timestampEpochMillis,
+        )
+    }
+
+    @Test
+    fun latestUserStop_nullWhenOnlyErrorCorrelatedOrPreWatermark() {
+        // The flagged-era shape: every would-be stop is a storm escape.
+        val exits = listOf(
+            exit(at = 500L, description = "remove task"),
+            exit(reason = ApplicationExitInfo.REASON_CRASH, at = 850_000L),
+            exit(at = 858_000L, description = "remove task"),
+        )
+
+        assertNull(UserStoppedDetector.latestUserStop(exits, watermark))
+    }
+
+    @Test
+    fun latestUserStop_agreesWithWasUserStopped() {
+        // The two judgments share one predicate set; a disagreement would let the detector
+        // flag a pause the credit clip does not honor, or vice versa.
+        val cases = listOf(
+            listOf(exit(at = 900_000L, description = "remove task")),
+            listOf(
+                exit(reason = ApplicationExitInfo.REASON_ANR, at = 850_000L),
+                exit(at = 858_000L, description = "remove task"),
+            ),
+            listOf(exit(at = 500L, description = "remove task")),
+        )
+        cases.forEach { exits ->
+            assertEquals(
+                UserStoppedDetector.wasUserStopped(exits, watermark),
+                UserStoppedDetector.latestUserStop(exits, watermark) != null,
+            )
+        }
     }
 }

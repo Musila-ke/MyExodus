@@ -172,6 +172,18 @@ class UsageDiagnosticsRecorder @Inject constructor(
     }
 
     /**
+     * ADR #160's credit-edge audit, reporting its own numeric answer. The audit queries the
+     * platform across the uncredited span just like a gap recovery does, so the watermark
+     * advances exactly as [recordRecovery]'s does for a real answer: whatever the span held
+     * was credited, or was found empty — either way the outage report must stop counting
+     * windows inside it. Never called without a real answer; a skipped or failed query
+     * leaves the watermark where it was.
+     */
+    fun markResolvedThrough(nowWallClockMs: Long) {
+        state.markGapsResolvedThrough(nowWallClockMs)
+    }
+
+    /**
      * The newest row either live accounting path wrote. Merged rather than per-source on
      * purpose: an authority handoff (Path A ↔ Path B) is ordinary, and measuring silence from
      * the *new* holder's own last row would misreport the handoff as an outage (§8.7 measures
@@ -183,17 +195,9 @@ class UsageDiagnosticsRecorder @Inject constructor(
         ledger.latestForSource(UsageLedgerSource.PATH_B),
     ).maxByOrNull { it.id }
 
-    /** The wall the process last observed accounting at, when that observation belongs to
-     *  [bootCount]. The exit-path repair starts its window here — v3 §5 D3's span is
-     *  `(last_credited_wall_ms, now]`, and a freezer's SIGSTOP prefix before a recorded death
-     *  has no other claimant. Null (no evidence, or a previous boot's) keeps the caller on the
-     *  death-anchored default. */
-    suspend fun lastObservedWallClock(bootCount: Int): Long? =
-        latestAccountingEvidence()?.takeIf { it.bootCount == bootCount }?.wallClockTsMs
-
     /** The wall window the gap leaves recoverable, in both clocks. Null when the gap is not
-     *  recoverable-as-a-window: fully before today's midnight, or longer than the bounded
-     *  repair span, or too short to be worth a query. */
+     *  recoverable-as-a-window: fully before today's midnight, or too short to be worth a
+     *  query. */
     private fun recoveryRequest(
         gapSpanMs: Long,
         wallClockMs: Long,
