@@ -39,7 +39,11 @@ class AppRulesStoreFactory(
 
     /** Thread-safe; returns null when the open failed into a defined recovery state. */
     fun open(): AppRulesStore? = synchronized(lock) {
-        database ?: openInternal()?.also { database = it }
+        database ?: openInternal()?.also {
+            // Fresh open only — a cached hit is silent (ADR #153 cold-start attribution).
+            database = it
+            Log.i(TAG, "Rules store opened fresh thread=${Thread.currentThread().name}")
+        }
     }
 
     /**
@@ -165,6 +169,12 @@ class AppRulesStoreFactory(
     ): AppRulesStore {
         val builder = Room.databaseBuilder(appContext, AppRulesStore::class.java, databaseName)
             .setJournalMode(journalMode)
+            // Kept from Fix A (ADR #153), defensively: the device capture falsified the pool
+            // attribution — Room itself only ever opens one connection (a single driver-open
+            // per process), so the five cold-start keyings come from the zetetic handle's
+            // internal pool, which this flag cannot reach. Raw-key mode (SqlCipherRawKey) is
+            // the operative fix; this stays so Room-level reader pools can never multiply keying.
+            .setSingleConnectionPool()
             .addMigrations(*ALL_MIGRATIONS)
             .addCallback(createCallback)
         if (encrypted) builder.setDriver(requireNotNull(encryption).newDriver())

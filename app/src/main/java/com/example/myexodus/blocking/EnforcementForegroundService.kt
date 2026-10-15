@@ -34,6 +34,7 @@ import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.UsageLedgerSource
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.telemetry.CrashReporting
+import com.example.myexodus.telemetry.StartupTrace
 import dagger.hilt.android.AndroidEntryPoint
 import java.time.LocalDate
 import java.time.ZoneId
@@ -89,6 +90,8 @@ import kotlinx.coroutines.runBlocking
  */
 @AndroidEntryPoint
 class EnforcementForegroundService : Service() {
+
+    private val startupTrace = StartupTrace("Fgs")
 
     @Inject lateinit var settings: EnhancedModeSettings
     @Inject lateinit var engine: BlockDecisionEngine
@@ -170,7 +173,9 @@ class EnforcementForegroundService : Service() {
             return START_NOT_STICKY
         }
         enterForeground()
+        startupTrace.lap("foreground")
         start()
+        startupTrace.lap("start")
         // START_STICKY: after a crash the system restarts us with a null intent, which is
         // exactly the §8.1 "startup (including after a crash) recompute from current state"
         // path — no stale-overlay detection exists or is attempted.
@@ -930,7 +935,24 @@ class EnforcementForegroundService : Service() {
 
         fun start(context: Context) {
             val intent = Intent(context, EnforcementForegroundService::class.java)
-            ContextCompat.startForegroundService(context, intent)
+            // A kill-woken process (WM tick, widget backstop) starts this from the background:
+            // Android 12+ refuses that (ForegroundServiceStartNotAllowedException) unless the
+            // app is battery-exempt or holds SYSTEM_ALERT_WINDOW — both true on the X6532. On
+            // an OEM missing both, degrade honestly: the D1 surfaces report the authority,
+            // this log names the refusal. Contained here once for every caller (ADR #152).
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (e: IllegalStateException) {
+                Log.w(TAG, "FGS start refused by the platform", e)
+            }
+        }
+
+        /** ADR #152's process-start re-arm (called from MyExodusApp.onCreate on every cold
+         *  start). The enablement gate reads its own [EnhancedModeSettings] — this runs
+         *  before any service instance exists to carry the injected one. */
+        fun ensureOnProcessStart(context: Context) {
+            if (!EnhancedModeSettings(context).enhancedModeEnabled) return
+            start(context)
         }
 
         fun stop(context: Context) {

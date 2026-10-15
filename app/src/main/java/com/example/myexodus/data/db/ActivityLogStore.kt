@@ -2,6 +2,7 @@ package com.example.myexodus.data.db
 
 import android.content.ContentValues
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import com.example.myexodus.data.db.entity.DomainEvent
 import net.zetetic.database.sqlcipher.SQLiteDatabase
@@ -10,16 +11,20 @@ import java.util.Arrays
 
 /**
  * Encrypted activity/attempt log (Enhanced Mode spec §8 Step 1): raw SQLCipher file opened
- * via the char[] password overload of [SQLiteDatabase.openOrCreateDatabase]. The password is
- * decrypted from Keystore immediately before the open and zeroed right after keying. Never
- * on the accessibility-event hot path — all writes are background and best-effort: a failing
- * log write is logged and skipped, never thrown at the caller (spec §9).
+ * via the byte-array passphrase overload of [SQLiteDatabase.openOrCreateDatabase]. The key is
+ * the Keystore-wrapped DEK turned into the raw-key passphrase `x'<hex>'` (ADR #153), so
+ * SQLCipher skips PBKDF2. The DEK is decrypted from Keystore immediately before the open and
+ * zeroed right after; the raw passphrase must outlive the open — the zetetic handle re-reads
+ * it for every internal pool connection — and is zeroed in [close]. Never on the
+ * accessibility-event hot path — all writes are background and best-effort: a failing log
+ * write is logged and skipped, never thrown at the caller (spec §9).
  */
 class ActivityLogStore(
     private val appContext: Context,
     private val keyManager: ActivityLogKeyManager,
 ) {
     @Volatile private var db: SQLiteDatabase? = null
+    private var rawKey: ByteArray? = null
     private val lock = Any()
 
     val isOpen: Boolean get() = synchronized(lock) { db != null }
@@ -37,9 +42,19 @@ class ActivityLogStore(
         if (db != null) return true
         val path = appContext.getDatabasePath(ActivityLogSchema.DB_NAME)
         return try {
+            val t0 = SystemClock.uptimeMillis()
             val key = keyManager.getOrCreateKey()
+            val t1 = SystemClock.uptimeMillis()
+            var raw: ByteArray? = null
             try {
-                val opened = SQLiteDatabase.openOrCreateDatabase(path, key, null, null)
+                raw = SqlCipherRawKey.passphraseFor(key)
+                val t2 = SystemClock.uptimeMillis()
+                val migrated = SqlCipherRawKey.ensureRawKeyed(path, key, raw)
+                val opened = SQLiteDatabase.openOrCreateDatabase(path, raw, null, null)
+                // Cold-start attribution (ADR #153): keystore unwrap / raw probe / keying splits.
+                Log.i(TAG, "Activity log keying: dek=${t1 - t0}ms probe=${t2 - t1}ms " +
+                    "key=${SystemClock.uptimeMillis() - t2}ms rekeyed=$migrated " +
+                    "thread=${Thread.currentThread().name}")
                 val walOk = ActivityLogSchema.applyPragmas(opened)
                 ActivityLogSchema.createSchema(opened)
                 if (!walOk) {
@@ -48,12 +63,15 @@ class ActivityLogStore(
                     false
                 } else {
                     db = opened
+                    rawKey = raw
+                    raw = null
                     Log.i(TAG, "Activity log open: WAL confirmed")
                     purgeOlderThan(RETENTION_MS)
                     true
                 }
             } finally {
                 Arrays.fill(key, 0.toByte())
+                raw?.let { Arrays.fill(it, 0.toByte()) }
             }
         } catch (e: Throwable) {
             val failure = keyManager.classifyFailure(e) // classify once (2026-08-28 review)
@@ -78,8 +96,10 @@ class ActivityLogStore(
     private fun reopenFresh(path: File): Boolean {
         return try {
             val freshKey = keyManager.getOrCreateKey()
+            var freshRaw: ByteArray? = null
             try {
-                val opened = SQLiteDatabase.openOrCreateDatabase(path, freshKey, null, null)
+                freshRaw = SqlCipherRawKey.passphraseFor(freshKey)
+                val opened = SQLiteDatabase.openOrCreateDatabase(path, freshRaw, null, null)
                 val walOk = ActivityLogSchema.applyPragmas(opened)
                 ActivityLogSchema.createSchema(opened)
                 // Same WAL gate as open(): a non-WAL handle would grow unboundedly (2026-08-28 review).
@@ -89,11 +109,14 @@ class ActivityLogStore(
                     false
                 } else {
                     db = opened
+                    rawKey = freshRaw
+                    freshRaw = null
                     Log.i(TAG, "Activity log recreated fresh after failure")
                     true
                 }
             } finally {
                 Arrays.fill(freshKey, 0.toByte())
+                freshRaw?.let { Arrays.fill(it, 0.toByte()) }
             }
         } catch (e: Throwable) {
             Log.e(TAG, "Activity log fresh recreate failed", e)
@@ -180,6 +203,8 @@ class ActivityLogStore(
     fun close() = synchronized(lock) {
         db?.close()
         db = null
+        rawKey?.let { Arrays.fill(it, 0.toByte()) }
+        rawKey = null
     }
 
     private fun evictOverflow(handle: SQLiteDatabase) {

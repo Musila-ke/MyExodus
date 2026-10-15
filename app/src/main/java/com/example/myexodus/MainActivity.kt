@@ -107,6 +107,7 @@ import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.settings.WidgetSettings
 import com.example.myexodus.settings.readProtectionChecks
 import com.example.myexodus.telemetry.CrashReporting
+import com.example.myexodus.telemetry.StartupTrace
 import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.ui.AppShell
 import com.example.myexodus.ui.NavKeys
@@ -161,6 +162,8 @@ class MainActivity : FragmentActivity() {
 
     /** Single-flight guard: the resume check and a sign-time detection can race. */
     @Volatile private var identityMigrationInFlight = false
+
+    private val startupTrace = StartupTrace("Activity")
 
     /** Bridges the screen-lock confirm flow's RESULT_OK back into the signing coroutine. */
     private var credentialContinuation: CancellableContinuation<Boolean>? = null
@@ -378,11 +381,13 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        startupTrace.lap("super")
         requestedTab = intent.getStringExtra(EXTRA_START_TAB)
         requestedHabit = intent.getStringExtra(EXTRA_START_HABIT)
         requestedRecoveryEntry = intent.getStringExtra(EXTRA_RECOVERY_ENTRY)
         handlePartnerNudgeIntent(intent)
         startPartnerLiveSync()
+        startupTrace.lap("intents")
         enableEdgeToEdge()
         setContent {
             MyExodusTheme {
@@ -693,6 +698,7 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+        startupTrace.lap("setContent-returned")
     }
 
     /**

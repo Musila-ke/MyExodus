@@ -70,13 +70,17 @@ class DatabaseMigration(
     }
 
     private fun migrateInternal(legacyFile: File, dek: ByteArray): Boolean {
+        // The pre-split legacy file predates raw-key mode (ADR #153) and must be opened with
+        // its own legacy keying — a raw-passphrase open would fail this read.
         SQLCipherDriver(dek, null, null).open(legacyFile.absolutePath).use { legacy ->
             val rulesPath = appContext.getDatabasePath(AppRulesStoreFactory.DB_NAME)
             rulesStoreFactory.currentDriver().open(rulesPath.absolutePath).use { rules ->
                 val activityPath = appContext.getDatabasePath(ActivityLogSchema.DB_NAME)
                 val logKey = activityLogKeyManager.getOrCreateKey()
+                val logRaw = SqlCipherRawKey.passphraseFor(logKey)
                 try {
-                    val activity = SQLiteDatabase.openOrCreateDatabase(activityPath, logKey, null, null)
+                    // Born raw-keyed (ADR #153): the destination must match what ActivityLogStore opens.
+                    val activity = SQLiteDatabase.openOrCreateDatabase(activityPath, logRaw, null, null)
                     try {
                         ActivityLogSchema.applyPragmas(activity)
                         ActivityLogSchema.createSchema(activity)
@@ -90,6 +94,7 @@ class DatabaseMigration(
                         if (!verified) return false
                     } finally {
                         activity.close()
+                        Arrays.fill(logRaw, 0.toByte())
                     }
                     // Zeroing must come AFTER verifiedCounts: countActivity reopens the DB
                     // with logKey, and a zeroed key throws SQLiteNotADatabaseException — the
@@ -240,13 +245,15 @@ class DatabaseMigration(
     }
 
     private fun countActivity(activityPath: File, logKey: ByteArray): Long {
-        val activity = SQLiteDatabase.openOrCreateDatabase(activityPath, logKey, null, null)
+        val raw = SqlCipherRawKey.passphraseFor(logKey)
+        val activity = SQLiteDatabase.openOrCreateDatabase(activityPath, raw, null, null)
         try {
             activity.rawQuery("SELECT count(*) FROM ${ActivityLogSchema.TABLE}", null).use { cursor ->
                 if (cursor.moveToFirst()) return cursor.getLong(0)
             }
         } finally {
             activity.close()
+            Arrays.fill(raw, 0.toByte())
         }
         return 0L
     }

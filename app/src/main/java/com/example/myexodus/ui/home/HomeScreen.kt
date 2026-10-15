@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.activity.compose.ReportDrawnWhen
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -145,6 +146,10 @@ fun HomeScreen(
     val rules by remember(profileId) {
         profileId?.let { store.restrictionRuleDao().observeByProfile(it) } ?: emptyFlow()
     }.collectAsStateWithLifecycle(initialValue = null)
+    // ADR #153: the user-perceivable "fully loaded" moment — streak + block list resolved, not
+    // just the first frame (TTID). reportFullyDrawn → AMS logs "Fully drawn ... +Nms", the
+    // TTFD number the startup-perf recipe reads.
+    ReportDrawnWhen { streakResolved && rules != null }
     // null until the first emission, like [rules]: the stat tiles show their skeleton rather
     // than a "0 blocked" that a moment later jumps to the real count.
     val attemptCounts by store.attemptLogDao().observeBlockedCounts()

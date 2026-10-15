@@ -27,6 +27,7 @@ import com.example.myexodus.accountability.sync.PushInstallationRegistrar
 import com.example.myexodus.accountability.sync.enqueuePartnerSync
 import com.example.myexodus.accountability.sync.runPartnerSyncPass
 import com.example.myexodus.blocking.BootReconciliationStore
+import com.example.myexodus.blocking.EnforcementForegroundService
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.HealthCheckWorker
 import com.example.myexodus.blocking.ProtectionStatusMonitor
@@ -40,8 +41,11 @@ import com.example.myexodus.data.db.DatabaseHealthStore
 import com.example.myexodus.data.db.DatabaseMigration
 import com.example.myexodus.recovery.RecoverySessionRepository
 import com.example.myexodus.telemetry.CrashReporting
+import com.example.myexodus.telemetry.StartupTrace
 import com.example.myexodus.widget.ProtectionSnapshotWriter
 import dagger.hilt.android.HiltAndroidApp
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -78,6 +82,10 @@ class MyExodusApp : Application(), Configuration.Provider {
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    // ADR #153: field init = construction time, so the first lap delta covers Hilt field
+    // injection, not just onCreate.
+    private val startupTrace = StartupTrace("App")
+
     private var foregroundActivities = 0
 
     // True only when this process was started by `am instrument` (the test APK's classes are
@@ -101,21 +109,34 @@ class MyExodusApp : Application(), Configuration.Provider {
     }
 
     override val workManagerConfiguration: Configuration
-        get() = Configuration.Builder().setWorkerFactory(hiltWorkerFactory).build()
+        get() = Configuration.Builder()
+            .setWorkerFactory(hiltWorkerFactory)
+            // B-10: without this, a throwable escaping any WM internal task (disk-full
+            // ForceStopRunnable ISE, 2026-10-15) kills the process on its thread.
+            .setTaskExecutor(guardedWorkManagerExecutor)
+            .build()
+
+    private val guardedWorkManagerExecutor: Executor = GuardedTaskExecutor(
+        Executors.newFixedThreadPool(4) { runnable -> Thread(runnable, "myexodus-wm") },
+    )
 
     override fun onCreate() {
         super.onCreate()
+        startupTrace.lap("super")
         // §8.5: App Check provider in place before ANY Firestore op (mailbox pull, backfill
         // responder, drain) — app-startup install covers paths that never route through drainOutbox.
         AppCheckInstaller.install(this)
+        startupTrace.lap("appcheck")
         // Plan §8 Step 16's sync_status channel: debug-only (never user-visible in release).
         PartnerNotifications.ensureSyncStatusChannel(this)
         // SOS §8.14: the partner_nudges_v3 channel exists from startup — the §8.12 pushEligible
         // snapshot reads its presence/importance, so it cannot wait for the first nudge.
         PartnerNotifications.ensurePartnerNudgesChannel(this)
+        startupTrace.lap("channels")
         // Decision 12 opt-out: FirebaseInitProvider ran before this call, so this is what the
         // stored preference overrides from the first moment of each process.
         crashReporting.applyStoredPreference()
+        startupTrace.lap("crashpref")
         // §14: database/key failure classification as telemetry (§9's own taxonomy). One
         // observer instead of per-site emits — the health store is the single sink every DB
         // recovery path already writes, and it is in-memory, so each failing launch reports.
@@ -156,6 +177,7 @@ class MyExodusApp : Application(), Configuration.Provider {
                     .onFailure { Log.w(TAG, "stale recovery-session sweep failed", it) }
             }
         }
+        startupTrace.lap("launches+open")
         registerActivityLifecycleCallbacks(backgroundCheckpointer)
         // §8 Step 9: USER_UNLOCKED is delivered dynamically-only (never a manifest receiver).
         val unlockFilter = IntentFilter(Intent.ACTION_USER_UNLOCKED)
@@ -173,6 +195,7 @@ class MyExodusApp : Application(), Configuration.Provider {
         if (getSystemService(UserManager::class.java).isUserUnlocked) {
             // §8 Step 6 cold-start trigger; post-unlock only — the status store is CE prefs.
             val authority = statusMonitor.refresh()
+            startupTrace.lap("status-refresh")
             // §14 bullet 4: the install-base distribution signal (status × authority × OEM ×
             // API), one event per process start — transitions alone would only ever sample
             // the installs that changed.
@@ -184,8 +207,24 @@ class MyExodusApp : Application(), Configuration.Provider {
                 "api" to Build.VERSION.SDK_INT.toString(),
             )
             enqueueHealthCheck()
+            startupTrace.lap("wm")
             enqueuePartnerSync(this)
             enqueueDailyMaintenance(this)
+            startupTrace.lap("wm-rest")
+            // Owner report 2026-10-15 (ADR #152): XOS kills the FGS-hosting process ("prcp
+            // FGS" cgroup kill, X6532 15:31:40) and ignores START_STICKY — the old re-arm
+            // covered only app-open/toggle/boot/update, so enforcement stayed dead until the
+            // app was next opened (6-min window live-observed, 18h35m largest in the ledger;
+            // Instagram ran unblocked through today's window). Every process start now re-arms
+            // the FGS, which turns the always-present 15-min WorkManager cadence (health
+            // check; the 30-min widget backstop — both device-proven to wake a dead process)
+            // into the keeper, and the FGS's exit-path repair resolves the ledger window via
+            // the ADR #149 watermark. Not a watchdog: ADR #105's rejected levers stay
+            // rejected; the premise this revises is its "sticky restart covers the kill case".
+            if (!underInstrumentation) {
+                EnforcementForegroundService.ensureOnProcessStart(this)
+            }
+            startupTrace.lap("fgs-ensure")
             // §8 Step 9: this boot's deferred reconciliation, if any (cold-start BOOT_COUNT
             // check + the locked-boot receiver's pending mark).
             reconcileBootIfNeeded()
@@ -199,6 +238,7 @@ class MyExodusApp : Application(), Configuration.Provider {
         // Mid-session disablement (plan §8 Step 10): catch sooner than the next periodic tick.
         getSystemService(AccessibilityManager::class.java)
             .addAccessibilityStateChangeListener(accessibilityStateListener)
+        startupTrace.lap("done")
     }
 
     private fun enqueueHealthCheck() {
