@@ -1,7 +1,6 @@
 package com.example.myexodus.blocking
 
 import android.app.ActivityManager
-import android.app.ApplicationExitInfo
 import android.app.Service
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
@@ -238,12 +237,11 @@ class EnforcementForegroundService : Service() {
                 emptyList()
             }
         }.getOrDefault(emptyList())
+        val candidates = UserStoppedDetector.userStopCandidates(exitReasons, watermark)
         if (UserStoppedDetector.wasUserStopped(exitReasons, watermark)) {
             // The description is logged because it is the discriminator the detector reads —
             // an unrecognized OEM shape shows up here instead of silently degrading protection.
-            val seen = exitReasons
-                .filter { it.reason == ApplicationExitInfo.REASON_USER_REQUESTED }
-                .maxByOrNull { it.timestampEpochMillis }
+            val seen = candidates.maxByOrNull { it.timestampEpochMillis }
             Log.w(
                 TAG,
                 "user stop detected — protection degraded, re-enable required " +
@@ -251,6 +249,15 @@ class EnforcementForegroundService : Service() {
             )
             // The flag only: the refresh below derives and publishes APP_STOPPED from it.
             status.requiresExplicitReEnable = true
+        } else if (candidates.isNotEmpty()) {
+            // ADR #156: would-be stops existed but every one was error-correlated (ANR/crash
+            // storm). Without this line that era's kills are invisible in logcat.
+            val seen = candidates.maxByOrNull { it.timestampEpochMillis }
+            Log.w(
+                TAG,
+                "user-requested exits ignored — error-correlated with the app's own stop storm, " +
+                    "not a deliberate pause (count=${candidates.size} desc=${seen?.description})",
+            )
         }
         return watermark
     }
