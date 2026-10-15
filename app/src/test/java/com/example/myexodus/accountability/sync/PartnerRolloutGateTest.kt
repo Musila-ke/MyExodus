@@ -6,9 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** Plan §13 line 564: the registration rollout gate's policy — a remote `false` halts
- *  registration, and every failure mode degrades to enabled (never to a broken rail).
- *  SOS §8.20 gives the same gate the `partner_sos_enabled` read with the opposite failure
- *  default: a new feature whose read fails stays OFF. */
+ *  registration, and every failure mode degrades to enabled (never to a broken rail). */
 class PartnerRolloutGateTest {
 
     private fun gate(readings: Map<String, Boolean>) =
@@ -30,25 +28,6 @@ class PartnerRolloutGateTest {
         assertTrue(
             "a failed/unavailable remote read must degrade to today's behavior, never to a broken rail",
             gate.pushRegistrationEnabled(),
-        )
-    }
-
-    @Test
-    fun sos_remoteFalse_haltsReachOut() = runTest {
-        assertFalse(gate(mapOf(PARTNER_SOS_CONFIG_KEY to false)).sosEnabled())
-    }
-
-    @Test
-    fun sos_remoteTrue_enablesReachOut() = runTest {
-        assertTrue(gate(mapOf(PARTNER_SOS_CONFIG_KEY to true)).sosEnabled())
-    }
-
-    @Test
-    fun sos_fetchFailure_readsAsDisabled() = runTest {
-        val gate = PartnerRolloutGate { throw IllegalStateException("offline") }
-        assertFalse(
-            "a new feature whose read fails must stay off — never a surprise surface on",
-            gate.sosEnabled(),
         )
     }
 }

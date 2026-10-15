@@ -5,8 +5,6 @@ import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.sos.NudgeEnvelope
 import com.example.myexodus.accountability.sos.NudgeRepository
 import com.example.myexodus.accountability.sync.FunctionErrors
-import com.example.myexodus.accountability.sync.PARTNER_SOS_CONFIG_KEY
-import com.example.myexodus.accountability.sync.PartnerRolloutGate
 import com.google.firebase.functions.FirebaseFunctionsException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.advanceTimeBy
@@ -14,7 +12,6 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -67,42 +64,13 @@ class SosViewModelTest {
         )
     }
 
-    private fun viewModel(sender: FakeSender, enabled: Boolean = true) = SosViewModel(
-        repository = sender.repository,
-        rolloutGate = PartnerRolloutGate { key -> key == PARTNER_SOS_CONFIG_KEY && enabled },
-    )
+    private fun viewModel(sender: FakeSender) = SosViewModel(repository = sender.repository)
 
     private fun rateLimited(reason: String, retryAfterSeconds: Int) = FunctionErrors.of(
         "rate_limited",
         FirebaseFunctionsException.Code.RESOURCE_EXHAUSTED,
         mapOf("reason" to reason, "retryAfterSeconds" to retryAfterSeconds),
     )
-
-    // --- flag ---------------------------------------------------------------------------------
-
-    @Test
-    fun enabled_readsTheGateFlag() = runTest {
-        val on = viewModel(FakeSender(), enabled = true)
-        val off = viewModel(FakeSender(), enabled = false)
-        advanceUntilIdle()
-        assertTrue(on.enabled.value)
-        assertFalse(off.enabled.value)
-    }
-
-    @Test
-    fun refreshEnabled_picksUpAFlagChange() = runTest {
-        var flag = false
-        val vm = SosViewModel(
-            repository = FakeSender().repository,
-            rolloutGate = PartnerRolloutGate { key -> key == PARTNER_SOS_CONFIG_KEY && flag },
-        )
-        advanceUntilIdle()
-        assertFalse(vm.enabled.value)
-        flag = true
-        vm.refreshEnabled()
-        advanceUntilIdle()
-        assertTrue(vm.enabled.value)
-    }
 
     // --- happy path + auto-return -------------------------------------------------------------
 

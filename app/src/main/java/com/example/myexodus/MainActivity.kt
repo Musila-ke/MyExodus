@@ -288,9 +288,6 @@ class MainActivity : FragmentActivity() {
     override fun onResume() {
         super.onResume()
         streaksViewModel.refresh()
-        // SOS §8.20: the sos flag is re-read at the same foreground boundary the sync pass
-        // uses — the Remote Config read serves its cached-or-default value on a failed fetch.
-        sosViewModel.refreshEnabled()
         // SOS §8.19: the block switch's state is re-read at the same boundary (a pair change
         // or a write from elsewhere lands the fresh value on the way back to Settings).
         nudgeSettingsViewModel.refresh()

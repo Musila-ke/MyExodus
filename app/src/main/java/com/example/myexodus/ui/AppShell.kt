@@ -205,8 +205,7 @@ fun AppShell(
     val relapseInFlight by streaks.relapseInFlight.collectAsStateWithLifecycle()
     val relapseNote by streaks.relapseNote.collectAsStateWithLifecycle()
 
-    // SOS §8.15 (Step 8): the Reach out control's client flag and sender state.
-    val sosEnabled by sos.enabled.collectAsStateWithLifecycle()
+    // SOS §8.15 (Step 8): the Reach out control's sender state.
     val sosState by sos.state.collectAsStateWithLifecycle()
 
     // FAB rev (owner mandate 2026-10-04): one roster read per Home entry feeds the pinned
@@ -263,10 +262,11 @@ fun AppShell(
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        // SOS §8.15 rev (owner mandate 2026-10-04): Reach out as a FAB, gated like the old
-        // card — flag on (FR-1), a live pair, Home visible.
+        // SOS §8.15 rev (owner mandate 2026-10-04): Reach out as a FAB. Owner mandate
+        // 2026-10-15: always present — the partner_sos_enabled Remote Config gate is removed
+        // (the server-side kill switch is the control); a live pair and Home visibility stay.
         floatingActionButton = {
-            if (contentTab == 0 && sosEnabled && partnerNames.isNotEmpty()) {
+            if (contentTab == 0 && partnerNames.isNotEmpty()) {
                 ReachOutFab(state = sosState, onClick = { sosConfirmOpen = true })
             }
         },

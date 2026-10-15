@@ -3,7 +3,6 @@ package com.example.myexodus.ui.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.myexodus.accountability.sos.NudgeRepository
-import com.example.myexodus.accountability.sync.PartnerRolloutGate
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.UUID
 import javax.inject.Inject
@@ -24,7 +23,6 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class SosViewModel @Inject constructor(
     private val repository: NudgeRepository,
-    private val rolloutGate: PartnerRolloutGate,
 ) : ViewModel() {
 
     sealed interface SosSendState {
@@ -51,12 +49,6 @@ class SosViewModel @Inject constructor(
         data object Unavailable : SosSendState
     }
 
-    private val _enabled = MutableStateFlow(false)
-
-    /** FR-1/§8.20: the client Remote Config flag; also requires a live pair, which Home
-     *  reads from its own roster. False until the first read — never a surprise surface. */
-    val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
-
     private val _state = MutableStateFlow<SosSendState>(SosSendState.Idle)
     val state: StateFlow<SosSendState> = _state.asStateFlow()
 
@@ -65,17 +57,6 @@ class SosViewModel @Inject constructor(
     private var pending: NudgeRepository.PendingNudge? = null
     private var sendJob: Job? = null
     private var returnJob: Job? = null
-
-    init {
-        refreshEnabled()
-    }
-
-    /** ViewModel-init and foreground trigger — the same boundary pattern the sync pass uses. */
-    fun refreshEnabled() {
-        viewModelScope.launch {
-            _enabled.value = rolloutGate.sosEnabled()
-        }
-    }
 
     /**
      * The single tap path (FAB rev: the dialog's Send — confirmation precedes this call).

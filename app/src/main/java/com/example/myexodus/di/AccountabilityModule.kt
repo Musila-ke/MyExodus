@@ -57,7 +57,6 @@ import com.example.myexodus.secrets.SecretsRepository
 import com.example.myexodus.accountability.sos.NudgeInboxRepository
 import com.example.myexodus.accountability.sos.NudgeRepository
 import com.example.myexodus.accountability.sos.NudgeSettingsRepository
-import com.example.myexodus.accountability.sync.PARTNER_SOS_CONFIG_KEY
 import com.example.myexodus.ui.partner.PartnerActivityUi
 import com.example.myexodus.ui.partner.PartnerDashboardSource
 import com.example.myexodus.ui.partner.PartnerSelection
@@ -177,9 +176,7 @@ object AccountabilityModule {
      * working rail. The 15-minute minimum fetch interval matches the sync cadence: a console
      * flip is picked up by the next pass. A failed fetch must not discard the last activated
      * value, so it is swallowed and the read still serves the cached value (or the in-app
-     * default on a fresh, offline install). SOS §8.20 rides the same instance: one defaults
-     * map, one fetch — `partner_sos_enabled` defaults `false`, the opposite failure default
-     * of a not-yet-released feature.
+     * default on a fresh, offline install).
      */
     @Provides @Singleton
     fun providePartnerRolloutGate(): PartnerRolloutGate {
@@ -189,12 +186,7 @@ object AccountabilityModule {
                 .setMinimumFetchIntervalInSeconds(900)
                 .build(),
         )
-        remoteConfig.setDefaultsAsync(
-            mapOf(
-                PUSH_REGISTRATION_CONFIG_KEY to true,
-                PARTNER_SOS_CONFIG_KEY to false,
-            ),
-        )
+        remoteConfig.setDefaultsAsync(mapOf(PUSH_REGISTRATION_CONFIG_KEY to true))
         return PartnerRolloutGate { key ->
             runCatching { remoteConfig.fetchAndActivate().await() }
             remoteConfig.getBoolean(key)
