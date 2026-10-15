@@ -33,10 +33,12 @@
          one back row across screens, so the way out cannot drift between pages. -->
     <string name="ui_back">Back</string>
 
-    <!-- Protection paused: neither detection path can see apps (§8 Step 6) — the degraded
-         notification and the Home banner share this copy. -->
+    <!-- Protection paused: neither detection path can see apps (§8 Step 6). The notification
+         has no button, so it names the way in; the Home banner is already in the app with the
+         Fix button below, so its variant names the button instead (B-09, 2026-10-15). -->
     <string name="protection_paused_title">Protection is paused</string>
     <string name="protection_paused_text">MyExodus can’t tell which app is open right now, so blocks won’t start. Open MyExodus to see what’s off and turn protection back on.</string>
+    <string name="protection_paused_card_text">MyExodus can’t tell which app is open right now, so blocks won’t start. Tap Fix to turn protection back on.</string>
     <string name="protection_paused_action">Fix</string>
     <!-- Home protection chip (finding #13: these were hardcoded Kotlin literals; the chip is the
          one-glance protection state and each value is a distinct claim, so they are resources). -->

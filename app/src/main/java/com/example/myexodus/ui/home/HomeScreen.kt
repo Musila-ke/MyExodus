@@ -942,7 +942,7 @@ private fun DegradationBanner(
         // §8 Step 6: cause not named — with both paths down it is usually more than one
         // thing; the Settings protection rows name each mechanism and carry its fix.
         ProtectionDegradation.DEGRADED_NO_DETECTION -> Triple(
-            stringResource(R.string.protection_paused_text),
+            stringResource(R.string.protection_paused_card_text),
             stringResource(R.string.protection_paused_action),
             onOpenSettings,
         )
