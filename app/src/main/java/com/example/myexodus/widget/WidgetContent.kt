@@ -358,15 +358,27 @@ private fun TallContent(
                 .background(GlanceTheme.colors.outline),
         ) {}
         Spacer(GlanceModifier.height(6.dp))
-        caption?.let {
-            Text(
-                text = it,
-                style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 10.sp),
-                maxLines = 1,
-            )
-            Spacer(GlanceModifier.height(6.dp))
+        // Caption + actions grouped as one nested band, not flat in the outer Column: Glance's
+        // RemoteViews translation caps every container at 10 children and silently drops the tail
+        // past that (LayoutSelectionKt in glance-appwidget 1.1.1 — javap-verified; device logcat
+        // 2026-10-16: "Truncated Column container from 11 to 10 elements", which ate the whole
+        // action row whenever the non-discreet caption was present). With the band wrappers this
+        // column holds 7 direct children in every path, well clear of the cap.
+        Column(
+            modifier = GlanceModifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Top,
+            horizontalAlignment = Alignment.Start,
+        ) {
+            caption?.let {
+                Text(
+                    text = it,
+                    style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 10.sp),
+                    maxLines = 1,
+                )
+                Spacer(GlanceModifier.height(6.dp))
+            }
+            ActionRow(view, logRelapse, reachOut)
         }
-        ActionRow(view, logRelapse, reachOut)
     }
 }
 
@@ -387,33 +399,41 @@ private fun MilestoneBand(view: WidgetView) {
     // coerceAtLeast guards a stale persisted snapshot written by the pre-ruling build.
     val fraction = milestoneFraction((days - 1).coerceAtLeast(0), target) ?: return
 
-    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            text = context.getString(R.string.widget_next_milestone_label).uppercase(),
-            style = TextStyle(
-                color = GlanceTheme.colors.onSurfaceVariant,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Medium,
-            ),
-            maxLines = 1,
-        )
-        Spacer(GlanceModifier.defaultWeight())
-        Text(
-            text = milestoneText(context, target, away).orEmpty(),
-            style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 10.sp),
-            maxLines = 1,
+    // One nested band (see TallContent): flat, these are 3 more children in the tall card's outer
+    // Column, which Glance truncates at 10.
+    Column(
+        modifier = GlanceModifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+        horizontalAlignment = Alignment.Start,
+    ) {
+        Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = context.getString(R.string.widget_next_milestone_label).uppercase(),
+                style = TextStyle(
+                    color = GlanceTheme.colors.onSurfaceVariant,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+                maxLines = 1,
+            )
+            Spacer(GlanceModifier.defaultWeight())
+            Text(
+                text = milestoneText(context, target, away).orEmpty(),
+                style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 10.sp),
+                maxLines = 1,
+            )
+        }
+        Spacer(GlanceModifier.height(5.dp))
+        // The library's indicator (a RemoteViews ProgressBar, tinted with theme tokens) rather
+        // than two boxes: it stretches to the cell's real width, where a hand-drawn bar could
+        // only ever be as wide as the declared preset.
+        LinearProgressIndicator(
+            progress = fraction,
+            modifier = GlanceModifier.fillMaxWidth().height(4.dp),
+            color = GlanceTheme.colors.tertiary,
+            backgroundColor = GlanceTheme.colors.surfaceVariant,
         )
     }
-    Spacer(GlanceModifier.height(5.dp))
-    // The library's indicator (a RemoteViews ProgressBar, tinted with theme tokens) rather than
-    // two boxes: it stretches to the cell's real width, where a hand-drawn bar could only ever be
-    // as wide as the declared preset.
-    LinearProgressIndicator(
-        progress = fraction,
-        modifier = GlanceModifier.fillMaxWidth().height(4.dp),
-        color = GlanceTheme.colors.tertiary,
-        backgroundColor = GlanceTheme.colors.surfaceVariant,
-    )
 }
 
 /** The protection state as the card's one chip (non-discreet only). */

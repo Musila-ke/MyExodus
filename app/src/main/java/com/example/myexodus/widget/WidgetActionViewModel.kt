@@ -116,18 +116,30 @@ class WidgetActionViewModel @Inject constructor(
 }
 
 /**
- * The copy each relapse outcome puts on the surface. Null = still interactive (no result text).
- * Pure, so the full outcome matrix is unit-testable.
+ * The copy each relapse outcome puts on the surface, in the disclosure pair the titles/bodies
+ * already carry: the recovery vocabulary only after disclosure, "count"/"reset" while discreet
+ * (FR5 — the surface a hold opens must not print the word the card just refused to show; a
+ * device leg caught "Relapse logged" on a discreet surface, 2026-10-16). "Already logged" is
+ * vocabulary-free and shared. Null = still interactive (no result text). Pure, so the full
+ * outcome × disclosure matrix is unit-testable.
  */
-internal fun relapseOutcomeRes(outcome: WidgetActionViewModel.RelapseOutcome): Int? = when (outcome) {
+internal fun relapseOutcomeRes(
+    outcome: WidgetActionViewModel.RelapseOutcome,
+    discreet: Boolean,
+): Int? = when (outcome) {
     WidgetActionViewModel.RelapseOutcome.None,
     WidgetActionViewModel.RelapseOutcome.InFlight,
     -> null
 
-    WidgetActionViewModel.RelapseOutcome.Logged -> R.string.widget_relapse_logged
+    WidgetActionViewModel.RelapseOutcome.Logged ->
+        if (discreet) R.string.widget_relapse_logged_discreet else R.string.widget_relapse_logged
+
     WidgetActionViewModel.RelapseOutcome.AlreadyLogged -> R.string.widget_relapse_already_logged
-    WidgetActionViewModel.RelapseOutcome.Gone -> R.string.widget_relapse_gone
-    WidgetActionViewModel.RelapseOutcome.Failed -> R.string.widget_relapse_failed
+    WidgetActionViewModel.RelapseOutcome.Gone ->
+        if (discreet) R.string.widget_relapse_gone_discreet else R.string.widget_relapse_gone
+
+    WidgetActionViewModel.RelapseOutcome.Failed ->
+        if (discreet) R.string.widget_relapse_failed_discreet else R.string.widget_relapse_failed
 }
 
 /**

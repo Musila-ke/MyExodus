@@ -460,11 +460,18 @@
     <string name="widget_hold_hint">Keep holding — release to cancel</string>
     <string name="widget_hold_close">Close</string>
     <!-- Outcomes. "Already logged" is the idempotency window talking: the rollover the user
-         asked for just happened, so it is reported as success-adjacent, not as an error. -->
+         asked for just happened, so it is reported as success-adjacent, not as an error. The
+         logged/gone/failed outcomes carry the same discreet pair as the titles/bodies — the
+         surface a hold opens must not print the word the card just refused to show (device leg
+         caught "Relapse logged" on a discreet surface, 2026-10-16). Content pinned by
+         WidgetActionStateTest's vocabulary guard. -->
     <string name="widget_relapse_logged">Relapse logged — a new streak starts at Day 1.</string>
+    <string name="widget_relapse_logged_discreet">Count reset — a new one starts at Day 1.</string>
     <string name="widget_relapse_already_logged">Already logged.</string>
     <string name="widget_relapse_gone">This streak is no longer active. Open the app.</string>
+    <string name="widget_relapse_gone_discreet">This count is no longer active. Open the app.</string>
     <string name="widget_relapse_failed">Couldn\'t log the relapse.</string>
+    <string name="widget_relapse_failed_discreet">Couldn\'t log the reset.</string>
     <!-- Partner dashboard (plan §7 item 12 / FR3): the paired device's last-known shared
          state. Copy never promises real-time delivery (AD-05 best-effort cadence) and keeps
          the §9 chain states distinct — "some history missing" is neutral; the unverified

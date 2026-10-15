@@ -322,7 +322,7 @@ private fun RelapseSurface(
         }
     }
     Spacer(Modifier.height(16.dp))
-    relapseOutcomeRes(outcome)?.let {
+    relapseOutcomeRes(outcome, discreet = info.discreet)?.let {
         Text(
             text = stringResource(it),
             style = MaterialTheme.typography.bodyMedium,
