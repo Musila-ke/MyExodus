@@ -66,6 +66,8 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.FirebaseFirestoreSettings
+import com.google.firebase.firestore.MemoryCacheSettings
 import com.google.firebase.functions.FirebaseFunctions
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.remoteconfig.FirebaseRemoteConfig
@@ -147,8 +149,23 @@ object AccountabilityModule {
         eventCipher: EventCipher,
     ): MailboxEventProcessor = MailboxEventProcessor(signer, eventCipher)
 
+    /** B-10 (2026-10-15): with default persistence the SDK keeps a local SQLite, and ENOSPC
+     *  inside it surfaced as uncaught Firestore-internal RuntimeExceptions that killed the
+     *  process (B7 disk-fill: "cannot rollback - no transaction is active"). Memory cache
+     *  removes the on-disk store by construction; durable offline state is the app's own Room
+     *  stores, and every Firestore read path either waits for server snapshots (PartnerLiveSync
+     *  skips isFromCache) or is guarded + retried next tick (mailbox pull). */
     @Provides @Singleton
-    fun provideFirebaseFirestore(): FirebaseFirestore = FirebaseFirestore.getInstance()
+    fun provideFirebaseFirestore(): FirebaseFirestore =
+        FirebaseFirestore.getInstance().apply {
+            firestoreSettings = memoryOnlyFirestoreSettings()
+        }
+
+    /** Extracted so the cache decision is JVM-pinnable (the builder is JVM-constructible). */
+    fun memoryOnlyFirestoreSettings(): FirebaseFirestoreSettings =
+        FirebaseFirestoreSettings.Builder()
+            .setLocalCacheSettings(MemoryCacheSettings.newBuilder().build())
+            .build()
 
     @Provides @Singleton
     fun provideFirebaseMessaging(): FirebaseMessaging = FirebaseMessaging.getInstance()
