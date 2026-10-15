@@ -28,6 +28,7 @@ class WidgetSnapshotTest {
         enforcement = EnforcementStatus.ACTIVE,
         streakDays = 12,
         habitLabel = "No smoking",
+        habitId = "habit-1",
         streakSample = streakSample,
         discreet = false,
         evalUtc = 1_800_000_000_000L,
@@ -55,6 +56,27 @@ class WidgetSnapshotTest {
         val prefs = mutablePreferencesOf()
         prefs.putSnapshot(sample.copy(streakDays = null, habitLabel = null))
         assertNull(snapshotFrom(prefs)?.habitLabel)
+    }
+
+    @Test
+    fun habitId_roundTripsAndClearsWithTheStreak() {
+        // The relapse control's binding: an id that outlived its streak would target a track
+        // the widget no longer shows — it must clear exactly when the number and label do.
+        val prefs = mutablePreferencesOf()
+        prefs.putSnapshot(sample)
+        assertEquals("habit-1", snapshotFrom(prefs)?.habitId)
+        prefs.putSnapshot(sample.copy(streakDays = null, habitLabel = null, habitId = null))
+        assertNull(snapshotFrom(prefs)?.habitId)
+    }
+
+    @Test
+    fun preV2Sample_decodesWithoutAHabitId() {
+        // A record written before this field existed renders unlabelled-for-writes: the relapse
+        // control hides rather than binding a guessed track.
+        val prefs = mutablePreferencesOf()
+        prefs.putSnapshot(sample)
+        prefs.remove(stringPreferencesKey("habit_id"))
+        assertNull(snapshotFrom(prefs)?.habitId)
     }
 
     @Test

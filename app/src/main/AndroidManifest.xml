@@ -217,6 +217,20 @@
                 android:resource="@xml/desert_dawn_widget_info" />
         </receiver>
 
+        <!-- Widget v2 (owner spec 2026-10-15): the action pills' hold-to-confirm surface. Own
+             task affinity (never stacks on the launcher or on app UI), out of recents.
+             exported=false: only ever started by the widget's own PendingIntent, which executes
+             with this app's identity. singleTop: a second pill tap delivers through onNewIntent
+             instead of stacking. -->
+        <activity
+            android:name=".widget.WidgetActionActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:taskAffinity="com.example.myexodus.widgetsurface"
+            android:theme="@style/Theme.MyExodus.WidgetAction" />
+
         <!-- isAccessibilityTool=false (enforcement plan v2 §8 Step 4): this service enforces
             user-configured restrictions, it does not assist accessibility — the flag keeps
             the service visible in accessibility settings as a restriction tool. -->

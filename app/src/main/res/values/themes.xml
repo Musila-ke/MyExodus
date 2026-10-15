@@ -8,4 +8,13 @@
     <style name="Theme.MyExodus" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/window_background</item>
     </style>
+
+    <!-- Widget v2 (owner spec 2026-10-15): the pills' hold-to-confirm surface is a sheet over
+         the launcher — translucent window, no background of its own, and the system dims what
+         is behind it so the card reads as modal. -->
+    <style name="Theme.MyExodus.WidgetAction" parent="Theme.MyExodus">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">true</item>
+    </style>
 </resources>

@@ -533,8 +533,10 @@ private fun ReachOutFab(state: SosViewModel.SosSendState, onClick: () -> Unit) {
     )
 }
 
-/** The sender state machine's user-visible results (plan §8.15 copy); null while Idle/Sending. */
-private fun sosStateMessage(context: Context, state: SosViewModel.SosSendState): String? =
+/** The sender state machine's user-visible results (plan §8.15 copy); null while Idle/Sending.
+ *  Internal since widget v2: the widget's hold-to-confirm surface renders the same states, and
+ *  the copy has exactly one definition (DRY — §8.15 semantics must not fork per surface). */
+internal fun sosStateMessage(context: Context, state: SosViewModel.SosSendState): String? =
     when (state) {
         SosViewModel.SosSendState.Sent -> context.getString(R.string.sos_check_in_sent)
         SosViewModel.SosSendState.NotSentOffline -> context.getString(R.string.sos_state_offline)

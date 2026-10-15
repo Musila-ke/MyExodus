@@ -14,6 +14,7 @@ import androidx.glance.action.Action
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.LinearProgressIndicator
 import androidx.glance.appwidget.components.Scaffold
+import androidx.glance.appwidget.cornerRadius
 import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
@@ -28,6 +29,7 @@ import androidx.glance.layout.width
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
+import androidx.glance.unit.ColorProvider
 import com.example.myexodus.R
 import com.example.myexodus.data.db.entity.MilestoneEvent
 
@@ -39,6 +41,10 @@ internal data class WidgetView(
      *  number is the wrong track as far as the user can tell). Null = no habit, or a sample from
      *  before the field existed. */
     val habitLabel: String?,
+    /** The id the "Log a relapse" control binds (widget v2): the exact track the number above it
+     *  belongs to. Null = no habit or a pre-v2 sample — the control hides rather than binding a
+     *  guessed track. */
+    val habitId: String?,
     /** Age of the stored reading at render time when the day count can no longer be *proven*
      *  current — a day boundary has passed since it was read, or the device rebooted. Null when
      *  the number needs no qualifier. It renders in the footnote slot, ahead of the milestone
@@ -101,11 +107,12 @@ internal fun milestoneFraction(days: Int?, next: Int?): Float? {
 }
 
 /**
- * The widget's whole UI, in three variants by the size the launcher reports: the one-line compact
- * card, the band card (4×2 and tall 2×2), and the full-height card a resize produces. Each
- * variant is a whole composition, not a stretched copy of the smaller one — the launcher's
- * RemoteViews host re-measures containers but never rescales type, so slack has to be absorbed by
- * weighted bands (user-flagged 2026-09-27: the resized card rendered a hero over a void).
+ * The widget's whole UI, in four variants by the size the launcher reports: the one-line compact
+ * card, the narrow 2×2, the band card, and the full-height card a resize produces. Each variant
+ * is a whole composition, not a stretched copy of the smaller one — the launcher's RemoteViews
+ * host re-measures containers but never rescales type, so slack has to be absorbed by weighted
+ * bands (user-flagged 2026-09-27: the resized card rendered a hero over a void). The two wide
+ * variants carry the dashboard's action pills — relapse and SOS (owner spec 2026-10-15).
  *
  * Copy is discreet by default — a day count with no status word and no recovery vocabulary (FR5).
  */
@@ -115,6 +122,8 @@ internal fun DesertDawnWidgetContent(
     openStreaks: Action,
     manageUrge: Action,
     openApp: Action,
+    logRelapse: Action,
+    reachOut: Action,
 ) {
     val context = LocalContext.current
     val statusText = context.getString(view.status.labelRes())
@@ -131,8 +140,9 @@ internal fun DesertDawnWidgetContent(
             LocalSize.current.height >= TALL_MIN_HEIGHT -> TallContent(
                 view = view,
                 statusText = statusText,
-                cells = widgetCells(context, view, manageUrge, withMilestone = false),
                 openStreaks = openStreaks,
+                logRelapse = logRelapse,
+                reachOut = reachOut,
             )
 
             LocalSize.current.width < WIDE_MIN_WIDTH -> NarrowContent(
@@ -145,8 +155,9 @@ internal fun DesertDawnWidgetContent(
             else -> ExpandedContent(
                 view = view,
                 statusText = statusText,
-                cells = widgetCells(context, view, manageUrge),
                 openStreaks = openStreaks,
+                logRelapse = logRelapse,
+                reachOut = reachOut,
             )
         }
     }
@@ -200,20 +211,23 @@ private fun CompactContent(
 
 /**
  * The band card, composed as bands rather than a headline with air under it (reference port
- * 2026-09-27, gallery `11.54.56`): hero row with the state chip, a hairline, then a data strip of
- * small label-over-value cells whose last cell is the action. Every band carries information. The
- * weighted spacer before the hairline keeps the strip on the card's bottom edge when a launcher
- * stretches the preset past its nominal height.
+ * 2026-09-27, gallery `11.54.56`): hero row with the state chip, a hairline, the caption line,
+ * then the two action pills on the bottom edge. Every band carries information. The weighted
+ * spacer before the hairline keeps the caption and pills on the card's bottom edge when a
+ * launcher stretches the preset past its nominal height.
  */
 @Composable
 private fun ExpandedContent(
     view: WidgetView,
     statusText: String,
-    cells: List<WidgetCell>,
     openStreaks: Action,
+    logRelapse: Action,
+    reachOut: Action,
 ) {
+    val context = LocalContext.current
+    val caption = captionFor(context, view, includeMilestone = true)
     Column(
-        modifier = GlanceModifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 8.dp),
+        modifier = GlanceModifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 6.dp),
         verticalAlignment = Alignment.Top,
         horizontalAlignment = Alignment.Start,
     ) {
@@ -227,7 +241,6 @@ private fun ExpandedContent(
                 StatusChip(statusText)
             }
         }
-        Spacer(GlanceModifier.height(6.dp))
         Spacer(GlanceModifier.defaultWeight())
         Box(
             GlanceModifier
@@ -235,8 +248,16 @@ private fun ExpandedContent(
                 .height(1.dp)
                 .background(GlanceTheme.colors.outline),
         ) {}
-        Spacer(GlanceModifier.height(6.dp))
-        WideCellRow(cells)
+        Spacer(GlanceModifier.height(4.dp))
+        caption?.let {
+            Text(
+                text = it,
+                style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 10.sp),
+                maxLines = 1,
+            )
+            Spacer(GlanceModifier.height(4.dp))
+        }
+        ActionRow(view, logRelapse, reachOut)
     }
 }
 
@@ -297,18 +318,21 @@ private fun NarrowContent(
 }
 
 /**
- * The full-height card (`TALL_SIZE`): hero, the progress band, then the data strip — fixed bands
- * with the slack shared above and below the middle band, so a resized card reads as a designed
- * surface at any stretch instead of a headline floating over a void (user-flagged 2026-09-27).
- * The strip drops the milestone cell: the band already carries it.
+ * The full-height card (`TALL_SIZE`): hero, the progress band, then the caption line and the two
+ * action pills — fixed bands with the slack shared above and below the middle band, so a resized
+ * card reads as a designed surface at any stretch instead of a headline floating over a void
+ * (user-flagged 2026-09-27). The caption drops the milestone rung: the band already carries it.
  */
 @Composable
 private fun TallContent(
     view: WidgetView,
     statusText: String,
-    cells: List<WidgetCell>,
     openStreaks: Action,
+    logRelapse: Action,
+    reachOut: Action,
 ) {
+    val context = LocalContext.current
+    val caption = captionFor(context, view, includeMilestone = false)
     Column(
         modifier = GlanceModifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.Top,
@@ -333,8 +357,16 @@ private fun TallContent(
                 .height(1.dp)
                 .background(GlanceTheme.colors.outline),
         ) {}
-        Spacer(GlanceModifier.height(8.dp))
-        WideCellRow(cells)
+        Spacer(GlanceModifier.height(6.dp))
+        caption?.let {
+            Text(
+                text = it,
+                style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 10.sp),
+                maxLines = 1,
+            )
+            Spacer(GlanceModifier.height(6.dp))
+        }
+        ActionRow(view, logRelapse, reachOut)
     }
 }
 
@@ -401,75 +433,83 @@ private fun StatusChip(text: String) {
     )
 }
 
-/** One small label-over-value block in the large card's data strip. [action] makes the value a
- *  tap target — which is how the card carries its one action without a button row (FR4). */
-private data class WidgetCell(val label: String?, val value: String, val action: Action?)
-
+/**
+ * The card's action row (owner spec 2026-10-15): the relapse control bound to the displayed
+ * track, and the SOS control. Both are plain taps onto the hold-confirm surface, where the
+ * long-press-and-ring protection lives — no launcher RemoteViews host delivers touch streams,
+ * so the ring cannot live on the widget itself (ADR #159).
+ *
+ * The relapse pill hides when [WidgetView.habitId] is null (no habit, or a sample from before
+ * the field existed): a control must never end a track other than the one the number above it
+ * names. The SOS pill then takes the full width — reach-out has no track to bind.
+ */
 @Composable
-private fun CellColumn(cell: WidgetCell, modifier: GlanceModifier) {
-    Column(modifier) {
-        cell.label?.let {
-            Text(
-                text = it.uppercase(),
-                style = TextStyle(
-                    color = GlanceTheme.colors.onSurfaceVariant,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Medium,
-                ),
-                maxLines = 1,
+private fun ActionRow(view: WidgetView, logRelapse: Action, reachOut: Action) {
+    val context = LocalContext.current
+    val compact = LocalSize.current.width < COMPACT_ACTION_MIN_WIDTH
+    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        if (view.habitId != null) {
+            PillButton(
+                text = context.getString(relapseLabelRes(discreet = view.discreet, compact = compact)),
+                action = logRelapse,
+                background = GlanceTheme.colors.surfaceVariant,
+                foreground = GlanceTheme.colors.onSurfaceVariant,
+                modifier = GlanceModifier.defaultWeight(),
             )
+            Spacer(GlanceModifier.width(10.dp))
         }
-        CellValue(cell)
+        PillButton(
+            text = context.getString(R.string.widget_action_reach_out),
+            action = reachOut,
+            background = GlanceTheme.colors.primary,
+            foreground = GlanceTheme.colors.onPrimary,
+            modifier = GlanceModifier.defaultWeight(),
+        )
     }
 }
 
-/** The cells side by side, one weighted block each with hairline dividers between — this needs
- *  the full card width (280+dp), which only the wide variants have. */
-@Composable
-private fun WideCellRow(cells: List<WidgetCell>) {
-    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-        cells.forEachIndexed { index, cell ->
-            if (index > 0) {
-                Box(
-                    GlanceModifier
-                        .width(1.dp)
-                        .height(26.dp)
-                        .background(GlanceTheme.colors.outline),
-                ) {}
-            }
-            CellColumn(
-                cell = cell,
-                modifier = GlanceModifier
-                    .defaultWeight()
-                    .padding(start = if (index > 0) 10.dp else 0.dp),
-            )
-        }
-    }
-}
+/** Below this the two-pill row no longer fits "Log a relapse" at 12sp — each pill is about
+ *  (width − padding − gap)/2 wide, the label needs ~80dp, and RemoteViews hosts apply the user's
+ *  font scale on top — so the relapse control falls back to its short form rather than
+ *  ellipsizing an action word. */
+private val COMPACT_ACTION_MIN_WIDTH = 220.dp
 
+/** One action pill: the rounded filled control of the reference composition. The SOS pill keeps
+ *  the one-filled-control-per-composition role; the relapse pill is tonal so the destructive
+ *  control never masquerades as the primary one. */
 @Composable
-private fun CellValue(cell: WidgetCell) {
-    val style = TextStyle(
-        color = if (cell.action != null) {
-            GlanceTheme.colors.primary
-        } else {
-            GlanceTheme.colors.onBackground
-        },
-        fontSize = 12.sp,
-        fontWeight = if (cell.action != null) FontWeight.Medium else FontWeight.Normal,
-    )
-    if (cell.action == null) {
-        Text(text = cell.value, style = style, maxLines = 1)
-    } else {
+private fun PillButton(
+    text: String,
+    action: Action,
+    background: ColorProvider,
+    foreground: ColorProvider,
+    modifier: GlanceModifier,
+) {
+    Box(
+        modifier = modifier
+            .height(34.dp)
+            .background(background)
+            .cornerRadius(17.dp)
+            .clickable(action),
+        contentAlignment = Alignment.Center,
+    ) {
         Text(
-            text = cell.value,
-            modifier = GlanceModifier
-                .clickable(cell.action)
-                .padding(vertical = 4.dp, horizontal = 2.dp),
-            style = style,
+            text = text,
+            style = TextStyle(color = foreground, fontSize = 12.sp, fontWeight = FontWeight.Medium),
             maxLines = 1,
         )
     }
+}
+
+/**
+ * The relapse control's label: named as the action it is when there is room, the short form where
+ * the row is tight, and the disclosure-free vocabulary ("Reset", never the recovery word) whenever
+ * the card is discreet (FR5). Pure, so the matrix is unit-testable.
+ */
+internal fun relapseLabelRes(discreet: Boolean, compact: Boolean): Int = when {
+    discreet -> R.string.widget_action_reset
+    compact -> R.string.widget_action_relapse_short
+    else -> R.string.widget_action_relapse
 }
 
 /**
@@ -490,42 +530,30 @@ private fun footnoteFor(context: Context, view: WidgetView, shortForm: Boolean):
 }
 
 /**
+ * The caption line under the hairline: the track the number belongs to (only when disclosed) and
+ * the number's qualifier, joined so a stale count reads as stale. [includeMilestone] adds the
+ * next rung in its short form for the card without a progress band — the tall card's band already
+ * carries it, so its caption never repeats it.
+ */
+private fun captionFor(context: Context, view: WidgetView, includeMilestone: Boolean): String? {
+    val qualifier = view.streakCheckedAgoMillis?.let {
+        context.getString(R.string.widget_checked_label) + " " + agoText(context, it)
+    } ?: if (includeMilestone) {
+        milestoneText(context, view.nextMilestoneDay, view.nextMilestoneDaysAway)
+    } else {
+        null
+    }
+    val label = view.habitLabel?.takeIf { !view.discreet }
+    return listOfNotNull(label, qualifier).joinToString(" · ").ifEmpty { null }
+}
+
+/**
  * The card's one action label — the same Recovery deep link whether the card calls it "Manage
  * urge" or, discreetly, "Tools" (FR5; "Open" promised the app's main page and user-flagged
  * 2026-09-27: a nav label must not misstate its destination).
  */
 private fun actionLabel(context: Context, view: WidgetView): String =
     context.getString(if (view.discreet) R.string.widget_tools else R.string.widget_manage_urge) + " ›"
-
-/**
- * The data strip's cells, in reading order: the track the number belongs to (only when the user
- * has opted into disclosure), the next milestone rung (omitted in the tall variant, whose
- * progress band carries it), when the stored number was last verified (only while it cannot be
- * proven current), and finally the action.
- */
-private fun widgetCells(
-    context: Context,
-    view: WidgetView,
-    manageUrge: Action,
-    withMilestone: Boolean = true,
-): List<WidgetCell> {
-    val cells = mutableListOf<WidgetCell>()
-    if (!view.discreet) {
-        view.habitLabel?.let {
-            cells += WidgetCell(context.getString(R.string.widget_habit_label), it, null)
-        }
-    }
-    if (withMilestone) {
-        milestoneText(context, view.nextMilestoneDay, view.nextMilestoneDaysAway)?.let {
-            cells += WidgetCell(context.getString(R.string.widget_next_label), it, null)
-        }
-    }
-    view.streakCheckedAgoMillis?.let {
-        cells += WidgetCell(context.getString(R.string.widget_checked_label), agoText(context, it), null)
-    }
-    cells += WidgetCell(label = null, value = actionLabel(context, view), action = manageUrge)
-    return cells
-}
 
 /**
  * The day count as a stat lockup: the word small and muted, the number large and gold, so the

@@ -1,5 +1,6 @@
 package com.example.myexodus.widget
 
+import com.example.myexodus.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -44,5 +45,24 @@ class WidgetContentTest {
         assertNull(milestoneFraction(null, 30))
         assertNull(milestoneFraction(7, null))
         assertNull(milestoneFraction(7, 0))
+    }
+
+    /**
+     * The relapse pill's label over its whole 2×2 domain (disclosure × row width). Discreet wins
+     * at any width — the recovery word must be unreachable while the user has not opted into
+     * disclosure (FR5); the short form exists only for the tight row after disclosure.
+     */
+    @Test
+    fun relapseLabel_coversTheDisclosureAndWidthMatrix() {
+        assertEquals(R.string.widget_action_reset, relapseLabelRes(discreet = true, compact = false))
+        assertEquals(R.string.widget_action_reset, relapseLabelRes(discreet = true, compact = true))
+        assertEquals(
+            R.string.widget_action_relapse,
+            relapseLabelRes(discreet = false, compact = false),
+        )
+        assertEquals(
+            R.string.widget_action_relapse_short,
+            relapseLabelRes(discreet = false, compact = true),
+        )
     }
 }
