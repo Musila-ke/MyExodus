@@ -2,10 +2,12 @@ package com.example.myexodus.blocking
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.view.Gravity
@@ -16,6 +18,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.content.res.ResourcesCompat
 import androidx.compose.ui.graphics.toArgb
 import com.example.myexodus.R
 import com.example.myexodus.ui.appLabel
@@ -134,13 +137,44 @@ internal class BlockOverlayView(
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
+    /** The Compose world's font (SansFamily = Work Sans, Type.kt). Absent this, every TextView
+     *  here rendered Roboto from the window theme while the durable BlockerActivity rendered
+     *  Work Sans — the same card swapping typeface mid-hand-off (task #4 audit). Loaded once
+     *  per view; a load failure degrades to the themed font, never to invisible text. */
+    private val brandTypeface: Typeface? by lazy {
+        runCatching { ResourcesCompat.getFont(context, R.font.work_sans) }.getOrNull()
+    }
+
+    /** One Compose text role on a TextView: size, family, weight, tracking, and no font
+     *  padding — Compose has none, so leaving the View default on would pad every text block
+     *  taller than its Compose twin and shift the whole wall down by a few px per line.
+     *  Weight rides the variable-font axis on API 26+; below that the default instance stands
+     *  (a weight step, not a different letterform). */
+    private fun applyText(
+        view: TextView,
+        sizeSp: Float,
+        factor: Float,
+        weight: Int,
+        letterSpacingEm: Float,
+    ) {
+        view.textSize = sizeSp * factor
+        view.includeFontPadding = false
+        view.letterSpacing = letterSpacingEm
+        val typeface = brandTypeface ?: return
+        view.typeface = typeface
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            view.fontVariationSettings = "'wght' $weight"
+        }
+    }
+
     /** The adaptive type ramp the Compose world uses (Adaptive.kt) — the overlay covers the
      *  full display, so the display's width class is the window class. Read per bind: a reused
      *  window can land on another display or be resized (split screen). Width comes from the
      *  live display metrics, never `configuration.screenWidthDp`: the display context's
      *  Configuration lags a display-size change (device-caught 2026-09-27 on the X6532 — the
      *  config read 360dp while the display was 1600px/320dpi, so the MEDIUM ramp never
-     *  applied; the metrics were live in the same read). */
+     *  applied; the metrics were live in the same read). The letter-spacing values are the
+     *  Compose roles' sp trackings converted to em at their own size (bodyMedium 0.25/14 etc.). */
     private fun applyTypeScale() {
         val metrics = resources.displayMetrics
         val widthDp = (metrics.widthPixels / metrics.density).toInt()
@@ -148,10 +182,13 @@ internal class BlockOverlayView(
         if (com.example.myexodus.BuildConfig.DEBUG) {
             Log.i("MyExodusOverlay", "overlay typeScale widthDp=$widthDp factor=$factor")
         }
-        title.textSize = 22f * factor
-        message.textSize = 14f * factor
-        hint.textSize = 12f * factor
-        warningText.textSize = 16f * factor
+        applyText(title, 22f, factor, weight = 600, letterSpacingEm = 0f) // titleLarge
+        applyText(message, 14f, factor, weight = 400, letterSpacingEm = 0.25f / 14f) // bodyMedium
+        applyText(hint, 12f, factor, weight = 400, letterSpacingEm = 0.4f / 12f) // bodySmall
+        applyText(warningText, 16f, factor, weight = 400, letterSpacingEm = 0.5f / 16f) // bodyLarge
+        listOf(recoveryButton, differentSiteButton, wallDismissButton).forEach { button ->
+            applyText(button, 14f, factor, weight = 500, letterSpacingEm = 0.1f / 14f) // labelLarge
+        }
         val discSize = dp((88 * factor).toInt())
         disc.layoutParams = LinearLayout.LayoutParams(discSize, discSize).apply { bottomMargin = dp(24) }
         val iconSize = dp((48 * factor).toInt())
@@ -190,7 +227,9 @@ internal class BlockOverlayView(
         gravity = Gravity.CENTER
         // dp, not raw px: 64px rendered as a visibly different inset per density
         // (emulator-caught 2026-09-13 alongside the Dialog-decoration sizing defect).
-        val pad = dp(24)
+        // 32dp = the block screen Column's padding (task #4): one inset, so text wraps at the
+        // same width on both surfaces.
+        val pad = dp(32)
         setPadding(pad, pad, pad, pad)
         addView(disc)
         addView(title)
@@ -319,9 +358,11 @@ internal class BlockOverlayView(
         }
         // Block walls = the v1 block screen's rhythm with their in-place Close (user-directed
         // 2026-09-15 rhythm; the escape became a wall control on 2026-09-27 — the app is
-        // already evicted behind it, so a tap must not be the only way out): title → 8dp →
-        // message → 32dp → Close → 24dp → hint. The app-block card joined the wall on
-        // 2026-10-03 — it too stays until the user dismisses it.
+        // already evicted behind it, so a tap must not be the only way out). The app-block
+        // card joined the wall on 2026-10-03 — it too stays until the user dismisses it.
+        // This is the SHARED rhythm (task #4): BlockerActivity.BlockScreen renders the same
+        // composition — disc 24 title 8 message 32 recovery 8 Close 24 hint — so the a11y
+        // cover cannot restyle when the durable screen takes over.
         val blocked = content is OverlayContent.DailyLimitBlocked || content is OverlayContent.AppBlocked
         message.layoutParams =
             if (blocked) marginParams(top = 8, bottom = 32) else marginParams(bottom = 32)

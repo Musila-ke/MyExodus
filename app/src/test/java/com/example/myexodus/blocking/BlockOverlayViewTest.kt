@@ -5,10 +5,13 @@ import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.content.res.ResourcesCompat
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.R
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -158,6 +161,43 @@ class BlockOverlayViewTest {
         // hint, never the cover's transient "Home and back always work".
         assertTrue(texts(host).contains(context.getString(R.string.block_screen_hint)))
         assertTrue(texts(host).none { it == context.getString(R.string.overlay_hint) })
+    }
+
+    @Test
+    fun appBlock_usesTheSharedWallRhythm_withTheComposeTypeRoles() {
+        // Task #4 audit: this card and BlockerActivity.BlockScreen are one composition —
+        // disc 24 title 8 message 32 recovery 8 Close 24 hint, 32dp inset — so the a11y
+        // cover cannot restyle when the durable screen takes over (compose rhythm in
+        // BlockerActivity, values here).
+        val host = BlockOverlayView(
+            context, {}, recovered::add, differentSite::add, onWallDismiss = {},
+        )
+        host.bind(OverlayContent.AppBlocked("AnkiDroid", "rule-2"))
+        val column = host.getChildAt(0) as ViewGroup
+        val density = context.resources.displayMetrics.density
+        fun px(dp: Int) = (dp * density).toInt()
+
+        assertEquals("32dp inset, as the block screen's Column", px(32), column.paddingStart)
+        val title = column.getChildAt(1) as TextView
+        val message = column.getChildAt(2) as TextView
+        val close = column.getChildAt(5) as TextView
+        val hint = column.getChildAt(6) as TextView
+        assertEquals("message follows the title by 8dp", px(8), (message.layoutParams as LinearLayout.LayoutParams).topMargin)
+        assertEquals("message → recovery gap", px(32), (message.layoutParams as LinearLayout.LayoutParams).bottomMargin)
+        assertEquals("recovery → Close gap", px(8), (column.getChildAt(3).layoutParams as LinearLayout.LayoutParams).bottomMargin)
+        assertEquals("Close → hint gap", px(24), (close.layoutParams as LinearLayout.LayoutParams).bottomMargin)
+        assertEquals(px(0), (hint.layoutParams as LinearLayout.LayoutParams).topMargin)
+
+        // The Compose text roles: Work Sans (SansFamily), no font padding (Compose has none).
+        // The weight axis (fontVariationSettings) is set alongside but does not round-trip
+        // through the getter under Robolectric's native-graphics stack; the rendered weight
+        // is verified on device, not here.
+        val workSans = ResourcesCompat.getFont(context, R.font.work_sans)
+        assertNotNull("Work Sans must load from res/font", workSans)
+        assertEquals("the card's typeface is SansFamily, not the themed default", workSans, title.typeface)
+        assertEquals(workSans, message.typeface)
+        assertEquals(workSans, hint.typeface)
+        assertTrue("Compose has no font padding", !title.includeFontPadding && !message.includeFontPadding && !hint.includeFontPadding)
     }
 
     @Test

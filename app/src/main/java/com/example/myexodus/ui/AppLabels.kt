@@ -53,6 +53,18 @@ internal val appLabelLoader: CoroutineScope =
 
 internal fun peekAppLabel(target: String): String? = labelCache[target]
 
+/**
+ * Publishes a label a caller already resolved synchronously (both block-fire paths name the
+ * target for the overlay card before the durable BlockerActivity launches): the activity then
+ * reads the same string from its first composition instead of flashing the raw identifier on
+ * a cold cache (task #4 audit — the async pipeline's miss path above is for lists, which can
+ * afford it; a block screen's title cannot).
+ */
+internal fun seedAppLabel(target: String, label: String) {
+    labelLoads.add(target)
+    Snapshot.withMutableSnapshot { labelCache[target] = label }
+}
+
 /** Label for a target: cached if known, else null and a background load is queued. */
 internal fun cachedAppLabel(
     target: String,

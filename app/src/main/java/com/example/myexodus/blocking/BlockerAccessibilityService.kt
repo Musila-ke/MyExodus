@@ -27,6 +27,7 @@ import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.data.db.entity.UsageLedgerSource
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.ui.appLabel
+import com.example.myexodus.ui.seedAppLabel
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -799,13 +800,18 @@ class BlockerAccessibilityService : AccessibilityService() {
 
     /** The card for an app block: the deciding package named as the app block screen names it,
      *  with the rule its escape action would start a session for (absent only in the
-     *  decide/show race with a deletion). Built on block transitions only. */
-    private fun appBlockedContent(packageName: String): OverlayContent.AppBlocked =
-        OverlayContent.AppBlocked(
-            target = appLabel(this, packageName),
+     *  decide/show race with a deletion). Built on block transitions only. The resolve also
+     *  seeds the shared label cache so BlockerActivity's title is this same string from its
+     *  first frame (task #4). */
+    private fun appBlockedContent(packageName: String): OverlayContent.AppBlocked {
+        val label = appLabel(this, packageName)
+        seedAppLabel(packageName, label)
+        return OverlayContent.AppBlocked(
+            target = label,
             ruleId = publisher.snapshot.appRules[packageName]?.ruleId,
             packageName = packageName,
         )
+    }
 
     /** Multi-window (plan §8 Step 5 / Decision 10): each display showing a restricted package
      *  gets its overlay bounded to that package's LARGEST window — its main surface, so a

@@ -34,6 +34,8 @@ import com.example.myexodus.data.db.entity.UsageLedgerSource
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.telemetry.StartupTrace
+import com.example.myexodus.ui.appLabel
+import com.example.myexodus.ui.seedAppLabel
 import dagger.hilt.android.AndroidEntryPoint
 import java.time.LocalDate
 import java.time.ZoneId
@@ -625,6 +627,10 @@ class EnforcementForegroundService : Service() {
     private fun usageStats(): UsageStatsManager = getSystemService(UsageStatsManager::class.java)
 
     private fun launchBlocker(outcome: AppBlockDecision.Launch) {
+        // Path B (and any launch without a preceding cover pass) has no other sync resolve:
+        // seed the shared label cache here so the screen's title never flashes the raw
+        // package identifier on a cold process (task #4). Runs on the tick worker, not main.
+        seedAppLabel(outcome.packageName, appLabel(this, outcome.packageName))
         val intent = Intent(this, BlockerActivity::class.java)
             .putExtra(BlockerActivity.EXTRA_PACKAGE, outcome.packageName)
             .putExtra(BlockerActivity.EXTRA_RULE_ID, outcome.ruleId)

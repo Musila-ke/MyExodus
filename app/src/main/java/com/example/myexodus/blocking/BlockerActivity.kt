@@ -55,6 +55,13 @@ import kotlinx.coroutines.launch
  * friction flow is not re-implemented here (user-directed 2026-09-13: one block language
  * across app and URL blocks).
  *
+ * Since the task #4 consistency audit it also carries the overlay card's Close (owner rulings
+ * 2026-09-27 / 2026-10-03: every block wall stays until the user dismisses it): the a11y
+ * cover and this screen are now the identical composition, so the hand-off cannot restyle.
+ * It finishes(), which is exactly what Home already does from this screen — the app was
+ * evicted first in the a11y flow (lands on the launcher), and Path B re-blocks on the next
+ * tick (the app is still behind; Home behaves identically there).
+ *
  * On stop (Home, keyguard, another window) the screen dismisses itself; it is not kept
  * alive in the background.
  */
@@ -90,6 +97,7 @@ class BlockerActivity : ComponentActivity() {
                         // IO: the session write opens the store — a synchronous SQLCipher call
                         // that must never run on Main while a wall is up (ADR #63).
                         onOpenRecovery = { lifecycleScope.launch(Dispatchers.IO) { openRecovery() } },
+                        onClose = { finish() },
                         modifier = Modifier.padding(innerPadding),
                     )
                 }
@@ -141,6 +149,7 @@ private fun BlockScreen(
     appLabel: String,
     packageName: String,
     onOpenRecovery: () -> Unit,
+    onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // The same adaptive ramp the View overlay reads (Adaptive.kt) — disc and glyph step up
@@ -183,7 +192,13 @@ private fun BlockScreen(
         Button(onClick = onOpenRecovery) {
             Text(stringResource(R.string.overlay_open_recovery))
         }
-        Spacer(Modifier.height(32.dp))
+        // The shared wall rhythm through the Close (task #4): the overlay card renders
+        // [recovery] 8 [Close] 24 [hint] — this screen must match exactly.
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = onClose) {
+            Text(stringResource(R.string.overlay_wall_dismiss))
+        }
+        Spacer(Modifier.height(24.dp))
         Text(
             stringResource(R.string.block_screen_hint),
             style = MaterialTheme.typography.bodySmall,

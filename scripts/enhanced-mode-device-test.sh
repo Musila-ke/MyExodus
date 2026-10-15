@@ -140,6 +140,13 @@ done
 [ -n "$BOUND" ] || { echo "FAILED: accessibility service never delivered events"; exit 1; }
 echo "    service bound and delivering events"
 
+echo "==> clearing the §8.2 explicit-re-enable gate (ADR #156: this script's own force-stops are recorded exits, and an isolated force-stop is correctly a user stop — the FGS scan stays off until an explicit re-enable, which a script cannot broadcast to the exported=false receiver; the in-process suite invokes the same call the banner tap does)"
+"$ADB" logcat -c
+"$ADB" shell am start -n "$APP/.blocking.DeviceVerificationActivity" --es suite reenable >/dev/null
+sleep 3
+"$ADB" logcat -d | grep -q "RESULT: reenable=PASS" || { echo "FAILED: re-enable suite did not pass"; exit 1; }
+echo "    re-enabled"
+
 echo "==> freezer survival cycle (am freeze 10s)"
 "$ADB" shell am freeze "$APP"
 sleep 10

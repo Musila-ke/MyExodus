@@ -38,7 +38,7 @@ import kotlinx.coroutines.runBlocking
  * drives the parts that need shell powers (key presses, touch injection) by reacting to
  * MARKER log lines, and asserts the tapjacking result from the victim's logcat lines.
  *
- * Host usage: am start -n <app>/.blocking.DeviceVerificationActivity --es suite <functional|latency|multiwindow|browser|fgs|fgs-down|sync|seed-ui|clear-ui|usage-seed|usage-clear> [--ez requireService false] [--ez preSplit true (multiwindow only: the suite seeds, logs MARKER_MULTIWINDOW_SEEDED, and waits for the host to form the split — host launches the victim fullscreen, then Recents → Split screen → pick a partner app; the suite observes, never launches)] [usage-seed: --es pkg <pkg> --ei limitMs <n> --ei usedMs <n> [--es days <7-char Mon-first, default 1111111 — rule day scope] [--ez quotaOnly true — no window at all: the pure daily-limit rule] [--es anchorDate <yyyy-MM-dd> --es tzAnchor <tzid> — §12 rollover/tz-change legs; defaults: today / device tz] [--es w1 <NOT_DUE|PENDING_DELIVERY|DELIVERED> --es w2 <same> — §12 mid-day-change-while-pending leg; default NOT_DUE] [--ez notifyEngine true — mirrors the editor's post-save onDailyLimitChanged call]; usage-clear: --es pkg <pkg> [--ez withRule true — also delete the seeded rule]]. Focus-free row reads (mid-measurement): `am broadcast -n <app>/.blocking.DeviceVerificationReceiver -a usage-read --es pkg <pkg>`.
+ * Host usage: am start -n <app>/.blocking.DeviceVerificationActivity --es suite <functional|latency|multiwindow|browser|fgs|fgs-down|sync|seed-ui|clear-ui|usage-seed|usage-clear|appblock-seed|appblock-clear|reenable> [--ez requireService false] [--ez preSplit true (multiwindow only: the suite seeds, logs MARKER_MULTIWINDOW_SEEDED, and waits for the host to form the split — host launches the victim fullscreen, then Recents → Split screen → pick a partner app; the suite observes, never launches)] [usage-seed: --es pkg <pkg> --ei limitMs <n> --ei usedMs <n> [--es days <7-char Mon-first, default 1111111 — rule day scope] [--ez quotaOnly true — no window at all: the pure daily-limit rule] [--es anchorDate <yyyy-MM-dd> --es tzAnchor <tzid> — §12 rollover/tz-change legs; defaults: today / device tz] [--es w1 <NOT_DUE|PENDING_DELIVERY|DELIVERED> --es w2 <same> — §12 mid-day-change-while-pending leg; default NOT_DUE] [--ez notifyEngine true — mirrors the editor's post-save onDailyLimitChanged call]; usage-clear: --es pkg <pkg> [--ez withRule true — also delete the seeded rule]]. Focus-free row reads (mid-measurement): `am broadcast -n <app>/.blocking.DeviceVerificationReceiver -a usage-read --es pkg <pkg>`.
  *
  * `seed-ui`/`clear-ui` seed and remove four rules (one per live-state branch of the home
  * dashboard) for UI screenshot verification; they keep existing data — no DB reset.
@@ -49,7 +49,7 @@ class DeviceVerificationActivity : Activity() {
         super.onCreate(savedInstanceState)
         val suite = intent.getStringExtra(EXTRA_SUITE)
         if (suite == null) {
-            Log.e(TAG, "no '$EXTRA_SUITE' extra; usage: --es $EXTRA_SUITE functional|latency|multiwindow|browser|fgs|fgs-down|sync|seed-ui|clear-ui")
+            Log.e(TAG, "no '$EXTRA_SUITE' extra; usage: --es $EXTRA_SUITE functional|latency|multiwindow|browser|fgs|fgs-down|sync|seed-ui|clear-ui|usage-seed|usage-clear|appblock-seed|appblock-clear")
             finish()
             return
         }
@@ -94,6 +94,9 @@ class DeviceVerificationActivity : Activity() {
             "clear-ui" -> clearUiRules()
             "usage-seed" -> usageSeedSuite()
             "usage-clear" -> usageClearSuite()
+            "appblock-seed" -> appBlockSeedSuite()
+            "appblock-clear" -> appBlockClearSuite()
+            "reenable" -> reenableSuite()
             else -> error("unknown suite '$suite'")
         }
     }
@@ -260,8 +263,66 @@ class DeviceVerificationActivity : Activity() {
         Log.i(TAG, "usage cleared pkg=$pkg rule=${deletedRule?.ruleId ?: "left-as-is"}")
     }
 
-    // --- functional suite (life-safety x3, tapjacking, browser URL) ---------------------
+    // --- app-block QA seeding (task #4 block-screen consistency legs) --------------------
 
+    /**
+     * Seeds ONE always-on APP rule for the named package through [RulesRepository] (policy
+     * bump + live snapshot, exactly an editor save) so the full block flow — a11y cover, then
+     * the BlockerActivity hand-off — can be exercised against a real foreground app. Host:
+     * `--es suite appblock-seed --es pkg <pkg>`. Refuses to touch a package that already has
+     * a rule (never mutates existing user data); every seeded rule carries [APPBLOCK_SEED_PREFIX]
+     * so [appBlockClearSuite] can remove exactly what was seeded and nothing else.
+     */
+    private suspend fun appBlockSeedSuite() {
+        val pkg = intent.getStringExtra(EXTRA_PKG) ?: error("--es $EXTRA_PKG required")
+        val store = entryPoint.appRulesStoreFactory().open() ?: error("store unavailable")
+        val profile = store.userProfileDao().observeActive().first() ?: PROFILE.also {
+            store.userProfileDao().insert(it)
+        }
+        val existing = store.restrictionRuleDao().getByProfileAndPackage(profile.userId, pkg)
+        check(existing == null) {
+            "pkg $pkg already has rule ${existing?.ruleId} on profile ${profile.userId} — refusing to touch it"
+        }
+        val rule = RestrictionRule(
+            ruleId = "$APPBLOCK_SEED_PREFIX-${System.nanoTime()}", profileId = profile.userId,
+            blockedPackage = pkg, targetType = "APP", isAlwaysOn = true, dailyLimitMs = 0L,
+            timeRangeStart = null, timeRangeEnd = null,
+            activeDaysOfWeek = EVERY_DAY, timezone = TimeZone.getDefault().id,
+            blockExpiresAt = 0L, severityLevel = "HIGH",
+        )
+        entryPoint.rulesRepository().insertRule(rule)
+        Log.i(TAG, "appblock seeded pkg=$pkg rule=${rule.ruleId} profile=${profile.userId}")
+    }
+
+    /** `--es suite appblock-clear --es pkg <pkg>` — deletes only rules whose id carries
+     *  [APPBLOCK_SEED_PREFIX] for the named package; any other rule is left untouched. */
+    private suspend fun appBlockClearSuite() {
+        val pkg = intent.getStringExtra(EXTRA_PKG) ?: error("--es $EXTRA_PKG required")
+        val store = entryPoint.appRulesStoreFactory().open() ?: error("store unavailable")
+        val profile = store.userProfileDao().observeActive().first() ?: return
+        val seeded = store.restrictionRuleDao().getByProfileAndPackage(profile.userId, pkg)
+            ?.takeIf { it.ruleId.startsWith(APPBLOCK_SEED_PREFIX) }
+            ?: error("pkg $pkg has no $APPBLOCK_SEED_PREFIX rule — refusing to delete anything else")
+        entryPoint.rulesRepository().deleteRule(seeded)
+        Log.i(TAG, "appblock cleared pkg=$pkg rule=${seeded.ruleId}")
+    }
+
+    // --- explicit re-enable (§8.2) for host scripts --------------------------------------
+
+    /**
+     * Clears the §8.2 explicit-re-enable gate in-process. Every host script force-stops the
+     * app as part of its bind/reset recipe, and since ADR #156 an isolated force-stop is
+     * (correctly) a detected user stop — protection intentionally stays off until an explicit
+     * re-enable, which a script cannot deliver (the receiver is exported=false, and a shell
+     * broadcast is denied). This suite invokes the exact call the banner tap and the
+     * notification action invoke. Host: `--es suite reenable`.
+     */
+    private suspend fun reenableSuite() {
+        entryPoint.protectionStatus().reenable()
+        Log.i(TAG, "protection re-enabled (explicit gate cleared)")
+    }
+
+    // --- functional suite (life-safety x3, tapjacking, browser URL) ---------------------
     private suspend fun functionalSuite() {
         lifecycleScenario_lockedDeviceAndKeyguard()
         tapjackingScenario()
@@ -692,6 +753,7 @@ class DeviceVerificationActivity : Activity() {
         const val EXTRA_WITH_RULE = "withRule"
         const val PROFILE_ID = "device-test-profile"
         const val UI_SEED_PREFIX = "ui-seed"
+        const val APPBLOCK_SEED_PREFIX = "appblock-seed"
         val PROFILE = UserProfile(
             userId = PROFILE_ID,
             name = "Device Test",

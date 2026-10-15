@@ -85,4 +85,22 @@ class AppLabelsTest {
         runBlocking { preloadAppLabels(context, listOf(key)) { appLabel(context, it) } }
         assertEquals(key, peekAppLabel(key))
     }
+
+    @Test
+    fun seededLabelServesCompositionReadsAndNeverReResolves() {
+        // Task #4: both block-fire paths seed the label the overlay card already resolved;
+        // the durable screen's title then reads it instead of flashing the raw identifier.
+        val key = "seed.test"
+        seedAppLabel(key, "Label C")
+        assertEquals("Label C", peekAppLabel(key))
+
+        val calls = AtomicInteger(0)
+        assertEquals(
+            "a composition read hits the seed, not the loader",
+            "Label C",
+            cachedAppLabel(key, context, appLabelLoader) { calls.incrementAndGet(); "Label D" },
+        )
+        runBlocking { preloadAppLabels(context, listOf(key)) { calls.incrementAndGet(); "Label D" } }
+        assertEquals("a seeded target is never re-resolved", 0, calls.get())
+    }
 }
