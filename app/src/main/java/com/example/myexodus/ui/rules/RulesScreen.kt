@@ -184,24 +184,23 @@ fun RulesScreen(
     // The engine/usage surfaces below stay limit-scoped (S9.4): with no limited rule the
     // engine's status explains nothing.
     val hasLimitedSite = rules?.let { hasLimitedSiteRule(it, nowMillis) } ?: false
-    // Consent is re-read whenever the rule set or the engine status changes — a status flip
-    // is exactly what returning from the consent dialog (grant) or a revoke produces.
-    var engineConsented by remember { mutableStateOf(VpnLifecycle.consented(context)) }
     // Keyed on the list itself (not on a predicate): while it is still loading, `rules` is
     // null and the effect must NOT decide — an unknown rule set is not "no rules", and
     // deciding on it would stop a healthy tunnel (device-found 2026-10-04).
     LaunchedEffect(rules, engineStatus) {
         val loaded = rules ?: return@LaunchedEffect
-        engineConsented = VpnLifecycle.consented(context)
         // Starts a consented tunnel the moment the first website rule appears (or on entry,
         // if it was down); stops it the moment the last one leaves. Consent-less is a NONE
         // inside `ensure` — the row below is the only path into the system dialog, never
         // automatic.
         VpnLifecycle.ensure(context, hasRules = hasLiveWebsiteRule(loaded, System.currentTimeMillis()))
     }
+    // Consent is read fresh at composition (the 5 s tick re-reads it): the old remembered
+    // copy went stale right after a grant — the tunnel established while the card still said
+    // "off", and its tap silently no-op'ed (stress-found 2026-10-15).
     val engineOffMessage = when {
         !hasLiveWebsite -> null
-        !engineConsented -> stringResource(R.string.domain_usage_off_body)
+        !VpnLifecycle.consented(context) -> stringResource(R.string.domain_usage_off_body)
         DnsSinkholeVpnService.state == VpnEngineState.FAILED ->
             stringResource(R.string.domain_usage_off_retry)
         else -> null
@@ -243,12 +242,15 @@ fun RulesScreen(
                     engineBannerMessage = engineBannerMessage.takeIf { hasLimitedSite },
                     engineOffMessage = engineOffMessage,
                     onEnableEngine = {
-                        if (engineConsented) {
-                            // FAILED retry: consent is on file, the establish failed.
-                            VpnLifecycle.start(context)
-                        } else {
-                            VpnLifecycle.consentIntent(context)?.let(context::startActivity)
-                        }
+                        // Non-null intent: no consent on file — walk the system dialog.
+                        // Null: already granted (fresh read, immune to a stale card) — the
+                        // establish retry, `ensure`-routed so a startable verdict is the
+                        // service's decision to make.
+                        VpnLifecycle.consentIntent(context)?.let(context::startActivity)
+                            ?: VpnLifecycle.ensure(
+                                context,
+                                hasRules = hasLiveWebsiteRule(loaded, System.currentTimeMillis()),
+                            )
                     },
                     errorMessage = errorMessage,
                     onDismissError = { errorMessage = null },
