@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -51,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -74,10 +76,12 @@ import com.example.myexodus.ui.RuleRowState
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.formatDuration
 import com.example.myexodus.ui.formatHeaderDate
+import com.example.myexodus.ui.preloadAppLabels
 import com.example.myexodus.ui.relativeTimeText
 import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.rememberWindowWidth
 import com.example.myexodus.ui.ruleRowState
+import com.example.myexodus.ui.rules.RULES_CARD_MAX_HEIGHT
 import com.example.myexodus.ui.scheduleSummary
 import com.example.myexodus.ui.streaks.FreeSinceLine
 import com.example.myexodus.ui.streaks.HabitLabelRow
@@ -156,6 +160,14 @@ fun HomeScreen(
         .collectAsStateWithLifecycle(initialValue = null)
     val countsByTarget = remember(attemptCounts) {
         attemptCounts?.associate { it.target to it.count }.orEmpty()
+    }
+    // Task #13: resolve rule labels off the main thread as the list lands — the 4000-rule
+    // ceiling ANR'd on per-row PackageManager calls during composition. Rows render the raw
+    // identifier until their label arrives in the shared cache.
+    val labelContext = LocalContext.current
+    LaunchedEffect(rules) {
+        val targets = rules.orEmpty().map { it.blockedPackage }
+        if (targets.isNotEmpty()) preloadAppLabels(labelContext, targets)
     }
     // Req 15 / #12: every partner's newest pinned message, newest first, as a Flow — a message
     // delivered by a background sync pass must reach a card that is already on screen, and the
@@ -678,8 +690,12 @@ private fun BlocksCard(
                 Button(onClick = onOpenRules) { Text(stringResource(R.string.home_blocks_add)) }
             }
         } else {
-            Column {
-                rules.forEachIndexed { index, rule ->
+            // Task #13: lazy, not an eager Column — only visible rows compose, so the list
+            // scales to the 4000-rule ceiling without one giant main-thread pass. The height
+            // cap is required: this card is an item of Home's outer LazyColumn, so an
+            // unbounded inner list would be measured with infinity constraints and crash.
+            LazyColumn(modifier = Modifier.heightIn(max = RULES_CARD_MAX_HEIGHT)) {
+                itemsIndexed(rules, key = { _, rule -> rule.ruleId }) { index, rule ->
                     if (index > 0) {
                         HorizontalDivider(
                             modifier = Modifier.padding(start = 56.dp),

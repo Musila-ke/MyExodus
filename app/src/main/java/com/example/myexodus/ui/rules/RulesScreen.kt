@@ -11,10 +11,12 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -66,6 +68,7 @@ import com.example.myexodus.ui.AppMark
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.LinkRow
 import com.example.myexodus.ui.WindowWidth
+import com.example.myexodus.ui.preloadAppLabels
 import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.rememberWindowWidth
 import com.example.myexodus.ui.ruleRowState
@@ -390,6 +393,15 @@ private fun EditorUnavailable(onBack: () -> Unit, modifier: Modifier = Modifier)
     }
 }
 
+/**
+ * Task #13: height cap on the rule-list cards (Home blocks card + Rules sections). The cards
+ * are items of a page-level LazyColumn, so their inner LazyColumn must be bounded or it is
+ * measured with infinity constraints and crashes. ~8 rows; taller lists scroll inside the
+ * card. Skipped: flattening rows into the page list (drops the card surface) — revisit if
+ * the nested scroll feels wrong on device.
+ */
+internal val RULES_CARD_MAX_HEIGHT = 480.dp
+
 @Composable
 private fun RulesList(
     rules: List<RestrictionRule>,
@@ -412,6 +424,11 @@ private fun RulesList(
     modifier: Modifier = Modifier,
 ) {
     val sidePadding: Dp = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
+    // Task #13: same off-main label warm-up as Home — the rules list reaches the same cap.
+    val labelContext = LocalContext.current
+    LaunchedEffect(rules) {
+        if (rules.isNotEmpty()) preloadAppLabels(labelContext, rules.map { it.blockedPackage })
+    }
     val appsHeader = stringResource(R.string.rules_apps_header)
     val websitesHeader = stringResource(R.string.rules_websites_header)
     val deactivatedHeader = stringResource(R.string.rules_deactivated_header)
@@ -567,8 +584,10 @@ private fun LazyListScope.ruleSection(
             shape = MaterialTheme.shapes.medium,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Column {
-                rules.forEachIndexed { index, rule ->
+            // Task #13: lazy body — only visible rows compose at the 4000-rule ceiling.
+            // Bounded height: this card is an item of the page LazyColumn.
+            LazyColumn(modifier = Modifier.heightIn(max = RULES_CARD_MAX_HEIGHT)) {
+                itemsIndexed(rules, key = { _, rule -> rule.ruleId }) { index, rule ->
                     if (index > 0) {
                         HorizontalDivider(
                             // Starts where the row text starts: row padding + mark + gap.
