@@ -25,23 +25,33 @@ class AccountingOutageSource @Inject constructor(
     /** The current outage report, or null when nothing measurable happened inside the
      *  freshness window — the same window the offer's own eligibility uses, so the report and
      *  the offer never disagree about what "recent" means. #13: the same read also yields the
-     *  one-time "tracking can run again" confirmation ([AccountingOutage.trackingResumed]). */
+     *  one-time "tracking can run again" confirmation ([AccountingOutage.trackingResumed]).
+     *
+     *  ADR #149: only windows the platform has not accounted for are reportable — a resolved
+     *  gap (its window was queried; whatever it held was credited, or nothing was held) has no
+     *  "some usage may not be counted" left in it. Counting resolved windows was the cry-wolf
+     *  defect: nightly device sleep fabricates gap rows that always resolve with nothing lost.
+     *  Sibling slices of one day-split detection re-join before counting so one overnight
+     *  silence is one interruption. */
     suspend fun current(nowWallClockMs: Long = System.currentTimeMillis()): AccountingOutage? {
         val since = nowWallClockMs - AccountingDiagnosticsState.ELIGIBILITY_FRESHNESS_MS
-        val rows = ledger.measuredOutagesSince(since)
+        val unresolved = ledger.measuredOutagesSince(since)
+            .filter { it.wallClockTsMs > state.gapsResolvedThroughMs }
         val exempt = isBatteryExempt(context)
         val stage = OutageStage.stage(
-            newestMeasuredOutageAtMs = rows.maxOfOrNull { it.wallClockTsMs } ?: 0L,
+            newestMeasuredOutageAtMs = unresolved.maxOfOrNull { it.wallClockTsMs } ?: 0L,
             batteryExempt = exempt,
             lastFixFiredAtMs = state.lastPromptMs,
             dismissedAtMs = state.dismissedAtMs,
             nowWallClockMs = nowWallClockMs,
         )
         val summary = AccountingDiagnostics.outageSummary(
-            rows.map { it.elapsedEndMs - it.elapsedStartMs },
+            AccountingDiagnostics.mergedOutageSpans(unresolved),
         )
         return when (stage) {
-            OutageStage.Stage.NONE -> null
+            // No reportable evidence (none, or the user dismissed all of it) — the offer still
+            // has its own fresh evidence to consult (ADR #149).
+            OutageStage.Stage.NONE -> offerReport(nowWallClockMs, exempt)
             OutageStage.Stage.CONFIRMED -> AccountingOutage(
                 summary = summary,
                 promptRoute = null,
@@ -55,6 +65,27 @@ class AccountingOutageSource @Inject constructor(
                 ),
             )
         }
+    }
+
+    /**
+     * ADR #149: R8's offer report — the one report a *resolved* gap still produces. §8.7's
+     * eligible gap (long, nothing recoverable in its window) is the evidence the exemption
+     * offer exists to explain, so the offer keeps its surfaces even though the window itself
+     * is no longer counted. Exists exactly while an offer can be made: exempt devices (nothing
+     * to offer) and dismissed/consumed eligibilities yield nothing, and the offer's own
+     * cooldowns apply via [AccountingDiagnosticsState.promptEligible].
+     */
+    private fun offerReport(nowWallClockMs: Long, exempt: Boolean): AccountingOutage? {
+        val since = state.promptEligibleSinceMs
+        val gapMs = state.promptEligibleGapMs
+        if (since == 0L || gapMs <= 0L || since <= state.dismissedAtMs) return null
+        if (!state.promptEligible(nowWallClockMs)) return null
+        val route = BatteryPromptGate.route(alreadyExempt = exempt, promptEligible = true)
+            ?: return null
+        return AccountingOutage(
+            summary = AccountingDiagnostics.OutageSummary(1, gapMs),
+            promptRoute = route,
+        )
     }
 
     /** §8.7's prompt cooldown bookkeeping: the offer was accepted (the user fired the fix), so

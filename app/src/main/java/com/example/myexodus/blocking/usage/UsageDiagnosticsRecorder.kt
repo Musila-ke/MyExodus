@@ -140,16 +140,35 @@ class UsageDiagnosticsRecorder @Inject constructor(
      * null when the platform could not be consulted — an unverifiable window is never escalated.
      * [bootBoundary] carries the request's own marker: escalation requires a boot count
      * unchanged since the last observation, so a reboot window is recovery-only.
+     *
+     * ADR #149: a numeric answer also advances the resolved-through watermark — the platform
+     * accounted for the window (whatever it held was credited, or nothing was held), so the
+     * outage report must stop counting it as "some usage may not be counted". The no-answer
+     * cases deliberately leave the watermark alone: an unverifiable window is exactly what the
+     * report is for.
      */
     fun recordRecovery(gapSpanMs: Long, recoverableMs: Long?, nowWallClockMs: Long, bootBoundary: Boolean) {
         if (recoverableMs == null || bootBoundary) return
+        state.markGapsResolvedThrough(nowWallClockMs)
         if (AccountingDiagnostics.isPromptEligible(gapSpanMs, recoverableMs)) {
-            state.markPromptEligible(nowWallClockMs)
+            state.markPromptEligible(nowWallClockMs, gapSpanMs)
         } else {
             // Recoverable activity: the outage had a consequence that is already being
             // repaired, so there is nothing to ask the user about.
             state.clearEligibility()
         }
+    }
+
+    /**
+     * ADR #149's one-time upgrade seed, called by the service on any diagnostics pass that
+     * holds platform access: the first such pass presumes every pre-existing measured gap
+     * resolved. Pre-fix builds counted corroborated and uncorroborated gaps alike (the defect
+     * this fixes) and stored no distinction, so the backlog cannot be re-classified — and its
+     * harm is bounded, because the report's own 24 h freshness ages it out. A device without
+     * usage access never seeds: there the count is genuinely unverifiable and stays honest.
+     */
+    fun seedResolvedThrough(nowWallClockMs: Long) {
+        if (state.gapsResolvedThroughMs == 0L) state.markGapsResolvedThrough(nowWallClockMs)
     }
 
     /**

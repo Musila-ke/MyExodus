@@ -152,13 +152,78 @@ class AccountingDiagnosticsTest {
         )
     }
 
-    private fun row(kind: Int, elapsedStartMs: Long, elapsedEndMs: Long) = UsageLedger(
+    // --- ADR #149: day-split siblings re-join before counting ---
+
+    @Test
+    fun mergedOutageSpans_rejoinsTheDaySplitIntoOneInterruption() {
+        // One 120 s detection written across local midnight: two rows sharing the detection's
+        // wall clock, contiguous in elapsed space. Counting rows would report the overnight
+        // silence twice and the largest window as only its longer half.
+        val rows = listOf(
+            row(UsageLedgerKind.GAP_DETECTED, elapsedStartMs = 1_000L, elapsedEndMs = 61_000L),
+            row(UsageLedgerKind.GAP_DETECTED, elapsedStartMs = 61_000L, elapsedEndMs = 121_000L),
+        )
+
+        assertEquals(listOf(120_000L), AccountingDiagnostics.mergedOutageSpans(rows))
+    }
+
+    @Test
+    fun mergedOutageSpans_multiDaySplitStillCollapsesToOneSpan() {
+        val rows = listOf(
+            row(UsageLedgerKind.GAP_DETECTED, elapsedStartMs = 0L, elapsedEndMs = 10_000L),
+            row(UsageLedgerKind.GAP_DETECTED, elapsedStartMs = 10_000L, elapsedEndMs = 20_000L),
+            row(UsageLedgerKind.GAP_DETECTED, elapsedStartMs = 20_000L, elapsedEndMs = 30_000L),
+        )
+
+        assertEquals(listOf(30_000L), AccountingDiagnostics.mergedOutageSpans(rows))
+    }
+
+    @Test
+    fun mergedOutageSpans_separateDetectionsNeverMerge_evenWhenContiguous() {
+        // Different wall clocks = different detections: an abutment of two real interruptions
+        // is two interruptions, not one long one.
+        val rows = listOf(
+            row(UsageLedgerKind.GAP_DETECTED, elapsedStartMs = 1_000L, elapsedEndMs = 61_000L, wallClockTsMs = 1_000L),
+            row(UsageLedgerKind.GAP_DETECTED, elapsedStartMs = 61_000L, elapsedEndMs = 121_000L, wallClockTsMs = 2_000L),
+        )
+
+        assertEquals(listOf(60_000L, 60_000L), AccountingDiagnostics.mergedOutageSpans(rows))
+    }
+
+    @Test
+    fun mergedOutageSpans_singleAndEmptyAreThemselves() {
+        assertEquals(
+            listOf(60_000L),
+            AccountingDiagnostics.mergedOutageSpans(
+                listOf(row(UsageLedgerKind.GAP_DETECTED, elapsedStartMs = 1_000L, elapsedEndMs = 61_000L)),
+            ),
+        )
+        assertEquals(emptyList<Long>(), AccountingDiagnostics.mergedOutageSpans(emptyList()))
+    }
+
+    @Test
+    fun mergedOutageSpans_sameWallDifferentBoots_doNotMerge() {
+        val rows = listOf(
+            row(UsageLedgerKind.GAP_DETECTED, elapsedStartMs = 1_000L, elapsedEndMs = 61_000L, bootCount = 6),
+            row(UsageLedgerKind.GAP_DETECTED, elapsedStartMs = 61_000L, elapsedEndMs = 121_000L, bootCount = 7),
+        )
+
+        assertEquals(listOf(60_000L, 60_000L), AccountingDiagnostics.mergedOutageSpans(rows))
+    }
+
+    private fun row(
+        kind: Int,
+        elapsedStartMs: Long,
+        elapsedEndMs: Long,
+        wallClockTsMs: Long = 1_000L,
+        bootCount: Int = 7,
+    ) = UsageLedger(
         eventId = "e-1",
         kind = kind,
-        wallClockTsMs = 1_000L,
+        wallClockTsMs = wallClockTsMs,
         elapsedStartMs = elapsedStartMs,
         elapsedEndMs = elapsedEndMs,
-        bootCount = 7,
+        bootCount = bootCount,
         packageName = AccountingDiagnostics.SENTINEL_PACKAGE,
         dayKey = "2026-09-28",
         creditedMs = 0L,

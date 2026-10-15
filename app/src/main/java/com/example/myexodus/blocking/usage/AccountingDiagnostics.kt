@@ -135,6 +135,36 @@ object AccountingDiagnostics {
         escalationThresholdMs: Long = ESCALATION_THRESHOLD_MS,
     ): Boolean = gapMs >= escalationThresholdMs && recoverableCreditMs <= 0L
 
+    /**
+     * The measured outages in [rows] with the day-split's sibling slices re-joined (ADR #149).
+     * [UsageLedgerMapper.splitAtDayBoundary] writes one row per local day an interval crosses,
+     * all sharing the detection's wall clock and contiguous in elapsed space — counting them
+     * separately reports one overnight silence as two interruptions, and the largest window as
+     * only its larger half. Siblings are rows from one detection (same wall clock, boot, and
+     * source); rows from different detections never merge even when their intervals abut,
+     * because an abutment of separate detections is two interruptions.
+     */
+    fun mergedOutageSpans(rows: List<UsageLedger>): List<Long> =
+        rows.groupBy { Triple(it.wallClockTsMs, it.bootCount, it.source) }
+            .values
+            .flatMap { detection ->
+                val sorted = detection.sortedBy { it.elapsedStartMs }
+                val spans = mutableListOf<Long>()
+                var start = sorted.first().elapsedStartMs
+                var end = sorted.first().elapsedEndMs
+                for (row in sorted.drop(1)) {
+                    if (row.elapsedStartMs <= end) {
+                        end = maxOf(end, row.elapsedEndMs)
+                    } else {
+                        spans += end - start
+                        start = row.elapsedStartMs
+                        end = row.elapsedEndMs
+                    }
+                }
+                spans += end - start
+                spans
+            }
+
     /** §8.7's summary read: how many outages, and the largest dead window among them. */
     data class OutageSummary(val count: Int, val largestWindowMs: Long)
 

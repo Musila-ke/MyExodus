@@ -298,7 +298,7 @@ class UsageDiagnosticsRecorderTest {
 
     @Test
     fun recordRecovery_recoverableActivity_clearsEligibility() {
-        state.markPromptEligible(wallNow - 1_000L)
+        state.markPromptEligible(wallNow - 1_000L, AccountingDiagnostics.ESCALATION_THRESHOLD_MS + 1)
         recorder.recordRecovery(
             AccountingDiagnostics.ESCALATION_THRESHOLD_MS + 1, recoverableMs = 60_000L, wallNow, bootBoundary = false,
         )
@@ -329,13 +329,74 @@ class UsageDiagnosticsRecorderTest {
         // §8.7: escalation requires the boot count unchanged since the last observation. A
         // reboot window is recovery-only — and it says nothing about an earlier in-boot outage
         // either, so an eligibility already recorded stays.
-        state.markPromptEligible(wallNow - 60_000L)
+        state.markPromptEligible(wallNow - 60_000L, AccountingDiagnostics.ESCALATION_THRESHOLD_MS + 1)
 
         recorder.recordRecovery(
             AccountingDiagnostics.ESCALATION_THRESHOLD_MS + 1, recoverableMs = 0L, wallNow, bootBoundary = true,
         )
 
         assertTrue(state.promptEligible(wallNow))
+    }
+
+    // --- ADR #149: the resolved-through watermark + the offer's own gap evidence ---
+
+    @Test
+    fun recordRecovery_numericAnswer_resolvesThroughNow_andStoresTheOfferGap() {
+        val gap = AccountingDiagnostics.ESCALATION_THRESHOLD_MS + 1
+        assertEquals(0L, state.gapsResolvedThroughMs)
+
+        recorder.recordRecovery(gap, recoverableMs = 0L, wallNow, bootBoundary = false)
+
+        assertEquals(wallNow, state.gapsResolvedThroughMs)
+        assertEquals(gap, state.promptEligibleGapMs)
+    }
+
+    @Test
+    fun recordRecovery_unverifiableWindow_leavesTheWatermarkAlone() {
+        // No platform answer = the window stays reportable ("may not be counted" is true for it).
+        recorder.recordRecovery(
+            AccountingDiagnostics.ESCALATION_THRESHOLD_MS + 1, recoverableMs = null, wallNow, bootBoundary = false,
+        )
+
+        assertEquals(0L, state.gapsResolvedThroughMs)
+    }
+
+    @Test
+    fun recordRecovery_rebootWindow_leavesTheWatermarkAlone() {
+        // The reboot query's window starts at the newest evidence, so windows *before* it were
+        // never queried — resolving through now would hide an old unqueried gap.
+        recorder.recordRecovery(
+            AccountingDiagnostics.ESCALATION_THRESHOLD_MS + 1, recoverableMs = 0L, wallNow, bootBoundary = true,
+        )
+
+        assertEquals(0L, state.gapsResolvedThroughMs)
+    }
+
+    @Test
+    fun recordRecovery_ineligibleOutcome_stillResolves_andDropsTheOfferGap() {
+        state.markPromptEligible(wallNow - 60_000L, 400_000L)
+
+        recorder.recordRecovery(
+            AccountingDiagnostics.ESCALATION_THRESHOLD_MS + 1, recoverableMs = 60_000L, wallNow, bootBoundary = false,
+        )
+
+        assertEquals(wallNow, state.gapsResolvedThroughMs)
+        assertEquals(0L, state.promptEligibleGapMs)
+    }
+
+    @Test
+    fun seedResolvedThrough_firesOnlyWhileNothingWasEverResolved() {
+        recorder.seedResolvedThrough(wallNow)
+        assertEquals(wallNow, state.gapsResolvedThroughMs)
+
+        // Once any resolution exists (seeded or real), the seed is done: it must never keep
+        // advancing, because advancing past an unanswered gap would hide an honest report.
+        recorder.seedResolvedThrough(wallNow + 60_000L)
+        assertEquals(wallNow, state.gapsResolvedThroughMs)
+
+        // And the watermark itself never moves backward.
+        state.markGapsResolvedThrough(wallNow - 60_000L)
+        assertEquals(wallNow, state.gapsResolvedThroughMs)
     }
 
     // --- helpers ---

@@ -425,6 +425,10 @@ class EnforcementForegroundService : Service() {
         // therefore guarantees this list is non-empty.
         val tracked = db.restrictionRuleDao().getActiveRules()
             .filter { it.isEnabled && it.dailyLimitMs > 0L }
+        val hasAccess = hasUsageAccess()
+        // ADR #149's one-time upgrade seed: with platform access present, the pre-fix backlog
+        // stops being reported; each fresh gap is then resolved through recordRecovery below.
+        if (hasAccess) diagnostics.seedResolvedThrough(System.currentTimeMillis())
         val request = diagnostics.pass(
             source,
             systemBootCount(this),
@@ -432,7 +436,7 @@ class EnforcementForegroundService : Service() {
             System.currentTimeMillis(),
             trackingActive = tracked.isNotEmpty(),
         ) ?: return
-        if (!hasUsageAccess()) {
+        if (!hasAccess) {
             // §8.9: without the permission there is nothing to query and nothing to conclude —
             // the gap stands recorded, and the window is never escalated as corroborated.
             crashReporting.nonFatal("accounting_gap_unrecoverable", cause = "no_permission")

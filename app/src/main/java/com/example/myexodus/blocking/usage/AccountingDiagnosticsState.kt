@@ -22,6 +22,20 @@ class AccountingDiagnosticsState @Inject constructor(@ApplicationContext context
     /** Wall clock of the most recent corroborated eligible gap; 0 = none waiting. */
     val promptEligibleSinceMs: Long get() = prefs.getLong(KEY_ELIGIBLE_SINCE, 0L)
 
+    /** The span of the gap that made the offer eligible — the offer report's own evidence when
+     *  no unresolved window exists to describe (ADR #149). 0 = none waiting. */
+    val promptEligibleGapMs: Long get() = prefs.getLong(KEY_ELIGIBLE_GAP_MS, 0L)
+
+    /**
+     * Wall clock through which measured gaps have been resolved by a real platform answer
+     * (ADR #149): the outage read model counts only gaps beyond this, because an interruption
+     * whose window the platform has already accounted for has no "usage may not be counted"
+     * left to report. Monotonic by construction ([markGapsResolvedThrough] keeps the max), and
+     * committed synchronously — the write happens on the FGS tick right before a kill can
+     * land, so the #146 apply()-loss doctrine applies here too. 0 = nothing resolved yet.
+     */
+    val gapsResolvedThroughMs: Long get() = prefs.getLong(KEY_RESOLVED_THROUGH, 0L)
+
     val lastPromptMs: Long get() = prefs.getLong(KEY_LAST_PROMPT, 0L)
 
     val lastDeclinedMs: Long get() = prefs.getLong(KEY_LAST_DECLINED, 0L)
@@ -29,8 +43,18 @@ class AccountingDiagnosticsState @Inject constructor(@ApplicationContext context
     /** #13: wall clock of the last dismissal of an outage report; 0 = never dismissed. */
     val dismissedAtMs: Long get() = prefs.getLong(KEY_DISMISSED, 0L)
 
-    fun markPromptEligible(nowWallClockMs: Long) {
-        prefs.edit { putLong(KEY_ELIGIBLE_SINCE, nowWallClockMs) }
+    fun markPromptEligible(nowWallClockMs: Long, gapMs: Long) {
+        prefs.edit {
+            putLong(KEY_ELIGIBLE_SINCE, nowWallClockMs)
+            putLong(KEY_ELIGIBLE_GAP_MS, gapMs)
+        }
+    }
+
+    /** ADR #149: a real platform answer resolved every measured gap up to [nowWallClockMs] —
+     *  its window was queried and its consequence settled. Never moves backward. */
+    fun markGapsResolvedThrough(nowWallClockMs: Long) {
+        if (nowWallClockMs <= gapsResolvedThroughMs) return
+        prefs.edit(commit = true) { putLong(KEY_RESOLVED_THROUGH, nowWallClockMs) }
     }
 
     /** #13: the report was acknowledged — every outage surface stays silent for evidence at or
@@ -43,13 +67,17 @@ class AccountingDiagnosticsState @Inject constructor(@ApplicationContext context
     /** The interruption that made this eligible either turned out to be recoverable or has
      *  been explained — either way there is nothing left to ask the user about. */
     fun clearEligibility() {
-        prefs.edit { remove(KEY_ELIGIBLE_SINCE) }
+        prefs.edit {
+            remove(KEY_ELIGIBLE_SINCE)
+            remove(KEY_ELIGIBLE_GAP_MS)
+        }
     }
 
     fun markPromptShown(nowWallClockMs: Long) {
         prefs.edit {
             putLong(KEY_LAST_PROMPT, nowWallClockMs)
             remove(KEY_ELIGIBLE_SINCE)
+            remove(KEY_ELIGIBLE_GAP_MS)
         }
     }
 
@@ -57,6 +85,7 @@ class AccountingDiagnosticsState @Inject constructor(@ApplicationContext context
         prefs.edit {
             putLong(KEY_LAST_DECLINED, nowWallClockMs)
             remove(KEY_ELIGIBLE_SINCE)
+            remove(KEY_ELIGIBLE_GAP_MS)
         }
     }
 
@@ -84,6 +113,8 @@ class AccountingDiagnosticsState @Inject constructor(@ApplicationContext context
     companion object {
         private const val PREFS_NAME = "accounting_diagnostics"
         private const val KEY_ELIGIBLE_SINCE = "prompt_eligible_since_ms"
+        private const val KEY_ELIGIBLE_GAP_MS = "prompt_eligible_gap_ms"
+        private const val KEY_RESOLVED_THROUGH = "gaps_resolved_through_ms"
         private const val KEY_LAST_PROMPT = "last_prompt_ms"
         private const val KEY_LAST_DECLINED = "last_declined_ms"
         private const val KEY_DISMISSED = "dismissed_at_ms"
