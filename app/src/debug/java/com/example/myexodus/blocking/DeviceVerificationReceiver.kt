@@ -71,7 +71,13 @@ import kotlinx.coroutines.launch
  * `-a rules-expire --es pkg <pkg> [--es backMs <n>] [--es read 1]` (#18's device leg: backdate
  * one rule's `block_expires_at` past now so the app's own sweep — not this seam — flips its
  * toggle; the state the Rules screen then shows is entirely app-produced. `--es read 1` skips
- * the plant and only logs enabled/expiresAt — the non-destructive read for the resume leg).
+ * the plant and only logs enabled/expiresAt — the non-destructive read for the resume leg),
+ * and `-a session-read [--ei limit <n>]` (widget v2.1: the newest `recovery_session` rows at
+ * column level — technique, state, entry, stamps — so a widget-held urge log is proven by its
+ * stored shape, not just by the surface's outcome copy; read-only), and
+ * `-a session-clear` (widget v2.1 legs: deletes widget-born log-only rows — entry=WIDGET,
+ * technique=none, COMPLETED — so a device leg's synthetic hold leaves no fake entry in the
+ * owner's real Recovery history; real technique sessions and app-made logs never match).
  */
 class DeviceVerificationReceiver : BroadcastReceiver() {
 
@@ -100,6 +106,8 @@ class DeviceVerificationReceiver : BroadcastReceiver() {
                     ACTION_PROTECTION_REENABLE -> protectionReenable(context)
                     ACTION_MIRROR_READ -> mirrorRead(context)
                     ACTION_PUSH_READ -> pushRead(context)
+                    ACTION_SESSION_READ -> sessionRead(context, intent.getIntExtra("limit", 5))
+                    ACTION_SESSION_CLEAR -> sessionClear(context)
                     ACTION_RULES_EXPIRE -> rulesExpire(
                         context,
                         pkg,
@@ -688,6 +696,50 @@ class DeviceVerificationReceiver : BroadcastReceiver() {
     }
 
     /**
+     * Widget v2.1's device evidence: the newest `recovery_session` rows at column level, so a
+     * widget-held urge log is proven by its stored shape (technique=none, entry=WIDGET), not just
+     * by the outcome copy on the surface. Read-only.
+     */
+    private suspend fun sessionRead(context: Context, limit: Int) {
+        val store = entryPoint(context).appRulesStoreFactory().open() ?: error("store unavailable")
+        store.useWriterConnection { tx ->
+            tx.usePrepared(
+                "SELECT id, technique, state, entry, started_at_epoch_ms, ended_at_epoch_ms, duration_sec " +
+                    "FROM recovery_session ORDER BY started_at_epoch_ms DESC LIMIT $limit",
+            ) { st ->
+                while (st.step()) {
+                    fun nullableLong(i: Int): Long? = if (st.isNull(i)) null else st.getLong(i)
+                    Log.i(
+                        TAG,
+                        "session id=${st.getText(0)?.take(8)} technique=${st.getText(1)} state=${st.getText(2)} " +
+                            "entry=${st.getText(3)} started=${st.getLong(4)} ended=${nullableLong(5)} " +
+                            "dur=${nullableLong(6)}",
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Widget v2.1 legs' cleanup: removes only rows a synthetic hold could have produced
+     * (entry=WIDGET + technique=none + COMPLETED) so the owner's Recovery history carries no
+     * fake entry. Logs the before/after census — deleting more than the leg wrote is visible.
+     */
+    private suspend fun sessionClear(context: Context) {
+        val store = entryPoint(context).appRulesStoreFactory().open() ?: error("store unavailable")
+        store.useWriterConnection { tx ->
+            suspend fun count(): Long =
+                tx.usePrepared("SELECT count(*) FROM recovery_session") { if (it.step()) it.getLong(0) else -1L }
+            val before = count()
+            tx.usePrepared(
+                "DELETE FROM recovery_session " +
+                    "WHERE entry = 'WIDGET' AND technique = 'none' AND state = 'COMPLETED'",
+            ) { it.step() }
+            Log.i(TAG, "session-clear deleted=${before - count()} remaining=${count()}")
+        }
+    }
+
+    /**
      * #52's device evidence: the store open here runs the real v11→v12 migration first (the
      * factory's onOpen path), so `user_version` reads the newest version only if the migration
      * chain executed on this device's SQLCipher database; a failed migration throws and the
@@ -701,7 +753,9 @@ class DeviceVerificationReceiver : BroadcastReceiver() {
         store.useWriterConnection { tx ->
             suspend fun long(sql: String): Long =
                 tx.usePrepared(sql) { if (it.step()) it.getLong(0) else -1L }
-            Log.i(TAG, "mirror schema user_version=${long("PRAGMA user_version")} (expect 13 — ADR #111 v12, ADR #115 v13)")
+            // Expectation tracks AppRulesStore's @Database version, not this seam: update both
+            // together on a migration (13 was current when #52 ran; 16 is current today).
+            Log.i(TAG, "mirror schema user_version=${long("PRAGMA user_version")} (expect 16 — AppRulesStore.kt)")
             listOf(
                 "attempt_mirror_link",
                 "recovery_mirror_link",
@@ -815,6 +869,8 @@ class DeviceVerificationReceiver : BroadcastReceiver() {
         const val ACTION_MIRROR_READ = "mirror-read"
         const val ACTION_PUSH_READ = "push-read"
         const val ACTION_RULES_EXPIRE = "rules-expire"
+        const val ACTION_SESSION_READ = "session-read"
+        const val ACTION_SESSION_CLEAR = "session-clear"
         const val SEED_SOURCE = "device-verification-seed"
         const val INTERVAL_LOG_CAP = 120
         const val AGE_EVIDENCE_MAX_ATTEMPTS = 10

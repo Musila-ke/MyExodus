@@ -1,0 +1,29 @@
+<!-- The widget's "log an urge" control glyph (widget v2.1 owner correction 2026-10-16): three
+     calm strokes. Urge-surfing is the app's own metaphor, and to anyone glancing at the home
+     screen a wave says nothing at all — which is the point (owner: "we need to think of user
+     privacy"). Authored white; every surface tints it (Glance ColorFilter.tint / Compose
+     ColorFilter.tint). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M3,7.5 C4.5,5.5 6.5,5.5 8,7.5 C9.5,9.5 11.5,9.5 13,7.5 C14.5,5.5 16.5,5.5 18,7.5"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M3,12.5 C4.5,10.5 6.5,10.5 8,12.5 C9.5,14.5 11.5,14.5 13,12.5 C14.5,10.5 16.5,10.5 18,12.5"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M3,17.5 C4.5,15.5 6.5,15.5 8,17.5 C9.5,19.5 11.5,19.5 13,17.5 C14.5,15.5 16.5,15.5 18,17.5"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+</vector>

@@ -6,8 +6,11 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.glance.ColorFilter
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
+import androidx.glance.Image
+import androidx.glance.ImageProvider
 import androidx.glance.LocalContext
 import androidx.glance.LocalSize
 import androidx.glance.action.Action
@@ -25,6 +28,7 @@ import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
+import androidx.glance.layout.size
 import androidx.glance.layout.width
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
@@ -41,10 +45,6 @@ internal data class WidgetView(
      *  number is the wrong track as far as the user can tell). Null = no habit, or a sample from
      *  before the field existed. */
     val habitLabel: String?,
-    /** The id the "Log a relapse" control binds (widget v2): the exact track the number above it
-     *  belongs to. Null = no habit or a pre-v2 sample — the control hides rather than binding a
-     *  guessed track. */
-    val habitId: String?,
     /** Age of the stored reading at render time when the day count can no longer be *proven*
      *  current — a day boundary has passed since it was read, or the device rebooted. Null when
      *  the number needs no qualifier. It renders in the footnote slot, ahead of the milestone
@@ -112,7 +112,8 @@ internal fun milestoneFraction(days: Int?, next: Int?): Float? {
  * is a whole composition, not a stretched copy of the smaller one — the launcher's RemoteViews
  * host re-measures containers but never rescales type, so slack has to be absorbed by weighted
  * bands (user-flagged 2026-09-27: the resized card rendered a hero over a void). The two wide
- * variants carry the dashboard's action pills — relapse and SOS (owner spec 2026-10-15).
+ * variants carry the icon controls — log an urge and reach out (widget v2.1, owner correction
+ * 2026-10-16: icon-only, because text on the launcher surface spells private intent).
  *
  * Copy is discreet by default — a day count with no status word and no recovery vocabulary (FR5).
  */
@@ -122,7 +123,7 @@ internal fun DesertDawnWidgetContent(
     openStreaks: Action,
     manageUrge: Action,
     openApp: Action,
-    logRelapse: Action,
+    logUrge: Action,
     reachOut: Action,
 ) {
     val context = LocalContext.current
@@ -141,7 +142,7 @@ internal fun DesertDawnWidgetContent(
                 view = view,
                 statusText = statusText,
                 openStreaks = openStreaks,
-                logRelapse = logRelapse,
+                logUrge = logUrge,
                 reachOut = reachOut,
             )
 
@@ -156,7 +157,7 @@ internal fun DesertDawnWidgetContent(
                 view = view,
                 statusText = statusText,
                 openStreaks = openStreaks,
-                logRelapse = logRelapse,
+                logUrge = logUrge,
                 reachOut = reachOut,
             )
         }
@@ -212,16 +213,16 @@ private fun CompactContent(
 /**
  * The band card, composed as bands rather than a headline with air under it (reference port
  * 2026-09-27, gallery `11.54.56`): hero row with the state chip, a hairline, the caption line,
- * then the two action pills on the bottom edge. Every band carries information. The weighted
- * spacer before the hairline keeps the caption and pills on the card's bottom edge when a
- * launcher stretches the preset past its nominal height.
+ * then the icon controls on the bottom edge — trailing, per the reference's control placement.
+ * Every band carries information. The weighted spacer before the hairline keeps the caption and
+ * controls on the card's bottom edge when a launcher stretches the preset past its nominal height.
  */
 @Composable
 private fun ExpandedContent(
     view: WidgetView,
     statusText: String,
     openStreaks: Action,
-    logRelapse: Action,
+    logUrge: Action,
     reachOut: Action,
 ) {
     val context = LocalContext.current
@@ -257,7 +258,7 @@ private fun ExpandedContent(
             )
             Spacer(GlanceModifier.height(4.dp))
         }
-        ActionRow(view, logRelapse, reachOut)
+        ControlRow(logUrge, reachOut)
     }
 }
 
@@ -318,8 +319,8 @@ private fun NarrowContent(
 }
 
 /**
- * The full-height card (`TALL_SIZE`): hero, the progress band, then the caption line and the two
- * action pills — fixed bands with the slack shared above and below the middle band, so a resized
+ * The full-height card (`TALL_SIZE`): hero, the progress band, then the caption line and the icon
+ * controls — fixed bands with the slack shared above and below the middle band, so a resized
  * card reads as a designed surface at any stretch instead of a headline floating over a void
  * (user-flagged 2026-09-27). The caption drops the milestone rung: the band already carries it.
  */
@@ -328,7 +329,7 @@ private fun TallContent(
     view: WidgetView,
     statusText: String,
     openStreaks: Action,
-    logRelapse: Action,
+    logUrge: Action,
     reachOut: Action,
 ) {
     val context = LocalContext.current
@@ -358,7 +359,7 @@ private fun TallContent(
                 .background(GlanceTheme.colors.outline),
         ) {}
         Spacer(GlanceModifier.height(6.dp))
-        // Caption + actions grouped as one nested band, not flat in the outer Column: Glance's
+        // Caption + controls grouped as one nested band, not flat in the outer Column: Glance's
         // RemoteViews translation caps every container at 10 children and silently drops the tail
         // past that (LayoutSelectionKt in glance-appwidget 1.1.1 — javap-verified; device logcat
         // 2026-10-16: "Truncated Column container from 11 to 10 elements", which ate the whole
@@ -377,7 +378,7 @@ private fun TallContent(
                 )
                 Spacer(GlanceModifier.height(6.dp))
             }
-            ActionRow(view, logRelapse, reachOut)
+            ControlRow(logUrge, reachOut)
         }
     }
 }
@@ -454,82 +455,73 @@ private fun StatusChip(text: String) {
 }
 
 /**
- * The card's action row (owner spec 2026-10-15): the relapse control bound to the displayed
- * track, and the SOS control. Both are plain taps onto the hold-confirm surface, where the
- * long-press-and-ring protection lives — no launcher RemoteViews host delivers touch streams,
- * so the ring cannot live on the widget itself (ADR #159).
+ * The card's control row (owner correction 2026-10-16): two icon-only circle buttons, trailing —
+ * the reference gallery's control idiom (gallery `11.54.56`: small monochrome glyphs in circles,
+ * one filled accent control per composition). Icon-only is the privacy design, not a style
+ * choice: a pill saying "Reach out" tells anyone glancing at the home screen exactly what the
+ * user is dealing with; a speech bubble tells them nothing. The action's words exist only on the
+ * transient hold surface and in the content descriptions (read by TalkBack, never drawn).
  *
- * The relapse pill hides when [WidgetView.habitId] is null (no habit, or a sample from before
- * the field existed): a control must never end a track other than the one the number above it
- * names. The SOS pill then takes the full width — reach-out has no track to bind.
+ * Both are plain taps onto the hold-confirm surface, where the long-press-and-ring protection
+ * lives — no launcher RemoteViews host delivers touch streams, so the ring cannot live on the
+ * widget itself (ADR #159). The urge circle is tonal (nothing destructive here — logging keeps
+ * the block); reach-out keeps the one-filled-control role.
  */
 @Composable
-private fun ActionRow(view: WidgetView, logRelapse: Action, reachOut: Action) {
+private fun ControlRow(logUrge: Action, reachOut: Action) {
     val context = LocalContext.current
-    val compact = LocalSize.current.width < COMPACT_ACTION_MIN_WIDTH
-    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        if (view.habitId != null) {
-            PillButton(
-                text = context.getString(relapseLabelRes(discreet = view.discreet, compact = compact)),
-                action = logRelapse,
-                background = GlanceTheme.colors.surfaceVariant,
-                foreground = GlanceTheme.colors.onSurfaceVariant,
-                modifier = GlanceModifier.defaultWeight(),
-            )
-            Spacer(GlanceModifier.width(10.dp))
-        }
-        PillButton(
-            text = context.getString(R.string.widget_action_reach_out),
+    Row(
+        modifier = GlanceModifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(GlanceModifier.defaultWeight())
+        ActionCircle(
+            iconRes = R.drawable.ic_widget_urge,
+            contentDescription = context.getString(R.string.widget_action_urge),
+            action = logUrge,
+            background = GlanceTheme.colors.surfaceVariant,
+            tint = GlanceTheme.colors.onSurfaceVariant,
+        )
+        Spacer(GlanceModifier.width(10.dp))
+        ActionCircle(
+            iconRes = R.drawable.ic_widget_reach_out,
+            contentDescription = context.getString(R.string.widget_action_reach_out),
             action = reachOut,
             background = GlanceTheme.colors.primary,
-            foreground = GlanceTheme.colors.onPrimary,
-            modifier = GlanceModifier.defaultWeight(),
+            tint = GlanceTheme.colors.onPrimary,
         )
     }
 }
 
-/** Below this the two-pill row no longer fits "Log a relapse" at 12sp — each pill is about
- *  (width − padding − gap)/2 wide, the label needs ~80dp, and RemoteViews hosts apply the user's
- *  font scale on top — so the relapse control falls back to its short form rather than
- *  ellipsizing an action word. */
-private val COMPACT_ACTION_MIN_WIDTH = 220.dp
-
-/** One action pill: the rounded filled control of the reference composition. The SOS pill keeps
- *  the one-filled-control-per-composition role; the relapse pill is tonal so the destructive
- *  control never masquerades as the primary one. */
+/** One circle control. 38dp keeps the two-band bottom block (caption + controls) inside the
+ *  110dp 4×2 preset's real budget, where the reference's small circle reads right anyway. */
 @Composable
-private fun PillButton(
-    text: String,
+private fun ActionCircle(
+    iconRes: Int,
+    contentDescription: String,
     action: Action,
     background: ColorProvider,
-    foreground: ColorProvider,
-    modifier: GlanceModifier,
+    tint: ColorProvider,
 ) {
     Box(
-        modifier = modifier
-            .height(34.dp)
+        modifier = GlanceModifier
+            .size(38.dp)
             .background(background)
-            .cornerRadius(17.dp)
+            .cornerRadius(19.dp)
             .clickable(action),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = text,
-            style = TextStyle(color = foreground, fontSize = 12.sp, fontWeight = FontWeight.Medium),
-            maxLines = 1,
+        // Resource-backed Image (RemoteViews.setImageViewResource) + a tint applied through the
+        // ImageView's color filter (RemoteViewsCompat.setImageViewColorFilter) — both paths
+        // javap-verified in glance-appwidget 1.1.1, the same evidence standard as the 10-child
+        // cap above. The drawables are authored white and tinted per surface.
+        Image(
+            provider = ImageProvider(iconRes),
+            contentDescription = contentDescription,
+            modifier = GlanceModifier.size(20.dp),
+            colorFilter = ColorFilter.tint(tint),
         )
     }
-}
-
-/**
- * The relapse control's label: named as the action it is when there is room, the short form where
- * the row is tight, and the disclosure-free vocabulary ("Reset", never the recovery word) whenever
- * the card is discreet (FR5). Pure, so the matrix is unit-testable.
- */
-internal fun relapseLabelRes(discreet: Boolean, compact: Boolean): Int = when {
-    discreet -> R.string.widget_action_reset
-    compact -> R.string.widget_action_relapse_short
-    else -> R.string.widget_action_relapse
 }
 
 /**

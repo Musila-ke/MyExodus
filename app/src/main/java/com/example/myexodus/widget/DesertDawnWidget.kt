@@ -114,14 +114,15 @@ class DesertDawnWidget : GlanceAppWidget() {
                             .putExtra(MainActivity.EXTRA_RECOVERY_ENTRY, RecoverySession.ENTRY_WIDGET),
                     ),
                     openApp = actionStartActivity(appLaunchIntent(context)),
-                    // The pills' hold-confirm surface (widget v2). The relapse action binds the
-                    // exact habitId this rendered frame displays — never a value read at tap
-                    // time, which belongs to whatever the app shows then, not what the user saw.
-                    logRelapse = actionStartActivity(
-                        widgetActionIntent(context, WidgetActionActivity.TARGET_RELAPSE, view.habitId),
+                    // The icon controls' hold-confirm surface (widget v2.1). Neither action
+                    // binds the displayed track: the urge log is a habitless recovery-session
+                    // row (the app's own log sheet writes the same one), and reach-out has no
+                    // track at all.
+                    logUrge = actionStartActivity(
+                        widgetActionIntent(context, WidgetActionActivity.TARGET_URGE),
                     ),
                     reachOut = actionStartActivity(
-                        widgetActionIntent(context, WidgetActionActivity.TARGET_SOS, habitId = null),
+                        widgetActionIntent(context, WidgetActionActivity.TARGET_SOS),
                     ),
                 )
             }
@@ -171,9 +172,6 @@ private fun viewFor(context: Context, snapshot: ProtectionSnapshot?): WidgetView
         ),
         streakDays = snapshot?.streakDays,
         habitLabel = snapshot?.habitLabel,
-        // The relapse pill's binding: the track this frame's number belongs to. Null hides the
-        // pill (no habit, or a pre-v2 sample) rather than binding a guessed track.
-        habitId = snapshot?.habitId,
         // The same predicate the writer uses to decide a re-read is owed — asked here of the
         // value the user is looking at. True means this number cannot be proven current, so it
         // renders with its age attached rather than silently ageing (spec §16 Q5, closed
@@ -196,7 +194,7 @@ private fun viewFor(context: Context, snapshot: ProtectionSnapshot?): WidgetView
         // What a render actually puts on the home screen, for the on-device loop.
         Log.i(
             TAG,
-            "widget view: status=${view.status} days=${view.streakDays} habit=${view.habitId}" +
+            "widget view: status=${view.status} days=${view.streakDays}" +
                 " checkedAgo=${view.streakCheckedAgoMillis} milestone=${view.nextMilestoneDay}" +
                 " discreet=${view.discreet}",
         )

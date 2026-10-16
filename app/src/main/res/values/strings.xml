@@ -433,25 +433,26 @@
     <string name="widget_status_protected">Protected</string>
     <string name="widget_status_unprotected">Not protected</string>
     <string name="widget_status_unverified">Unverified</string>
-    <!-- Widget v2 (owner spec 2026-10-15): the two action pills on the wide cards. The relapse
-         pill's label keeps the widget's vocabulary contract — "Reset" while discreet (no
-         recovery word), the action's own name only after disclosure; the short form is for the
-         pill row's tight width, not a different vocabulary. SOS ("Reach out") is the same
-         wording Home's FAB uses and carries no recovery vocabulary either way. -->
-    <string name="widget_action_relapse">Log a relapse</string>
-    <string name="widget_action_relapse_short">Relapse</string>
-    <string name="widget_action_reset">Reset</string>
+    <!-- Widget v2.1 (owner correction 2026-10-16): the wide cards' actions are icon-only
+         controls (wave = log an urge, speech bubble = reach out). The v2 text pills spelled
+         private intent to anyone glancing at the home screen — the owner: "we need to think of
+         user privacy, an icon would have helped". No action word is ever drawn on the launcher
+         surface; these two strings exist only as content descriptions, which TalkBack reads
+         and nothing renders. -->
+    <string name="widget_action_urge">Log an urge</string>
     <string name="widget_action_reach_out">Reach out</string>
-    <!-- The hold-to-confirm surface the pills open (one shared shape for both actions: title,
+    <!-- The hold-to-confirm surface the controls open (one shared shape for both actions: title,
          one line of what will happen, the ring, the hint). Both actions execute only on a
-         completed hold — release early cancels. The relapse titles/bodies are the discreet
-         pair: "count" while discreet, the app's own relapse vocabulary only after disclosure.
-         No day count is quoted: the widget behind the surface already shows the number, and a
-         number written here could disagree with it by the time the hold lands. -->
-    <string name="widget_hold_relapse_title">Log a relapse?</string>
-    <string name="widget_hold_relapse_body">Your current streak ends and a new one starts at Day 1. Your best run stays on record.</string>
-    <string name="widget_hold_reset_title">Reset the count?</string>
-    <string name="widget_hold_reset_body">The current count ends and a new one starts at Day 1.</string>
+         completed hold — release early cancels. The urge surface carries the widget's disclosure
+         pair: the app's own vocabulary ("urge") only after the user opted into disclosure (FR5),
+         and its copy mirrors the app's Log-this-urge sheet (strings_recovery.xml) — logging
+         keeps the block, and nothing is shared with the partner. No day count is quoted: the
+         widget behind the surface already shows the number, and a number written here could
+         disagree with it by the time the hold lands. -->
+    <string name="widget_hold_urge_title">Log an urge?</string>
+    <string name="widget_hold_urge_body">Your block stays in place — this is not an override, and nothing is shared.</string>
+    <string name="widget_hold_urge_title_discreet">Save this moment?</string>
+    <string name="widget_hold_urge_body_discreet">It stays on your phone — nothing is shared.</string>
     <string name="widget_hold_sos_title">Reach out?</string>
     <string name="widget_hold_sos_body">Let %1$s know you could use a check-in.</string>
     <string name="widget_hold_sos_body_generic">Let your partner know you could use a check-in.</string>
@@ -459,19 +460,12 @@
     <string name="widget_hold_checking">Checking…</string>
     <string name="widget_hold_hint">Keep holding — release to cancel</string>
     <string name="widget_hold_close">Close</string>
-    <!-- Outcomes. "Already logged" is the idempotency window talking: the rollover the user
-         asked for just happened, so it is reported as success-adjacent, not as an error. The
-         logged/gone/failed outcomes carry the same discreet pair as the titles/bodies — the
-         surface a hold opens must not print the word the card just refused to show (device leg
-         caught "Relapse logged" on a discreet surface, 2026-10-16). Content pinned by
-         WidgetActionStateTest's vocabulary guard. -->
-    <string name="widget_relapse_logged">Relapse logged — a new streak starts at Day 1.</string>
-    <string name="widget_relapse_logged_discreet">Count reset — a new one starts at Day 1.</string>
-    <string name="widget_relapse_already_logged">Already logged.</string>
-    <string name="widget_relapse_gone">This streak is no longer active. Open the app.</string>
-    <string name="widget_relapse_gone_discreet">This count is no longer active. Open the app.</string>
-    <string name="widget_relapse_failed">Couldn\'t log the relapse.</string>
-    <string name="widget_relapse_failed_discreet">Couldn\'t log the reset.</string>
+    <!-- The urge outcome. FR-5 makes the write best-effort by contract (a store that is not
+         open skips the write rather than failing the user — the same stance the app's own sheet
+         takes), so "saved" is the only terminal outcome, and the copy reports the practice, not
+         storage. Content pinned by WidgetActionStateTest's vocabulary guard. -->
+    <string name="widget_urge_saved">Urge logged — your block is still in place.</string>
+    <string name="widget_urge_saved_discreet">Saved — nothing was shared.</string>
     <!-- Partner dashboard (plan §7 item 12 / FR3): the paired device's last-known shared
          state. Copy never promises real-time delivery (AD-05 best-effort cadence) and keeps
          the §9 chain states distinct — "some history missing" is neutral; the unverified

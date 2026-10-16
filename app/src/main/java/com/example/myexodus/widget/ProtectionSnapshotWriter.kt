@@ -139,7 +139,6 @@ class ProtectionSnapshotWriter @Inject constructor(
                 // deferred and is recorded in the same breath.
                 streakDays = streak?.days,
                 habitLabel = streak?.label,
-                habitId = streak?.habitId,
                 streakSample = streak?.sample,
                 discreet = settings.discreetMode,
                 evalUtc = nowUtc,
@@ -228,16 +227,14 @@ internal fun streakFieldsFor(
     existing: ProtectionSnapshot?,
     sample: StreakSample?,
 ): StreakFields? = when {
-    state != null -> StreakFields(state.currentDay, state.targetLabel, state.habitId, sample)
+    state != null -> StreakFields(state.currentDay, state.targetLabel, sample)
     resolved -> null
-    else -> existing?.let { StreakFields(it.streakDays, it.habitLabel, it.habitId, it.streakSample) }
+    else -> existing?.let { StreakFields(it.streakDays, it.habitLabel, it.streakSample) }
 }
 
 internal data class StreakFields(
     val days: Int?,
     val label: String?,
-    /** The habit the number belongs to — the widget v2 relapse control's binding. */
-    val habitId: String?,
     val sample: StreakSample?,
 )
 
@@ -286,9 +283,6 @@ internal fun shouldRestamp(
     if (existing.enforcement != next.enforcement) return true
     if (existing.streakDays != next.streakDays) return true
     if (existing.habitLabel != next.habitLabel) return true
-    // A selection flip with an equal day count still re-binds the relapse control: the stored
-    // id is what the control ends, so it must change exactly when the displayed track does.
-    if (existing.habitId != next.habitId) return true
     // The verification pair moves on every real read, and the widget's "checked" caption is
     // rendered from it — a fresh read must land even when the day count happens to match.
     if (existing.streakSample != next.streakSample) return true

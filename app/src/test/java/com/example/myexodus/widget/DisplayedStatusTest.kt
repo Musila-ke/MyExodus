@@ -27,7 +27,6 @@ class DisplayedStatusTest {
         enforcement = enforcement,
         streakDays = 12,
         habitLabel = null,
-        habitId = null,
         discreet = true,
         evalUtc = evalUtc,
         evalElapsed = evalElapsed,
