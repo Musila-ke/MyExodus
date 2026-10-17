@@ -1,5 +1,7 @@
 # Habit Tracking & Streaks (V1 Phase 2) — Implementation Specification (Revision 2)
 
+*Revision 2026-10-17 (docs audit): §16's "whether Play Store distribution is ever planned" is closed — never (ADR #15, direct APK only); the other §16 questions are plan-time and were resolved or deferred during build, not current blockers.*
+
 ## 1. Feature Overview
 
 Build the offline-first habit recovery tracking system: a days-free streak counter, a personalized withdrawal-expectation timeline, and milestone celebration (7/30/90 days) with notifications and in-app splash cards. The app runs fully offline (no GMS/FCM, no network dependency), is sideloaded, and must run correctly across all Android device skins (stock/Pixel, Samsung OneUI, Xiaomi/HyperOS, Oppo/ColorOS, Transsion/XOS, etc.), not one specific device.

@@ -1,6 +1,6 @@
 # MyExodus Build & Dependencies
 
-Current as of 2026-09-13. All versions verified together: `assembleDebug`, `lintDebug`, `testDebugUnitTest` all pass.
+Baseline current as of 2026-09-13 (all versions verified together: `assembleDebug`, `lintDebug`, `testDebugUnitTest` all pass); later changes are recorded as dated revisions inline through 2026-10-17 (latest: ADR #171).
 
 ## Toolchain
 

@@ -2,6 +2,8 @@
 
 ## Final Implementation Specification (Post-Audit, Resolved)
 
+*Status revision 2026-10-17 (docs audit): built and device-proven; this is the spec of record. §3's "V1 ships with UsageStatsManager… Play Store distributed" describes the pre-Enhanced-Mode baseline, not today's app — there is no Play distribution (ADR #15). Later device evidence supersedes the §12 status paragraphs as they age: ADR #17/#30/#63 (XOS fixes, ANR class, latency), the split-screen ADR (multi-window verified PASS 2026-09-14), and the X6532C second-unit runs (2026-10-01). The §12 question on whether the p99 metric should exclude deliberate deferral wait is still unresolved — it is a metric-definition ruling for the owner, not a build gap.*
+
 ---
 
 ## 1. Feature Overview

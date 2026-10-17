@@ -6,6 +6,8 @@ MyExodus needs a local, encrypted, relational persistence layer for user profile
 
 This spec supersedes all prior draft research on this feature. Every open question from that research and its audits is resolved below. Where a prior draft claimed unverified numbers, hardened-enterprise threat protection, or undecided trade-offs, those are replaced here with a single, buildable decision.
 
+**Audit revision 2026-10-17.** This spec shipped. Current pins are Room **3.0.3**, SQLCipher 4.18.0, androidx.sqlite 2.7.0 (`gradle/libs.versions.toml`) — the 3.0.1 references below are the versions at writing. The "Play Store upload" wording in §13 is dead: distribution is direct APK only (ADR #15); read any such mention as "first release build."
+
 ## 2. Requirements
 
 ### Functional

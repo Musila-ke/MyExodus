@@ -1,6 +1,6 @@
 # Daily App Usage Limit & Pre-Block Warning Enforcement — Implementation Specification (v2)
 
-**Status:** Approved for implementation — supersedes v1 in full
+**Status:** Approved for implementation — supersedes v1 in full *(**Audit revision 2026-10-17:** this file is now the **archive** — v2 shipped, and `daily-usage-limit-enforcement-implementation-plan-v3.md` supersedes it for build purposes on every section it touches; v3's header is the current build state. Every Play Console item below (Decision 6's declaration, Decision 18's `specialUse` submission, Decision 21's staged rollout, §13/§15/§18's approval gates) is **dead**: there is no Play distribution (ADR #15). The local build-time kill-switch half of Decision 21 stands; the staged-rollout half never applied. §16's open questions were resolved/annotated in the 2026-09-15 status block at the end of that section.)*
 **Scope:** V1 Requirement 4 (daily per-app limit enforcement) and Requirement 5 (pre-block warnings)
 **Consumer:** AI build agent — implement literally as written; do not re-derive architecture choices
 

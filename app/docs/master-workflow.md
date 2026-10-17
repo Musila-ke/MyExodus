@@ -1,13 +1,15 @@
 
 # Master Workflow — Full Pipeline, File-by-File
 
+> **Revision 2026-10-17:** this is the project's original methodology document, retained as design rationale. The pipeline actually in force is defined by `CLAUDE.md` (plan-fidelity protocol): plans live in `app/plans/`, docs in `app/docs/`, and the AI implements against them. `AGENTS.md`, `system-failure-domains.md`, and `operations-and-incident-readiness.md` are not present in this repo — references below describe the original setup design, not current files. Gate 2.5's actual toolset is SonarQube Community, OpenGrep, gitleaks, and Trivy (OWASP Dependency-Check was evaluated and removed 2026-08-24 — see `MyExodus Build & Dependencies.md`).
+
 ## Your stack
 - **Research + persistent memory:** NotebookLM — holds Deep Research per feature AND a separate "Project Memory" notebook (see below)
 - **Architect:** Claude (Sonnet 5, free tier) — fresh session per feature, no reliance on chat continuity
 - **Primary audit:** ChatGPT (5.6, free tier)
 - **Optional independent spot-check:** Gemini Pro — high-stakes features only
 - **Build:** DeepSeek in Antigravity
-- **Deterministic checks:** SonarQube Community Build, OpenGrep, gitleaks, OWASP Dependency-Check (Gate 2.5)
+- **Deterministic checks:** SonarQube Community Build, OpenGrep, gitleaks, Trivy (Gate 2.5)
 
 ## The "Project Memory" notebook — solves the fresh-session problem
 Claude sessions don't persist across features, and pasting full docs into every session burns tokens fast. Fix: create ONE separate NotebookLM notebook (not per-feature) and upload as sources: `engineering-decision-system.md`, `engineering-patterns-reference.md`, `system-failure-domains.md`, `operations-and-incident-readiness.md`, PRD, architecture doc. Before each Phase 3 Claude session, query this notebook: *"summarize what's relevant to building [feature name] from these documents — relevant patterns, current failure-domain entries, applicable operational requirements."* Paste that synthesis into Claude's fresh session instead of the full documents. Update the source files in this notebook (re-upload) whenever `system-failure-domains.md` or the patterns reference gets a new entry.
@@ -22,7 +24,7 @@ Claude sessions don't persist across features, and pasting full docs into every 
 | `engineering-patterns-reference.md` | Same folder | Known-pattern library — feeds Claude at Phase 3, and Gate 2.5 tool list |
 | `AGENTS.md` | **Project root in Antigravity** (not a per-feature file) | Loads automatically every DeepSeek session — never pasted manually again |
 | PRD + architecture doc | Project root or repo docs folder | Existing-system context — referenced at Phase 3, not re-explained each time |
-| Gate 2.5 tools (SonarQube, OpenGrep, gitleaks, Dependency-Check) | Installed once, run via CI or locally per build | No AI involved — deterministic |
+| Gate 2.5 tools (SonarQube, OpenGrep, gitleaks, Trivy) | Installed once, run via CI or locally per build | No AI involved — deterministic |
 
 ---
 
@@ -61,7 +63,7 @@ From your PRD, pick the feature. Write (or have DeepSeek draft, then you tighten
 3. If DeepSeek flags something mid-build, check which of the five escalation categories it's using (per AGENTS.md). "Implementation detail" — let it decide and move on. Any of the other four — that's a real flag, goes into Gate 3, not dismissed and not stalling you in the moment.
 
 **Step 6 — Gate 2.5 (deterministic, no AI)**
-Run SonarQube/OpenGrep/gitleaks/Dependency-Check against the diff. Zero-cost, catches file size, DRY, complexity, secrets, known-vulnerable dependencies mechanically.
+Run SonarQube/OpenGrep/gitleaks/Trivy against the diff. Zero-cost, catches file size, DRY, complexity, secrets, known-vulnerable dependencies mechanically.
 
 **Step 7 — Gate 3 (conformance + validation review)**
 1. New Claude or ChatGPT conversation.

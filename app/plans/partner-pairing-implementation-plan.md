@@ -285,6 +285,8 @@ All values below are exact byte lengths; do not vary them.
 
 Not implemented in this milestone. When built, the QR payload will encode the same `invitationToken` format from §8.2, consumed through the existing `joinPairingSession` function unchanged.
 
+*Revision 2026-10-17 (docs audit): this section and §4's "QR/CameraX (V1.1)" paragraph describe the plan-time assumption and are superseded by §19.2/§19.3. The shipped app already had QR pairing (`PairingCodec`, CBOR) before this delta; the delta built the **typed Crockford code** alongside it (ADR #97), not QR. The shipped ceremony uses neither `joinPairingSession` nor the §8 `pairingSessions` collection — see the §19.3 reconciliation table.*
+
 ---
 
 ## 9. Error Handling

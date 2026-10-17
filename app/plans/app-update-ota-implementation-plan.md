@@ -2,9 +2,9 @@
 
 **Status:** Draft for approval — **direction revised 2026-10-17 (ADR #171, owner ruling): the update source is GitHub Releases for both development and production, and Firebase Remote Config is removed entirely.** This revision supersedes the Firebase-specific parts of §0/§1/§3/§4/§8 below (Firestore `releases/latest` manifest, Firebase Storage APK bucket, `storage.rules`): read them as the requirements/verification contract, not the transport. What survives unchanged: the signed-manifest trust anchor, SHA-256 + signing-certificate verification before `PackageInstaller`, the Settings/Home surfaces, the "install unknown apps" grant row, and every UR/UN requirement. The replacement transport design (release asset layout, manifest signing, dev vs production channel split, rate-limit handling) is explicitly deferred to the implementation session — see ADR #171 "Open decisions".
 **Target Audience:** Implementation engineer / coding agent
-**Stack:** Kotlin, Jetpack Compose, Hilt, Firebase (Firestore, Cloud Storage), WorkManager
+**Stack:** Kotlin, Jetpack Compose, Hilt, WorkManager. *(As first drafted this line read "Firebase (Firestore, Cloud Storage)" — the Firebase transport is superseded by the Status revision above, 2026-10-17, ADR #171.)*
 **minSdk:** 26 (Android 8.0)
-**Depends on:** Firebase project (Blaze, already live), Firestore rules pipeline (`firestore.rules` + emulator suite), Settings-screen row pattern (`settings_*` rows with Fix actions), `ProtectionSnapshotWriter`-style background refresh precedent
+**Depends on:** Settings-screen row pattern (`settings_*` rows with Fix actions), `ProtectionSnapshotWriter`-style background refresh precedent. *(As first drafted this also listed the Firebase project + Firestore rules pipeline; that dependency is superseded by the Status revision above — GitHub Releases is the channel, ADR #171.)*
 
 ---
 

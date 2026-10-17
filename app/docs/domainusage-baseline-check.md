@@ -74,8 +74,10 @@ blocklist-NXDOMAIN decision point — one query must not be decided twice (S3.5 
 (`DnsSinkholeVpnService.kt:69-72`); `DatabaseModule.provideAppRulesStoreFactory()` provides
 the singleton `AppRulesStoreFactory`, whose `open()` returns the SQLCipher-encrypted Room
 database (`RulesStoreEncryption.newDriver()`, `AppRulesStoreFactory.build()`). The engine can
-inject the same factory. Current schema version: **9** (`AppRulesStore.kt:56`) → the feature's
-migration is **9 → 10** (plus the 10 → 9 downgrade, below).
+inject the same factory. Schema version at this check (2026-09-20): **9** (`AppRulesStore.kt:56`) →
+the feature's migration was **9 → 10** (plus the 10 → 9 downgrade, below). *The store has since
+advanced — it is v16 at `AppRulesStore.kt:78` (2026-10-17); this paragraph is the S0 record, not
+current state.*
 
 **P6 — FAIL as written.** The builder adds `fd00:14:14::1/128` and a `::/0` route
 (`DnsSinkholeVpnService.kt:130-133`) — the TUN is **dual-stack**, not IPv4-only. No

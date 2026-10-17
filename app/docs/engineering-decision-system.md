@@ -72,7 +72,7 @@ Three checks AI systematically underweights:
 For a significant feature, search not just "best practices for X" but "X outage postmortem," "X duplicate processing incident," "X data corruption incident." Real incident reports teach lessons textbooks don't — "we had backups" vs. "the backups were never restored successfully" is the kind of gap only failure history surfaces.
 
 ## 11. Fitness functions — where a principle becomes machine-checkable
-When a principle can be phrased as an automatable check, do that instead of relying on review to catch drift forever: "domain module A must never import infrastructure module B," "every external HTTP call has a timeout," "no code accesses secrets directly," "public API responses never expose internal DB IDs." This is what Gate 2.5's tooling (Semgrep, dependency-cruiser) is *for* — architecture that stays true as code evolves, not just true on day one.
+When a principle can be phrased as an automatable check, do that instead of relying on review to catch drift forever: "domain module A must never import infrastructure module B," "every external HTTP call has a timeout," "no code accesses secrets directly," "public API responses never expose internal DB IDs." This is what Gate 2.5's tooling (OpenGrep/SonarQube custom rules, gitleaks, Trivy) is *for* — architecture that stays true as code evolves, not just true on day one.
 
 ## 12. The loop — this replaces "the checklist"
 ```

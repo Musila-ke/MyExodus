@@ -696,6 +696,8 @@ user-authorized) **landed 2026-09-28: `913b858`, 340 files, `.tmp-auth-*` creden
 gitignored** — plus the Partner test-residue cleanup flagged in #110, queued with #66's
 production unpair verification.
 
+*Status revision 2026-10-17 (docs audit): both items that paragraph lists as remaining are closed — the V1 feature review (#16) ran 2026-09-28 (20 shipped / 10 partial / 1 by design / 5 not built; progress note), and the Partner test residue was removed through the production unpair UI as #66's device verification (six residue pairs, roster 7→1; ADR #114).*
+
 ## Device pass (2026-09-22 — the gate was wrong, and screencap had a reason)
 
 **The battery day-log gate was false.** Recorded three times above as "device pass pending — an

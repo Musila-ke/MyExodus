@@ -5,7 +5,8 @@ fully; record results in `docs/domainusage-test-report.md`"; this project's docs
 **Date:** 2026-09-21; **X6532 phone session appended 2026-09-22** (§4.2; PF-3/PF-4 closed the same
 day — §5.1 items 14–16); **PF-5 drain PASSed 2026-09-29 overnight** (unplugged, wireless adb —
 §4.2), closing §12.3 at 8/8 and the AC tally at 21 PASS / 0 PENDING / 1 N/A.
-**Branch:** `dev` (work uncommitted). **Baseline commit:** `cc7a13b`.
+**Branch:** `dev` (the feature work was uncommitted at S10 writing; it has since been committed —
+revision 2026-10-17). **Baseline commit:** `cc7a13b`.
 **Per-step implementation record:** `app/docs/domainusage-implementation-log.md` (S1–S9; S10 appended
 at close-out). **S0 gate:** `app/docs/domainusage-baseline-check.md`.
 
@@ -462,7 +463,9 @@ against the fixed tree; the two marked *device-caught* produced the correspondin
     pre-fix receiver snapshot `0 app, 3 url rules` → post-fix `0 app, 0 url rules`; harness run
     green end-to-end with self-clean leaving 0 app / 0 url.
 
-### 5.2 Product defects *(device-caught by the I-1…I-3 legs)* — the
+### 5.2 Product defects
+
+1. **A limited website was fully blocked at DNS** *(device-caught by the I-1…I-3 legs)* — the
    baseline `DomainBlocklist` answered NXDOMAIN for every host-level website rule, including plain
    daily-limit rules, so a limited site never loaded at all and never accrued a byte. Fixed:
    `DomainBlocklist.fromUrlPatterns` now includes only rules whose block does not depend on usage
