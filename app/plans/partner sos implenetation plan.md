@@ -4,7 +4,7 @@
 **Platform:** Android (Kotlin) + Firebase  
 **Scope:** V1, Android only  
 **Audience:** AI coding agent / implementation engineer  
-**Status:** Build specification
+**Status:** Build specification — **shipped deviations (read before FR-1/FR-22):** (1) 2026-10-15, owner mandate / ADR #158 — the client Remote Config flag `partner_sos_enabled` was removed end-to-end; the Reach out control's visibility is now structural (Home tab + a live pair), and the server kill switch is the only operational control. (2) 2026-10-17 — Remote Config is scheduled for removal entirely and GitHub Releases becomes the APK channel (ADR #171). Both FR rows are historical intent; `app/docs/partner-sos-mapping.md` + ADR #158/#171 record what shipped.
 
 ---
 
