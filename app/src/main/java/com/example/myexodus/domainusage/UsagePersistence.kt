@@ -50,21 +50,28 @@ class UsagePersistence(
      * §6.6/§4.9: one flush cycle. [rows] was taken on the tick thread, so the day key it carries
      * cannot race a rollover; the dirty flag is cleared only through the generation guard, so an
      * accrual that landed while the commit was in flight is written by the next cycle.
+     *
+     * @return true when the rows were written (or there was nothing to write), false when this
+     * attempt failed. Mid-day callers may ignore it — the still-set dirty flag re-emits the row
+     * next cycle — but §6.7's outgoing-day finals exist nowhere else after the split, so the
+     * rollover caller must retry until true.
      */
-    suspend fun flush(ledger: UsageLedger, rows: List<UsageSnapshot>) {
-        if (rows.isEmpty()) return
-        try {
+    suspend fun flush(ledger: UsageLedger, rows: List<UsageSnapshot>): Boolean {
+        if (rows.isEmpty()) return true
+        return try {
             val store = requireNotNull(dao()) { "rules store unavailable" }
             store.upsertMax(rows)
             for (row in rows) ledger.acknowledge(row.ruleId, row.revision, row.generation)
             counters.inc(Counter.db_flush_ok)
             consecutiveFlushFailures = 0
             onDbDegraded(false)
+            true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             counters.inc(Counter.db_flush_fail)
             if (++consecutiveFlushFailures >= MAX_CONSECUTIVE_FAILURES) onDbDegraded(true)
+            false
         }
     }
 

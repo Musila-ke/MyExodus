@@ -106,13 +106,13 @@ class UsagePersistenceTest {
         val degraded = DegradeLog()
         val persistence = persistence({ dao }, degraded)
 
-        persistence.flush(ledger, rows)
-        persistence.flush(ledger, rows)
+        assertFalse("a failed attempt reports false (§6.7's retry contract)", persistence.flush(ledger, rows))
+        assertFalse(persistence.flush(ledger, rows))
         assertEquals(2L, counters.get(Counter.db_flush_fail))
         assertNull("two failures are not yet a degraded store", degraded.last)
         assertTrue("the rule stays dirty for the next cycle", counter.changedSincePersist)
 
-        persistence.flush(ledger, rows)
+        assertFalse(persistence.flush(ledger, rows))
         assertEquals(true, degraded.last)
     }
 
@@ -131,7 +131,7 @@ class UsagePersistenceTest {
         persistence.flush(ledger, rows)
         persistence.flush(ledger, rows)
         dao.failUpsert = false
-        persistence.flush(ledger, rows)
+        assertTrue("a written flush reports true", persistence.flush(ledger, rows))
         dao.failUpsert = true
         persistence.flush(ledger, rows)
         persistence.flush(ledger, rows)

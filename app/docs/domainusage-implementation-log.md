@@ -853,3 +853,25 @@ concurrency guard added — it previously waited only for the *emulator* batch, 
 a phone session ran would have driven the same device twice and invalidated both. Wireless adb was
 enabled with `adb tcpip 5555` while on USB: it works on this build, contrary to the script's header
 claim, and does not survive a phone reboot.
+
+## Review sweep — rollover finals retry (2026-10-17)
+
+**Finding.** §6.7's rollover final was written exactly once (`persistRollover` →
+`UsagePersistence.flush`), and `flush` swallowed ordinary failures and returned `Unit`. By then the
+ledger's split has already moved each counter into the new day, and `dirtySnapshot()` stamps the
+*current* day key — so one transient db failure at midnight permanently dropped the outgoing day's
+row. §6.6/U-11's "next cycle writes the newer cumulative value" provably cannot reach it: the old
+total no longer exists in the counter.
+
+**Fix.** `UsagePersistence.flush` returns `Boolean` (true also for an empty row set; false for a
+failed attempt; `CancellationException` still rethrows), and `DomainUsageEngine.persistRollover`
+retries the finals every `RETRY_MS` until written, then runs retention and stores the new day key.
+The retry sits outside `hook(Unit)` on purpose: it is not a relay-path hook, so breaker dormancy
+must not skip a data write, and db-scope cancellation ends it through `delay`. Mid-day callers may
+ignore the return — the still-set dirty flag re-emits the row next cycle.
+
+**Regression.** `DomainUsageLifecycleTest.aFailedRolloverFinalIsRetried_untilTheOutgoingDaysRowIsWritten`
+runs a real midnight crossing with the DAO refusing every write: the outgoing row is absent while
+failing and the persisted day key stays on the old day; both land only after the outage clears. A
+mid-day flush cannot fake the row because it stamps the new day key. `UsagePersistenceTest` pins
+the true/false return contract. Focused run: 14 + 9 tests, 0 failures, BUILD SUCCESSFUL.

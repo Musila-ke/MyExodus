@@ -401,15 +401,23 @@ class DomainUsageEngine(
         }
     }
 
-    /** §6.7: the rollover's writes — the outgoing day's finals, retention, and the new day key. */
+    /**
+     * §6.7: the rollover's writes — the outgoing day's finals, retention, and the new day key.
+     * The finals are retried until written: the split has already moved the counters into the
+     * new day, so a single failed attempt would drop the outgoing day's row permanently
+     * (§6.6's "next cycle writes the newer cumulative value" cannot reach it).
+     *
+     * Outside [hook] on purpose: this is not a relay-path hook, so breaker dormancy must not
+     * skip a data write, and cancelling the db scope must end the retry via `delay`.
+     */
     private suspend fun persistRollover(rollover: DayRollover) {
         val ledger = ledger ?: return
         val persistence = persistence ?: return
-        hook(Unit) {
-            persistence.flush(ledger, rollover.finals)
-            persistence.deleteOlderThan(UsagePersistence.retentionCutoff(rollover.newDayKey))
-            host?.setLastDayKey(rollover.newDayKey)
+        while (!persistence.flush(ledger, rollover.finals)) {
+            delay(UsagePersistence.RETRY_MS)
         }
+        persistence.deleteOlderThan(UsagePersistence.retentionCutoff(rollover.newDayKey))
+        hook(Unit) { host?.setLastDayKey(rollover.newDayKey) }
     }
 
     /** §6.8/S7.5: the monitor reports every change of the recomputed strictness (D-34). */

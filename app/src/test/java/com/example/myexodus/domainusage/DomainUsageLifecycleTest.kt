@@ -386,6 +386,50 @@ class DomainUsageLifecycleTest {
         }
     }
 
+    @Test
+    fun aFailedRolloverFinalIsRetried_untilTheOutgoingDaysRowIsWritten() = runTest {
+        val dao = FakeRuleUsageDao()
+        val host = FakeDomainUsageHost()
+        val engine = engine()
+        withRealDispatchers { tick, db ->
+            engine.start(
+                rules = MutableStateFlow(listOf(rule)),
+                seedRevisions = {},
+                dao = { dao },
+                host = host,
+                tickDispatcher = tick,
+                dbDispatcher = db,
+            )
+            // Refuse every write from before the first persist cycle, so the outgoing day's
+            // row can only ever appear through the rollover final itself.
+            dao.failUpsert = true
+
+            val counter = engine.ledger!!.counterFor("r1", 0L)!!
+            counter.touch(0L)
+            mono.now = 5_000L
+            awaitUsage(engine, 5_000L)
+            val oldDay = engine.ledger!!.dayKey
+            val failuresBefore = counters.get(Counter.db_flush_fail)
+
+            wall.instant = wall.instant.plusSeconds(86_400L)
+            await("the ledger crossed midnight") { engine.ledger!!.dayKey != oldDay }
+            // The rollover's write has failed by now (the dbScope is single-threaded and FIFO,
+            // so this failure cannot trail a later launch); §6.7 must retry it, not drop it.
+            await("the rollover's write failed") { counters.get(Counter.db_flush_fail) > failuresBefore }
+            assertNull("a mid-day flush can never write the outgoing day", dao.stored("r1", 0L, oldDay))
+            assertEquals(
+                "the day key does not advance past an unwritten final",
+                oldDay,
+                host.lastDayKeyWritten,
+            )
+
+            dao.failUpsert = false
+            await("the rollover final was retried") { dao.stored("r1", 0L, oldDay) == 5_000L }
+            await("the new day key lands after the final") { host.lastDayKeyWritten == engine.ledger!!.dayKey }
+            assertTrue(engine.stop())
+        }
+    }
+
     /** Real single-thread executors: `stop()`'s bounded `runBlocking` needs real threads. */
     private suspend fun withRealDispatchers(block: suspend (CoroutineDispatcher, CoroutineDispatcher) -> Unit) {
         val tickExec = Executors.newSingleThreadExecutor { Thread(it, "test-tick") }
