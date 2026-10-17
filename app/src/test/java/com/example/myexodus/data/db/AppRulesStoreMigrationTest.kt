@@ -37,11 +37,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Rules-store migration chain 2→14 (recovery_state, attempt_log, is_enabled, streak tables,
+ * Rules-store migration chain 2→16 (recovery_state, attempt_log, is_enabled, streak tables,
  * daily-usage tracker day-identity reshape, recovery-session + risk-window tables, the
  * domain-usage `rule_usage_daily` table, the usage ledger, the per-pair mirror links, the
- * partner-activity journal/link/projection tables, and the journal's message-addressing
- * column).
+ * partner-activity journal/link/projection tables, the journal's message-addressing column,
+ * and the v16 per-pair consent matrix).
  * The v2 baseline is the exact DDL Room generates
  * for version 2 (verbatim copies of the SQL emitted by AppRulesStore_Impl), so the test proves
  * the real upgrade path end to end, including Room's post-migration schema validation (the
@@ -315,6 +315,10 @@ class AppRulesStoreMigrationTest {
             assertEquals(0, activity.deleteJournalOlderThan(1_700_000_000_000L, 10))
             assertEquals(1, activity.deleteJournalOlderThan(1_700_000_000_001L, 10))
             assertTrue(activity.pendingForPair("pair-b", sinceMs = 0L, limit = 10).isEmpty())
+            assertNull(
+                "an expired journal row's per-pair link must die with it (finding #63)",
+                activity.linkSequence("evt-1", "pair-a"),
+            )
 
             // Message addressing 13→14 (#96): with the column in place, a row addressed to one
             // pair pends only for that pair, while an untargeted row keeps fanning out.

@@ -108,6 +108,10 @@ private fun PacedBreathing(
 ) {
     val choices = technique.durationChoicesMinutes.ifEmpty { listOf(5) }
     var minutes by remember { mutableIntStateOf(technique.defaultDurationMinutes ?: choices.first()) }
+    // Finding #54: `started` separates "never begun" (chooser) from "paused" (ring retained).
+    // Keying the chooser on `!running` alone unmounted the pacer on Pause, discarding its
+    // elapsed clock and sending the user back to the duration picker.
+    var started by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(false) }
     var roundsDone by remember { mutableStateOf(false) }
 
@@ -115,7 +119,7 @@ private fun PacedBreathing(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        if (!running && !roundsDone) {
+        if (!started) {
             Text(
                 stringResource(R.string.recovery_pacer_choose_duration),
                 style = MaterialTheme.typography.titleMedium,
@@ -129,7 +133,10 @@ private fun PacedBreathing(
                     )
                 }
             }
-            Button(onClick = { running = true }, modifier = Modifier.fillMaxWidth()) {
+            Button(
+                onClick = { started = true; running = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Text(stringResource(R.string.recovery_pacer_start))
             }
         } else {
@@ -152,21 +159,37 @@ private fun PacedBreathing(
                     roundsDone = true
                 },
             )
-            if (running) {
-                OutlinedButton(onClick = { running = false }, modifier = Modifier.fillMaxWidth()) {
+            when {
+                running -> OutlinedButton(
+                    onClick = { running = false },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
                     Text(stringResource(R.string.recovery_pacer_pause))
                 }
-            } else {
                 // Reaching 0 stops the clock; the user confirms the session ended where they are.
-                Text(
-                    stringResource(R.string.recovery_pacer_finished),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (minutes < choices.maxOrNull().orZero()) {
-                    TextButton(onClick = { roundsDone = false; minutes = choices.first { it > minutes } }) {
-                        Text(stringResource(R.string.recovery_pacer_extend))
+                roundsDone -> {
+                    Text(
+                        stringResource(R.string.recovery_pacer_finished),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (minutes < choices.maxOrNull().orZero()) {
+                        TextButton(
+                            onClick = {
+                                roundsDone = false
+                                started = false
+                                minutes = choices.first { it > minutes }
+                            },
+                        ) {
+                            Text(stringResource(R.string.recovery_pacer_extend))
+                        }
                     }
+                }
+                else -> Button(
+                    onClick = { running = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(stringResource(R.string.recovery_pacer_resume))
                 }
             }
         }

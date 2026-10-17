@@ -66,6 +66,14 @@ class StreaksViewModel @Inject constructor(
      *  screen maps it to copy — resources stay out of the ViewModel (finding #20). */
     val setupError: StateFlow<SetupError?> = _setupError.asStateFlow()
 
+    private val _onboardingInFlight = MutableStateFlow(false)
+
+    /** §9 first line of duplicate-tap defense for the Start control, like
+     *  [relapseInFlight]: `onboard` has no natural key to make its insert idempotent, so a
+     *  second tap while the first write is out would create a duplicate habit and there is no
+     *  delete path to undo it (finding #61). */
+    val onboardingInFlight: StateFlow<Boolean> = _onboardingInFlight.asStateFlow()
+
     private val _relapseInFlight = MutableStateFlow(false)
 
     /** §9 first line of duplicate-tap defense: the control disables while a write is out. */
@@ -133,37 +141,43 @@ class StreaksViewModel @Inject constructor(
         severity: WithdrawalSeverity,
         recoveryStartAt: Long,
     ) {
+        if (_onboardingInFlight.value) return
+        _onboardingInFlight.value = true
         _setupError.value = null
         viewModelScope.launch(Dispatchers.IO) {
-            val profileId = rulesRepository.ensureActiveProfile().userId
-            when (val result = repository.onboard(
-                profileId = profileId,
-                targetIdentifier = targetLabel,
-                habitDurationYears = durationYears,
-                severity = severity,
-                recoveryStartAt = recoveryStartAt,
-            )) {
-                is HabitRepository.OnboardingResult.Ready -> {
-                    _relapseFeedback.value = null
-                    _addingHabit.value = false
-                    _habits.value = repository.habits()
-                }
+            try {
+                val profileId = rulesRepository.ensureActiveProfile().userId
+                when (val result = repository.onboard(
+                    profileId = profileId,
+                    targetIdentifier = targetLabel,
+                    habitDurationYears = durationYears,
+                    severity = severity,
+                    recoveryStartAt = recoveryStartAt,
+                )) {
+                    is HabitRepository.OnboardingResult.Ready -> {
+                        _relapseFeedback.value = null
+                        _addingHabit.value = false
+                        _habits.value = repository.habits()
+                    }
 
-                is HabitRepository.OnboardingResult.Rejected -> {
-                    _setupError.value = when (result.reason) {
-                        HabitRepository.OnboardingResult.Rejected.Reason.START_IN_FUTURE ->
-                            SetupError.START_IN_FUTURE
+                    is HabitRepository.OnboardingResult.Rejected -> {
+                        _setupError.value = when (result.reason) {
+                            HabitRepository.OnboardingResult.Rejected.Reason.START_IN_FUTURE ->
+                                SetupError.START_IN_FUTURE
 
-                        HabitRepository.OnboardingResult.Rejected.Reason.INVALID_DURATION ->
-                            SetupError.INVALID_DURATION
+                            HabitRepository.OnboardingResult.Rejected.Reason.INVALID_DURATION ->
+                                SetupError.INVALID_DURATION
 
-                        HabitRepository.OnboardingResult.Rejected.Reason.IMPLAUSIBLE_CLOCK ->
-                            SetupError.IMPLAUSIBLE_CLOCK
+                            HabitRepository.OnboardingResult.Rejected.Reason.IMPLAUSIBLE_CLOCK ->
+                                SetupError.IMPLAUSIBLE_CLOCK
 
-                        HabitRepository.OnboardingResult.Rejected.Reason.STORE_UNAVAILABLE ->
-                            SetupError.STORE_UNAVAILABLE
+                            HabitRepository.OnboardingResult.Rejected.Reason.STORE_UNAVAILABLE ->
+                                SetupError.STORE_UNAVAILABLE
+                        }
                     }
                 }
+            } finally {
+                _onboardingInFlight.value = false
             }
         }
     }

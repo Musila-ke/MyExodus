@@ -261,7 +261,9 @@ private fun WindowDialog(
                         modifier = Modifier.weight(1f),
                     )
                 }
-                if (end <= start) {
+                // Strictly `start > end` is the overnight case; `start == end` is the empty
+                // half-open interval ([start, end)), which the evaluator never activates.
+                if (end < start) {
                     Text(
                         stringResource(R.string.recovery_windows_overnight),
                         style = MaterialTheme.typography.bodyMedium,

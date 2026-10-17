@@ -4,7 +4,6 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -172,37 +171,6 @@ class VpnPacketTest {
         assertEquals(443, tcp.dstPort)
         assertEquals(20 + 40, tcp.payloadOffset)
         assertEquals(ip.payloadLength - 40, tcp.payloadLength) // 12: claimed header covers payload bytes
-    }
-
-    @Test
-    fun fragmentV4_reassemblesToOriginal() {
-        val packet = VpnPacket.buildTcpSegment(
-            src = byteArrayOf(10, 14, 14, 1), dst = byteArrayOf(93, 184.toByte(), 216.toByte(), 34),
-            srcPort = 12345, dstPort = 443, seq = 42, ack = 7, ackFlag = true, psh = true,
-            payload = "0123456789abcdef".toByteArray(),
-        )
-        val frags = VpnPacket.fragmentV4(packet)
-        assertEquals(2, frags.size)
-        // Fragment 0 carries only the TCP header: total length 40, DF|MF, offset 0.
-        assertEquals(0x6000, VpnPacket.readShort(frags[0], 6))
-        assertEquals(40, VpnPacket.readShort(frags[0], 2))
-        // Fragment 1 carries the payload at offset 40 (5 x 8 bytes), DF, no MF.
-        assertEquals(0x4005, VpnPacket.readShort(frags[1], 6))
-        assertEquals(20 + 16, VpnPacket.readShort(frags[1], 2))
-        // Both fragment headers have valid checksums (fold to 0xFFFF).
-        assertEquals(0xFFFF, VpnPacket.fold16(VpnPacket.sum16(frags[0], 0, 20)))
-        assertEquals(0xFFFF, VpnPacket.fold16(VpnPacket.sum16(frags[1], 0, 20)))
-        // The IP fragment ID is preserved so the device can reassemble.
-        assertEquals(VpnPacket.readShort(packet, 4), VpnPacket.readShort(frags[0], 4))
-        assertEquals(VpnPacket.readShort(packet, 4), VpnPacket.readShort(frags[1], 4))
-        // Reassembly: the kernel rebuilds the IP header from fragment 0 (total length fixed
-        // up), so the upper-layer bytes (TCP header + payload) must match the original.
-        val reassembled = ByteArray(packet.size - 20)
-        frags[0].copyInto(reassembled, 0, 20, 40)
-        frags[1].copyInto(reassembled, 20, 20)
-        assertArrayEquals(packet.copyOfRange(20, packet.size), reassembled)
-        // Zero-payload segments are not fragmented.
-        assertTrue(VpnPacket.fragmentV4(packet.copyOf(40)).isEmpty())
     }
 
     @Test

@@ -3,16 +3,14 @@ package com.example.myexodus.settings
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
-import androidx.core.app.NotificationManagerCompat
-import androidx.core.content.ContextCompat
 import com.example.myexodus.accountability.crypto.AccountabilityKeyStore
 import com.example.myexodus.blocking.OverlayController
 import com.example.myexodus.blocking.hasUsageAccess
+import com.example.myexodus.notifications.NotificationAccess
 
 /**
  * Platform-status snapshot behind the Settings status rows (plan §2/§8.6). Every row is a
@@ -58,18 +56,14 @@ fun readProtectionChecks(context: Context): ProtectionChecks {
 }
 
 /**
- * API 33+ runtime grant; below 33, the app-level toggle. Notifications are the secondary
- * warning channel only (plan §8 Step 7) — blocking never depends on this.
+ * Whether the app can actually post. Delegates to [NotificationAccess.canPost] — the one gate
+ * every poster uses — because the runtime grant alone is not enough: on API 33+ a user can keep
+ * POST_NOTIFICATIONS granted and still switch the app's notifications off, and a setup step
+ * that read only the permission would claim a heads-up that never arrives (finding #59).
+ * Notifications are the secondary warning channel only (plan §8 Step 7) — blocking never
+ * depends on this.
  */
-fun notificationsGranted(context: Context): Boolean =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        ContextCompat.checkSelfPermission(
-            context,
-            android.Manifest.permission.POST_NOTIFICATIONS,
-        ) == PackageManager.PERMISSION_GRANTED
-    } else {
-        NotificationManagerCompat.from(context).areNotificationsEnabled()
-    }
+fun notificationsGranted(context: Context): Boolean = NotificationAccess.canPost(context)
 
 private fun integrityStatus(): IntegrityStatus = runCatching {
     val keyStore = AccountabilityKeyStore()

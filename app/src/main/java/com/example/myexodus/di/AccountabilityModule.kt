@@ -68,6 +68,7 @@ import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.FirebaseFirestoreSettings
 import com.google.firebase.firestore.MemoryCacheSettings
 import com.google.firebase.functions.FirebaseFunctions
+import com.google.firebase.Timestamp
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.remoteconfig.FirebaseRemoteConfig
 import com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings
@@ -608,7 +609,6 @@ object AccountabilityModule {
     fun provideIdentityMigration(
         enrollmentDao: EnrollmentDao,
         epochStore: IdentityEpochStore,
-        keystore: AccountabilityKeyStore,
     ): IdentityMigration = IdentityMigration(
         enrollmentDao = enrollmentDao,
         epochStore = epochStore,
@@ -890,5 +890,10 @@ private fun nudgeDocOf(snapshot: DocumentSnapshot): NudgeInboxRepository.NudgeDo
         senderUid = snapshot.get("senderUid") as? String,
         envelope = snapshot.get("envelope") as? String,
         createdAtMs = (snapshot.get("createdAtMs") as? Number)?.toLong(),
-        expiresAtMillis = snapshot.getTimestamp("expiresAt")?.toDate()?.time,
+        expiresAtMillis = nudgeExpiryMillisOf(snapshot.get("expiresAt")),
     )
+
+/** A wrong-typed `expiresAt` must degrade to null, never throw: [nudgeDocOf] runs inside a
+ *  Firestore snapshot listener, and a RuntimeException there reaches the main-thread executor
+ *  uncaught — the SDK's typed getter throws instead of returning null (finding #64). */
+internal fun nudgeExpiryMillisOf(value: Any?): Long? = (value as? Timestamp)?.toDate()?.time

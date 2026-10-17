@@ -220,6 +220,23 @@ class InspectingTcpTapTest {
     }
 
     @Test
+    fun aSecondCloseDoesNotReturnTheSlotTwice() {
+        // GuardedTap's fault path closes the inner tap and the Baseline's teardown closes it
+        // again; each pool.wrap() is a fresh wrapper, so the pool's per-wrapper release guard
+        // cannot see the earlier one. Without the tap's own guard the same buffer lands in the
+        // free list twice and two flows can own it (review sweep 2026-10-17).
+        val h = Harness()
+        h.use("example.com")
+        val tap = h.open()
+        assertEquals(ClientDataResult.Hold, tap.onClientData(hello, 0, 100))
+
+        tap.onClosed()
+        tap.onClosed()
+
+        assertEquals(64, h.engine.pool.available())
+    }
+
+    @Test
     fun aCloseAfterForwardingDoesNotTakeTheSlotBackFromTheBaseline() {
         val h = Harness()
         h.use("example.com")

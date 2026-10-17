@@ -53,6 +53,7 @@ fun StreaksScreen(
     state: HabitState?,
     addingHabit: Boolean,
     setupError: StreaksViewModel.SetupError?,
+    onboardingInFlight: Boolean,
     relapseInFlight: Boolean,
     relapseFeedback: StreaksViewModel.RelapseFeedback?,
     onOnboard: (
@@ -103,6 +104,7 @@ fun StreaksScreen(
             if (state == null || addingHabit) {
                 HabitSetupCard(
                     error = setupError?.let { stringResource(setupErrorMessage(it)) },
+                    submitting = onboardingInFlight,
                     onOnboard = onOnboard,
                     onCancel = if (addingHabit) onCancelAddHabit else null,
                 )

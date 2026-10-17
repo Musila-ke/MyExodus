@@ -252,6 +252,41 @@ class ApprovalFlowTest {
     }
 
     @Test
+    fun respond_chainingThrows_revertsDecisionAndRefuses() = runTest {
+        // Finding #65: `EventCreator.create` throws on real failure modes (destroyed agreement
+        // key, keystore miss) — it does not only return `Failed`. A throw used to leave the row
+        // decided while no response ever reached the wire, so the two devices disagreed forever.
+        insertResponderRow("partnerKey:4", message = "help")
+        clock = now0 + 1_000
+        val throwingFlow = ApprovalFlow(
+            dao = db.approvalRequestDao(),
+            enrollmentDao = db.enrollmentDao(),
+            creator = EventCreator(
+                store = store,
+                enrollmentDao = db.enrollmentDao(),
+                cekDerivation = cekDerivation,
+                eventCipher = cipher,
+                signer = signer,
+                epochStore = IdentityEpochStore(db.identityEpochDao()),
+                agreementPrivateKey = { throw IllegalStateException("agreement key gone") },
+                sessionKeyManager = SessionKeyManager(store),
+            ),
+            now = { clock },
+        )
+
+        val refused = throwingFlow.respond("partnerKey:4", true, signing())
+
+        assertTrue(refused is ApprovalFlow.RespondResult.Refused)
+        assertEquals(
+            "a thrown chain append must revert the CAS so the request stays decidable",
+            ApprovalRequest.STATUS_REQUESTED,
+            db.approvalRequestDao().byId("partnerKey:4")!!.status,
+        )
+        assertTrue(db.chainEventDao().chainFor(pairId).isEmpty())
+        assertEquals(0, decisionNotifies)
+    }
+
+    @Test
     fun respond_secondTime_isRefusedAndChainsNoSecondEvent() = runTest {
         insertResponderRow("partnerKey:4", message = "help")
         clock = now0 + 1_000

@@ -10,7 +10,6 @@ import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.DatabaseHealthStore
 import com.example.myexodus.data.db.DatabaseKeyManager
 import com.example.myexodus.data.db.DatabaseMigration
-import com.example.myexodus.data.db.InstallationIdProvider
 import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.data.db.RulesStoreEncryption
 import com.example.myexodus.data.db.RulesStoreKeyManager
@@ -33,10 +32,6 @@ object DatabaseModule {
     @Provides @Singleton
     fun provideActivityLogKeyManager(@ApplicationContext context: Context): ActivityLogKeyManager =
         ActivityLogKeyManager(context)
-
-    @Provides @Singleton
-    fun provideInstallationIdProvider(@ApplicationContext context: Context): InstallationIdProvider =
-        InstallationIdProvider(context)
 
     @Provides @Singleton
     fun provideHealthStore(): DatabaseHealthStore = DatabaseHealthStore()

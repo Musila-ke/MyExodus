@@ -91,6 +91,7 @@
     <string name="recovery_minutes">%1$d min</string>
     <string name="recovery_pacer_start">Start</string>
     <string name="recovery_pacer_pause">Pause</string>
+    <string name="recovery_pacer_resume">Resume</string>
     <string name="recovery_pacer_breathe_in">Breathe in</string>
     <string name="recovery_pacer_breathe_out">Breathe out</string>
     <!-- Clock readout (m:ss), not a count of anything: no plural dimension exists.

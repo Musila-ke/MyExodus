@@ -68,7 +68,11 @@ internal class InspectingTcpTap(
     }
 
     override fun onClosed() {
-        closed.set(true)
+        // Exactly once (FlowTap contract): GuardedTap's fault path closes the inner tap and the
+        // Baseline's teardown closes it again, and each pool.wrap() is a fresh OwnedBytes whose
+        // own release guard cannot see the earlier one — a second release would put the same
+        // buffer into the free list twice, handing it to two flows (review sweep 2026-10-17).
+        if (!closed.compareAndSet(false, true)) return
         try {
             synchronized(holdLock) {
                 terminal = true

@@ -84,10 +84,4 @@ class RiskWindowEvaluatorTest {
         )
     }
 
-    @Test
-    fun minutesUntilEnd_countsAcrossMidnight() {
-        assertEquals(6 * 60 + 30, RiskWindowEvaluator.minutesUntilEnd(at(thursday, 23, 30), allDays))
-        assertEquals(360, RiskWindowEvaluator.minutesUntilEnd(at(thursday, 0, 0), allDays))
-        assertEquals(0, RiskWindowEvaluator.minutesUntilEnd(at(thursday, 12, 0), allDays))
-    }
 }

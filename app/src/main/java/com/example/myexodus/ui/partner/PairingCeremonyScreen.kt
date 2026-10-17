@@ -169,9 +169,14 @@ fun PairingCeremonyScreen(
 
     /** Signed-pairing finish, shared by both roles: one biometric prompt, then the flow call. */
     fun signAndFinish() {
+        if (working) return
         val current = pending ?: return
+        // Finding #55 (the finding #17 class, RuleEditor): the flag is written on Main before
+        // the dispatch. Written inside the IO coroutine, the tap window before dispatch let a
+        // second "They match" launch a second prompt and a racing submit — the losing submit
+        // then rendered "already used" over a pairing that had just succeeded.
+        working = true
         scope.launch(Dispatchers.IO) {
-            working = true
             val uid = deps.myUid()
             if (uid == null) {
                 working = false
@@ -241,9 +246,10 @@ fun PairingCeremonyScreen(
     }
 
     fun startInvite() {
+        if (working) return
+        working = true
+        reported.set(false)
         scope.launch(Dispatchers.IO) {
-            reported.set(false)
-            working = true
             runCatching { deps.saveName(name) }.onFailure { Log.w(TAG, "saving name failed", it) }
             val uid = deps.myUid()
             val attempt = uid?.let {
@@ -270,15 +276,16 @@ fun PairingCeremonyScreen(
     }
 
     fun startJoin() {
+        if (working) return
         // The code can be checked without the network (ADR #97) — a mistyped character is a
         // field error here, never a round-trip that reads back as a pairing failure.
         if (PairingCode.parse(code) is PairingCode.ParseResult.Invalid) {
             codeError = true
             return
         }
+        working = true
+        reported.set(false)
         scope.launch(Dispatchers.IO) {
-            reported.set(false)
-            working = true
             runCatching { deps.saveName(name) }.onFailure { Log.w(TAG, "saving name failed", it) }
             val uid = deps.myUid()
             val attempt = uid?.let {

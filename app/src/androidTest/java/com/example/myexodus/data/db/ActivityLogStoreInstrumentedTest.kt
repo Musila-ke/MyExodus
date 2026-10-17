@@ -102,6 +102,29 @@ class ActivityLogStoreInstrumentedTest {
     }
 
     @Test
+    fun reopen_purgesRowsOlderThanRetention() {
+        // Finding #62: open() passed a 14-day DURATION to purgeOlderThan, which expects an
+        // absolute epoch cutoff — the cutoff landed in 1970 and the retention purge deleted
+        // nothing, forever. The direct-call test above could not see it; only the open path can.
+        val store = newStore()
+        assertTrue(store.open())
+        val now = System.currentTimeMillis()
+        store.insert(event("stale", "inst-1", createdAt = now - 15L * 24 * 60 * 60 * 1000))
+        store.insert(event("fresh", "inst-1", createdAt = now))
+        store.close()
+
+        val reopened = newStore()
+        assertTrue(reopened.open())
+        assertEquals("open must purge rows past the 14-day window (finding #62)", 1L, reopened.count())
+        val survivors = mutableListOf<String>()
+        reopened.databaseForTest()!!.rawQuery(
+            "SELECT event_id FROM ${ActivityLogSchema.TABLE}", null,
+        ).use { cursor -> while (cursor.moveToNext()) survivors += cursor.getString(0) }
+        assertEquals(listOf("fresh"), survivors)
+        reopened.close()
+    }
+
+    @Test
     fun capEviction_keepsAtMostMaxEvents() {
         val store = newStore()
         assertTrue(store.open())

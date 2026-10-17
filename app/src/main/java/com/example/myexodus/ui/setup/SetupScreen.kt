@@ -117,9 +117,12 @@ fun SetupScreen(
 
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { granted ->
+    ) {
         notificationsRequested = true
-        notificationsOk = granted
+        // Re-read the whole gate, not the permission result alone: with POST_NOTIFICATIONS
+        // already granted, the launcher returns "granted" without showing anything, and the
+        // app-level toggle can still be off (finding #59).
+        notificationsOk = notificationsGranted(context)
     }
 
     val step = SetupSteps[index]

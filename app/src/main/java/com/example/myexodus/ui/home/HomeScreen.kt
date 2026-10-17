@@ -856,8 +856,6 @@ private fun StatePill(label: String, active: Boolean) {
     }
 }
 
-/** Non-blocking notice: the store is running on the plaintext database while the one-time
- *  encryption conversion retries on a later launch (plan §8 Step 0 — never blocks app use). */
 /**
  * Req 15: the partner's pinned message, rendered verbatim (partner-authored text is content,
  * never a template). #12: the header names the sender when the roster resolves one — the
@@ -927,6 +925,8 @@ private fun PinnedMessageCard(
     }
 }
 
+/** Non-blocking notice: the store is running on the plaintext database while the one-time
+ *  encryption conversion retries on a later launch (plan §8 Step 0 — never blocks app use). */
 @Composable
 private fun EncryptionPendingNotice() {
     Surface(

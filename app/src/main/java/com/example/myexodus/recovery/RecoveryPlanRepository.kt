@@ -26,7 +26,12 @@ class RecoveryPlanRepository(private val storeFactory: AppRulesStoreFactory) {
     suspend fun windows(): List<RiskWindow> {
         val store = storeFactory.open() ?: return emptyList()
         val dao = store.riskWindowDao()
-        if (dao.count() == 0L) dao.insert(RiskWindow.DEFAULT)
+        // Seed inside the write transaction: three surfaces read the plan (the recovery root's
+        // activeWindow plus two subpages), and on a fresh install their first reads can overlap —
+        // a check-then-insert outside the transaction gives an empty table two defaults.
+        store.withWriteTransaction<Unit> {
+            if (dao.count() == 0L) dao.insert(RiskWindow.DEFAULT)
+        }
         return dao.all()
     }
 
@@ -36,9 +41,16 @@ class RecoveryPlanRepository(private val storeFactory: AppRulesStoreFactory) {
     suspend fun addWindow(startMinute: Int, endMinute: Int, daysMask: Int): Boolean {
         val store = storeFactory.open() ?: return false
         val dao = store.riskWindowDao()
-        if (dao.count() >= RiskWindow.MAX_WINDOWS) return false
-        dao.insert(RiskWindow(startMinute = startMinute, endMinute = endMinute, daysMask = daysMask))
-        return true
+        // Cap check inside the write transaction: the editor launches each save from its own
+        // coroutine, so a check-then-insert outside it lets two saves both pass at the boundary.
+        var added = false
+        store.withWriteTransaction<Unit> {
+            if (dao.count() < RiskWindow.MAX_WINDOWS) {
+                dao.insert(RiskWindow(startMinute = startMinute, endMinute = endMinute, daysMask = daysMask))
+                added = true
+            }
+        }
+        return added
     }
 
     suspend fun updateWindow(window: RiskWindow) {
@@ -75,23 +87,29 @@ class RecoveryPlanRepository(private val storeFactory: AppRulesStoreFactory) {
         if (clean.isEmpty()) return false
         val store = storeFactory.open() ?: return false
         val dao = store.coachingStepDao()
-        if (dao.countForKind(profileId, kind) >= CoachingStep.MAX_PER_KIND) return false
+        // Cap and next order are read inside the write transaction: the editor launches each
+        // save from its own coroutine, so a pre-transaction read lets two rapid saves both pass
+        // the cap or mint the same step_order.
+        var added = false
         store.withWriteTransaction<Unit> {
-            dao.insert(
-                CoachingStep(
-                    stepId = UUID.randomUUID().toString(),
-                    profileId = profileId,
-                    stepOrder = dao.maxOrderForKind(profileId, kind) + 1,
-                    actionText = clean,
-                    associatedTriggerWindow = windowId,
-                    kind = kind,
-                ),
-            )
-            PartnerActivityJournal.emitForProfile(
-                store, profileId, EventPayload.TYPE_COACHING_STEP_UPDATED, System.currentTimeMillis(),
-            )
+            if (dao.countForKind(profileId, kind) < CoachingStep.MAX_PER_KIND) {
+                dao.insert(
+                    CoachingStep(
+                        stepId = UUID.randomUUID().toString(),
+                        profileId = profileId,
+                        stepOrder = dao.maxOrderForKind(profileId, kind) + 1,
+                        actionText = clean,
+                        associatedTriggerWindow = windowId,
+                        kind = kind,
+                    ),
+                )
+                PartnerActivityJournal.emitForProfile(
+                    store, profileId, EventPayload.TYPE_COACHING_STEP_UPDATED, System.currentTimeMillis(),
+                )
+                added = true
+            }
         }
-        return true
+        return added
     }
 
     suspend fun updateItem(step: CoachingStep, text: String, windowId: String) {
@@ -120,10 +138,18 @@ class RecoveryPlanRepository(private val storeFactory: AppRulesStoreFactory) {
     suspend fun moveItem(step: CoachingStep, delta: Int) {
         val store = storeFactory.open() ?: return
         val dao = store.coachingStepDao()
-        val siblings = dao.getForProfile(step.profileId).filter { it.kind == step.kind }
-        val index = siblings.indexOfFirst { it.stepId == step.stepId }
-        val target = siblings.getOrNull(index + delta) ?: return
-        dao.setOrder(step.stepId, target.stepOrder)
-        dao.setOrder(target.stepId, step.stepOrder)
+        // Read and swap inside the write transaction, and take the moving row's CURRENT order
+        // from the sibling list: a second tap carries the entity captured before the first swap
+        // committed, so trusting its step_order wrote a duplicated order (the target received
+        // the stale value) instead of performing the next move.
+        store.withWriteTransaction<Unit> {
+            val siblings = dao.getForProfile(step.profileId).filter { it.kind == step.kind }
+            val index = siblings.indexOfFirst { it.stepId == step.stepId }
+            if (index < 0) return@withWriteTransaction
+            val target = siblings.getOrNull(index + delta) ?: return@withWriteTransaction
+            val current = siblings[index]
+            dao.setOrder(current.stepId, target.stepOrder)
+            dao.setOrder(target.stepId, current.stepOrder)
+        }
     }
 }

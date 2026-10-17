@@ -2,6 +2,7 @@ package com.example.myexodus.ui.settings
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.Widgets
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -142,7 +144,12 @@ fun SettingsScreen(
 
     val loaded = checks
     when (pane) {
-        PANE_PROTECTION -> if (loaded != null) {
+        // Finding #53: the pane can be opened before the resume re-read lands (the index
+        // renders with no checks), and only this pane renders from `loaded` — without a
+        // fallback the tap produced a blank frame.
+        PANE_PROTECTION -> if (loaded == null) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        } else {
             ProtectionScreen(
                 checks = loaded,
                 serviceEnabled = serviceEnabled,

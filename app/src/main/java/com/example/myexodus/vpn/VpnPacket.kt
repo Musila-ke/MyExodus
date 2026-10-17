@@ -238,37 +238,6 @@ object VpnPacket {
         return array
     }
 
-    /**
-     * Split an IPv4 packet into two fragments so the first fragment carries only the
-     * upper-layer header (a zero-payload-looking segment) and the second carries the data.
-     * Probe: some device kernels/DPI match "TCP with payload" on TUN ingress and drop the
-     * segment; the kernel itself reassembles fragments before TCP, so fragmentation may
-     * bypass the matcher. Returns the two fragments, or empty when there is no payload.
-     */
-    fun fragmentV4(packet: ByteArray): List<ByteArray> {
-        if (packet.size <= 40) return emptyList()
-        val id = packet.copyOfRange(4, 6)
-        val flagsOffset = readShort(packet, 6) and 0x3FFF // keep DF, drop any existing frag-offset/MF
-        val payload = packet.size - 40
-        val frag0 = ByteArray(40)
-        packet.copyInto(frag0, 0, 0, 20)
-        frag0[2] = 0; frag0[3] = 40
-        frag0[6] = (0x60 or ((flagsOffset ushr 8) and 0x3F)).toByte(); frag0[7] = (flagsOffset and 0xFF).toByte() // DF|MF, offset 0
-        packet.copyInto(frag0, 20, 20, 40)
-        frag0[10] = 0; frag0[11] = 0 // checksum field must be zeroed before summing
-        val hc0 = headerChecksumV4(frag0, 0, 20)
-        frag0[10] = (hc0 ushr 8).toByte(); frag0[11] = hc0.toByte()
-        val frag1 = ByteArray(20 + payload)
-        packet.copyInto(frag1, 0, 0, 20)
-        frag1[2] = ((20 + payload) ushr 8).toByte(); frag1[3] = (20 + payload).toByte()
-        frag1[6] = (0x40 or (((flagsOffset or 5) ushr 8) and 0x3F)).toByte(); frag1[7] = ((flagsOffset or 5) and 0xFF).toByte() // DF, offset 40/8=5
-        packet.copyInto(frag1, 20, 40, packet.size)
-        frag1[10] = 0; frag1[11] = 0
-        val hc1 = headerChecksumV4(frag1, 0, 20)
-        frag1[10] = (hc1 ushr 8).toByte(); frag1[11] = hc1.toByte()
-        return listOf(frag0, frag1)
-    }
-
     /** Full IP packet carrying one UDP datagram (RFC 768: checksum 0 is reserved — write 0xFFFF instead). */
     fun buildUdpPacket(
         src: ByteArray, dst: ByteArray,

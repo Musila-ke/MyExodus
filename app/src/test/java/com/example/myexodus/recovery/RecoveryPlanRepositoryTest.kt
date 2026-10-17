@@ -18,6 +18,10 @@ import com.example.myexodus.data.db.entity.HabitProgress
 import com.example.myexodus.data.db.entity.PairProfileSharing
 import com.example.myexodus.data.db.entity.PairStreakSharing
 import com.example.myexodus.data.db.entity.RiskWindow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -191,6 +195,25 @@ class RecoveryPlanRepositoryTest {
         assertTrue(seeded.enabled)
     }
 
+    /**
+     * Three surfaces read the plan (the recovery root's activeWindow plus two subpages), and on
+     * a fresh install their first reads overlap: a check-then-insert outside the transaction
+     * gives the empty table two defaults. The re-check inside the write transaction sees the
+     * first insert.
+     */
+    @Test
+    fun concurrentFirstReads_seedExactlyOneDefault() = runTest {
+        coroutineScope {
+            (1..8).map { async(Dispatchers.IO) { repository.windows() } }.awaitAll()
+        }
+
+        assertEquals(
+            "a raced first read must not leave two default windows",
+            1,
+            repository.windows().size,
+        )
+    }
+
     @Test
     fun addWindow_capsAtThree_andDeleteLeavesAtLeastOneAfterReseed() = runTest {
         repository.windows() // seed the default
@@ -202,6 +225,67 @@ class RecoveryPlanRepositoryTest {
             repository.addWindow(15 * 60, 16 * 60, RiskWindowSpec.ALL_DAYS_MASK),
         )
         assertEquals(RiskWindow.MAX_WINDOWS, repository.windows().size)
+    }
+
+    /**
+     * Finding #58: the editor launches each save from its own coroutine. A pre-transaction
+     * count let concurrent saves both pass the cap; the check now runs inside the write
+     * transaction, so the cap holds no matter how the saves interleave.
+     */
+    @Test
+    fun concurrentAddWindow_neverExceedsTheCap() = runTest {
+        repository.windows() // seed the default: two slots left
+
+        coroutineScope {
+            (1..8).map { i ->
+                async(Dispatchers.IO) { repository.addWindow(9 * 60 + i, 10 * 60 + i, RiskWindowSpec.ALL_DAYS_MASK) }
+            }.awaitAll()
+        }
+
+        assertEquals(RiskWindow.MAX_WINDOWS, repository.windows().size)
+    }
+
+    @Test
+    fun concurrentAddItem_neverExceedsThePerKindCap() = runTest {
+        coroutineScope {
+            (1..10).map { i ->
+                async(Dispatchers.IO) { repository.addItem(profileId, CoachingStep.KIND_STEP, "step $i") }
+            }.awaitAll()
+        }
+
+        assertEquals(
+            CoachingStep.MAX_PER_KIND,
+            repository.items(profileId).count { it.kind == CoachingStep.KIND_STEP },
+        )
+        assertEquals(
+            "every winning save got its own step_order",
+            CoachingStep.MAX_PER_KIND,
+            repository.items(profileId).map { it.stepOrder }.toSet().size,
+        )
+    }
+
+    /**
+     * A rapid double tap on Move Up sends the same pre-recomposition entity twice. The second
+     * call must swap using the row's CURRENT order; the old code wrote the stale order onto the
+     * target, leaving two items with the same step_order (finding #58).
+     */
+    @Test
+    fun moveItem_secondTapWithAStaleEntity_keepsOrdersUnique() = runTest {
+        repository.addItem(profileId, CoachingStep.KIND_STEP, "A")
+        repository.addItem(profileId, CoachingStep.KIND_STEP, "B")
+        repository.addItem(profileId, CoachingStep.KIND_STEP, "C")
+        val staleC = repository.items(profileId).single { it.actionText == "C" }
+
+        repository.moveItem(staleC, -1)
+        repository.moveItem(staleC, -1) // still carries C's pre-first-swap step_order
+
+        val steps = repository.items(profileId).filter { it.kind == CoachingStep.KIND_STEP }
+        assertEquals(listOf("C", "A", "B"), steps.map { it.actionText })
+        assertEquals(
+            "a stale tap must never duplicate a step_order",
+            steps.size,
+            steps.map { it.stepOrder }.toSet().size,
+        )
     }
 
     private class FakeKeyManager : DatabaseKeyManager {

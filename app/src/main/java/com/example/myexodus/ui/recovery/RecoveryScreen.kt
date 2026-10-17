@@ -302,14 +302,18 @@ private fun TechniqueSession(
 
     // The row is created when the technique is opened (FR-5: STARTED is the moment of choosing),
     // and each technique gets its own row — switching techniques ends the previous one quietly.
+    // Finding #60: start() opens the store synchronously, and a LaunchedEffect body runs on Main
+    // — the same fresh-open ANR class reload() above documents (device-caught 2026-09-19).
     LaunchedEffect(technique.id) {
-        sessionId = sessions.start(
-            technique = technique.id,
-            intensityStart = null,
-            entry = entry,
-            zoneId = ZoneId.systemDefault().id,
-            nowEpochMs = System.currentTimeMillis(),
-        )
+        sessionId = withContext(Dispatchers.IO) {
+            sessions.start(
+                technique = technique.id,
+                intensityStart = null,
+                entry = entry,
+                zoneId = ZoneId.systemDefault().id,
+                nowEpochMs = System.currentTimeMillis(),
+            )
+        }
     }
     DisposableEffect(technique.id) {
         onDispose {

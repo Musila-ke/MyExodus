@@ -109,11 +109,28 @@ interface PartnerActivityDao {
      * stale motivational message arriving late serves nobody. Bounded batches, oldest first.
      */
     @Query(
+        "DELETE FROM partner_activity_link WHERE event_id IN (" +
+            "SELECT event_id FROM partner_activity_outbox WHERE created_at_ms < :cutoffMs " +
+            "ORDER BY created_at_ms ASC LIMIT :batch)",
+    )
+    suspend fun deleteLinksForExpired(cutoffMs: Long, batch: Int): Int
+
+    @Query(
         "DELETE FROM partner_activity_outbox WHERE event_id IN (" +
             "SELECT event_id FROM partner_activity_outbox WHERE created_at_ms < :cutoffMs " +
             "ORDER BY created_at_ms ASC LIMIT :batch)",
     )
-    suspend fun deleteJournalOlderThan(cutoffMs: Long, batch: Int): Int
+    suspend fun deleteExpiredJournalRows(cutoffMs: Long, batch: Int): Int
+
+    /** Retention as one unit (finding #63): the links of an expired journal row die with it.
+     *  Deleting the journal alone left one link per (event, pair) behind forever — the tables
+     *  are only ever joined by these queries, so the orphans were harmless but unbounded.
+     *  Both statements select the same batch; the outbox is untouched by the link delete. */
+    @Transaction
+    suspend fun deleteJournalOlderThan(cutoffMs: Long, batch: Int): Int {
+        deleteLinksForExpired(cutoffMs, batch)
+        return deleteExpiredJournalRows(cutoffMs, batch)
+    }
 
     // --- Received-state projection (Step 8, §8.10) ------------------------------------------
 

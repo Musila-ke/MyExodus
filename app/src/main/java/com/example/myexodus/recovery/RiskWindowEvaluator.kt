@@ -36,19 +36,8 @@ object RiskWindowEvaluator {
     fun activeWindow(now: LocalDateTime, windows: List<RiskWindowSpec>): RiskWindowSpec? =
         windows.firstOrNull { isActive(now, it) }
 
-    /** Minutes until the window's end from [now] (for "until 6:00" copy); 0 when not active. */
-    fun minutesUntilEnd(now: LocalDateTime, window: RiskWindowSpec): Int {
-        if (!isActive(now, window)) return 0
-        val t = now.hour * 60 + now.minute
-        val minutes = (window.endMinute - t + MINUTES_PER_DAY) % MINUTES_PER_DAY
-        // A window that ends exactly at the same minute it started is a full-day window.
-        return if (minutes == 0) MINUTES_PER_DAY else minutes
-    }
-
     private fun maskCovers(daysMask: Int, date: LocalDate): Boolean =
         daysMask and (1 shl (date.dayOfWeek.value - 1)) != 0
-
-    private const val MINUTES_PER_DAY = 24 * 60
 }
 
 /** Room-free view of a `risk_window` row (the entity maps to this one-for-one). */

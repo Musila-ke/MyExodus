@@ -205,6 +205,7 @@ fun AppShell(
     val streakLoadFailed by streaks.loadFailed.collectAsStateWithLifecycle()
     val addingHabit by streaks.addingHabit.collectAsStateWithLifecycle()
     val setupError by streaks.setupError.collectAsStateWithLifecycle()
+    val onboardingInFlight by streaks.onboardingInFlight.collectAsStateWithLifecycle()
     val relapseInFlight by streaks.relapseInFlight.collectAsStateWithLifecycle()
     val relapseFeedback by streaks.relapseFeedback.collectAsStateWithLifecycle()
 
@@ -372,6 +373,7 @@ fun AppShell(
                         state = habit,
                         addingHabit = addingHabit,
                         setupError = setupError,
+                        onboardingInFlight = onboardingInFlight,
                         relapseInFlight = relapseInFlight,
                         relapseFeedback = relapseFeedback,
                         onOnboard = streaks::onboard,

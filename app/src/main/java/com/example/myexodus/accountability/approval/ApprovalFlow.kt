@@ -111,17 +111,26 @@ class ApprovalFlow(
         if (dao.casDecide(requestEventId, status, at, at) == 0) {
             return refuse(requestEventId, describeUnchanged(requestEventId, at))
         }
-        val created = creator.create(
-            row.pairId,
-            EventPayload(
-                type = EventPayload.TYPE_APPROVAL_RESPONSE,
-                text = "",
-                requestEventId = row.requestEventId,
-                pairingEpoch = enrollment.pairingEpoch,
-                decision = approve,
-            ),
-            signature,
-        )
+        // `create` is a throwing path in production (a destroyed/undoable agreement key, a
+        // keystore miss); treating a throw as a plain failure is what keeps the documented
+        // invariant — the row and the wire can never disagree — true for every failure mode,
+        // not just the returned-`Failed` ones (finding #65).
+        val created = runCatching {
+            creator.create(
+                row.pairId,
+                EventPayload(
+                    type = EventPayload.TYPE_APPROVAL_RESPONSE,
+                    text = "",
+                    requestEventId = row.requestEventId,
+                    pairingEpoch = enrollment.pairingEpoch,
+                    decision = approve,
+                ),
+                signature,
+            )
+        }.getOrElse { e ->
+            Log.w(TAG, "approval response not chained request=$requestEventId", e)
+            EventCreator.CreateResult.Failed(e.toString())
+        }
         return when (created) {
             is EventCreator.CreateResult.Created -> RespondResult.Decided(approve)
             // Identical bytes already chained — the decision is effectively delivered.

@@ -88,6 +88,7 @@ import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * How a user-initiated unpair ended. A cancelled biometric prompt is not a failure: the
@@ -264,10 +265,17 @@ fun PartnerScreen(
     // Null = not paired, or the store refused a read — no honest claim, so no card.
     var sharesNothing by remember { mutableStateOf<Boolean?>(null) }
 
+    // Finding #57: roster switches start overlapping reloads (every roster row fires one), and
+    // IO-pool completions can arrive out of order. Only the newest reload may publish, or a
+    // fast A -> B switch could leave A's dashboard under B's selection.
+    val reloadEpoch = remember { AtomicInteger(0) }
     suspend fun reload() {
-        state = runCatching { source.load(selectedPairId = selectedPairId, nowMillis = System.currentTimeMillis()) }
+        val epoch = reloadEpoch.incrementAndGet()
+        val loaded = runCatching { source.load(selectedPairId = selectedPairId, nowMillis = System.currentTimeMillis()) }
             .onFailure { Log.w(TAG, "dashboard load failed", it) }
             .getOrElse { state ?: PartnerDashboardUi.Loading }
+        if (epoch != reloadEpoch.get()) return
+        state = loaded
         // The source falls back to the newest pairing when the stored pick is gone (unpaired,
         // or a fresh install's first pair): persist the resolved id, so the next cold start
         // shows this user instead of re-deciding.
@@ -294,25 +302,32 @@ fun PartnerScreen(
         scope.launch(Dispatchers.IO) { reload() }
     }
 
+    // Finding #56 (the #17/#55 class): every in-flight flag below is written on Main BEFORE
+    // the dispatch, with an entry guard. Written inside the IO coroutine, the queue time before
+    // dispatch left a second tap window — for the composer that meant the same message
+    // journaled and sent twice, and for approve/reject/unpair a duplicated state-changing write.
     val runCheckNow: () -> Unit = {
-        scope.launch(Dispatchers.IO) {
+        if (!checking) {
             checking = true
             checkFailed = false
             checkOk = false
-            val ok = runCatching { onCheckNow() }.getOrDefault(false)
-            checking = false
-            checkFailed = !ok
-            // A successful check with nothing new leaves the "last synced" watermark
-            // unchanged, so without a receipt the button looks like it did nothing.
-            checkOk = ok
-            reload()
+            scope.launch(Dispatchers.IO) {
+                val ok = runCatching { onCheckNow() }.getOrDefault(false)
+                checking = false
+                checkFailed = !ok
+                // A successful check with nothing new leaves the "last synced" watermark
+                // unchanged, so without a receipt the button looks like it did nothing.
+                checkOk = ok
+                reload()
+            }
         }
     }
 
     fun respondTo(requestEventId: String, approve: Boolean) {
+        if (respondingTo != null) return
+        respondingTo = requestEventId
+        respondFailed = false
         scope.launch(Dispatchers.IO) {
-            respondingTo = requestEventId
-            respondFailed = false
             val ok = runCatching { onRespondToApproval(requestEventId, approve) }
                 .onFailure { Log.w(TAG, "approval response threw", it) }
                 .getOrDefault(false)
@@ -323,9 +338,10 @@ fun PartnerScreen(
     }
 
     fun runUnpair(pairId: String) {
+        if (unpairing) return
+        unpairing = true
+        unpairFailed = false
         scope.launch(Dispatchers.IO) {
-            unpairing = true
-            unpairFailed = false
             val outcome = runCatching { onUnpair(pairId) }
                 .onFailure { Log.w(TAG, "unpair initiation threw", it) }
                 .getOrDefault(UnpairOutcome.FAILED)
@@ -470,11 +486,13 @@ fun PartnerScreen(
                 dismissing = dismissing,
                 onCheckNow = runCheckNow,
                 onDismiss = {
-                    scope.launch(Dispatchers.IO) {
+                    if (!dismissing) {
                         dismissing = true
-                        runCatching { onDismissUnpair(current.pairId) }
-                        dismissing = false
-                        reload()
+                        scope.launch(Dispatchers.IO) {
+                            runCatching { onDismissUnpair(current.pairId) }
+                            dismissing = false
+                            reload()
+                        }
                     }
                 },
             )
@@ -715,10 +733,10 @@ fun PartnerScreen(
                 val target = paired?.pairId
                 if (target == null) {
                     messageOutcome = MessageSendOutcome.FAILED
-                } else {
+                } else if (!messageSending) {
+                    messageSending = true
+                    messageOutcome = null
                     scope.launch(Dispatchers.IO) {
-                        messageSending = true
-                        messageOutcome = null
                         val outcome = runCatching { onSendMessage(target, text) }
                             .onFailure { Log.w(TAG, "message send threw", it) }
                             .getOrDefault(MessageSendOutcome.FAILED)
@@ -797,16 +815,18 @@ fun PartnerScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        scope.launch(Dispatchers.IO) {
+                        if (!saving) {
                             saving = true
                             failed = false
-                            val ok = runCatching { onRenameUser(user.pairId, name) }
-                                .onFailure { Log.w(TAG, "rename failed", it) }
-                                .isSuccess
-                            saving = false
-                            failed = !ok
-                            if (ok) renaming = null
-                            reload()
+                            scope.launch(Dispatchers.IO) {
+                                val ok = runCatching { onRenameUser(user.pairId, name) }
+                                    .onFailure { Log.w(TAG, "rename failed", it) }
+                                    .isSuccess
+                                saving = false
+                                failed = !ok
+                                if (ok) renaming = null
+                                reload()
+                            }
                         }
                     },
                     enabled = !saving,

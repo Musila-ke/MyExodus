@@ -42,6 +42,11 @@ class ActivityLogStore(
         if (db != null) return true
         val path = appContext.getDatabasePath(ActivityLogSchema.DB_NAME)
         return try {
+            // Self-contained like every other SQLCipher consumer (finding #66): without this,
+            // the store's first open in a process that has not yet touched the rules DB dies
+            // with UnsatisfiedLinkError — order-dependent, and silent because open() returns
+            // false on the fail-open path (device-caught 2026-10-17).
+            System.loadLibrary("sqlcipher")
             val t0 = SystemClock.uptimeMillis()
             val key = keyManager.getOrCreateKey()
             val t1 = SystemClock.uptimeMillis()
@@ -66,7 +71,7 @@ class ActivityLogStore(
                     rawKey = raw
                     raw = null
                     Log.i(TAG, "Activity log open: WAL confirmed")
-                    purgeOlderThan(RETENTION_MS)
+                    purgeOlderThan(System.currentTimeMillis() - RETENTION_WINDOW_MS)
                     true
                 }
             } finally {
@@ -217,6 +222,8 @@ class ActivityLogStore(
 
     private companion object {
         const val TAG = "MyExodusActivityLog"
-        const val RETENTION_MS = 14L * 24 * 60 * 60 * 1000
+        /** A duration, not a cutoff: [purgeOlderThan] takes an absolute epoch
+         *  (finding #62 — passing this raw made the open-time purge a no-op). */
+        const val RETENTION_WINDOW_MS = 14L * 24 * 60 * 60 * 1000
     }
 }

@@ -45,6 +45,7 @@ import java.time.format.DateTimeFormatter
 @Composable
 internal fun HabitSetupCard(
     error: String?,
+    submitting: Boolean,
     onOnboard: (
         label: String,
         durationYears: Int,
@@ -173,7 +174,7 @@ internal fun HabitSetupCard(
                 onClick = {
                     onOnboard(label.trim(), DURATION_OPTIONS[durationIndex!!].second, severity!!, startAt)
                 },
-                enabled = label.isNotBlank() && durationIndex != null && severity != null,
+                enabled = !submitting && label.isNotBlank() && durationIndex != null && severity != null,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(stringResource(R.string.streaks_setup_start))

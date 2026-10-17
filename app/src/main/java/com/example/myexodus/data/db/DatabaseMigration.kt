@@ -303,6 +303,13 @@ class DatabaseMigration(
                 Column("active_days_of_week", Kind.TEXT), Column("block_expires_at", Kind.LONG),
                 Column("severity_level", Kind.TEXT),
             )),
+            // The v15 global consent flags (share_access_attempts / share_relapses /
+            // share_milestones) are NOT copied: schema v16 dropped those columns (ADR #135 —
+            // consent is per (pair, habit) in pair_streak_sharing, and the owner ruling is
+            // "nothing until you choose", so a legacy flag must not seed a pair). Naming them
+            // here would make the INSERT fail against the v16 destination ("table
+            // habit_progress has no column named …"), which kept the legacy file on every
+            // launch instead of ever finishing the split (review sweep 2026-10-17).
             TableSpec("habit_progress", "habit_progress", listOf(
                 Column("progress_id", Kind.TEXT), Column("profile_id", Kind.TEXT),
                 Column("target_identifier", Kind.TEXT),
@@ -311,8 +318,6 @@ class DatabaseMigration(
                 Column("habit_duration_years", Kind.LONG),
                 Column("onboarding_severity_level", Kind.TEXT),
                 Column("last_relapse_timestamp", Kind.LONG),
-                Column("share_access_attempts", Kind.LONG),
-                Column("share_relapses", Kind.LONG), Column("share_milestones", Kind.LONG),
                 Column("assigned_partnership_id", Kind.TEXT),
             )),
             TableSpec("coaching_step", "coaching_step", listOf(
