@@ -24,6 +24,12 @@ interface DomainUsageHost {
     fun postVpnStoppedNotification()
 
     /**
+     * FR3: a website rule crossed a warning threshold. The host applies the notification
+     * permission test; the copy names no site (INV-7).
+     */
+    fun postWebsiteLimitWarning(level: Int, remainingMs: Long)
+
+    /**
      * §8 S7.5/D-34: start strict-Private-DNS tracking, reporting every change of the recomputed
      * value. Returns the unregister action [DomainUsageEngine.stop] runs; a no-op below API 28.
      */

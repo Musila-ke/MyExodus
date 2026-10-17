@@ -18,6 +18,8 @@ class UsageTickLoop(
     private val ledger: UsageLedger,
     private val counters: EngineCounters,
     private val onRollover: suspend (DayRollover) -> Unit = {},
+    /** After every ledger pass (post-rollover): the engine surfaces threshold warnings here. */
+    private val onTick: () -> Unit = {},
     private val onPersistDue: suspend () -> Unit = {},
 ) {
 
@@ -27,6 +29,7 @@ class UsageTickLoop(
             delay(MeteringConfig.TICK_MS)
             try {
                 ledger.tick()?.let { onRollover(it) }
+                onTick()
                 if (++ticksSincePersist >= PERSIST_EVERY_TICKS) {
                     ticksSincePersist = 0
                     onPersistDue()

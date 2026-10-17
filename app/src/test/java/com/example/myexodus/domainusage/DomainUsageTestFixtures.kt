@@ -39,6 +39,12 @@ internal class FakeDomainUsageHost(
         notifications.incrementAndGet()
     }
 
+    val limitWarnings = java.util.concurrent.CopyOnWriteArrayList<LimitWarning>()
+
+    override fun postWebsiteLimitWarning(level: Int, remainingMs: Long) {
+        limitWarnings.add(LimitWarning(level, remainingMs))
+    }
+
     override fun registerPrivateDnsMonitor(onStrictChanged: (Boolean) -> Unit): () -> Unit {
         monitorRegistrations.incrementAndGet()
         strictCallback = onStrictChanged

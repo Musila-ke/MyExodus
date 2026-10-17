@@ -2,6 +2,7 @@ package com.example.myexodus.widget
 
 import android.content.Context
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -126,7 +127,6 @@ internal fun milestoneFraction(days: Int?, next: Int?): Float? {
 internal fun DesertDawnWidgetContent(
     view: WidgetView,
     openStreaks: Action,
-    manageUrge: Action,
     openApp: Action,
     /** Null when the sample carries no bound habit: no track to end, no control to offer. */
     logRelapse: Action?,
@@ -140,7 +140,13 @@ internal fun DesertDawnWidgetContent(
     // The whole surface is tappable so any launcher-initiated tap re-enters the app, whose
     // cold-start/resume path re-checks protection and re-publishes the snapshot (spec NFR5).
     // The inner targets keep their own clicks — RemoteViews gives the child priority.
-    Scaffold(modifier = GlanceModifier.clickable(openApp)) {
+    // horizontalPadding = 0: Scaffold's default 12dp on each side stacked on top of each variant's
+    // own padding and cost the 2x1 card ~25% of its width. Each variant owns its inset instead.
+    Scaffold(
+        modifier = GlanceModifier.clickable(openApp),
+        backgroundColor = GlanceTheme.colors.background,
+        horizontalPadding = 0.dp,
+    ) {
         when {
             LocalSize.current.height < EXPANDED_MIN_HEIGHT ->
                 CompactContent(view, statusText, footnote, openStreaks)
@@ -157,8 +163,10 @@ internal fun DesertDawnWidgetContent(
             LocalSize.current.width < WIDE_MIN_WIDTH -> NarrowContent(
                 view = view,
                 statusText = statusText,
-                manageUrge = manageUrge,
                 openStreaks = openStreaks,
+                logRelapse = logRelapse,
+                logUrge = logUrge,
+                reachOut = reachOut,
             )
 
             else -> ExpandedContent(
@@ -189,18 +197,20 @@ private fun CompactContent(
     openStreaks: Action,
 ) {
     Column(
-        modifier = GlanceModifier.fillMaxSize().padding(vertical = 2.dp),
+        modifier = GlanceModifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         if (view.discreet) {
-            DayLockup(view, openStreaks, numeralSize = 26.sp)
+            DayLockup(view, openStreaks, numeralSize = 28.sp)
         } else {
+            // The status word alone (FR3a): the combined line clips at this width. Colored by
+            // state so the word carries the same signal as the bigger cards' chip.
             Text(
                 text = statusText,
                 style = TextStyle(
-                    color = GlanceTheme.colors.onBackground,
-                    fontSize = 16.sp,
+                    color = statusColor(view.status),
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                 ),
                 maxLines = 1,
@@ -238,7 +248,7 @@ private fun ExpandedContent(
     val context = LocalContext.current
     val caption = captionFor(context, view, includeMilestone = true)
     Column(
-        modifier = GlanceModifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 6.dp),
+        modifier = GlanceModifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.Top,
         horizontalAlignment = Alignment.Start,
     ) {
@@ -246,20 +256,15 @@ private fun ExpandedContent(
             modifier = GlanceModifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            DayLockup(view, openStreaks, numeralSize = 32.sp)
+            DayLockup(view, openStreaks, numeralSize = 38.sp)
             if (!view.discreet) {
                 Spacer(GlanceModifier.defaultWeight())
-                StatusChip(statusText)
+                StatusChip(view.status, statusText)
             }
         }
         Spacer(GlanceModifier.defaultWeight())
-        Box(
-            GlanceModifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(GlanceTheme.colors.outline),
-        ) {}
-        Spacer(GlanceModifier.height(4.dp))
+        Hairline()
+        Spacer(GlanceModifier.height(5.dp))
         caption?.let {
             Text(
                 text = it,
@@ -273,33 +278,34 @@ private fun ExpandedContent(
 }
 
 /**
- * The tall 2×2 card ([NARROW_SIZE]): the compact stack plus the card's action, because at the
- * ~110dp a 2-column cell honestly reports there is no room for a data strip — a chip beside the
- * hero clips (an 11sp "Not protected" needs ~88dp by itself) and so does a label-inline value row.
- * The milestone line takes the short form for the same reason ("23d to 30-day mark" is the
- * narrowest unambiguous form; the compact card's sentence form is ~98dp). The action rides the same centered stack
- * rather than pinning to the bottom edge: both tested launchers draw this cell far taller than
- * the preset they match (~187dp drawn for a reported 193dp nominal on AOSP, 2026-09-27), and a
- * pinned action turns that slack into the void the tall card was reworked to remove. Centered,
- * the slack lands as margin.
+ * The tall 2×2 card ([NARROW_SIZE]): the compact stack plus the same icon controls the wide
+ * variants carry (widget v3, 2026-10-17). At the ~110dp a 2-column cell honestly reports there is
+ * no room for a data strip — a chip beside the hero clips and so does a label-inline value row —
+ * so the card stays a centered stack. The controls ride that stack at 28dp / 5dp gaps (94dp for
+ * three, inside the 104dp content width) instead of the old text link: one control idiom across
+ * every variant, and no launcher text naming an action. Both tested launchers draw this cell far
+ * taller than the preset they match, so a pinned action would turn that slack into a void;
+ * centered, the slack lands as margin.
  */
 @Composable
 private fun NarrowContent(
     view: WidgetView,
     statusText: String,
-    manageUrge: Action,
     openStreaks: Action,
+    logRelapse: Action?,
+    logUrge: Action,
+    reachOut: Action,
 ) {
     val context = LocalContext.current
     Column(
-        modifier = GlanceModifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp),
+        modifier = GlanceModifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        DayLockup(view, openStreaks, numeralSize = 26.sp)
+        DayLockup(view, openStreaks, numeralSize = 30.sp)
         if (!view.discreet) {
-            Spacer(GlanceModifier.height(3.dp))
-            StatusChip(statusText)
+            Spacer(GlanceModifier.height(4.dp))
+            StatusChip(view.status, statusText)
         }
         footnoteFor(context, view, shortForm = true)?.let {
             Spacer(GlanceModifier.height(2.dp))
@@ -312,18 +318,14 @@ private fun NarrowContent(
                 maxLines = 1,
             )
         }
-        Spacer(GlanceModifier.height(4.dp))
-        Text(
-            text = actionLabel(context, view),
-            modifier = GlanceModifier
-                .clickable(manageUrge)
-                .padding(vertical = 2.dp, horizontal = 6.dp),
-            style = TextStyle(
-                color = GlanceTheme.colors.primary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-            ),
-            maxLines = 1,
+        Spacer(GlanceModifier.height(8.dp))
+        ControlRow(
+            logRelapse = logRelapse,
+            logUrge = logUrge,
+            reachOut = reachOut,
+            discreet = view.discreet,
+            size = 28.dp,
+            alignment = Alignment.CenterHorizontally,
         )
     }
 }
@@ -354,42 +356,47 @@ private fun TallContent(
             modifier = GlanceModifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            DayLockup(view, openStreaks, numeralSize = 34.sp)
+            DayLockup(view, openStreaks, numeralSize = 44.sp)
             if (!view.discreet) {
                 Spacer(GlanceModifier.defaultWeight())
-                StatusChip(statusText)
+                StatusChip(view.status, statusText)
             }
         }
-        Spacer(GlanceModifier.defaultWeight())
+        Spacer(GlanceModifier.height(12.dp))
         MilestoneBand(view)
+        // One flexible band, not two: splitting the slack above and below the milestone band
+        // (the pre-v3 layout) turned a stretched card into two voids with a gauge stranded
+        // between them. Here the slack lands below the gauge, above the footer hairline.
         Spacer(GlanceModifier.defaultWeight())
-        Box(
-            GlanceModifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(GlanceTheme.colors.outline),
-        ) {}
+        Hairline()
         Spacer(GlanceModifier.height(6.dp))
-        // Caption + controls grouped as one nested band, not flat in the outer Column: Glance's
+        // Footer keeps the reference's bottom-edge grammar: caption left, controls right. Glance's
         // RemoteViews translation caps every container at 10 children and silently drops the tail
         // past that (LayoutSelectionKt in glance-appwidget 1.1.1 — javap-verified; device logcat
         // 2026-10-16: "Truncated Column container from 11 to 10 elements", which ate the whole
-        // action row whenever the non-discreet caption was present). With the band wrappers this
-        // column holds 7 direct children in every path, well clear of the cap.
-        Column(
+        // action row whenever the non-discreet caption was present). This column holds 7 direct
+        // children in every path, well clear of the cap.
+        Row(
             modifier = GlanceModifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Top,
-            horizontalAlignment = Alignment.Start,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            caption?.let {
+            if (caption != null) {
                 Text(
-                    text = it,
+                    text = caption,
+                    modifier = GlanceModifier.defaultWeight(),
                     style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 10.sp),
                     maxLines = 1,
                 )
-                Spacer(GlanceModifier.height(6.dp))
+            } else {
+                Spacer(GlanceModifier.defaultWeight())
             }
-            ControlRow(logRelapse, logUrge, reachOut, discreet = view.discreet)
+            ControlRow(
+                logRelapse = logRelapse,
+                logUrge = logUrge,
+                reachOut = reachOut,
+                discreet = view.discreet,
+                modifier = GlanceModifier,
+            )
         }
     }
 }
@@ -441,24 +448,36 @@ private fun MilestoneBand(view: WidgetView) {
         // only ever be as wide as the declared preset.
         LinearProgressIndicator(
             progress = fraction,
-            modifier = GlanceModifier.fillMaxWidth().height(4.dp),
+            modifier = GlanceModifier.fillMaxWidth().height(5.dp),
             color = GlanceTheme.colors.tertiary,
-            backgroundColor = GlanceTheme.colors.surfaceVariant,
+            backgroundColor = HairlineColor,
         )
     }
 }
 
-/** The protection state as the card's one chip (non-discreet only). */
+/**
+ * The protection state as the card's one chip (non-discreet only). Semantic container colors,
+ * not one neutral pill for all three states: the chip is the card's only colored evidence of
+ * protection, so a teal "Protected" and a red "Not protected" must not look identical
+ * (widget redesign 2026-10-17).
+ */
 @Composable
-private fun StatusChip(text: String) {
+private fun StatusChip(status: DisplayedStatus, text: String) {
+    val colors = GlanceTheme.colors
+    val (background, foreground) = when (status) {
+        DisplayedStatus.PROTECTED -> colors.primaryContainer to colors.onPrimaryContainer
+        DisplayedStatus.UNPROTECTED -> colors.errorContainer to colors.onErrorContainer
+        DisplayedStatus.UNVERIFIED -> colors.secondaryContainer to colors.onSecondaryContainer
+    }
     Text(
         text = text,
         modifier = GlanceModifier
-            .background(GlanceTheme.colors.surfaceVariant)
+            .background(background)
+            .cornerRadius(9.dp)
             .padding(horizontal = 8.dp, vertical = 3.dp),
         style = TextStyle(
-            color = GlanceTheme.colors.onSurfaceVariant,
-            fontSize = 11.sp,
+            color = foreground,
+            fontSize = 10.sp,
             fontWeight = FontWeight.Medium,
         ),
         maxLines = 1,
@@ -490,13 +509,20 @@ private fun ControlRow(
     logUrge: Action,
     reachOut: Action,
     discreet: Boolean,
+    size: Dp = 36.dp,
+    modifier: GlanceModifier = GlanceModifier.fillMaxWidth(),
+    alignment: Alignment.Horizontal = Alignment.End,
 ) {
     val context = LocalContext.current
+    val gap = if (size >= 34.dp) 8.dp else 5.dp
+    // The tonal circles use the secondary container, not surfaceVariant: on the cream canvas
+    // surfaceVariant is within ~8 tone steps of the card and the circles all but vanished.
+    val colors = GlanceTheme.colors
     Row(
-        modifier = GlanceModifier.fillMaxWidth(),
+        modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
+        horizontalAlignment = alignment,
     ) {
-        Spacer(GlanceModifier.defaultWeight())
         logRelapse?.let {
             ActionCircle(
                 iconRes = R.drawable.ic_log_relapse,
@@ -504,10 +530,11 @@ private fun ControlRow(
                     if (discreet) R.string.widget_action_reset else R.string.widget_action_relapse,
                 ),
                 action = it,
-                background = GlanceTheme.colors.surfaceVariant,
-                tint = GlanceTheme.colors.onSurfaceVariant,
+                background = colors.secondaryContainer,
+                tint = colors.onSecondaryContainer,
+                size = size,
             )
-            Spacer(GlanceModifier.width(10.dp))
+            Spacer(GlanceModifier.width(gap))
         }
         ActionCircle(
             iconRes = R.drawable.ic_log_urge,
@@ -515,22 +542,24 @@ private fun ControlRow(
                 if (discreet) R.string.widget_action_urge_discreet else R.string.widget_action_urge,
             ),
             action = logUrge,
-            background = GlanceTheme.colors.surfaceVariant,
-            tint = GlanceTheme.colors.onSurfaceVariant,
+            background = colors.secondaryContainer,
+            tint = colors.onSecondaryContainer,
+            size = size,
         )
-        Spacer(GlanceModifier.width(10.dp))
+        Spacer(GlanceModifier.width(gap))
         ActionCircle(
             iconRes = R.drawable.ic_widget_reach_out,
             contentDescription = context.getString(R.string.widget_action_reach_out),
             action = reachOut,
-            background = GlanceTheme.colors.primary,
-            tint = GlanceTheme.colors.onPrimary,
+            background = colors.primary,
+            tint = colors.onPrimary,
+            size = size,
         )
     }
 }
 
-/** One circle control. 38dp keeps the two-band bottom block (caption + controls) inside the
- *  110dp 4×2 preset's real budget, where the reference's small circle reads right anyway. */
+/** One circle control. 36dp keeps the two-band bottom block (caption + controls) inside the
+ *  110dp 4×2 preset's real budget; 28dp is the narrow 2×2 variant's version. */
 @Composable
 private fun ActionCircle(
     iconRes: Int,
@@ -538,12 +567,13 @@ private fun ActionCircle(
     action: Action,
     background: ColorProvider,
     tint: ColorProvider,
+    size: Dp,
 ) {
     Box(
         modifier = GlanceModifier
-            .size(38.dp)
+            .size(size)
             .background(background)
-            .cornerRadius(19.dp)
+            .cornerRadius(size / 2)
             .clickable(action),
         contentAlignment = Alignment.Center,
     ) {
@@ -554,7 +584,7 @@ private fun ActionCircle(
         Image(
             provider = ImageProvider(iconRes),
             contentDescription = contentDescription,
-            modifier = GlanceModifier.size(20.dp),
+            modifier = GlanceModifier.size(if (size >= 34.dp) 19.dp else 15.dp),
             colorFilter = ColorFilter.tint(tint),
         )
     }
@@ -596,18 +626,12 @@ private fun captionFor(context: Context, view: WidgetView, includeMilestone: Boo
 }
 
 /**
- * The card's one action label — the same Recovery deep link whether the card calls it "Manage
- * urge" or, discreetly, "Tools" (FR5; "Open" promised the app's main page and user-flagged
- * 2026-09-27: a nav label must not misstate its destination).
- */
-private fun actionLabel(context: Context, view: WidgetView): String =
-    context.getString(if (view.discreet) R.string.widget_tools else R.string.widget_manage_urge) + " ›"
-
-/**
- * The day count as a stat lockup: the word small and muted, the number large and gold, so the
- * number — the reason the widget exists — carries the visual weight instead of sitting at caption
- * size (reference port, 2026-09-27). Tapping it opens the Streaks tab, not Home: the surface the
- * number belongs to, reached with the same tab extra the milestone notifications use.
+ * The day count as a stat lockup, in the reference's label/value grammar: a tracked uppercase
+ * micro-label in the streak gold, then the number itself as the card's largest ink mark. The
+ * value carries the weight, the accent names what it measures (widget redesign 2026-10-17 — the
+ * inverse of the old gold-on-muddy-gold hierarchy). Tapping it opens the Streaks tab, not Home:
+ * the surface the number belongs to, reached with the same tab extra the milestone notifications
+ * use.
  */
 @Composable
 private fun DayLockup(view: WidgetView, openStreaks: Action, numeralSize: TextUnit) {
@@ -627,20 +651,20 @@ private fun DayLockup(view: WidgetView, openStreaks: Action, numeralSize: TextUn
             )
         } else {
             Text(
-                text = context.getString(R.string.widget_day_label),
+                text = context.getString(R.string.widget_day_label).uppercase(),
                 modifier = GlanceModifier.padding(bottom = 3.dp),
                 style = TextStyle(
-                    color = GlanceTheme.colors.onSurfaceVariant,
-                    fontSize = 12.sp,
+                    color = GlanceTheme.colors.tertiary,
+                    fontSize = 9.sp,
                     fontWeight = FontWeight.Medium,
                 ),
                 maxLines = 1,
             )
-            Spacer(GlanceModifier.width(4.dp))
+            Spacer(GlanceModifier.width(5.dp))
             Text(
                 text = context.getString(R.string.widget_day_number, days),
                 style = TextStyle(
-                    color = GlanceTheme.colors.tertiary,
+                    color = GlanceTheme.colors.onBackground,
                     fontSize = numeralSize,
                     fontWeight = FontWeight.Bold,
                 ),
@@ -648,6 +672,25 @@ private fun DayLockup(view: WidgetView, openStreaks: Action, numeralSize: TextUn
             )
         }
     }
+}
+
+/** The compact card's status word, in the same three semantic colors as the large cards' chip. */
+@Composable
+private fun statusColor(status: DisplayedStatus): ColorProvider = when (status) {
+    DisplayedStatus.PROTECTED -> GlanceTheme.colors.primary
+    DisplayedStatus.UNPROTECTED -> GlanceTheme.colors.error
+    DisplayedStatus.UNVERIFIED -> GlanceTheme.colors.onSurfaceVariant
+}
+
+/** The 1dp band divider shared by the expanded and tall cards. */
+@Composable
+private fun Hairline() {
+    Box(
+        GlanceModifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(HairlineColor),
+    ) {}
 }
 
 /** "2h ago" — how old the stored reading is. Minutes while it is minutes (a reboot right after a

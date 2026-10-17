@@ -324,6 +324,11 @@ class DomainUsageEngine(
                 ledger = ledger,
                 counters = counters,
                 onRollover = { rollover -> dbScope.launch { persistRollover(rollover) } },
+                onTick = {
+                    for (warning in ledger.takeLimitWarnings()) {
+                        host.postWebsiteLimitWarning(warning.level, warning.remainingMs)
+                    }
+                },
                 onPersistDue = {
                     // §6.6: the day key is stamped on the tick thread; the write itself is handed
                     // to the db thread so a slow commit cannot delay the next tick.

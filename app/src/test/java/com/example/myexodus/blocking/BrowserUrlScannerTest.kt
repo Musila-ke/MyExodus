@@ -51,20 +51,35 @@ class BrowserUrlScannerTest {
                     severityLevel = "CRITICAL",
                 ),
             )!!,
+            UrlPattern.from(
+                com.example.myexodus.data.db.entity.RestrictionRule(
+                    ruleId = "r2", profileId = "p-1",
+                    blockedPackage = "https://limited.example.com",
+                    targetType = "WEBSITE", isAlwaysOn = false,
+                    dailyLimitMs = 60_000L, timeRangeStart = null, timeRangeEnd = null,
+                    activeDaysOfWeek = "1111111", blockExpiresAt = 0L,
+                    severityLevel = "HIGH",
+                ),
+            )!!,
         ),
         version = 1L,
     )
 
-    /** Fake platform seams: [extractUrlText] records the view-ID asked for and returns [text]
-     *  (null root → null); [hasView] reports a toolbar only when the qualified id matches the
-     *  package's entry in [browserBars]. The real tree walks are exercised on-device (§12);
-     *  Robolectric cannot drive them. */
-    private fun scanner(text: String?): BrowserUrlScanner = BrowserUrlScanner(
+    /** Fake platform seams: [extractUrlField] records the view-ID asked for and returns [text]
+     *  with the bar's focused state (null root → null); [hasView] reports a toolbar only when
+     *  the qualified id matches the package's entry in [browserBars]. The real tree walks are
+     *  exercised on-device (§12); Robolectric cannot drive them. */
+    private fun scanner(
+        text: String?,
+        usageTodayMs: (String) -> Long? = { null },
+        focused: () -> Boolean = { false },
+    ): BrowserUrlScanner = BrowserUrlScanner(
         engine, stateMachine,
         onResult = { g, d, c, _ -> results.add(g to d); canonicals.add(c) },
-        extractUrlText = { root, viewId ->
+        usageTodayMs = usageTodayMs,
+        extractUrlField = { root, viewId ->
             extractedViewIds.add(viewId)
-            if (root == null) null else text
+            if (root == null) null else text?.let { UrlField(it, focused()) }
         },
         hasView = { _, viewId ->
             browserBars[viewId.substringBefore(":id/")] == viewId.substringAfter(":id/")
@@ -233,6 +248,91 @@ class BrowserUrlScannerTest {
         idle()
         assertEquals(1, results.size)
         assertEquals(BlockDecision.Allow, results[0].second)
+    }
+
+    // --- Daily-limit quota through the URL path (device-caught 2026-10-17) ---
+
+    private fun scanLimitedSite(usageTodayMs: (String) -> Long?) {
+        val gen = stateMachine.advance("com.android.chrome", 1, detectionTimeNanos = 1L)
+        scanner("https://limited.example.com", usageTodayMs)
+            .onContentChanged("com.android.chrome", CHROME_BAR, { chromeRoot("x") }, gen)
+        idle()
+    }
+
+    @Test
+    fun exhaustedDailyLimit_blocksTheUrlScan() {
+        scanLimitedSite { if (it == "r2") 60_000L else null }
+        assertEquals(1, results.size)
+        assertEquals(BlockDecision.Block("HIGH", true), results[0].second)
+    }
+
+    @Test
+    fun exhaustedLimit_blocksTheSameSiteInEveryDiscoveredBrowser() {
+        // Usage is metered per domain, not per browser: whichever browser the user is in, the
+        // same rule and the same exhausted counter decide. Discovery finds each browser's own
+        // toolbar ID (Chrome/Brave url_bar, Firefox url_bar_text).
+        val scanner = scanner("https://limited.example.com", usageTodayMs = { if (it == "r2") 60_000L else null })
+        for (pkg in listOf("com.android.chrome", "com.brave.browser", "org.mozilla.firefox")) {
+            val gen = stateMachine.advance(pkg, 1, detectionTimeNanos = 1L)
+            val viewId = scanner.viewIdFor(pkg) { chromeRoot("x") }!!
+            scanner.onContentChanged(pkg, viewId, { chromeRoot("x") }, gen)
+            idle()
+        }
+        assertEquals(3, results.size)
+        assertTrue(results.all { it.second == BlockDecision.Block("HIGH", true) })
+    }
+
+    @Test
+    fun underDailyLimit_allowsTheUrlScan() {
+        scanLimitedSite { if (it == "r2") 59_999L else null }
+        assertEquals(listOf(BlockDecision.Allow), results.map { it.second })
+    }
+
+    @Test
+    fun usageUnavailable_failsOpen() {
+        scanLimitedSite { null }
+        assertEquals(listOf(BlockDecision.Allow), results.map { it.second })
+    }
+
+    // --- Address-bar edit session (device-caught 2026-10-17) ---
+
+    @Test
+    fun editing_autocompletePreview_defersTheScan() {
+        // Chrome writes "instagram.com" into the bar while the user types "insta"; the page
+        // never loads. A decision here blocked a site the user never opened.
+        val scanner = scanner("https://betting.example.com", focused = { true })
+        val gen = stateMachine.advance("com.android.chrome", 1, detectionTimeNanos = 1L)
+        scanner.onContentChanged("com.android.chrome", CHROME_BAR, { chromeRoot("x") }, gen)
+        idle()
+        assertTrue(results.isEmpty())
+    }
+
+    @Test
+    fun editing_commitAfterEditing_blocksNormally() {
+        var focused = true
+        val scanner = scanner("https://betting.example.com", focused = { focused })
+        val gen = stateMachine.advance("com.android.chrome", 1, detectionTimeNanos = 1L)
+        scanner.onContentChanged("com.android.chrome", CHROME_BAR, { chromeRoot("x") }, gen)
+        idle()
+        assertTrue(results.isEmpty())
+        focused = false // the user committed; focus left the bar and the page is loading
+        scanner.onContentChanged("com.android.chrome", CHROME_BAR, { chromeRoot("x") }, gen)
+        idle()
+        assertEquals(1, results.size)
+        assertEquals(BlockDecision.Block("CRITICAL", true), results[0].second)
+    }
+
+    @Test
+    fun editing_evaluatedAtFireTime_notEventTime() {
+        // A commit inside the debounce window must decide: the state is read at fire time.
+        var focused = true
+        val scanner = scanner("https://betting.example.com", focused = { focused })
+        val gen = stateMachine.advance("com.android.chrome", 1, detectionTimeNanos = 1L)
+        scanner.onContentChanged("com.android.chrome", CHROME_BAR, { chromeRoot("x") }, gen)
+        focused = false
+        idle()
+        assertEquals(1, results.size)
+        assertEquals(BlockDecision.Block("CRITICAL", true), results[0].second)
     }
 
     private fun idleFor(duration: Duration) =

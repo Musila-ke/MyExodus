@@ -25,6 +25,7 @@ import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.blocking.usage.UsageSessionMachine
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.data.db.entity.UsageLedgerSource
+import com.example.myexodus.domainusage.DomainUsageEngine
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.ui.appLabel
 import com.example.myexodus.ui.seedAppLabel
@@ -63,6 +64,8 @@ class BlockerAccessibilityService : AccessibilityService() {
     @Inject lateinit var recoveryStore: RecoveryStateStore
     @Inject lateinit var attempts: AttemptRecorder
     @Inject lateinit var usageEngine: UsageAccountingEngine
+    /** Website daily-limit totals (S9.3); the URL path's quota input. */
+    @Inject lateinit var domainUsageEngine: DomainUsageEngine
 
     /** Per-bind foreground state + overlay (plan §12: recreated on re-bind; app-scoped
      *  singletons would carry stale generation/overlay state across a Hiber disconnect —
@@ -104,6 +107,7 @@ class BlockerAccessibilityService : AccessibilityService() {
             engine = this.engine,
             stateMachine = this.stateMachine,
             onResult = ::handleUrlResult,
+            usageTodayMs = { ruleId -> domainUsageEngine.usageTodayMs(ruleId) },
         )
     }
 
@@ -758,8 +762,9 @@ class BlockerAccessibilityService : AccessibilityService() {
      *  a partition partner. Overlap disqualifies by design — a restricted fullscreen
      *  window still fading out behind a new foreground app and a blocked PiP sliver both
      *  overlap the allowed window, and keeping their cover alive would strand it over the
-     *  launcher (the "Home always works" promise). No visibility test: the android-37
-     *  stubs drop AccessibilityWindowInfo.isVisible, and overlap already separates
+     *  launcher (the "Home always works" promise). AccessibilityWindowInfo has no visibility
+     *  test — `isVisible` is absent from the API 34 runtime and the SDK stubs (device-proven
+     *  2026-10-17; the old "stub trim" note was wrong) — and overlap already separates
      *  occluded windows from partitions. Costs a window-list walk, so callers
      *  short-circuit on a not-shown overlay. */
     private fun restrictedPaneBeside(displayId: Int, allowed: AccessibilityWindowInfo?): Boolean {

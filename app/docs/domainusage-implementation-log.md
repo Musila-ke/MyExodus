@@ -875,3 +875,56 @@ runs a real midnight crossing with the DAO refusing every write: the outgoing ro
 failing and the persisted day key stays on the old day; both land only after the outage clears. A
 mid-day flush cannot fake the row because it stamps the new day key. `UsagePersistenceTest` pins
 the true/false return contract. Focused run: 14 + 9 tests, 0 failures, BUILD SUCCESSFUL.
+
+## Website quota in the URL path + FR3 warnings (2026-10-17)
+
+**Finding (device-caught).** A 30-minute instagram.com daily limit showed `30 / 30 min` while the
+site kept loading in Chrome, with no warning. Two independent defects: (1) `BrowserUrlScanner`
+called `engine.decideUrl(canonical, System.currentTimeMillis())` without `usageTodayMs`, and
+`BlockDecisionEngine` evaluates the quota branch only when that input is provided — the URL path
+could enforce always-on, schedules and expiry, never the daily limit. Old build: `url scan
+gen=128 'instagram.com' -> Allow` at 20:10:13–20:10:26, after the 20:09:26 exhaustion
+(`dns_nxdomain_served` 0→313, `flow_resets_sweep` 0→12). The VPN path enforced the attributable
+flows; Chrome's DoH/ECH traffic was unattributed (`sni_ech` 169→284, `flows_unattributed`
+418→626) — the documented D-18/S-12/R-7/INV-8 limit, which the URL path does not depend on.
+(2) No website-limit warning mechanism existed at all; the thresholds lived only in the
+package-keyed `UsageAccountingEngine`.
+
+**Fix.** `BrowserUrlScanner` gains `usageTodayMs: (ruleId) -> Long?` (default null = fail open) and
+passes the matched rule's total into `decideUrl`; `BlockerAccessibilityService` wires
+`DomainUsageEngine.usageTodayMs`. `UsageLedger.takeLimitWarnings()` reuses
+`UsageAccountingEngine.calculateWarningThresholdsMs`; the fired flags live on `RuleCounter`, seeded
+from the persisted total on attach (no restart replay), re-seeded on a limit change, reset at
+rollover, and gated to the current revision. `UsageTickLoop` gains an `onTick` hook (inside the
+existing exception guard) that posts `DomainUsageHost.postWebsiteLimitWarning`;
+`AndroidDomainUsageHost` renders notification id 3 on `domain_usage_status` with INV-7-safe copy.
+No metering, attribution, DNS, relay or persistence code changed.
+
+**Cross-browser.** Usage is keyed `(ruleId, revision)` with no app identity, so every browser's
+traffic to the site feeds one counter; toolbar discovery is per package (`url_bar`,
+`url_bar_text`, `location_bar_text`), so the same exhausted counter decides in each. Regression:
+`exhaustedLimit_blocksTheSameSiteInEveryDiscoveredBrowser` drives Chrome, Brave and Firefox.
+
+**Device proof (X6532, install -r, no data clear).** Rules screen: `instagram.com — 30m daily
+limit — Used today: 30 / 30 min`. New build: Chrome `url scan gen=3 'instagram.com' -> Block`
+(21:01:24–21:02:00) with the `UrlBlocked` overlay; Brave `gen=6 ... -> Block` (21:02:39–21:02:45)
+with the same overlay. Warning leg: limit temporarily raised to 41m → usage 30→32 → notification
+id=3, "Website limit almost used up" / "9 min left on a website limit today. Tap to review your
+rules." (no hostname); rule then restored to 30m. Internet sanity: example.com rendered through
+the VPN and the counters kept advancing.
+
+**The 27→30 move.** Display floors whole minutes (`usedMs / 60_000`, `RulesScreen.kt:692`); the
+ledger books one monotonic interval per tick, so accrual cannot exceed wall time (pinned by
+`RuleCounterTest`, `eightOverlappingFlowsOnOneRuleCountOnce`, and the idle-tail test). The jump
+therefore required ≥2:01 of real accrual — domain-level totals include background/keep-alive flows
+plus the 15 s tail. The exact source is unrecoverable post-hoc (per-rule totals are not logged;
+INV-7), recorded as unproven detail rather than a second defect.
+
+**Regression.** Full JVM suite: **1780 tests / 0 failures / 0 errors / 0 skipped** (+8:
+`BrowserUrlScannerTest` exhausted/under/unavailable + cross-browser; `UsageLedgerTest`
+once-per-threshold, seeded-total no-replay, limit-change re-arm, superseded-revision silence).
+
+**Follow-on, same day (ADR #174):** the scanner's address-bar edit-session gate added three
+regressions (`editing_autocompletePreview_defersTheScan`, `editing_commitAfterEditing_blocksNormally`,
+`editing_evaluatedAtFireTime_notEventTime`), taking the full suite to **1783 tests / 0 failures /
+0 errors / 0 skipped** (BUILD SUCCESSFUL 12m38s). Metering, accounting and warnings are untouched.

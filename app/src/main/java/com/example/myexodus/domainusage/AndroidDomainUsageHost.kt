@@ -29,6 +29,28 @@ class AndroidDomainUsageHost(private val context: Context) : DomainUsageHost {
      * INV-7: the copy names the feature, never a site.
      */
     override fun postVpnStoppedNotification() {
+        postStatusNotification(
+            NOTIFICATION_ID,
+            context.getString(R.string.domain_usage_vpn_stopped_title),
+            context.getString(R.string.domain_usage_vpn_stopped_text),
+        )
+    }
+
+    override fun postWebsiteLimitWarning(level: Int, remainingMs: Long) {
+        // INV-7: the copy names the feature, never the site.
+        val text = if (remainingMs < 60_000L) {
+            context.getString(R.string.domain_usage_limit_warning_soon)
+        } else {
+            context.getString(R.string.domain_usage_limit_warning_text, (remainingMs / 60_000L).toInt())
+        }
+        postStatusNotification(
+            WARNING_NOTIFICATION_ID,
+            context.getString(R.string.domain_usage_limit_warning_title),
+            text,
+        )
+    }
+
+    private fun postStatusNotification(id: Int, title: String, text: String) {
         if (notificationsDenied()) return
         try {
             val nm = context.getSystemService(NotificationManager::class.java) ?: return
@@ -40,13 +62,13 @@ class AndroidDomainUsageHost(private val context: Context) : DomainUsageHost {
                 ),
             )
             nm.notify(
-                NOTIFICATION_ID,
+                id,
                 NotificationCompat.Builder(context, CHANNEL_ID)
                     .setSmallIcon(android.R.drawable.stat_sys_warning)
-                    .setContentTitle(context.getString(R.string.domain_usage_vpn_stopped_title))
-                    .setContentText(context.getString(R.string.domain_usage_vpn_stopped_text))
-                    // #26: "paused" copy — the tap lands on Rules where the tunnel is
-                    // re-enabled (or the failure retried).
+                    .setContentTitle(title)
+                    .setContentText(text)
+                    // #26: the tap lands on Rules where the tunnel is re-enabled (or the
+                    // failure retried); warnings land there to review the limit.
                     .setContentIntent(
                         PendingIntent.getActivity(
                             context,
@@ -61,7 +83,7 @@ class AndroidDomainUsageHost(private val context: Context) : DomainUsageHost {
                     .build(),
             )
         } catch (e: Exception) {
-            // A missing notification must never break the stop path.
+            // A missing notification must never break the metering path.
             return
         }
     }
@@ -82,5 +104,6 @@ class AndroidDomainUsageHost(private val context: Context) : DomainUsageHost {
     private companion object {
         const val CHANNEL_ID = "domain_usage_status"
         const val NOTIFICATION_ID = 2
+        const val WARNING_NOTIFICATION_ID = 3
     }
 }

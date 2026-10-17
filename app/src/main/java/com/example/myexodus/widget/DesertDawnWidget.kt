@@ -20,7 +20,6 @@ import androidx.glance.appwidget.updateAll
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.MainActivity
 import com.example.myexodus.blocking.systemBootCount
-import com.example.myexodus.data.db.entity.RecoverySession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.catch
@@ -107,11 +106,6 @@ class DesertDawnWidget : GlanceAppWidget() {
                     openStreaks = actionStartActivity(
                         appLaunchIntent(context)
                             .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_STREAKS),
-                    ),
-                    manageUrge = actionStartActivity(
-                        appLaunchIntent(context)
-                            .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_RECOVERY)
-                            .putExtra(MainActivity.EXTRA_RECOVERY_ENTRY, RecoverySession.ENTRY_WIDGET),
                     ),
                     openApp = actionStartActivity(appLaunchIntent(context)),
                     // The icon controls' hold-confirm surface (widget v2.2). The relapse control

@@ -384,4 +384,88 @@ class UsageLedgerTest {
         assertFalse(c.changedSincePersist)
         assertTrue(ledger.dirtySnapshot().isEmpty())
     }
+
+    // --- FR3 website-limit warnings ---
+
+    /** Drives the counter with a touch every second, so totals track the elapsed clock. */
+    private fun drive(ledger: UsageLedger, c: RuleCounter, from: Long, to: Long) {
+        for (t in from..to step 1_000L) {
+            advanceTo(t)
+            c.touch(t)
+            ledger.tick()
+        }
+    }
+
+    @Test
+    fun limitWarnings_fireOnceAtEachThreshold() {
+        val ledger = ledger()
+        ledger.applyRules(listOf(rule(limit = 100_000L))) // thresholds 50 s and 90 s
+        val c = ledger.counterFor("r1", 0)!!
+
+        drive(ledger, c, 0L, 49_000L)
+        assertTrue("nothing below the first threshold", ledger.takeLimitWarnings().isEmpty())
+
+        drive(ledger, c, 50_000L, 50_000L)
+        assertEquals(listOf(LimitWarning(1, 50_000L)), ledger.takeLimitWarnings())
+        assertTrue("a consumed crossing never repeats", ledger.takeLimitWarnings().isEmpty())
+
+        drive(ledger, c, 51_000L, 90_000L)
+        assertEquals(listOf(LimitWarning(2, 10_000L)), ledger.takeLimitWarnings())
+        assertTrue(ledger.takeLimitWarnings().isEmpty())
+    }
+
+    @Test
+    fun seededTotalsDoNotReplayAlreadyCrossedWarnings() {
+        val ledger = ledger()
+        ledger.applyRules(
+            listOf(rule(limit = 100_000L)),
+            seededTotals = mapOf("r1:0" to 60_000L),
+        )
+        advanceTo(1_000)
+        ledger.tick()
+        assertTrue("a restart must not re-warn level 1", ledger.takeLimitWarnings().isEmpty())
+
+        // Seeded 60 s + 30 driven seconds (the first touch only opens the streak) = 90 s,
+        // exactly the level-2 threshold (remaining 10 s).
+        drive(ledger, ledger.counterFor("r1", 0)!!, 2_000L, 32_000L)
+        assertEquals(
+            "the level-2 crossing still fires after the restart",
+            listOf(LimitWarning(2, 10_000L)),
+            ledger.takeLimitWarnings(),
+        )
+    }
+
+    @Test
+    fun changingTheLimitReseedsWarnings() {
+        val ledger = ledger()
+        ledger.applyRules(listOf(rule(limit = 100_000L)))
+        val c = ledger.counterFor("r1", 0)!!
+        drive(ledger, c, 0L, 60_000L)
+        assertEquals(1, ledger.takeLimitWarnings().size)
+
+        // Raising the limit moves both thresholds above the current total: they re-arm.
+        ledger.applyRules(listOf(rule(limit = 200_000L))) // thresholds 100 s and 180 s
+        drive(ledger, c, 61_000L, 100_000L)
+        assertEquals(listOf(LimitWarning(1, 100_000L)), ledger.takeLimitWarnings())
+
+        // Lowering it back below the total warns about nothing retroactively.
+        ledger.applyRules(listOf(rule(limit = 100_000L)))
+        advanceTo(101_000)
+        c.touch(101_000)
+        ledger.tick()
+        assertTrue(ledger.takeLimitWarnings().isEmpty())
+    }
+
+    @Test
+    fun aSupersededRevisionNeverWarns() {
+        val ledger = ledger()
+        ledger.applyRules(listOf(rule(limit = 100_000L)))
+        val old = ledger.counterFor("r1", 0)!!
+        drive(ledger, old, 0L, 1_000L)
+
+        ledger.applyRules(listOf(rule(limit = 100_000L, pattern = "other.example", revision = 1L)))
+        drive(ledger, old, 2_000L, 100_000L)
+        assertEquals("the old revision still accrued", 100_000L, old.totalMs)
+        assertTrue("only the current revision can notify", ledger.takeLimitWarnings().isEmpty())
+    }
 }

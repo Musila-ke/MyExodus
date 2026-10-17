@@ -5,6 +5,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
+import com.example.myexodus.BuildConfig
 
 /**
  * In-browser URL scanning (Enhanced Mode spec §8 Steps 7–8, Data Flow step 6): content-changed
@@ -26,8 +27,19 @@ class BrowserUrlScanner(
     private val engine: BlockDecisionEngine,
     private val stateMachine: ForegroundStateMachine,
     private val onResult: (generation: Long, decision: BlockDecision, canonical: CanonicalUrl?, packageName: String) -> Unit,
-    private val extractUrlText: (root: AccessibilityNodeInfo?, viewId: String) -> String? = { root, viewId ->
-        defaultExtractUrlText(root, viewId)
+    /** Today's metered usage for the matched URL rule; null until the metering ledger attaches —
+     *  the quota then fails open (never a block on missing data). Without this input the URL
+     *  path can only enforce schedules, expiry and always-on, which is why an exhausted daily
+     *  limit went unblocked in the browser (device-caught 2026-10-17). */
+    private val usageTodayMs: (ruleId: String) -> Long? = { null },
+    /** The address-bar node's text and focus state, read at fire time. Focus is the edit-session
+     *  signal: the omnibox writes autocomplete completions into the same node this scan reads,
+     *  so a typed "insta" previewing "instagram.com" is textually indistinguishable from a
+     *  committed navigation — deciding it blocked a site the user never opened, over and over
+     *  (device-caught 2026-10-17). A node that never reports focus fails open (scan decides as
+     *  before), so this gate can only suppress a false block, never a real one. */
+    private val extractUrlField: (root: AccessibilityNodeInfo?, viewId: String) -> UrlField? = { root, viewId ->
+        defaultExtractUrlField(root, viewId)
     },
     private val hasView: (root: AccessibilityNodeInfo, viewId: String) -> Boolean = { root, viewId ->
         root.findAccessibilityNodeInfosByViewId(viewId).isNotEmpty()
@@ -77,11 +89,27 @@ class BrowserUrlScanner(
         pending?.let { handler.removeCallbacks(it) }
         val task = Runnable {
             pending = null
-            if (!stateMachine.isCurrent(generation)) return@Runnable
-            val text = extractUrlText(activeWindowRoot(), viewId) ?: run {
-                Log.d(TAG, "url scan no-op: no address-bar text for $packageName ($viewId)")
+            if (!stateMachine.isCurrent(generation)) {
+                if (BuildConfig.DEBUG) Log.i(TAG, "url scan dropped: stale gen=$generation ($packageName)")
                 return@Runnable
             }
+            val root = activeWindowRoot()
+            val field = extractUrlField(root, viewId) ?: run {
+                if (BuildConfig.DEBUG) {
+                    Log.i(TAG, "url scan no-op: no address-bar text for $packageName ($viewId) root=${root?.packageName}")
+                }
+                return@Runnable
+            }
+            // No decision while the bar is being edited — not even Allow, which would dismiss
+            // a still-blocked page's card. The commit itself reloads the page and schedules a
+            // fresh scan once focus leaves the bar.
+            if (field.focused) {
+                if (BuildConfig.DEBUG) {
+                    Log.i(TAG, "url scan deferred: address bar edit session active ($packageName)")
+                }
+                return@Runnable
+            }
+            val text = field.text
             // Non-page text is not evidence (device-caught 2026-09-13): mid-typing fragments
             // ("ex") and the omnibox's own hint ("Search or type URL") canonicalize to a
             // dotless host, match nothing, and used to Allow — dismissing the card over a
@@ -90,6 +118,7 @@ class BrowserUrlScanner(
             // (about:blank — the "different site" target —, chrome://, file://) has no
             // canonical form and is a navigation, so it is always allowed.
             val canonical = UrlPattern.canonicalizeCandidate(text)
+            val rule = canonical?.let { engine.matchingUrlRule(it) }
             val decision = when {
                 canonical == null ->
                     if (SCHEME_PREFIX.containsMatchIn(text.trim())) BlockDecision.Allow
@@ -97,14 +126,18 @@ class BrowserUrlScanner(
                         Log.d(TAG, "url scan no-op: unparseable, not a scheme navigation '$text'")
                         return@Runnable
                     }
-                !isPageLike(canonical) && engine.matchingUrlRule(canonical) == null -> {
+                !isPageLike(canonical) && rule == null -> {
                     Log.d(TAG, "url scan no-op: not a page-like address '$text'")
                     return@Runnable
                 }
-                else -> engine.decideUrl(canonical, System.currentTimeMillis())
+                else -> engine.decideUrl(
+                    canonical,
+                    System.currentTimeMillis(),
+                    rule?.let { usageTodayMs(it.ruleId) },
+                )
             }
-            if (com.example.myexodus.BuildConfig.DEBUG) {
-                Log.i(TAG, "url scan gen=$generation '$text' -> ${decision.javaClass.simpleName}")
+            if (BuildConfig.DEBUG) {
+                Log.i(TAG, "url scan gen=$generation focused=${field.focused} '$text' -> ${decision.javaClass.simpleName}")
             }
             onResult(generation, decision, canonical, packageName)
         }
@@ -138,12 +171,20 @@ class BrowserUrlScanner(
         private fun isPageLike(canonical: CanonicalUrl): Boolean =
             canonical.scheme != null || canonical.hostUnicode.contains('.')
 
-        /** Platform walk; null when the view-ID is missing or has no text (silent no-op upstream). */
-        private fun defaultExtractUrlText(root: AccessibilityNodeInfo?, viewId: String): String? {
+        /** Platform walk; null when the view-ID is missing or has no text (silent no-op upstream).
+         *  Focus is read from the same node and fails open: a recycled node or a browser that
+         *  never reports focus must not disable URL blocking. */
+        private fun defaultExtractUrlField(root: AccessibilityNodeInfo?, viewId: String): UrlField? {
             val matches = root?.findAccessibilityNodeInfosByViewId(viewId) ?: return null
-            return matches.asSequence()
-                .mapNotNull { it.text?.toString() }
-                .firstOrNull { it.isNotBlank() }
+            val node = matches.firstOrNull { !it.text.isNullOrBlank() } ?: return null
+            return UrlField(
+                text = node.text.toString(),
+                focused = runCatching { node.isFocused }.getOrDefault(false),
+            )
         }
     }
 }
+
+/** Address-bar content as read at scan time: [text] is what the omnibox shows, [focused] is
+ *  whether the bar owns input focus (an edit session is active). */
+data class UrlField(val text: String, val focused: Boolean)

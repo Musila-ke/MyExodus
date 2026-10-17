@@ -677,3 +677,33 @@ two FAILs raised that session were both harness criteria, not code — PF-7 meas
 CPU-saturating batch (re-measured PASS on the idle device, §5.1 item 14) and PF-4's thread
 tolerance calibrated below keep-alive wander (re-ruled, legs re-scored, §5.1 item 15). Both are
 recorded with their raw numbers rather than dropped.
+
+## 13. Post-report fix — website daily-limit enforcement in the URL path (2026-10-17)
+
+Device-caught defect: a 30-minute instagram.com rule showed `30 / 30 min` while the site kept
+loading, with no warning. Root cause: `BrowserUrlScanner` decided with no `usageTodayMs`, so
+`BlockDecisionEngine`'s quota branch was unreachable from the URL path; no website-limit warning
+mechanism existed (ADR #172). The fix touches no metering, attribution, DNS or relay code.
+
+| Check | Evidence | Result |
+|---|---|---|
+| Exhausted quota blocks the URL scan | `BrowserUrlScannerTest.exhaustedDailyLimit_blocksTheUrlScan`; device X6532 21:01:24–21:02:00 `url scan gen=3 'instagram.com' -> Block` + overlay screenshot | **PASS** |
+| Under the quota allows; unavailable usage fails open | `underDailyLimit_allowsTheUrlScan`, `usageUnavailable_failsOpen` | **PASS** |
+| The same exhausted counter decides in every discovered browser | `exhaustedLimit_blocksTheSameSiteInEveryDiscoveredBrowser` (Chrome, Brave, Firefox); device Brave 21:02:39–21:02:45 -> Block + overlay screenshot | **PASS** |
+| Warnings fire once at each threshold | `limitWarnings_fireOnceAtEachThreshold` | **PASS** |
+| A restart never replays a crossed threshold | `seededTotalsDoNotReplayAlreadyCrossedWarnings` | **PASS** |
+| A limit change re-arms above the total; lowering never fires retroactively | `changingTheLimitReseedsWarnings` | **PASS** |
+| A superseded revision never warns | `aSupersededRevisionNeverWarns` | **PASS** |
+| The warning notification renders with INV-7-safe copy | Device X6532: limit temporarily 41m → usage 30→32 → notification id=3, channel `domain_usage_status`, "Website limit almost used up" / "9 min left on a website limit today…" (no hostname); rule restored to 30m | **PASS** |
+| The internet path is intact after the change | Device: example.com rendered through the VPN, `url scan 'example.com' -> Allow`, VPN counters advancing | **PASS** |
+
+**Suite at this fix:** full JVM **1780 tests / 0 failures / 0 errors / 0 skipped** (+8
+regressions). Honest limits: URL enforcement still needs the accessibility service and a
+discovered toolbar ID; ECH/DoH flows remain unattributed (D-18/S-12/R-7/INV-8); warnings are
+notifications only.
+
+**Later the same day (ADR #174):** the scanner gained three more regressions for the
+address-bar edit-session gate (`editing_autocompletePreview_defersTheScan`,
+`editing_commitAfterEditing_blocksNormally`, `editing_evaluatedAtFireTime_notEventTime`). Current
+full-suite total: **1783 tests / 0 failures / 0 errors / 0 skipped** (BUILD SUCCESSFUL 12m38s).
+The gate changes no metering or accounting; the URL-blocking device evidence is in ADR #174.

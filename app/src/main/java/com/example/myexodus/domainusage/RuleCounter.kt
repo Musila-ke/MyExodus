@@ -31,6 +31,12 @@ class RuleCounter(
     @Volatile
     var changedSincePersist: Boolean = false
 
+    /** Threshold warnings already surfaced for this day ([UsageLedger.takeLimitWarnings]).
+     *  Tick thread only; seeded from the persisted total on attach so a restart never re-fires
+     *  a threshold the user has already been warned about. */
+    var warning1Fired: Boolean = false
+    var warning2Fired: Boolean = false
+
     /**
      * Elapsed instant the current activity streak began. Written by relay threads (through
      * [touch]) as well as the tick thread, so it is atomic rather than the plain `Long` of the
@@ -89,6 +95,8 @@ class RuleCounter(
             totalMs = ivEnd - split
             book(ivEnd)
             sessionStart.set(boundary)
+            warning1Fired = false
+            warning2Fired = false
             return oldTotal
         }
         return resetForNewDay(boundary)
@@ -100,6 +108,8 @@ class RuleCounter(
         totalMs = 0L
         book(boundary)
         sessionStart.set(boundary)
+        warning1Fired = false
+        warning2Fired = false
         return oldTotal
     }
 

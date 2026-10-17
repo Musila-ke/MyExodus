@@ -1,5 +1,6 @@
 package com.example.myexodus.domainusage
 
+import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.util.concurrent.ConcurrentHashMap
@@ -63,9 +64,14 @@ class UsageLedger(
                     initialTotalMs = seededTotals[key] ?: 0L,
                     dailyLimitMs = rule.dailyLimitMs,
                     enforcedToday = rule.enforcedToday,
-                )
+                ).also { seedWarnings(it) }
             } else {
-                existing.dailyLimitMs = rule.dailyLimitMs
+                if (existing.dailyLimitMs != rule.dailyLimitMs) {
+                    existing.dailyLimitMs = rule.dailyLimitMs
+                    // A raised limit must re-arm thresholds above the current total; a lowered
+                    // one must not fire retroactively for time already spent.
+                    seedWarnings(existing)
+                }
                 existing.enforcedToday = rule.enforcedToday
             }
             currentRevisionByRuleId[rule.id] = rule.revision
@@ -149,6 +155,41 @@ class UsageLedger(
         lastTickWallMs = wallMs
     }
 
+    /**
+     * FR3 warning thresholds (the same policy the app-usage engine uses, one definition): the
+     * crossings this tick should surface, each consumed exactly once per counter/day. Only a
+     * rule's current revision can warn — a superseded counter kept alive by its still-open
+     * flows must not produce a notification for a rule the user already edited away from.
+     */
+    fun takeLimitWarnings(): List<LimitWarning> {
+        var out: ArrayList<LimitWarning>? = null
+        for (counter in byKey.values) {
+            if (!counter.enforcedToday || counter.dailyLimitMs <= 0L) continue
+            if (currentRevisionByRuleId[counter.ruleId] != counter.revision) continue
+            val (threshold1, threshold2) = UsageAccountingEngine.calculateWarningThresholdsMs(counter.dailyLimitMs)
+            val remaining = (counter.dailyLimitMs - counter.totalMs).coerceAtLeast(0L)
+            when {
+                !counter.warning2Fired && counter.totalMs >= threshold2 -> {
+                    counter.warning1Fired = true
+                    counter.warning2Fired = true
+                    (out ?: ArrayList<LimitWarning>(2).also { out = it }).add(LimitWarning(2, remaining))
+                }
+                !counter.warning1Fired && counter.totalMs >= threshold1 -> {
+                    counter.warning1Fired = true
+                    (out ?: ArrayList<LimitWarning>(2).also { out = it }).add(LimitWarning(1, remaining))
+                }
+            }
+        }
+        return out ?: emptyList()
+    }
+
+    /** Fired flags start from what the persisted total already crossed (no duplicate on restart). */
+    private fun seedWarnings(counter: RuleCounter) {
+        val (threshold1, threshold2) = UsageAccountingEngine.calculateWarningThresholdsMs(counter.dailyLimitMs)
+        counter.warning1Fired = counter.dailyLimitMs > 0L && counter.totalMs >= threshold1
+        counter.warning2Fired = counter.dailyLimitMs > 0L && counter.totalMs >= threshold2
+    }
+
     /** §6.5 step 5: exhaustion follows the ledger total; in `ENFORCE` a new exhaustion sweeps. */
     private fun evaluateExhaustion() {
         for (counter in byKey.values) {
@@ -189,6 +230,9 @@ class UsageSnapshot(
     val totalMs: Long,
     val generation: Long,
 )
+
+/** FR3: one threshold crossing to surface; [remainingMs] is the budget left at the crossing. */
+data class LimitWarning(val level: Int, val remainingMs: Long)
 
 /** §6.7: the day-key change, carrying the outgoing day's final rows to persist. */
 class DayRollover(

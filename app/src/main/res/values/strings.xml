@@ -427,21 +427,15 @@
 
     <!-- Home-screen widget (V1 Req 36). Every string here is discreet by default: a day count,
          and only if the user opts in, one status word. No recovery vocabulary is reachable in
-         discreet mode (widget spec FR5) — including the action, which is "Tools" while discreet
-         (a neutral nav affordance that doesn't promise the app's main page, user-flagged
-         2026-09-27) and only becomes "Manage urge" (the app's own name for the Recovery tab's
-         entry point) once the user has opted into disclosure. -->
+         discreet mode (widget spec FR5). Action words live only on the hold surface and in
+         content descriptions — the launcher card itself is icon-only (widget v2.1+). -->
     <string name="widget_label">Streak</string>
     <string name="widget_description">Your day count at a glance.</string>
-    <!-- The day count renders as a stat lockup: this label small and muted, the number large. -->
+    <!-- The day count renders as a stat lockup: this micro-label drawn uppercase in the streak
+         gold, the number large in ink. -->
     <string name="widget_day_label">Day</string>
     <string name="widget_day_number">%1$d</string>
     <string name="widget_day_unknown">No streak yet</string>
-    <string name="widget_manage_urge">Manage urge</string>
-    <string name="widget_tools">Tools</string>
-    <!-- The large card's data strip: tiny captions over one short value each. -->
-    <string name="widget_habit_label">Habit</string>
-    <string name="widget_next_label">Next</string>
     <!-- "23d to 30-day mark": the distance leads and the rung is named as an amount of days
          free. Two bare day-quantities side by side ("30 days in 23d", and before that "30 days ·
          23d") read as a contradiction or a date (user-flagged 2026-09-27 and 2026-10-17);
@@ -878,6 +872,10 @@
     <string name="domain_usage_channel_name">Website limits</string>
     <string name="domain_usage_vpn_stopped_title">Website limits paused</string>
     <string name="domain_usage_vpn_stopped_text">The VPN stopped, so website limits are not being applied.</string>
+    <!-- FR3 threshold warning. INV-7: never names the site. -->
+    <string name="domain_usage_limit_warning_title">Website limit almost used up</string>
+    <string name="domain_usage_limit_warning_text">%1$d min left on a website limit today. Tap to review your rules.</string>
+    <string name="domain_usage_limit_warning_soon">Less than a minute left on a website limit today. Tap to review your rules.</string>
     <!-- Rules screen: usage line and engine status banner (plan §8 S9.3/S9.4) -->
     <string name="rules_used_today">Used today: %1$d / %2$d min</string>
     <string name="domain_usage_banner_private_dns">Private DNS is on, so website limits may not apply. Set Private DNS to Off or Automatic in system settings.</string>
