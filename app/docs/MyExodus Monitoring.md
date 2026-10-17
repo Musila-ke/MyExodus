@@ -58,9 +58,11 @@ collection count.
 ## 3. §17 line 639 — maxInstances (configured + deployed) and budget alert (DONE)
 
 - `maxInstances` is set and deployed (functions deploy 2026-09-18): `registerPairing` 10
-  (index.js:49), `relayMailboxMessage` 10 (relay.js:80), `dispatchSweep` 1 (sweep.js:26),
+  (index.js:247), `relayMailboxMessage` 10 (relay.js:72), `retryDispatchSweep` 1 (sweep.js:46),
   `cleanupMailboxes` 1 (cleanup.js:24). AD-20a's load estimate (OQ-1) remains the bound's
-  justification; the values are placeholders per AD-20a until OQ-1 is answered.
+  justification; the values are placeholders per AD-20a until OQ-1 is answered. (Line refs
+  refreshed 2026-10-17; the earlier `dispatchSweep` name was wrong — the exported/deployed
+  name has always been `retryDispatchSweep`.)
 - **Budget alert: DONE 2026-09-19 (task #34).** OQ-5 answered by the owner: **$2/month**
   (owner revised from $5 the same day; budget PATCHed via the Billing Budgets API).
   Budget `MyExodus monthly budget (OQ-5: $2)` ($2.00, project-scoped to myexodus-53804)
