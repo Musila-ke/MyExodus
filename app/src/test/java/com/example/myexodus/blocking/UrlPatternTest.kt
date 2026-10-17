@@ -30,6 +30,26 @@ class UrlPatternTest {
         assertEquals("/Path/Here", s.pathPrefix)
     }
 
+    /** The omnibox elides default ports (and the scheme — observed on-device 2026-08-27), so a
+     *  scheme-less default port typed as a rule must canon away or the pattern can never match
+     *  the address-bar text the scanner reads; non-default ports stay pinned. */
+    @Test
+    fun schemeLessDefaultPorts_areNormalized_nonDefaultStaysPinned() {
+        val port80 = UrlPattern.parseStructure("example.com:80")!!
+        assertNull(port80.port)
+        val port443 = UrlPattern.parseStructure("example.com:443")!!
+        assertNull(port443.port)
+        val nonDefault = UrlPattern.parseStructure("example.com:8443")!!
+        assertEquals(8443, nonDefault.port)
+
+        val rule80 = UrlPattern.from(rule("example.com:80"))!!
+        assertTrue(rule80.matches(candidate("example.com")))
+        assertTrue(rule80.matches(candidate("http://example.com")))
+        val rule8443 = UrlPattern.from(rule("example.com:8443"))!!
+        assertTrue(rule8443.matches(candidate("example.com:8443")))
+        assertFalse(rule8443.matches(candidate("example.com")))
+    }
+
     @Test
     fun punycode_keepsBothForms() {
         val s = UrlPattern.parseStructure("https://exämple.com:8443")!!

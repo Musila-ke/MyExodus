@@ -8,6 +8,7 @@ import com.google.firebase.FirebaseOptions
 import com.google.firebase.functions.FirebaseFunctions
 import com.google.firebase.functions.FirebaseFunctionsException
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -85,8 +86,112 @@ class PairingRegistrationTest {
         assertEquals(1, transport.wires.size)
     }
 
+    @Test
+    fun cancellation_isRethrown_neverClassifiedAsAnOutcome() = runTest {
+        // A backed-out ceremony cancels the awaiting coroutine; that CE must not be
+        // laundered into a Rejected/Failed "verdict" (the caller would then discard state
+        // on the strength of a server answer that was never received).
+        val transport = ScriptedTransport(mutableListOf(CancellationException("scope cancelled")))
+
+        var propagated = false
+        try {
+            transport.submit(proof())
+        } catch (e: CancellationException) {
+            propagated = true
+        }
+
+        assertTrue("cancellation must propagate out of submit", propagated)
+        assertEquals("no retry after cancellation", 1, transport.wires.size)
+    }
+
+    // --- parse() contract against the deployed function's response shape
+    // (functions/index.js returns { pairId, status: 'active'|'pending', pairingEpoch }). ---
+
+    @Test
+    fun pendingResponse_mapsToAwaitingPartner() = runTest {
+        // The two-sided handshake's first-half signal: our proof stored, partner's not in yet.
+        val transport = ScriptedTransport(mutableListOf(mapOf("status" to "pending")))
+
+        val outcome = transport.submit(proof())
+
+        assertEquals(PairingRegistration.SubmitResult.AwaitingPartner, outcome)
+        assertEquals(1, transport.wires.size)
+    }
+
+    @Test
+    fun activeResponseMissingPairIdOrEpoch_isFailed_notRegistered() = runTest {
+        val noEpoch = ScriptedTransport(
+            mutableListOf(mapOf("status" to "active", "pairId" to "uid-a_uid-b")),
+        )
+        assertTrue(noEpoch.submit(proof()) is PairingRegistration.SubmitResult.Failed)
+
+        val noPairId = ScriptedTransport(
+            mutableListOf(mapOf("status" to "active", "pairingEpoch" to 3)),
+        )
+        assertTrue(noPairId.submit(proof()) is PairingRegistration.SubmitResult.Failed)
+    }
+
+    @Test
+    fun malformedOrUnexpectedResponse_isFailed() = runTest {
+        val nonMap = ScriptedTransport(mutableListOf<Any?>("garbage"))
+        assertTrue(nonMap.submit(proof()) is PairingRegistration.SubmitResult.Failed)
+
+        val nullData = ScriptedTransport(mutableListOf<Any?>(null))
+        assertTrue(nullData.submit(proof()) is PairingRegistration.SubmitResult.Failed)
+
+        val unknownStatus = ScriptedTransport(mutableListOf(mapOf("status" to "something-else")))
+        assertTrue(unknownStatus.submit(proof()) is PairingRegistration.SubmitResult.Failed)
+    }
+
+    @Test
+    fun ambiguousThenVerdict_surfacesTheRetrysVerdict() = runTest {
+        // §9 replay in the wild: the first call committed but its response was lost, so the
+        // same-requestId retry replays the committed outcome — here, an already-active pair.
+        val transport = ScriptedTransport(
+            mutableListOf(
+                unavailable(),
+                verdict("PAIRING_ACTIVE", FirebaseFunctionsException.Code.FAILED_PRECONDITION),
+            ),
+        )
+
+        val outcome = transport.submit(proof())
+
+        assertEquals(PairingRegistration.SubmitResult.Rejected("PAIRING_ACTIVE"), outcome)
+        assertEquals("identical replay", transport.wires[0], transport.wires[1])
+        assertEquals(2, transport.wires.size)
+    }
+
+    @Test
+    fun ambiguousThenGenericFailure_isFailed() = runTest {
+        val transport = ScriptedTransport(
+            mutableListOf(unavailable(), RuntimeException("serializer blew up")),
+        )
+
+        val outcome = transport.submit(proof())
+
+        assertTrue(outcome is PairingRegistration.SubmitResult.Failed)
+        assertEquals(2, transport.wires.size)
+    }
+
+    @Test
+    fun cancellationDuringTheRetry_isRethrown() = runTest {
+        val transport = ScriptedTransport(
+            mutableListOf(unavailable(), CancellationException("backed out during retry")),
+        )
+
+        var propagated = false
+        try {
+            transport.submit(proof())
+        } catch (e: CancellationException) {
+            propagated = true
+        }
+
+        assertTrue("the retry's CE must propagate too", propagated)
+        assertEquals(2, transport.wires.size)
+    }
+
     private class ScriptedTransport(
-        private val outcomes: MutableList<Any>,
+        private val outcomes: MutableList<out Any?>,
     ) : PairingRegistration(ApplicationProvider.getApplicationContext(), functionsInstance()) {
 
         val wires = mutableListOf<Map<String, Any>>()

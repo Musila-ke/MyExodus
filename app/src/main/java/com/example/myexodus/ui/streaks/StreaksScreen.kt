@@ -52,9 +52,9 @@ private const val VIEW_TIMELINE = "timeline"
 fun StreaksScreen(
     state: HabitState?,
     addingHabit: Boolean,
-    setupError: String?,
+    setupError: StreaksViewModel.SetupError?,
     relapseInFlight: Boolean,
-    relapseNote: String?,
+    relapseFeedback: StreaksViewModel.RelapseFeedback?,
     onOnboard: (
         label: String,
         durationYears: Int,
@@ -102,7 +102,7 @@ fun StreaksScreen(
 
             if (state == null || addingHabit) {
                 HabitSetupCard(
-                    error = setupError,
+                    error = setupError?.let { stringResource(setupErrorMessage(it)) },
                     onOnboard = onOnboard,
                     onCancel = if (addingHabit) onCancelAddHabit else null,
                 )
@@ -122,10 +122,31 @@ fun StreaksScreen(
                 RelapseCard(
                     currentDays = daysFree(state.currentStreakElapsedMs),
                     inFlight = relapseInFlight,
-                    note = relapseNote,
+                    note = relapseFeedback?.let { relapseNoteText(it) },
                     onRelapse = onRelapse,
                 )
             }
         }
     }
+}
+
+private fun setupErrorMessage(error: StreaksViewModel.SetupError): Int = when (error) {
+    StreaksViewModel.SetupError.START_IN_FUTURE -> R.string.streaks_setup_error_future
+    StreaksViewModel.SetupError.INVALID_DURATION -> R.string.streaks_setup_error_invalid
+    StreaksViewModel.SetupError.IMPLAUSIBLE_CLOCK -> R.string.streaks_setup_error_clock
+    StreaksViewModel.SetupError.STORE_UNAVAILABLE -> R.string.streaks_setup_error_store
+}
+
+/** Copy for the last relapse outcome (finding #20); the support line stays the test-pinned
+ *  pure function in StreaksPresentation.kt. */
+@Composable
+private fun relapseNoteText(feedback: StreaksViewModel.RelapseFeedback): String = when (feedback) {
+    is StreaksViewModel.RelapseFeedback.Support ->
+        relapseSupportNote(feedback.endedDays, feedback.bestDays)
+
+    StreaksViewModel.RelapseFeedback.RejectedBeforeStart ->
+        stringResource(R.string.streaks_relapse_error_before_start)
+
+    StreaksViewModel.RelapseFeedback.StoreUnavailable ->
+        stringResource(R.string.streaks_relapse_error_store)
 }

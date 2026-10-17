@@ -431,6 +431,24 @@ class PartnerSyncCoordinatorTest {
         assertEquals(listOf(pairId), drainCalls.map { it.first })
     }
 
+    /** Per-pair isolation covers THROWN failures too (e.g. an SQLite error under disk
+     *  pressure): the throwing pair's slice is skipped, the healthy pair still drains and
+     *  pulls, and syncOnce returns normally rather than aborting the pass. */
+    @Test
+    fun onePairsSliceThrowing_isContained_theRestStillRun() = runTest {
+        val secondPair = "pair-second"
+        enroll()
+        enroll(secondPair, partnerSigningKey = ecKeyPair().public, partnerAgreementKey = ecKeyPair().public)
+        uids[secondPair] = "me" to "partner-two"
+        coordinator = coordinator(warmSigner(), drainThrowsFor = pairId)
+
+        val report = coordinator.syncOnce()
+
+        assertEquals("the throwing pair's slice is skipped", listOf(secondPair), drainCalls.map { it.first })
+        assertEquals("the healthy pair still drained and pulled", listOf(secondPair), pullCalls)
+        assertEquals("a partial pass is reported, not hidden", false, report.uidsResolved)
+    }
+
     /**
      * Appendix A.2/A.3: a journal row becomes one `TYPE_*` activity event per pair — the wire
      * body carries the kind, the version pair, and the whole `stateAfter` snapshot, and the row
@@ -764,6 +782,7 @@ class PartnerSyncCoordinatorTest {
         drain: MailboxOutboxDrainer.DrainResult = MailboxOutboxDrainer.DrainResult.Sent(2),
         pullResult: FirestoreMailboxReceiver.PullResult = FirestoreMailboxReceiver.PullResult(appended = 3),
         resumeUnpairs: suspend () -> Boolean = { false },
+        drainThrowsFor: String? = null,
     ) = PartnerSyncCoordinator(
         enrollmentDao = db.enrollmentDao(),
         storeFactory = factory,
@@ -781,6 +800,7 @@ class PartnerSyncCoordinatorTest {
         resolveUids = { pId -> uids[pId] },
         drainOutbox = { pId, authorUid, partnerUid ->
             stepOrder += "drain"
+            if (pId == drainThrowsFor) throw IllegalStateException("disk full")
             drainCalls += Triple(pId, authorUid, partnerUid)
             drain
         },

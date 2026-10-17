@@ -1,8 +1,9 @@
-<!-- The widget's "log an urge" control glyph (widget v2.1 owner correction 2026-10-16): three
-     calm strokes. Urge-surfing is the app's own metaphor, and to anyone glancing at the home
-     screen a wave says nothing at all — which is the point (owner: "we need to think of user
-     privacy"). Authored white; every surface tints it (Glance ColorFilter.tint / Compose
-     ColorFilter.tint). -->
+<!-- The shared log-a-moment glyph (widget v2.1 owner correction 2026-10-16; app use added
+     2026-10-17): three calm strokes. Owned by both the widget's log control and the streak
+     card's relapse action so the two surfaces cannot read as two different actions. On the
+     launcher a wave says nothing to a bystander, which is the point (owner: "we need to
+     think of user privacy"). Authored white; every surface tints it (Glance
+     ColorFilter.tint / Compose ColorFilter.tint). -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"

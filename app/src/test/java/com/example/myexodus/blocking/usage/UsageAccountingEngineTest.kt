@@ -62,6 +62,9 @@ class UsageAccountingEngineTest {
     private val today: LocalDate =
         LocalDate.ofInstant(Instant.ofEpochMilli(wallNowMs), ZoneId.systemDefault())
 
+    /** The engine's injected clock — [wallNowMs] unless a test moves it across midnight. */
+    private var engineNowMs: Long = 0L
+
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
@@ -78,7 +81,8 @@ class UsageAccountingEngineTest {
         val dispatcher = Dispatchers.IO.limitedParallelism(1)
         val crashReporting = com.example.myexodus.telemetry.CrashReporting(context)
         ledger = UsageLedgerRepository(factory, dispatcher, crashReporting)
-        engine = UsageAccountingEngine(factory, dispatcher, crashReporting, ledger, context) { wallNowMs }
+        engineNowMs = wallNowMs
+        engine = UsageAccountingEngine(factory, dispatcher, crashReporting, ledger, context) { engineNowMs }
         kotlinx.coroutines.runBlocking {
             db.userProfileDao().insert(
                 UserProfile(
@@ -470,6 +474,29 @@ class UsageAccountingEngineTest {
         assertEquals(today.toString(), row.localDateAnchor)
         assertEquals(4 * MIN, row.msUsedToday)
         assertEquals(false, row.blockedToday)
+    }
+
+    @Test
+    fun reconciledWindow_completingAfterMidnight_neverCreditsYesterdaysUsageIntoToday() = runTest {
+        // §8.11/ADR #94: "a credit that completes today can never hand today a budget that
+        // yesterday's usage should have consumed". The window was clipped to the pass day
+        // (23:59:59) and the credit transaction lands just after midnight: the journal keeps
+        // the row on the day the time occurred, the fresh tracker must stay at zero.
+        val windowEnd = today.plusDays(1).atStartOfDay(ZoneId.systemDefault())
+            .toInstant().toEpochMilli() - 1_000L
+        engineNowMs = windowEnd + 61_000L
+
+        val credited = engine.creditReconciledWindow(
+            PKG, 10 * MIN, 15 * MIN, 5 * MIN, UsageLedgerSource.MAINTENANCE, windowEnd,
+        )
+
+        assertEquals(0L, credited)
+        val tracker = trackerRow()!!
+        assertEquals(today.plusDays(1).toString(), tracker.localDateAnchor)
+        assertEquals(0L, tracker.msUsedToday)
+        val row = db.usageLedgerDao().rowsOfKindSince(UsageLedgerKind.RECONCILIATION, 0L).single()
+        assertEquals(today.toString(), row.dayKey)
+        assertEquals(5 * MIN, row.creditedMs)
     }
 
     @Test

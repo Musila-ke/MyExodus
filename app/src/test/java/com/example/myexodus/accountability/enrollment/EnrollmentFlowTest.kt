@@ -115,6 +115,14 @@ class EnrollmentFlowTest {
         )
         val result = flow().verifyPartnerMaterial(sessionId, payload(), transcriptBytes, signWith(partnerKeys, otherPair))
         assertTrue(result is EnrollmentFlow.PartnerVerification.Rejected)
+
+        // The sessionId-field guard itself (EnrollmentFlow.kt:64) — a perfectly valid
+        // signature cannot rescue a payload minted for another session (2026-10-16 review:
+        // the assertions above only exercised the signature-replay rejection).
+        val mismatched = flow().verifyPartnerMaterial(
+            "deadbeefdeadbeef", payload(), transcriptBytes, signWith(partnerKeys, transcriptBytes),
+        )
+        assertTrue(mismatched is EnrollmentFlow.PartnerVerification.Rejected)
     }
 
     @Test

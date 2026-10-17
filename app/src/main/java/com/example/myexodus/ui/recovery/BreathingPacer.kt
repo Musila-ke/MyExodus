@@ -89,7 +89,12 @@ fun BreathingPacer(
         var lastPhase = -1
         while (isActive) {
             elapsedMs = SystemClock.elapsedRealtime() - startedAt
-            if (remainingSeconds == 0L) {
+            // Finding #14 (2026-10-16): [remainingSeconds] is a composition-time val, and this
+            // effect block holds the copy captured when it launched (the canonical stale-lambda
+            // case the Compose docs solve with rememberUpdatedState) — testing it here meant
+            // onFinished never fired and a session could never end itself. The state read
+            // (elapsedMs, just written above) is live, so the boundary is tested on it.
+            if (elapsedMs >= durationSeconds * 1000L) {
                 onFinished()
                 return@LaunchedEffect
             }

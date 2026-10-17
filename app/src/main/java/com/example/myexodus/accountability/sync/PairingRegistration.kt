@@ -6,6 +6,7 @@ import com.example.myexodus.accountability.enrollment.PairingProof
 import com.google.firebase.functions.FirebaseFunctions
 import com.google.firebase.functions.FirebaseFunctionsException
 import com.google.firebase.functions.HttpsCallableResult
+import kotlinx.coroutines.CancellationException
 
 /**
  * §8 Step 3 client for the registerPairing Cloud Function (region us-central1 — AD-17b:
@@ -47,6 +48,10 @@ open class PairingRegistration(
         val wire = wireMapOf(proof)
         return try {
             parse(callRegisterPairing(wire))
+        } catch (e: CancellationException) {
+            // Cancellation is not a transport outcome — never classified as Rejected/Failed
+            // (same rule as IdentityMigration.migrate and NudgeRepository.call).
+            throw e
         } catch (e: FirebaseFunctionsException) {
             if (!isTransportAmbiguous(e)) {
                 // The function's own verdict — a stable reason code travels in the message
@@ -56,6 +61,8 @@ open class PairingRegistration(
             } else {
                 try {
                     parse(callRegisterPairing(wire))
+                } catch (retry: CancellationException) {
+                    throw retry
                 } catch (retry: FirebaseFunctionsException) {
                     // Still unreachable after the retry: transient, not a verdict — the
                     // caller may re-run the ceremony; nothing was rejected server-side.

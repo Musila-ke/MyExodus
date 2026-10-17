@@ -6,6 +6,7 @@ import com.example.myexodus.R
 import com.example.myexodus.accountability.sos.NudgeRepository
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.recovery.RecoverySessionRepository
+import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.ui.home.SosViewModel
 import com.example.myexodus.ui.partner.PartnerDashboardSource
 import com.example.myexodus.ui.partner.PartnerSelection
@@ -20,22 +21,24 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * State behind the widget's hold-to-confirm surface ([WidgetActionActivity], widget v2.1 — owner
- * correction 2026-10-16). The hold gesture is the accident protection; this class is the
- * execution: "log an urge" writes the same terminal session row the Recovery screen's log sheet
- * writes ([RecoverySessionRepository.logOnly], entry [RecoverySession.ENTRY_WIDGET]), and
- * reach-out drives the same §8.15 sender machine Home uses.
+ * State behind the widget's hold-to-confirm surface ([WidgetActionActivity], widget v2.2 — owner
+ * rulings 2026-10-15/16/17). The hold gesture is the accident protection; this class is the
+ * execution: "log a relapse" ends exactly the `habitId` the tapped control displayed
+ * ([HabitRepository.logRelapse]), "log an urge" writes the same terminal session row the
+ * Recovery screen's log sheet writes ([RecoverySessionRepository.logOnly], entry
+ * [RecoverySession.ENTRY_WIDGET]), and reach-out drives the same §8.15 sender machine Home uses.
  *
  * [sos] is this surface's own [SosViewModel] over the shared [NudgeRepository] — Home keeps its
  * own instance; §8.15's machine (UUID identity, retry-stable envelope, 5-second auto-returns) is
  * reused whole rather than re-implemented, so the surface can never drift from Home's semantics.
  *
  * Copy stays out of here (the [SosViewModel] pattern): this class exposes pure state, the screen
- * maps it to strings — except [urgeOutcomeRes], kept next to the states it names so the mapping
- * is unit-testable as a matrix.
+ * maps it to strings — except [urgeOutcomeRes]/[relapseOutcomeRes], kept next to the states they
+ * name so each mapping is unit-testable as a matrix.
  */
 @HiltViewModel
 class WidgetActionViewModel @Inject constructor(
+    private val habits: HabitRepository,
     private val sessions: RecoverySessionRepository,
     private val nudgeRepository: NudgeRepository,
     private val partnerSource: PartnerDashboardSource,
@@ -46,6 +49,9 @@ class WidgetActionViewModel @Inject constructor(
 
     private val _urge = MutableStateFlow(UrgeOutcome.None)
     val urge: StateFlow<UrgeOutcome> = _urge.asStateFlow()
+
+    private val _relapse = MutableStateFlow(RelapseOutcome.None)
+    val relapse: StateFlow<RelapseOutcome> = _relapse.asStateFlow()
 
     private val _partner = MutableStateFlow<PartnerGate>(PartnerGate.Checking)
     val partner: StateFlow<PartnerGate> = _partner.asStateFlow()
@@ -70,6 +76,36 @@ class WidgetActionViewModel @Inject constructor(
      */
     fun reset() {
         _urge.value = UrgeOutcome.None
+        _relapse.value = RelapseOutcome.None
+    }
+
+    /**
+     * The relapse execution: `logRelapse` against the exact track the widget displayed. The ring
+     * already gates this, but the VM is the last line: a double delivery of the hold (or a tap
+     * racing the state flip) must not write twice.
+     */
+    fun logRelapse(habitId: String) {
+        if (_relapse.value == RelapseOutcome.InFlight) return
+        _relapse.value = RelapseOutcome.InFlight
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { habits.logRelapse(habitId) }
+            _relapse.value = when (result) {
+                is HabitRepository.RelapseResult.RolledOver -> RelapseOutcome.Logged
+                // A write inside the idempotency window: the state the user asked for already
+                // holds (the rollover just happened), so the honest report is success-adjacent,
+                // not a failure.
+                HabitRepository.RelapseResult.DuplicateIgnored -> RelapseOutcome.AlreadyLogged
+                // The displayed track has no active streak left (ended or removed since the
+                // widget rendered): the app is where that gets resolved.
+                HabitRepository.RelapseResult.NoActiveStreak -> RelapseOutcome.Gone
+                // Clock anomaly (unreachable from this surface: the timestamp is always "now")
+                // and store-unavailable both mean "nothing was written, holding again is the
+                // retry" — one honest state.
+                HabitRepository.RelapseResult.RejectedBeforeStreakStart,
+                HabitRepository.RelapseResult.StoreUnavailable,
+                -> RelapseOutcome.Failed
+            }
+        }
     }
 
     /** The urge-log execution: the exact path the Recovery screen's log sheet uses
@@ -113,6 +149,8 @@ class WidgetActionViewModel @Inject constructor(
      *  rather than failing the user), so there is no failure state: the only terminal outcome is
      *  [Saved]. */
     enum class UrgeOutcome { None, InFlight, Saved }
+
+    enum class RelapseOutcome { None, InFlight, Logged, AlreadyLogged, Gone, Failed }
 }
 
 /**
@@ -148,3 +186,49 @@ internal fun urgeHoldArmed(outcome: WidgetActionViewModel.UrgeOutcome): Boolean 
  */
 internal fun urgeAutoFinishes(outcome: WidgetActionViewModel.UrgeOutcome): Boolean =
     outcome == WidgetActionViewModel.UrgeOutcome.Saved
+
+/**
+ * The copy each relapse outcome puts on the surface, in the disclosure pair the titles/bodies
+ * already carry: the recovery vocabulary only after disclosure, "count"/"reset" while discreet
+ * (FR5 — the surface a hold opens must not print the word the card just refused to show; a
+ * device leg caught "Relapse logged" on a discreet surface, 2026-10-16). "Already logged" is
+ * vocabulary-free and shared. Null = still interactive (no result text). Pure, so the full
+ * outcome × disclosure matrix is unit-testable.
+ */
+internal fun relapseOutcomeRes(
+    outcome: WidgetActionViewModel.RelapseOutcome,
+    discreet: Boolean,
+): Int? = when (outcome) {
+    WidgetActionViewModel.RelapseOutcome.None,
+    WidgetActionViewModel.RelapseOutcome.InFlight,
+    -> null
+
+    WidgetActionViewModel.RelapseOutcome.Logged ->
+        if (discreet) R.string.widget_relapse_logged_discreet else R.string.widget_relapse_logged
+
+    WidgetActionViewModel.RelapseOutcome.AlreadyLogged -> R.string.widget_relapse_already_logged
+    WidgetActionViewModel.RelapseOutcome.Gone ->
+        if (discreet) R.string.widget_relapse_gone_discreet else R.string.widget_relapse_gone
+
+    WidgetActionViewModel.RelapseOutcome.Failed ->
+        if (discreet) R.string.widget_relapse_failed_discreet else R.string.widget_relapse_failed
+}
+
+/**
+ * Whether the hold ring accepts a gesture in this outcome. Failed stays armed — the write never
+ * happened, and the surface's own hint asks for the hold again; the other terminal states are
+ * closed for holding by design (InFlight is a write, Logged/AlreadyLogged close themselves, Gone
+ * points at the app). Pure, and pinned by the same-domain test as the copy matrix.
+ */
+internal fun relapseHoldArmed(outcome: WidgetActionViewModel.RelapseOutcome): Boolean =
+    outcome == WidgetActionViewModel.RelapseOutcome.None ||
+        outcome == WidgetActionViewModel.RelapseOutcome.Failed
+
+/**
+ * Whether an outcome closes the surface on its own: the two success-adjacent states are
+ * self-evident (the widget behind the scrim flips to Day 1), so the surface dismisses and lets
+ * the user see it. Terminal problems stay open — they carry copy the user must read first.
+ */
+internal fun relapseAutoFinishes(outcome: WidgetActionViewModel.RelapseOutcome): Boolean =
+    outcome == WidgetActionViewModel.RelapseOutcome.Logged ||
+        outcome == WidgetActionViewModel.RelapseOutcome.AlreadyLogged

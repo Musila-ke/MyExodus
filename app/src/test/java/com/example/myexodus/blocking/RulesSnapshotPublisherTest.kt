@@ -120,6 +120,24 @@ class RulesSnapshotPublisherTest {
     }
 
     @Test
+    fun resetAllData_clearsTheDeviceProtectedSnapshotToo() = runTest {
+        // Finding #11 (2026-10-16): the user-confirmed reset destroyed the CE cache but not
+        // the §8.5 DE copy, so a wiped install kept the restricted-package list on disk and
+        // the next locked boot could enforce pre-reset rules. The reset contract covers both.
+        seedProfile()
+        factory.open()!!.restrictionRuleDao().insert(appRule("com.instagram.android"))
+        publisher.loadFromDb() // writes both cache copies
+
+        recovery.resetAllData()
+
+        // Simulated post-reset reboot: the DE restore must find nothing.
+        val freshPublisher = RulesSnapshotPublisher(context, factory)
+        assertNull("DE snapshot must not survive a user-confirmed reset",
+            freshPublisher.loadDeviceProtected())
+        assertEquals(SnapshotState.Uninitialized, freshPublisher.state.value)
+    }
+
+    @Test
     fun loadFromDb_publishesActiveProfileRulesWithRoomAuthorityVersion() = runTest {
         seedProfile()
         val store = factory.open()!!
@@ -158,6 +176,27 @@ class RulesSnapshotPublisherTest {
         val state = publisher.state.value
         assertTrue("Expected Degraded, got $state", state is SnapshotState.Degraded)
         assertEquals("Engine keeps the last published snapshot", lastGood, publisher.snapshot)
+    }
+
+    @Test
+    fun loadFromDb_cacheWriteFails_stillPublishes_andDoesNotThrow() = runTest {
+        // Finding #10 (2026-10-16, B-10 disk-full class): the CE cache write was the one
+        // unwrapped disk write — its IOException aborted the publish and escaped into the
+        // handler-less fire-and-forget scopes that cold-load this (crash-loop on every boot
+        // and service start). Caches are best-effort speed-ups; the publish is the authority.
+        seedProfile()
+        factory.open()!!.restrictionRuleDao().insert(appRule("com.instagram.android"))
+        // Force the write to fail: a directory occupies the temp path writeTo writes to.
+        val tmpPath = java.io.File(context.filesDir, "rules_snapshot.json.tmp")
+        tmpPath.mkdirs()
+        assertTrue("fixture must occupy the temp path", tmpPath.isDirectory)
+        try {
+            publisher.loadFromDb()
+        } finally {
+            tmpPath.delete()
+        }
+        assertEquals(SnapshotState.Ready(0L), publisher.state.value)
+        assertTrue(publisher.snapshot.appRules.containsKey("com.instagram.android"))
     }
 
     @Test

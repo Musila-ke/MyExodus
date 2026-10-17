@@ -3,6 +3,7 @@ package com.example.myexodus.accountability.enrollment
 import com.example.myexodus.accountability.crypto.AccountabilityKeyStore
 import com.example.myexodus.accountability.sync.FirestoreSchema
 import com.example.myexodus.accountability.sync.PairingExchange
+import com.google.firebase.firestore.FirebaseFirestoreException
 import java.security.PrivateKey
 import java.security.Signature
 import kotlinx.coroutines.async
@@ -11,6 +12,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -115,6 +117,40 @@ class PairingFlowTest {
         assertEquals(listOf(alias), partnerGenerated)
         assertEquals(alias, initiatorDao.getByPairId(durablePairId)!!.myAgreementKeyAlias)
         assertEquals(alias, partnerDao.getByPairId(durablePairId)!!.myAgreementKeyAlias)
+    }
+
+    /**
+     * Finding #12 (2026-10-16): the vault write is post-durable — the enrollment row and the
+     * agreement key are already committed, and the vault value is derivable from them — so a
+     * disk-full-class vault failure must not surface as a failed pairing. Before the guard,
+     * the throw escaped [PairingFlow.submitInitiatorSignature] and the ceremony rendered the
+     * connectivity failure copy over a device that was in fact paired.
+     */
+    @Test
+    fun vaultWriteFailure_afterDurableEnrollment_stillPairs() = runTest {
+        var nowEpochMillis = 1_700_000_000_000L
+        val cloud = FakeCloud()
+        val initiator = DeviceKeys()
+        val partner = DeviceKeys()
+        val initiatorDao = FakeEnrollmentDao()
+        val initiatorSecrets = FakeSecrets().apply { failStorePairingKey = true }
+        val initiatorFlow = flow(initiator, cloud, testScheduler, initiatorDao, initiatorSecrets) { nowEpochMillis }
+        val partnerFlow = flow(partner, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets()) { nowEpochMillis }
+
+        val initiation = initiatorFlow.initiate("uid-a")
+        val durablePairId = EnrollmentTranscript.durablePairIdOf("uid-a", "uid-b")
+
+        val partnerJob = async {
+            partnerFlow.complete(initiation.qrBytes, "uid-b", signing(partner.signing.private))
+        }
+        val await = checkNotNull(initiatorFlow.awaitPartner(initiation.token, 30_000))
+        val initiatorOutcome = initiatorFlow.submitInitiatorSignature(await, initiation.token, "uid-a", signing(initiator.signing.private))
+        val partnerOutcome = partnerJob.await()
+
+        assertEquals(PairingFlow.Outcome.Paired(durablePairId, await.sas), initiatorOutcome)
+        assertTrue("partner side is fully paired", partnerOutcome is PairingFlow.Outcome.Paired)
+        assertNotNull("enrollment is durable despite the vault failure", initiatorDao.getByPairId(durablePairId))
+        assertNull("vault value absent — derivable from the enrollment + keystore", initiatorSecrets.pairingKey.value)
     }
 
     /**
@@ -444,12 +480,78 @@ class PairingFlowTest {
         var nowEpochMillis = 1_700_000_000_000L
         val cloud = FakeCloud()
         val initiator = DeviceKeys()
-        val initiatorFlow = flow(initiator, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets()) { nowEpochMillis }
+        val destroyed = mutableListOf<String>()
+        val initiatorFlow = flow(initiator, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets(),
+            destroyAgreementKey = destroyed::add) { nowEpochMillis }
         val initiation = initiatorFlow.initiate("uid-a")
+        val alias = AccountabilityKeyStore.pairAgreementAliasOf(initiation.token.sessionId)
 
         assertNull(initiatorFlow.awaitPartner(initiation.token, 30_000))
         assertTrue(cloud.pairings.isEmpty())
         assertFalse("timeout alone does not consume the token", cloud.tokenDocs.isEmpty())
+        assertEquals("the timed-out attempt key must not survive (§19.5 / ADR #106)", listOf(alias), destroyed)
+    }
+
+    /**
+     * §19.5 / ADR #106: the activation wait rethrows transport failures (PairingExchange), and
+     * the screen clears its token reference on the failed outcome — so cancel becomes
+     * unreachable and the submit wrapper's own discard is the key's only remaining chance.
+     */
+    @Test
+    fun transportDropDuringTheInitiatorActivationWait_destroysTheAttemptKey_andRethrows() = runTest {
+        var nowEpochMillis = 1_700_000_000_000L
+        val cloud = FakeCloud()
+        val initiator = DeviceKeys()
+        val partner = DeviceKeys()
+        val destroyed = mutableListOf<String>()
+        val initiatorFlow = flow(initiator, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets(),
+            destroyAgreementKey = destroyed::add) { nowEpochMillis }
+        val partnerFlow = flow(partner, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets()) { nowEpochMillis }
+        val initiation = initiatorFlow.initiate("uid-a")
+        val alias = AccountabilityKeyStore.pairAgreementAliasOf(initiation.token.sessionId)
+
+        // The partner answers on the token but its proof call dies → the initiator's submit
+        // lands in AwaitingPartner and enters the activation wait, where the drop happens.
+        cloud.failNextRegistration = true
+        val partnerJob = async {
+            partnerFlow.complete(initiation.qrBytes, "uid-b", signing(partner.signing.private))
+        }
+        val await = checkNotNull(initiatorFlow.awaitPartner(initiation.token, 30_000))
+        cloud.failNextActivationWait = true
+        val thrown = runCatching {
+            initiatorFlow.submitInitiatorSignature(await, initiation.token, "uid-a", signing(initiator.signing.private))
+        }.exceptionOrNull()
+
+        assertTrue("the transport failure must propagate, not vanish", thrown is FirebaseFirestoreException)
+        assertEquals(FirebaseFirestoreException.Code.UNAVAILABLE, (thrown as FirebaseFirestoreException).code)
+        assertEquals("a thrown submit must not orphan the attempt key", listOf(alias), destroyed)
+        assertTrue(partnerJob.await() is PairingFlow.Outcome.Rejected)
+    }
+
+    /** The joiner half of the same contract: a thrown finishJoin must not orphan its key. */
+    @Test
+    fun transportDropDuringTheJoinerActivationWait_destroysTheAttemptKey_andRethrows() = runTest {
+        var nowEpochMillis = 1_700_000_000_000L
+        val cloud = FakeCloud()
+        val initiator = DeviceKeys()
+        val partner = DeviceKeys()
+        val partnerDestroyed = mutableListOf<String>()
+        val initiatorFlow = flow(initiator, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets()) { nowEpochMillis }
+        val partnerFlow = flow(partner, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets(),
+            destroyAgreementKey = partnerDestroyed::add) { nowEpochMillis }
+        val initiation = initiatorFlow.initiate("uid-a")
+        val ready = partnerFlow.prepareJoin(initiation.qrBytes, "uid-b") as PairingFlow.JoinPreparationResult.Ready
+        val alias = AccountabilityKeyStore.pairAgreementAliasOf(initiation.token.sessionId)
+
+        // The initiator never submits, so the joiner's proof lands in AwaitingPartner and
+        // enters the activation wait, where the drop happens.
+        cloud.failNextActivationWait = true
+        val thrown = runCatching {
+            partnerFlow.finishJoin(ready.preparation, "uid-b", signing(partner.signing.private))
+        }.exceptionOrNull()
+
+        assertTrue("the transport failure must propagate, not vanish", thrown is FirebaseFirestoreException)
+        assertEquals("a thrown finishJoin must not orphan the attempt key", listOf(alias), partnerDestroyed)
     }
 
     /**

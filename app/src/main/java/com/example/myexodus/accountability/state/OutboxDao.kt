@@ -68,16 +68,22 @@ interface OutboxDao {
 
     /**
      * Step 18: sent rows whose mailbox document still owes a relay-marker read-back — never
-     * checked, or last checked inside the settle window. The window, not a single look, is
-     * the design: the relay runs asynchronously and a partner wake can trigger a sync pass
-     * seconds after a drain, so "no marker yet" is inconclusive until the relay's own
-     * latency has certainly elapsed.
+     * checked, or last checked inside the last hour (ADR #53's due formula: the relay runs
+     * asynchronously and a partner wake can trigger a sync pass seconds after a drain, so a
+     * single no-marker look would be a false negative; re-checks make the read-back
+     * self-healing). A checked row therefore keeps costing one read per pass while checks
+     * continue, and drops out only after an hour without one.
+     *
+     * Ordered least-recently-checked first — SQLite sorts NULLs first under ASC, so a
+     * never-checked row always outranks re-checks. Under `LIMIT` this guarantees fresh rows
+     * get their first look even when an hour's worth of due rows exceeds the batch, and
+     * re-stamping rotates the tail forward so no due row starves.
      */
     @Query(
         "SELECT o.message_id FROM outbox o INNER JOIN events e ON e.id = o.event_id " +
             "WHERE e.pair_id = :pairId AND o.status = 'SENT' AND o.relay_rejection IS NULL " +
             "AND (o.relay_checked_at IS NULL OR o.relay_checked_at > :settleBeforeEpochMillis) " +
-            "LIMIT :limit",
+            "ORDER BY o.relay_checked_at ASC LIMIT :limit",
     )
     suspend fun relayCheckDue(pairId: String, settleBeforeEpochMillis: Long, limit: Int): List<UncheckedSentRow>
 

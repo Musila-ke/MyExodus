@@ -3,6 +3,7 @@ package com.example.myexodus.accountability.sync
 import android.Manifest
 import android.app.Application
 import android.app.Notification
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
@@ -248,6 +249,34 @@ class PartnerNotificationsTest {
         )
     }
 
+    /** The `_v3` id migration's other half: a dented pre-v3 channel cannot be raised in
+     *  place, so its id is retired by deletion at startup — without this, the settings
+     *  screen would list duplicate check-in channels. */
+    @Test
+    fun ensurePartnerNudgesChannel_retiresTheLegacyChannelIds() {
+        manager.createNotificationChannel(
+            NotificationChannel(
+                PartnerNotifications.CHANNEL_PARTNER_NUDGES_LEGACY, "legacy",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(
+                PartnerNotifications.CHANNEL_PARTNER_NUDGES_V2, "v2",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+
+        PartnerNotifications.ensurePartnerNudgesChannel(context)
+
+        assertNull(manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_NUDGES_LEGACY))
+        assertNull(manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_NUDGES_V2))
+        assertEquals(
+            NotificationManager.IMPORTANCE_HIGH,
+            manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_NUDGES)!!.importance,
+        )
+    }
+
     /** Device-observed 2026-10-04 (both rig devices): the nudge post's channel-create call
      *  rewrote the LIVE v2 channel's importance HIGH→DEFAULT (XOS honors app importance
      *  updates on non-user-locked channels), so every later post was tray-only — the exact
@@ -383,6 +412,61 @@ class PartnerNotificationsTest {
         assertEquals(
             context.getString(R.string.partner_event_text),
             notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
+    /** #16: the partner ended the partnership and this device's shared data was shredded —
+     *  the responder is told who, when, and that the erase happened (owner-observed defect:
+     *  the roster silently dropped with nothing on the other device). This test is the only
+     *  coverage of the ended-notification's copy contract; the caller is the deletion
+     *  composition in DI. */
+    @Test
+    fun partnershipEnded_namesWhoAndWhen_unlocked_lockscreenStaysGeneric() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyPartnershipEnded(context, PAIR_ID, PARTNER_NAME, OCCURRED_AT)
+
+        val posted = manager.activeNotifications.single()
+        assertEquals(
+            PartnerNotifications.idFor(PartnerNotifications.NOTIF_PARTNERSHIP_ENDED, PAIR_ID),
+            posted.id,
+        )
+        val notification = posted.notification
+        assertEquals(
+            context.getString(R.string.partner_ended_title_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(
+                R.string.partner_ended_text_named,
+                DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(OCCURRED_AT)),
+            ),
+            notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+        val publicVersion = notification.publicVersion
+        assertTrue("lockscreen renders the generic public copy", publicVersion != null)
+        assertEquals(
+            context.getString(R.string.partner_ended_title),
+            publicVersion!!.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            "who and when never reach the lockscreen (FR-13)",
+            context.getString(R.string.partner_ended_text),
+            publicVersion.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
+    /** A deletion request without a server timestamp (hand-written document, missing field)
+     *  still posts the named copy — with the no-time body, never an empty date. */
+    @Test
+    fun partnershipEnded_withoutATimestamp_usesTheNoTimeCopy() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyPartnershipEnded(context, PAIR_ID, PARTNER_NAME, endedAtEpochMillis = null)
+
+        assertEquals(
+            context.getString(R.string.partner_ended_text_named_no_time),
+            manager.activeNotifications.single().notification.extras.getString(Notification.EXTRA_TEXT),
         )
     }
 

@@ -43,6 +43,22 @@ class PartnerSyncTelemetryTest {
     }
 
     @Test
+    fun worstPass_reportsBothDeniedAndOutboxAge() = runTest {
+        // The fully-degraded pass: notifications denied AND rows stuck PENDING — both rails
+        // fire, denied first (the §14 denied-rate numerator, then the age histogram).
+        val now = 1_000_000_000L
+        val fake = Fake(canPost = false, oldestPending = { now }, now = now)
+        fake.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
+        assertEquals(
+            listOf(
+                PartnerSyncTelemetry.EVENT_NOTIFICATIONS_DENIED,
+                "${PartnerSyncTelemetry.EVENT_OUTBOX_PENDING} age=under_15m",
+            ),
+            fake.events,
+        )
+    }
+
+    @Test
     fun oldestPending_agesIntoTheRightBucket_withBoundariesAtTheBucketEdges() = runTest {
         val now = 1_000_000_000L
         val edges = listOf(

@@ -103,6 +103,38 @@ class QrReassemblerTest {
         assertArrayEquals(payload, reassembled.assembledPayload())
     }
 
+    @Test
+    fun forgedHeaderWithLargerCount_isIgnored_sessionStaysIntact() {
+        val payload = randomBytes(1_500) // 3 chunks
+        val all = chunks(payload)
+        val reassembled = QrReassembler()
+        reassembled.accept(all[0])
+        // Hostile frame: same session id, but a header claiming 100 chunks at index 99.
+        // Without the shape guard this indexes the 3-slot arrays sized by the first frame
+        // and throws ArrayIndexOutOfBoundsException.
+        val forged = QrChunkCodec.decode(
+            all[0].sessionId + byteArrayOf(0, 100) + byteArrayOf(0, 99) + ByteArray(10),
+        )
+        assertFalse(reassembled.accept(forged))
+        assertEquals(1f / 3f, reassembled.progress, 0.001f) // progress flushed by nothing
+        reassembled.accept(all[1])
+        reassembled.accept(all[2])
+        assertTrue(reassembled.isComplete)
+        assertArrayEquals(payload, reassembled.assembledPayload())
+    }
+
+    @Test
+    fun headerOnlyFrame_isIgnored_notASessionReset() {
+        val payload = randomBytes(1_500) // 3 chunks
+        val all = chunks(payload)
+        val reassembled = QrReassembler()
+        reassembled.accept(all[0])
+        // An 8-byte frame (header, no payload) decodes fine but must not flush the session.
+        val bare = QrChunkCodec.decode(all[0].sessionId + byteArrayOf(0, 3) + byteArrayOf(0, 0))
+        assertFalse(reassembled.accept(bare))
+        assertEquals(1f / 3f, reassembled.progress, 0.001f)
+    }
+
     /** §12 fuzz: random payloads, random orders, random duplication — never crashes, always exact. */
     @Test
     fun fuzz_randomPayloadsInRandomOrders() {

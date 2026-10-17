@@ -20,7 +20,8 @@ import org.junit.runner.RunWith
  * Real Keystore + real SQLCipher round trip for the encrypted rules store (habit-streaks plan
  * §12): DEK wrap/unwrap across manager instances, the stored blob never being the raw key,
  * cold install → relaunch decrypt, and the at-rest header check. Every test wipes all state
- * through [RecoveryManager.resetAllData].
+ * through `resetAllDataEmulatorOnly` — the gated no-op-off-emulator wrapper (DeviceSafety.kt);
+ * a raw [RecoveryManager.resetAllData] here would wipe the handset's production store.
  */
 @RunWith(AndroidJUnit4::class)
 class RulesStoreKeyManagerInstrumentedTest {

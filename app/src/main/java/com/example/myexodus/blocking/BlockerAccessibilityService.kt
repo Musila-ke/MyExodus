@@ -59,6 +59,7 @@ class BlockerAccessibilityService : AccessibilityService() {
     @Inject lateinit var settings: EnhancedModeSettings
     @Inject lateinit var monitor: EnhancedModeHealthMonitor
     @Inject lateinit var statusMonitor: ProtectionStatusMonitor
+    @Inject lateinit var status: ProtectionStatusStore
     @Inject lateinit var recoveryStore: RecoveryStateStore
     @Inject lateinit var attempts: AttemptRecorder
     @Inject lateinit var usageEngine: UsageAccountingEngine
@@ -377,7 +378,6 @@ class BlockerAccessibilityService : AccessibilityService() {
     ) {
         val displayId = window.displayIdOrDefault()
         val decisionTimeNanos = SystemClock.elapsedRealtimeNanos()
-        profiler.recordDecision(generation, detectionNanos, decisionTimeNanos)
         val decision = engine.decideApp(packageName, System.currentTimeMillis())
         if (BuildConfig.DEBUG) {
             Log.i(TAG, "decide $packageName gen=$generation -> ${decision.javaClass.simpleName}")
@@ -397,6 +397,10 @@ class BlockerAccessibilityService : AccessibilityService() {
                 // starts at the app's whole surface; split-screen pane coverage is the
                 // largest-window re-bound in blockOtherRestrictedWindows.
                 if (!overlay.isShown(displayId)) {
+                    // Recorded only when a submission follows (coverBlockedApp → overlay.show):
+                    // every other decision is never submitted, and its pending entry would live
+                    // for the process lifetime (review finding #45).
+                    profiler.recordDecision(generation, detectionNanos, decisionTimeNanos)
                     coverBlockedApp(generation, displayId, packageName)
                     // XOS measures the *animating* task for a moment after an app switch, so a
                     // cover shown mid-animation lands at the animation's rect with the app's
@@ -544,7 +548,9 @@ class BlockerAccessibilityService : AccessibilityService() {
             return
         }
         val limitWalled = dailyWallPackage(displayId) == packageName
-        val tracked = !scheduleBlocked && !limitWalled && isLimitTracked(packageName)
+        val tracked = sessionTracked(scheduleBlocked, limitWalled, isLimitTracked(packageName)) {
+            status.requiresExplicitReEnable
+        }
         val observed = usageSessions.observeForeground(
             packageName, tracked, displayId, SystemClock.elapsedRealtime(), systemBootCount(this),
         )
@@ -615,11 +621,14 @@ class BlockerAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** One accounting write + render. §8 Step 4's authority gate ("only when
-     *  ProtectionStatusMonitor reports Path A holds accounting authority") is trivially
-     *  satisfied until Step 5/6 exist: Path B has no process yet and this ticker running is
-     *  Path A's health signal — Step 6 replaces this seam with the monitor check. The engine
-     *  transaction runs off the main thread (NFR4: failures are logged, never crash-loops). */
+    /** One accounting write + render. §8 Steps 5/6's authority gate holds structurally:
+     *  [ProtectionStatusMonitor.authorityFor] answers FULL exactly while this instance's
+     *  [connected] flag is set (its liveness input), and Path B credits only under
+     *  DEGRADED_POLLING_ONLY — i.e. only while this Path A ticker cannot exist (its
+     *  in-process flag gates it). The engine has no cross-path overlap dedupe, so this
+     *  mutual exclusion is the whole containment; the paused promise sits one level up, at
+     *  the session gate ([sessionTracked]). The engine transaction runs off the main
+     *  thread (NFR4: failures are logged, never crash-loops). */
     private fun accountUsage(tick: UsageSessionMachine.Tick) {
         // The rule may have lost its limit (or been paused/expired) mid-session: sessions open
         // only for tracked rules, but an edit can land between open and tick. Re-checked here,
@@ -1030,9 +1039,7 @@ class BlockerAccessibilityService : AccessibilityService() {
     }
 
     /** AccessibilityEvent.getWindow() is removed from the compileSdk 37 stubs; resolve the
-     *  window from the (flagRetrieveInteractiveWindows) window list instead. */
-    private fun windowFor(event: AccessibilityEvent): AccessibilityWindowInfo? = windowFor(event.windowId)
-
+     *  window from the (flagRetrieveInteractiveWindows) window list instead (by window id). */
     private fun windowFor(windowId: Int): AccessibilityWindowInfo? {
         val windows = runCatching { getWindows() }.getOrNull() ?: return null
         return windows.firstOrNull { it.id == windowId }
@@ -1138,6 +1145,20 @@ class BlockerAccessibilityService : AccessibilityService() {
             oracleAgeMs: Long,
         ): Boolean = activePackage != incomingPackage &&
             platformForegroundConfirms(activePackage, oraclePackage, oracleAgeMs)
+
+        /** The full session-open gate (plan §8 Step 4): schedule wall, limit wall, rule
+         *  tracked, and — the protection-paused promise, enforced here 2026-10-16 — never
+         *  while [reenableRequired] holds. "Time limits stay paused until you re-enable"
+         *  (protection_stopped_text) binds Path A's session opens exactly as it binds the
+         *  poll path's accounting; paused time must not re-enter the budget (ADR #160).
+         *  The flag is read through a lambda so an already-rejected package never touches the
+         *  status store. Pure for direct testing. */
+        fun sessionTracked(
+            scheduleBlocked: Boolean,
+            limitWalled: Boolean,
+            ruleTracked: Boolean,
+            reenableRequired: () -> Boolean,
+        ): Boolean = !scheduleBlocked && !limitWalled && ruleTracked && !reenableRequired()
 
         /** True between onServiceConnected and onDestroy; the device suite waits on it because
          *  the accessibility re-bind after a process restart lags on XOS. */

@@ -6,6 +6,8 @@ import androidx.room3.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.state.AccountabilityDatabase
+import com.example.myexodus.accountability.state.IdentityEpoch
+import com.example.myexodus.accountability.state.IdentityEpochDao
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -71,6 +73,25 @@ class IdentityMigrationTest {
 
         assertEquals(IdentityMigration.MigrationResult.Failed("StrongBox unavailable"), result)
         assertEquals(0, epochStore.current())
+        assertEquals(2, db.enrollmentDao().all().size)
+    }
+
+    @Test
+    fun dbStepFailure_returnsFailed_notThrows_andLeavesEnrollments() = runTest {
+        // The call site's contract is a returned Failed (retried on the next resume); a throw
+        // escaping a post-rotation DB step would crash the resume path instead (disk-full class).
+        val failingDao = object : IdentityEpochDao {
+            override suspend fun current(): Int? = 0
+            override suspend fun upsert(row: IdentityEpoch) {
+                throw IllegalStateException("disk full")
+            }
+        }
+        val failingMigration = IdentityMigration(db.enrollmentDao(), IdentityEpochStore(failingDao))
+
+        val result = failingMigration.migrate { rotated = true }
+
+        assertEquals(IdentityMigration.MigrationResult.Failed("disk full"), result)
+        assertTrue(rotated)
         assertEquals(2, db.enrollmentDao().all().size)
     }
 

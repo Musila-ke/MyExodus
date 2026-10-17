@@ -36,7 +36,7 @@ class EventPayloadTest {
     @Test
     fun approvalReferenceFields_roundTrip() {
         val p = EventPayload(
-            type = "approval-response", // concrete type value lands with Step 13
+            type = EventPayload.TYPE_APPROVAL_RESPONSE,
             text = "approved",
             requestEventId = "req-event-1",
             pairingEpoch = 3,

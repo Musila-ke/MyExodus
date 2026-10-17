@@ -2,6 +2,8 @@ package com.example.myexodus.ui.rules
 
 import android.util.Log
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -201,12 +203,37 @@ fun RulesScreen(
     // Consent is read fresh at composition (the 5 s tick re-reads it): the old remembered
     // copy went stale right after a grant — the tunnel established while the card still said
     // "off", and its tap silently no-op'ed (stress-found 2026-10-15).
+    // The editor watches the engine too (owner report 2026-10-17): a new website rule is inert
+    // until the tunnel is on, so the same blocker drives the editor's warning and save prompt.
+    val engineWatched = hasLiveWebsite || (route == ROUTE_EDIT && editTargetType == "WEBSITE")
+    val engineBlocker = if (engineWatched) {
+        VpnLifecycle.websiteEngineBlocker(VpnLifecycle.consented(context), DnsSinkholeVpnService.state)
+    } else {
+        null
+    }
     val engineOffMessage = when {
         !hasLiveWebsite -> null
-        !VpnLifecycle.consented(context) -> stringResource(R.string.domain_usage_off_body)
-        DnsSinkholeVpnService.state == VpnEngineState.FAILED ->
-            stringResource(R.string.domain_usage_off_retry)
+        engineBlocker == VpnLifecycle.WebsiteEngineBlocker.NEEDS_CONSENT ->
+            stringResource(R.string.domain_usage_off_body)
+        engineBlocker != null -> stringResource(R.string.domain_usage_off_retry)
         else -> null
+    }
+    // Non-null intent: no consent on file — walk the system dialog. Null: consent is already
+    // on file — an establish retry, `ensure`-routed so a startable verdict is the service's
+    // decision to make. Shared by the list row and the editor's fix-it actions.
+    //
+    // The dialog MUST be launched for result: ConfirmDialog reads getCallingPackage(), which
+    // is null for a plain start. It then calls Vpn.prepare(null, null), which short-circuits
+    // to true "for backward compatibility" — the dialog sets RESULT_OK and finishes without
+    // ever rendering (device-found 2026-10-17, tap did nothing).
+    val consentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { VpnLifecycle.ensure(context, hasRules = true) }
+    val enableWebsiteEngine: () -> Unit = remember(context, consentLauncher) {
+        {
+            VpnLifecycle.consentIntent(context)?.let(consentLauncher::launch)
+                ?: VpnLifecycle.ensure(context, hasRules = true)
+        }
     }
 
     when (route) {
@@ -226,6 +253,8 @@ fun RulesScreen(
                     usageAccountingEngine = usageAccountingEngine,
                     platformUsage = platformUsage,
                     psl = psl,
+                    websiteEngineBlocker = engineBlocker,
+                    onEnableWebsiteEngine = enableWebsiteEngine,
                     onDone = { route = ROUTE_LIST },
                     modifier = modifier,
                 )
@@ -244,17 +273,7 @@ fun RulesScreen(
                     domainUsageEngine = domainUsageEngine,
                     engineBannerMessage = engineBannerMessage.takeIf { hasLimitedSite },
                     engineOffMessage = engineOffMessage,
-                    onEnableEngine = {
-                        // Non-null intent: no consent on file — walk the system dialog.
-                        // Null: already granted (fresh read, immune to a stale card) — the
-                        // establish retry, `ensure`-routed so a startable verdict is the
-                        // service's decision to make.
-                        VpnLifecycle.consentIntent(context)?.let(context::startActivity)
-                            ?: VpnLifecycle.ensure(
-                                context,
-                                hasRules = hasLiveWebsiteRule(loaded, System.currentTimeMillis()),
-                            )
-                    },
+                    onEnableEngine = enableWebsiteEngine,
                     errorMessage = errorMessage,
                     onDismissError = { errorMessage = null },
                     onAddApp = {
@@ -598,6 +617,7 @@ private fun LazyListScope.ruleSection(
                     RuleRow(
                         rule = rule,
                         enabled = pendingPause[rule.ruleId] ?: rule.isEnabled,
+                        awaitingWrite = pendingPause.containsKey(rule.ruleId),
                         nowMillis = nowMillis,
                         domainUsageEngine = domainUsageEngine,
                         onEdit = { onEdit(rule) },
@@ -616,6 +636,8 @@ private fun LazyListScope.ruleSection(
 private fun RuleRow(
     rule: RestrictionRule,
     enabled: Boolean,
+    /** A pause write for this rule is in flight — the switch is locked until it lands. */
+    awaitingWrite: Boolean,
     nowMillis: Long,
     domainUsageEngine: DomainUsageEngine,
     onEdit: () -> Unit,
@@ -680,6 +702,12 @@ private fun RuleRow(
         Switch(
             checked = enabled,
             onCheckedChange = onTogglePause,
+            // Finding #18 (2026-10-16): locked while this rule's write is in flight. Two
+            // overlapping setEnabled writes can commit in either order (two IO threads), and an
+            // inverted commit leaves the switch showing the opposite of what the engine does —
+            // the pendingPause entry never clears because the committed value never matches the
+            // asked one.
+            enabled = !awaitingWrite,
             modifier = Modifier.semantics {
                 contentDescription = if (enabled) pauseLabel else resumeLabel
             },

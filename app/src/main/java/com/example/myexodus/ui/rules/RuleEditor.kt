@@ -71,6 +71,7 @@ import com.example.myexodus.ui.formatDuration
 import com.example.myexodus.ui.formatTime
 import com.example.myexodus.ui.toggleDay
 import com.example.myexodus.ui.rememberAppLabel
+import com.example.myexodus.vpn.VpnLifecycle.WebsiteEngineBlocker
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -112,6 +113,11 @@ fun RuleEditorScreen(
     usageAccountingEngine: UsageAccountingEngine,
     platformUsage: PlatformUsageReader,
     psl: PublicSuffixList,
+    /** Non-null while the website tunnel cannot serve this rule (owner report 2026-10-17):
+     *  the warning is stated up front and re-asked at save, so a rule can never be created
+     *  silently inert. Null for app rules and a healthy/startable tunnel. */
+    websiteEngineBlocker: WebsiteEngineBlocker?,
+    onEnableWebsiteEngine: () -> Unit,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -152,6 +158,10 @@ fun RuleEditorScreen(
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<EditorError?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var confirmEngineOff by rememberSaveable { mutableStateOf(false) }
+    // One prompt per editor session: "Save anyway" is a deliberate choice, so a later save
+    // must not re-ask — the persistent Rules row remains the standing reminder.
+    var enginePromptHandled by rememberSaveable { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
     // "Add app" has no target yet: open the chooser right away.
@@ -248,6 +258,13 @@ fun RuleEditorScreen(
             error = EditorError(duplicateMessage)
             return
         }
+        // Owner report 2026-10-17: a website rule saved while the tunnel is off is inert —
+        // nothing blocks and a daily limit never counts. The choice stays with the user, but
+        // it is made knowingly: reaching this point means the fields are valid and unique.
+        if (!isApp && websiteEngineBlocker != null && !enginePromptHandled) {
+            confirmEngineOff = true
+            return
+        }
         val fields = composeRuleFields(
             alwaysOn = alwaysOn,
             windowEnabled = windowEnabled,
@@ -257,8 +274,13 @@ fun RuleEditorScreen(
             days = days,
             limitTotalMinutes = limitTotalMinutes,
         )
+        // Finding #17 (2026-10-16): set on Main before the launch. `saving` gates the Save
+        // button, and setting it inside the IO coroutine left the dispatcher's queue time as a
+        // window where a second tap passed the duplicate check again (existingRules can't see a
+        // rule that hasn't committed) and inserted a second identical rule — the collision the
+        // duplicate check exists to prevent.
+        saving = true
         scope.launch(Dispatchers.IO) {
-            saving = true
             runCatching {
                 val base = initial ?: RestrictionRule(
                     ruleId = UUID.randomUUID().toString(),
@@ -345,6 +367,25 @@ fun RuleEditorScreen(
                         error = null
                     }
                 },
+            )
+        }
+
+        // Owner report 2026-10-17: the engine state must be obvious while the rule is being
+        // built, not discovered later when nothing fires. No dismiss — it is a live system
+        // claim and leaves when the tunnel does.
+        if (!isApp && websiteEngineBlocker != null) {
+            val consentMissing = websiteEngineBlocker == WebsiteEngineBlocker.NEEDS_CONSENT
+            ErrorBanner(
+                message = stringResource(
+                    if (consentMissing) R.string.editor_engine_off_consent
+                    else R.string.editor_engine_off_retry,
+                ),
+                onDismiss = null,
+                actionLabel = stringResource(
+                    if (consentMissing) R.string.editor_engine_off_turn_on
+                    else R.string.editor_engine_off_try_again,
+                ),
+                onAction = onEnableWebsiteEngine,
             )
         }
 
@@ -565,6 +606,33 @@ fun RuleEditorScreen(
                 showPicker = false
             },
             onDismiss = { showPicker = false },
+        )
+    }
+
+    if (confirmEngineOff) {
+        AlertDialog(
+            onDismissRequest = { confirmEngineOff = false },
+            title = { Text(stringResource(R.string.editor_engine_off_dialog_title)) },
+            text = { Text(stringResource(R.string.editor_engine_off_dialog_body)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmEngineOff = false
+                    enginePromptHandled = true
+                    onEnableWebsiteEngine()
+                    save()
+                }) {
+                    Text(stringResource(R.string.editor_engine_off_turn_on))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    confirmEngineOff = false
+                    enginePromptHandled = true
+                    save()
+                }) {
+                    Text(stringResource(R.string.editor_engine_off_save_anyway))
+                }
+            },
         )
     }
 

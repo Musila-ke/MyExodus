@@ -625,6 +625,126 @@ class AppRulesStoreMigrationInstrumentedTest {
     }
 
     /**
+     * Sharing settings (ADR #134, 2026-10-04): the v14 → v15 additive columns. The harness's
+     * own rule is a test per schema bump — this leg and its rollback below were the pair the
+     * v15 bump skipped (found 2026-10-16 review). Pins the migration's whole point: the stored
+     * 0 on `share_relapses` flips to 1 (the owner-reported suppression repair), the new
+     * visibility master and profile-wide flags default to on, the journal's display columns
+     * read back NULL on pre-v15 rows ("no name to show"), and every pre-existing row survives.
+     */
+    @Test
+    fun migrate14To15_addsSharingColumns_andFlipsTheStoredRelapseFlag() = runTest {
+        val v14 = helper.createDatabase(14)
+        seedProfileAndHabit(v14)
+        seedCoachingStep(v14)
+        // The stored 0 the migration exists to repair (no pre-#134 surface ever wrote it).
+        exec(v14, "UPDATE habit_progress SET share_relapses = 0 WHERE progress_id = 'h-1'")
+        exec(
+            v14,
+            "INSERT INTO partner_activity_outbox (event_id, kind, target_pair_id, text, " +
+                "occurred_at_ms, days_free, relapse_count, milestones_reached, coaching_progress, " +
+                "protocol_version, schema_version, created_at_ms) VALUES " +
+                "('evt-legacy', 'streak_updated', NULL, '', 100, 4, 1, '7,30', 2, 1, 1, 100)",
+        )
+
+        val v15 = helper.runMigrationsAndValidate(15, listOf(AppRulesStoreFactory.MIGRATION_14_15))
+
+        v15.prepare(
+            "SELECT target_identifier, current_clean_days_streak, share_relapses, share_streak " +
+                "FROM habit_progress WHERE progress_id = 'h-1'",
+        ).use { stmt ->
+            assertTrue(stmt.step())
+            assertEquals("Instagram", stmt.getText(0))
+            assertEquals(3L, stmt.getLong(1))
+            assertEquals("the stored 0 must flip to on (ADR #134 repair)", 1L, stmt.getLong(2))
+            assertEquals("the new visibility master defaults to on", 1L, stmt.getLong(3))
+        }
+        v15.prepare(
+            "SELECT share_check_ins, share_recovery FROM user_profile WHERE user_id = 'profile-1'",
+        ).use { stmt ->
+            assertTrue(stmt.step())
+            assertEquals("profile-wide check-ins consent defaults to on", 1L, stmt.getLong(0))
+            assertEquals("profile-wide recovery consent defaults to on", 1L, stmt.getLong(1))
+        }
+        v15.prepare(
+            "SELECT text, habit_label, ended_days, milestone_day FROM partner_activity_outbox " +
+                "WHERE event_id = 'evt-legacy'",
+        ).use { stmt ->
+            assertTrue("the journal row survives", stmt.step())
+            assertTrue("a pre-v15 row has no habit name", stmt.isNull(1))
+            assertTrue("a pre-v15 row has no streak length", stmt.isNull(2))
+            assertTrue("a pre-v15 row has no milestone day", stmt.isNull(3))
+        }
+        assertPreExistingDataSurvives(v15, "after the sharing-settings upgrade")
+    }
+
+    /**
+     * The v15 rollback, same rationale as the other downgrade legs: a v14 build reinstalled
+     * over a database that briefly ran at v15 must open. The three added columns are physically
+     * dropped by recreating the tables and copying rows — every row survives with the values
+     * of the columns v14 knows, and the declared outbox index is back.
+     */
+    @Test
+    fun migrate14To15To14_dropsOnlyTheNewColumns_andKeepsEveryRow() = runTest {
+        val v14 = helper.createDatabase(14)
+        seedProfileAndHabit(v14)
+        seedCoachingStep(v14)
+
+        val v15 = helper.runMigrationsAndValidate(15, listOf(AppRulesStoreFactory.MIGRATION_14_15))
+        exec(
+            v15,
+            "INSERT INTO partner_activity_outbox (event_id, kind, target_pair_id, text, " +
+                "occurred_at_ms, days_free, relapse_count, milestones_reached, coaching_progress, " +
+                "protocol_version, schema_version, created_at_ms, habit_label, ended_days, " +
+                "milestone_day) VALUES " +
+                "('evt-named', 'streak_updated', 'pair-a', 'Keep going', 200, 4, 1, '7,30', 2, 1, 1, 200, " +
+                "'Instagram', 30, 7)",
+        )
+
+        val down = helper.runMigrationsAndValidate(14, listOf(AppRulesStoreFactory.MIGRATION_15_14))
+
+        assertTrue(
+            "the downgrade must drop habit_progress.share_streak",
+            runCatching {
+                down.prepare("SELECT share_streak FROM habit_progress LIMIT 1").use { it.step() }
+            }.isFailure,
+        )
+        assertTrue(
+            "the downgrade must drop user_profile.share_check_ins",
+            runCatching {
+                down.prepare("SELECT share_check_ins FROM user_profile LIMIT 1").use { it.step() }
+            }.isFailure,
+        )
+        assertTrue(
+            "the downgrade must drop the journal display columns",
+            runCatching {
+                down.prepare("SELECT habit_label FROM partner_activity_outbox LIMIT 1").use { it.step() }
+            }.isFailure,
+        )
+        down.prepare(
+            "SELECT text FROM partner_activity_outbox WHERE event_id = 'evt-named'",
+        ).use { stmt ->
+            assertTrue("the journal row survives the recreate", stmt.step())
+            assertEquals("Keep going", stmt.getText(0))
+        }
+        down.prepare(
+            "SELECT share_relapses FROM habit_progress WHERE progress_id = 'h-1'",
+        ).use { stmt ->
+            assertTrue(stmt.step())
+            assertEquals("columns that survive keep their values", 1L, stmt.getLong(0))
+        }
+        assertEquals(
+            "the index the recreate dropped must be back (Room validates indices on open)",
+            1L,
+            down.prepare(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'index' " +
+                    "AND name = 'index_partner_activity_outbox_created_at_ms'",
+            ).use { it.step(); it.getLong(0) },
+        )
+        assertPreExistingDataSurvives(down, "after the sharing-settings downgrade")
+    }
+
+    /**
      * The v16 consent matrix (ADR #135) on the real SQLCipher stack: Room validates the whole
      * migrated file against 16.json (the strongest drift check for the hand-written recreate),
      * the legacy consent columns are physically gone, the pair tables exist empty ("nothing

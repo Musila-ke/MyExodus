@@ -6,6 +6,7 @@ import java.io.RandomAccessFile
 import androidx.room3.Room
 import androidx.sqlite.driver.AndroidSQLiteDriver
 import androidx.test.core.app.ApplicationProvider
+import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -38,6 +39,63 @@ class AccountabilityDatabaseMigrationTest {
     @After
     fun tearDown() {
         context.deleteDatabase(AccountabilityDatabase.DB_NAME)
+    }
+
+    /**
+     * v1→v12 in one open — the path a pre-Phase-4 install takes on its first launch after an
+     * update. This is the only test whose baseline lacks the enrollments table, so it is the
+     * only one that executes [AccountabilityDatabase.MIGRATION_1_2]'s hand-written DDL at all;
+     * Room's post-migration validation then proves that DDL still matches the entity schema.
+     * Registers the production [AccountabilityDatabase.ALL_MIGRATIONS] list verbatim.
+     */
+    @Test
+    fun migrationFromV1_runsTheEntireChain_creatingEnrollmentsAndKeepingChainData() {
+        val dbPath = context.getDatabasePath(AccountabilityDatabase.DB_NAME).absolutePath
+
+        AndroidSQLiteDriver().open(dbPath).use { conn ->
+            V1_DDL.forEach { ddl ->
+                conn.prepare(ddl).use { it.step() }
+            }
+            conn.prepare(
+                "INSERT INTO events (pair_id, sender_key_id, epoch, sequence, previous_event_hash, " +
+                    "event_hash, envelope, direction, created_at, sync_state) " +
+                    "VALUES ('pair-a', 'k1', 0, 1, NULL, x'01', x'02', 'OUT', 5, 'PENDING')",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO chain_heads (pair_id, sender_key_id, last_sequence, last_event_hash, forked) " +
+                    "VALUES ('pair-a', 'k1', 1, x'01', 0)",
+            ).use { it.step() }
+            conn.prepare("PRAGMA user_version = 1").use { it.step() }
+        }
+
+        val db = Room.databaseBuilder(
+            context,
+            AccountabilityDatabase::class.java,
+            AccountabilityDatabase.DB_NAME,
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
+        runBlocking {
+            // MIGRATION_1_2 ran for real: the table exists, matches Room's expected schema
+            // (validated on this very query), and is writable.
+            assertNull(db.enrollmentDao().getByPairId("pair-a"))
+            db.enrollmentDao().upsert(
+                EnrollmentRecord(
+                    pairId = "pair-a",
+                    mySenderKeyId = "k1",
+                    partnerSigningKeyId = "k2",
+                    partnerSigningPubKey = ByteArray(1),
+                    partnerAgreementPubKey = ByteArray(1),
+                    createdAtEpochMillis = 6,
+                ),
+            )
+            assertEquals("k1", db.enrollmentDao().getByPairId("pair-a")?.mySenderKeyId)
+
+            // The v1 chain data survived the whole chain, and every later table is live.
+            assertEquals(1L, db.chainEventDao().chainFor("pair-a").single().sequence)
+            assertEquals(0, db.chainHeadDao().get("pair-a", "k1")?.keyEpoch)
+            db.identityEpochDao().upsert(IdentityEpoch(epoch = 1))
+            assertEquals(1, db.identityEpochDao().current())
+        }
+        db.close()
     }
 
     @Test
@@ -663,6 +721,10 @@ class AccountabilityDatabaseMigrationTest {
                 "partner_agreement_pubkey BLOB NOT NULL, " +
                 "created_at INTEGER NOT NULL)",
         )
+
+        /** v1 baseline: chain tables only — a pre-Phase-4 install had no enrollments table,
+         *  which no other test baseline omits (they all subsume MIGRATION_1_2's work). */
+        private val V1_DDL = V2_DDL.take(3)
 
         /** v4 baseline: V2 + identity_epoch (2→3) + mailbox_watermark_ts (3→4); no Step-4 tables. */
         private val V4_DDL = V2_DDL.take(3) + listOf(

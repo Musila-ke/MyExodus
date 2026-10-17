@@ -69,6 +69,25 @@ class FirestoreSchemaTest {
     }
 
     @Test
+    fun nudgeSettingsData_isExactlyTheRulesKeySet() {
+        // firestore.rules: nudgeSettings create/update allows exactly blocked + updatedAt,
+        // updatedAt == request.time. Any extra key fails every write (the same contract the
+        // four other writers above are pinned to).
+        val data = FirestoreSchema.nudgeSettingsData(blocked = true)
+        assertEquals(setOf("blocked", "updatedAt"), data.keys)
+        assertEquals(true, data["blocked"])
+        assertTrue(data["updatedAt"] is FieldValue)
+    }
+
+    @Test
+    fun nudgeAckData_isExactlyTheAckedAtKey() {
+        // firestore.rules: nudge acks create hasOnly(['ackedAt']), ackedAt == request.time.
+        val data = FirestoreSchema.nudgeAckData()
+        assertEquals(setOf("ackedAt"), data.keys)
+        assertTrue(data["ackedAt"] is FieldValue)
+    }
+
+    @Test
     fun pushInstallationData_carriesExactlyTheRulesKeySet() {
         val data = FirestoreSchema.pushInstallationData(
             provider = "fcm",

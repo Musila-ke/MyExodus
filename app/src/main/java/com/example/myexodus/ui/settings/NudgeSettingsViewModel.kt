@@ -41,6 +41,12 @@ class NudgeSettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val settings = repository.load()
             current = settings
+            // Finding #19 (2026-10-16): the fresh read predates an in-flight write's commit, so
+            // overwriting here would clear `saving` and re-enable the switch mid-write — reopening
+            // the exact race `saving` exists to close (a resume can land inside the write's
+            // network round trip). The write's own completion lands the committed value; the next
+            // resume re-reads. Current-on-null is kept: the next write's target base stays fresh.
+            if (_state.value?.saving == true) return@launch
             _state.value = settings?.let { UiState(it.partnerName, it.blocked) }
         }
     }

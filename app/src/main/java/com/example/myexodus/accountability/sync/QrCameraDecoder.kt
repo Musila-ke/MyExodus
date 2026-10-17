@@ -1,5 +1,6 @@
 package com.example.myexodus.accountability.sync
 
+import android.util.Log
 import android.util.Size
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -34,6 +35,11 @@ class QrCameraDecoder(
     override fun analyze(image: ImageProxy) {
         try {
             decode(image)?.let(onFrame)
+        } catch (e: Exception) {
+            // CameraX 1.6.2 installs no catch around the analyzer call (bytecode-verified in
+            // the pinned artifact), so an escaping exception here kills the process. A
+            // malformed frame or a caller-side hiccup must cost one frame, not the session.
+            Log.w(TAG, "QR frame dropped", e)
         } finally {
             image.close()
         }
@@ -76,6 +82,8 @@ class QrCameraDecoder(
     }
 
     companion object {
+        private const val TAG = "MyExodusPartnerSync"
+
         /** §11: fixed 640x480 analysis at KEEP_ONLY_LATEST — drop frames rather than queue them. */
         fun builder(): ImageAnalysis.Builder = ImageAnalysis.Builder()
             .setTargetResolution(Size(640, 480))

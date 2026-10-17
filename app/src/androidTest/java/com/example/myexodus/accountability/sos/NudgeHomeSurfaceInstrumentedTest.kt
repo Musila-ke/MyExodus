@@ -16,6 +16,7 @@ import com.example.myexodus.R
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.EnhancedModeTestEntryPoint
 import com.example.myexodus.notifications.NotificationAccess
+import com.example.myexodus.settings.HomeSettings
 import com.example.myexodus.ui.home.HomeScreen
 import dagger.hilt.android.EntryPointAccessors
 import org.junit.Assert.assertEquals
@@ -168,6 +169,7 @@ class NudgeHomeSurfaceInstrumentedTest {
         compose.setContent {
             HomeScreen(
                 store = store,
+                homeSettings = HomeSettings(context),
                 monitor = EnhancedModeHealthMonitor(context),
                 degradation = null,
                 authority = null,

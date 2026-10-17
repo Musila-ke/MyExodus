@@ -30,10 +30,19 @@ import org.junit.runner.RunWith
  * worker injects) attempts the `push_installations` write, and the production WM worker runs
  * end-to-end on this device.
  *
- * Rule-deploy dependency: v2 security rules are written but NOT deployed (user-gated), so under
- * the live v1 rules the write is expected to be PERMISSION_DENIED — the test distinguishes that
- * specific signature (registrar still returns cleanly, AD-05 sync fallback applies) from any
- * other failure, and once the rules deploy the same test flips to asserting the written document.
+ * Deploy state (corrected 2026-10-16, finding #23 — this block previously claimed the rules
+ * were "written but NOT deployed" and the write "expected to be PERMISSION_DENIED"): the v2
+ * rules' AD-18a `push_installations` owner read/write block has been LIVE since 2026-09-19
+ * (ruleset e943c834, live through the App Check enforcement flip — ADR #57's "wrote the same
+ * doc on the same device/rules/code" run IS this test's true branch); the current live release
+ * is 2026-10-03 (ruleset 0a6b8efa, byte-identical to the repo's firestore.rules — verified via
+ * the Rules API on 2026-10-16). With an accepted App Check token `registered` is therefore
+ * expected true and the first branch asserts the written document. The `false` branch keeps the
+ * PERMISSION_DENIED carrier for environments that cannot mint a token — App Check rejection and
+ * rules rejection are the same PERMISSION_DENIED to the client ([AppCheckInstaller.canAttest],
+ * ADR #57's emulator A/B) — so the branch proves the failure is that exact signature (registrar
+ * still returns cleanly, AD-05 sync fallback applies), not a different breakage wearing the
+ * same boolean.
  */
 @RunWith(AndroidJUnit4::class)
 class PushInstallationInstrumentedTest {
@@ -74,8 +83,10 @@ class PushInstallationInstrumentedTest {
                 snapshot.data?.keys,
             )
         } else {
-            // Not deployed yet count: the write itself must be the rules rejection — not a
-            // different breakage wearing the same boolean.
+            // PERMISSION_DENIED carrier: covers both denial causes the client cannot tell
+            // apart (App Check rejection under enforcement; a project whose rules lack the
+            // AD-18a block) — the write itself must be that signature, not a different
+            // breakage wearing the same boolean.
             val failure = runCatching {
                 doc.set(
                     FirestoreSchema.pushInstallationData("fcm", token!!, "android", "instrumented", true),

@@ -413,11 +413,22 @@ class UsageAccountingEngine(
                     ),
                 )
             ) {
-                is AppendOutcome.Written -> outcome.closingDayCreditedMs
+                is AppendOutcome.Written ->
+                    // The tracker is *today's* live counter. A pass computed at 23:59:59 can
+                    // close its window (and complete this credit) after midnight; the journal
+                    // keeps that row on yesterday's day, where it belongs, but advancing
+                    // today's tracker by it would hand today a budget yesterday's usage
+                    // already consumed (§8.11, ADR #94). It rolls away with yesterday's row
+                    // by design; the journal still carries the history.
+                    if (outcome.closingDayKey == today) outcome.closingDayCreditedMs else 0L
                 AppendOutcome.Duplicate, is AppendOutcome.Collision, is AppendOutcome.Rejected -> 0L
             }
             if (accepted != credit) {
-                Log.w(TAG, "reconcile $packageName partial credit ${accepted}ms of ${credit}ms")
+                Log.w(
+                    TAG,
+                    "reconcile $packageName partial credit ${accepted}ms of ${credit}ms" +
+                        " (duplicate, refused, or window closed on another day)",
+                )
             }
             val verdict = deriveVerdict(
                 tracker.copy(msUsedToday = tracker.msUsedToday + accepted),

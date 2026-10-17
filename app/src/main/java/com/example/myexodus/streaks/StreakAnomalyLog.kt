@@ -1,5 +1,6 @@
 package com.example.myexodus.streaks
 
+import android.util.Log
 import java.io.File
 import java.time.Instant
 import java.time.format.DateTimeFormatter
@@ -11,6 +12,13 @@ import java.time.format.DateTimeFormatter
  * so an anomaly caused by that same clock is inherently self-reported (a human reviewer reads
  * the delta and boot count together). Append-only with a single rotation so a persistent
  * anomaly (e.g. a clock stuck in the past, logged on every evaluation) cannot grow unbounded.
+ *
+ * Totality (finding #13, 2026-10-16): both writes swallow I/O failures. This log is a
+ * best-effort evidence channel, and every caller appends from inside an evaluation write
+ * transaction or between a milestone claim and its post — before this guard an IOException
+ * (disk-full class) rolled back the evaluation or consumed a claim without posting. A failed
+ * append logs to logcat and drops the evidence line; the DB write in the same transaction
+ * remains the canary for a full disk.
  */
 class StreakAnomalyLog(
     private val file: File,
@@ -18,9 +26,7 @@ class StreakAnomalyLog(
 ) {
     @Synchronized
     fun append(anomaly: StreakAnomaly) {
-        if (file.length() > maxBytes) rotate()
-        file.parentFile?.mkdirs()
-        file.appendText(format(anomaly) + "\n")
+        appendLine(format(anomaly))
     }
 
     /**
@@ -30,10 +36,18 @@ class StreakAnomalyLog(
      */
     @Synchronized
     fun appendMilestonePosted(milestoneDay: Int, tWallMillis: Long) {
-        if (file.length() > maxBytes) rotate()
-        file.parentFile?.mkdirs()
         val stamp = DateTimeFormatter.ISO_INSTANT.format(Instant.ofEpochMilli(tWallMillis))
-        file.appendText("$stamp type=MILESTONE_NOTIFICATION_POSTED milestoneDay=$milestoneDay\n")
+        appendLine("$stamp type=MILESTONE_NOTIFICATION_POSTED milestoneDay=$milestoneDay")
+    }
+
+    private fun appendLine(line: String) {
+        try {
+            if (file.length() > maxBytes) rotate()
+            file.parentFile?.mkdirs()
+            file.appendText(line + "\n")
+        } catch (e: Exception) {
+            Log.w(TAG, "anomaly-log append failed (evidence line dropped)", e)
+        }
     }
 
     private fun rotate() {
@@ -51,5 +65,9 @@ class StreakAnomalyLog(
         append(" rBoot=").append(a.rBootMillis)
         append(" deltaMs=").append(a.deltaMs ?: "-")
         append(" resolution=").append(a.resolution)
+    }
+
+    private companion object {
+        const val TAG = "StreakAnomalyLog"
     }
 }

@@ -28,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -278,6 +279,15 @@ internal fun RelapseCard(
                 enabled = !inFlight,
                 modifier = Modifier.fillMaxWidth(),
             ) {
+                // Owner ruling 2026-10-17: the streak card's relapse action carries the same
+                // glyph as the widget's relapse control, so the two surfaces cannot read as two
+                // different actions.
+                Icon(
+                    painter = painterResource(R.drawable.ic_log_relapse),
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(8.dp))
                 Text(
                     stringResource(
                         if (inFlight) R.string.streaks_relapse_in_flight

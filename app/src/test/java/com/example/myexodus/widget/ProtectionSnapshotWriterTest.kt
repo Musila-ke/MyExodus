@@ -24,6 +24,7 @@ class ProtectionSnapshotWriterTest {
         enforcement: EnforcementStatus = EnforcementStatus.ACTIVE,
         streakDays: Int? = 12,
         habitLabel: String? = "No smoking",
+        habitId: String? = "habit-1",
         streakSample: StreakSample? = null,
         discreet: Boolean = true,
         evalUtc: Long = nowUtc - MINUTE,
@@ -32,6 +33,7 @@ class ProtectionSnapshotWriterTest {
         enforcement = enforcement,
         streakDays = streakDays,
         habitLabel = habitLabel,
+        habitId = habitId,
         streakSample = streakSample,
         discreet = discreet,
         evalUtc = evalUtc,
@@ -157,6 +159,7 @@ class ProtectionSnapshotWriterTest {
         val fields = streakFieldsFor(state = null, resolved = false, existing = stored, sample = null)
         assertEquals(12, fields?.days)
         assertEquals("No smoking", fields?.label)
+        assertEquals("habit-1", fields?.habitId)
         assertEquals(stored.streakSample, fields?.sample)
     }
 
@@ -188,6 +191,7 @@ class ProtectionSnapshotWriterTest {
             sample = read,
         )
         assertEquals(5, fields?.days)
+        assertEquals("habit-1", fields?.habitId)
         assertEquals(read, fields?.sample)
     }
 
@@ -267,6 +271,16 @@ class ProtectionSnapshotWriterTest {
                 next = snapshot(habitLabel = "No alcohol"),
                 nowUtc = nowUtc,
             ),
+        )
+    }
+
+    @Test
+    fun habitIdChange_isWritten() {
+        // The relapse control ends the stored id's track. A selection flip whose day count and
+        // label happen to match must still re-stamp — otherwise the control would keep ending
+        // the previously displayed track while the card claims the new one.
+        assertTrue(
+            shouldRestamp(existing = snapshot(), next = snapshot(habitId = "habit-2"), nowUtc = nowUtc),
         )
     }
 

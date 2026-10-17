@@ -75,6 +75,21 @@ class StrictModeManagerTest {
     }
 
     @Test
+    fun impossibleDeadline_readsAsExpired_neverACenturyLock() {
+        val m = manager()
+        m.strictModeEnabled = true
+        // The exact record found on the X6532 (2026-10-04 device-test leftover): a sentinel,
+        // not a timestamp. It must never reach the cooldown label.
+        context.getSharedPreferences("strict_mode", Context.MODE_PRIVATE)
+            .edit()
+            .putLong("cooldown_until_epoch_millis", 9_999_999_999_999L)
+            .commit()
+        assertFalse(m.cooldownActive)
+        assertEquals(0L, m.cooldownRemainingMillis)
+        assertTrue(m.canDisable())
+    }
+
+    @Test
     fun reenabling_resetsCooldown() {
         val m = manager()
         m.strictModeEnabled = true

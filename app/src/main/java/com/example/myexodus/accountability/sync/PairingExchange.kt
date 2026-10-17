@@ -115,35 +115,44 @@ open class PairingExchange(
             }
         }
         if (!doc.exists()) return TokenReadResult.NotFound
-        val creatorUid = doc.getString("creatorUid")
-            ?: return TokenReadResult.Failed("token document missing creatorUid")
-        val payloadBytes = doc.getBlob("payload")?.toBytes()
-            ?: return TokenReadResult.Failed("token document missing payload")
-        val initiatorPayload = try {
-            decodeEnrollmentPayload(payloadBytes)
-        } catch (e: Exception) {
-            return TokenReadResult.Failed("token payload unparseable")
-        }
-        // Rules require expiresAt on create; its absence means a corrupt or foreign doc.
-        val expiresAt = doc.getTimestamp("expiresAt")?.toDate()?.time
-            ?: return TokenReadResult.Failed("token document missing expiresAt")
-        val partnerUid = doc.getString("partnerUid")
-        val partner = if (partnerUid == null) {
-            null
-        } else {
-            val partnerPayloadBytes = doc.getBlob("partnerPayload")?.toBytes()
-            val partnerSignature = doc.getBlob("partnerSignature")?.toBytes()
-            if (partnerPayloadBytes == null || partnerSignature == null) {
-                return TokenReadResult.Failed("token response incomplete")
-            }
-            val partnerPayload = try {
-                decodeEnrollmentPayload(partnerPayloadBytes)
+        // The accessors below throw plain RuntimeExceptions on a present-but-wrong-type field
+        // (the rules pin the token-doc key set, not field types), so a hostile partner response
+        // could violate this method's sealed-result contract. The outer catch makes the
+        // function total: every unreadable document is a typed Failed, never a raw throw.
+        return try {
+            val creatorUid = doc.getString("creatorUid")
+                ?: return TokenReadResult.Failed("token document missing creatorUid")
+            val payloadBytes = doc.getBlob("payload")?.toBytes()
+                ?: return TokenReadResult.Failed("token document missing payload")
+            val initiatorPayload = try {
+                decodeEnrollmentPayload(payloadBytes)
             } catch (e: Exception) {
-                return TokenReadResult.Failed("partner payload unparseable")
+                return TokenReadResult.Failed("token payload unparseable")
             }
-            PartnerResponse(partnerUid, partnerPayload, partnerSignature)
+            // Rules require expiresAt on create; its absence means a corrupt or foreign doc.
+            val expiresAt = doc.getTimestamp("expiresAt")?.toDate()?.time
+                ?: return TokenReadResult.Failed("token document missing expiresAt")
+            val partnerUid = doc.getString("partnerUid")
+            val partner = if (partnerUid == null) {
+                null
+            } else {
+                val partnerPayloadBytes = doc.getBlob("partnerPayload")?.toBytes()
+                val partnerSignature = doc.getBlob("partnerSignature")?.toBytes()
+                if (partnerPayloadBytes == null || partnerSignature == null) {
+                    return TokenReadResult.Failed("token response incomplete")
+                }
+                val partnerPayload = try {
+                    decodeEnrollmentPayload(partnerPayloadBytes)
+                } catch (e: Exception) {
+                    return TokenReadResult.Failed("partner payload unparseable")
+                }
+                PartnerResponse(partnerUid, partnerPayload, partnerSignature)
+            }
+            TokenReadResult.Found(creatorUid, initiatorPayload, partner, expiresAt)
+        } catch (e: Exception) {
+            // Non-local returns above pass through; only accessor throws land here.
+            TokenReadResult.Failed("token document malformed")
         }
-        return TokenReadResult.Found(creatorUid, initiatorPayload, partner, expiresAt)
     }
 
     /**

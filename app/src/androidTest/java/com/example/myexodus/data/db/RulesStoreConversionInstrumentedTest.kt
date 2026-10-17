@@ -27,7 +27,8 @@ import org.junit.runner.RunWith
  * path surfacing KeyUnavailable without touching data. These must run on-device — Robolectric
  * cannot load the SQLCipher native library, so the JVM suite covers only the file-state
  * machine (PlaintextConversionFileOpsTest). Every test wipes all state via
- * [RecoveryManager.resetAllData].
+ * `resetAllDataEmulatorOnly` — the gated no-op-off-emulator wrapper (DeviceSafety.kt); a raw
+ * [RecoveryManager.resetAllData] here would wipe the handset's production store.
  */
 @RunWith(AndroidJUnit4::class)
 class RulesStoreConversionInstrumentedTest {

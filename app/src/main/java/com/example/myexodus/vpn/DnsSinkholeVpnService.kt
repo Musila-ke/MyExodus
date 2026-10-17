@@ -145,10 +145,15 @@ class DnsSinkholeVpnService : VpnService() {
     @Volatile private var healthCode = ""
 
     @Volatile private var running = false
-    private var tunFd: ParcelFileDescriptor? = null
-    private var tunOut: FileOutputStream? = null
-    private var dnsSocket4: DatagramSocket? = null
-    private var dnsSocket6: DatagramSocket? = null
+    // Volatile so the start worker's publication and stopAll's teardown of these fields form
+    // the Dekker-style handshake that [startSinkhole] and [stopAll] rely on (finding #21).
+    @Volatile private var tunFd: ParcelFileDescriptor? = null
+    @Volatile private var tunOut: FileOutputStream? = null
+    @Volatile private var dnsSocket4: DatagramSocket? = null
+    @Volatile private var dnsSocket6: DatagramSocket? = null
+
+    /** Bumped by every [stopAll]; a start worker captured it before its establish (finding #21). */
+    @Volatile private var stopGeneration = 0L
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -159,6 +164,10 @@ class DnsSinkholeVpnService : VpnService() {
             else -> if (state != VpnEngineState.STARTING && state != VpnEngineState.ACTIVE &&
                 state != VpnEngineState.DEGRADED
             ) {
+                // Claimed here (main thread), not inside the worker: two START commands in
+                // quick succession must not both spawn an establish while the first worker's
+                // own assignment is still pending (finding #21).
+                state = VpnEngineState.STARTING
                 thread(name = "vpn-start") { startSinkhole() }
             }
         }
@@ -167,7 +176,11 @@ class DnsSinkholeVpnService : VpnService() {
     }
 
     private fun startSinkhole() {
-        state = VpnEngineState.STARTING
+        // Generation captured before any work: a STOP that lands while this worker is
+        // mid-establish bumps it, and the handshake below then unwinds instead of letting a
+        // late `running = true` re-assert a tunnel no owner knows about (finding #21). The
+        // STARTING state itself is claimed by onStartCommand on the main thread.
+        val generation = stopGeneration
         try {
             detectPrivateDns()
             publisher.loadFastPath() // sync policy cache first; authoritative reload follows async
@@ -196,19 +209,39 @@ class DnsSinkholeVpnService : VpnService() {
                 setMtu(VpnPacket.MTU)
             }.establish()
             if (fd == null) { fail("${EngineHealth.FAILED_TUN_SETUP} prepare-consent-missing"); return }
-            tunFd = fd
-            tunOut = FileOutputStream(fd.fileDescriptor)
+            val s4: DatagramSocket
+            val s6: DatagramSocket
             try {
-                dnsSocket4 = DatagramSocket().also { protect(it) }
-                dnsSocket6 = DatagramSocket().also { protect(it) }
+                s4 = DatagramSocket().also { protect(it) }
+                s6 = DatagramSocket().also { protect(it) }
             } catch (e: IOException) {
+                try { fd.close() } catch (e2: IOException) {}
                 fail("${EngineHealth.FAILED_DNS_BIND} ${e.javaClass.simpleName}")
                 return
             }
+            tunFd = fd
+            tunOut = FileOutputStream(fd.fileDescriptor)
+            dnsSocket4 = s4
+            dnsSocket6 = s6
             running = true
+            // Dekker-style handshake with stopAll: it bumps stopGeneration before reading the
+            // tunnel fields; this worker publishes them (all volatile) before reading the
+            // generation — so at least one side sees the other. Only then may the loops spawn.
+            if (generation != stopGeneration) {
+                // Losing side: STOP raced the establish. Tear down what was published,
+                // identity-checked so a newer START that already took the fields is untouched.
+                if (tunFd === fd) {
+                    running = false
+                    tunFd = null; tunOut = null; dnsSocket4 = null; dnsSocket6 = null
+                }
+                try { fd.close() } catch (e: IOException) {}
+                try { s4.close() } catch (e: IOException) {}
+                try { s6.close() } catch (e: IOException) {}
+                return
+            }
             thread(name = "vpn-tun") { pump(fd) }
-            thread(name = "vpn-dns4") { dnsReceiveLoop(dnsSocket4!!, isV6 = false) }
-            thread(name = "vpn-dns6") { dnsReceiveLoop(dnsSocket6!!, isV6 = true) }
+            thread(name = "vpn-dns4") { dnsReceiveLoop(s4, isV6 = false) }
+            thread(name = "vpn-dns6") { dnsReceiveLoop(s6, isV6 = true) }
             thread(name = "vpn-sweep") { sweepLoop() }
             launchDomainUsage()
             observePolicy()
@@ -741,6 +774,9 @@ class DnsSinkholeVpnService : VpnService() {
     }
 
     private fun stopAll() {
+        // First, before any teardown: the start worker's Dekker handshake reads this after
+        // publishing the tunnel fields (finding #21).
+        stopGeneration++
         running = false
         scope.cancel()
         // §6.9: the Engine's single shutdown — bounded final flush, monitor unregister and the

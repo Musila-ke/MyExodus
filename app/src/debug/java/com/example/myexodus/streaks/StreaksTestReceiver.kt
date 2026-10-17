@@ -17,7 +17,7 @@ import kotlinx.coroutines.launch
  * host shell (which cannot reach non-exported receivers — same rule as
  * `DeviceVerificationReceiver`). `streak-read` dumps every active streak's milestone rows
  * (achieved/sent/acknowledged) without changing anything; `streak-catchup` runs the exact
- * boot-receiver call, `MilestoneAlerter.catchUpAfterBoot()`, so the task #14 catch-up path
+ * boot-receiver call, `MilestoneAlerter.catchUpAll()`, so the task #14 catch-up path
  * is device-testable without a real reboot (BOOT_COMPLETED is a protected broadcast the
  * shell cannot send).
  */
@@ -36,7 +36,7 @@ class StreaksTestReceiver : BroadcastReceiver() {
                 when (action) {
                     ACTION_STREAK_READ -> readMilestones(context, "streak-read")
                     ACTION_STREAK_CATCHUP -> {
-                        alerter.catchUpAfterBoot()
+                        alerter.catchUpAll()
                         readMilestones(context, "streak-catchup")
                     }
 

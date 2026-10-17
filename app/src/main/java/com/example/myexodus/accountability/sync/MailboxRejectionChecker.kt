@@ -12,9 +12,10 @@ import com.example.myexodus.accountability.state.UncheckedSentRow
  * server-side rate-limit rejection is a distinct state from a network failure (which never
  * reaches this class — it leaves the row `PENDING` for the drainer to retry).
  *
- * Read-back is due for a row until it has been checked once past [SETTLE_MILLIS] without a
- * marker: the relay runs asynchronously and a partner wake can start a sync pass seconds
- * after a drain, so an early "no marker yet" must not be final.
+ * Due window (ADR #53): a row is due while never checked, or checked within the last
+ * [SETTLE_MILLIS] — a partner wake can start a sync pass seconds after a drain, before the
+ * relay has run, so an early "no marker yet" must not be final, and the re-checks make the
+ * read-back self-healing. An idle gap past the window finally closes a marker-less row.
  *
  * A failed read (network, permission) leaves the row due for the next pass — this step can
  * never fail the sync it runs in. Collaborators are function-typed seams (house pattern, see
@@ -56,8 +57,9 @@ class MailboxRejectionChecker(
         const val TAG = "MyExodusPartnerSync"
         const val BATCH = 50
 
-        /** Longer than any believable relay latency; short enough that a row stops costing
-         *  reads soon after it is sent. */
+        /** The re-check window (ADR #53), not a one-shot settle: longer than any believable
+         *  relay latency, and the horizon past which an idle gap stops a marker-less row from
+         *  costing reads. */
         const val SETTLE_MILLIS = 60 * 60 * 1000L
     }
 }

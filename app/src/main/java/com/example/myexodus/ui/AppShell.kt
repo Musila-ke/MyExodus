@@ -72,6 +72,7 @@ import com.example.myexodus.domainusage.PublicSuffixList
 import com.example.myexodus.recovery.RecoveryPlanRepository
 import com.example.myexodus.recovery.RecoverySessionRepository
 import com.example.myexodus.settings.EnhancedModeSettings
+import com.example.myexodus.settings.HomeSettings
 import com.example.myexodus.settings.StrictModeManager
 import com.example.myexodus.settings.WidgetSettings
 import com.example.myexodus.streaks.HabitRepository
@@ -136,6 +137,8 @@ fun AppShell(
     strictMode: StrictModeManager,
     settings: EnhancedModeSettings,
     crashReporting: CrashReporting,
+    /** Owner request 2026-10-17: Home's "Your blocks" privacy toggle state. */
+    homeSettings: HomeSettings,
     widgetSettings: WidgetSettings,
     onWidgetSettingsChanged: () -> Unit,
     degradation: ProtectionDegradation?,
@@ -203,7 +206,7 @@ fun AppShell(
     val addingHabit by streaks.addingHabit.collectAsStateWithLifecycle()
     val setupError by streaks.setupError.collectAsStateWithLifecycle()
     val relapseInFlight by streaks.relapseInFlight.collectAsStateWithLifecycle()
-    val relapseNote by streaks.relapseNote.collectAsStateWithLifecycle()
+    val relapseFeedback by streaks.relapseFeedback.collectAsStateWithLifecycle()
 
     // SOS §8.15 (Step 8): the Reach out control's sender state.
     val sosState by sos.state.collectAsStateWithLifecycle()
@@ -305,6 +308,7 @@ fun AppShell(
                 when {
                     contentTab == 0 -> HomeScreen(
                         store = store,
+                        homeSettings = homeSettings,
                         monitor = monitor,
                         degradation = degradation,
                         authority = authority,
@@ -369,7 +373,7 @@ fun AppShell(
                         addingHabit = addingHabit,
                         setupError = setupError,
                         relapseInFlight = relapseInFlight,
-                        relapseNote = relapseNote,
+                        relapseFeedback = relapseFeedback,
                         onOnboard = streaks::onboard,
                         onOpenHabitPicker = { pickerOpen = true },
                         onCancelAddHabit = streaks::cancelAddHabit,

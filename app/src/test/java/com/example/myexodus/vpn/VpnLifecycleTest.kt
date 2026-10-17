@@ -1,6 +1,7 @@
 package com.example.myexodus.vpn
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -59,6 +60,37 @@ class VpnLifecycleTest {
         assertEquals(VpnLifecycle.Action.NONE, decide(false, true, VpnEngineState.STOPPED))
         assertEquals(VpnLifecycle.Action.NONE, decide(false, true, VpnEngineState.REVOKED))
         assertEquals(VpnLifecycle.Action.NONE, decide(false, true, VpnEngineState.FAILED))
+    }
+
+    /**
+     * Owner report 2026-10-17: the Rules page must make "website blocking is off" obvious —
+     * a website rule created while the tunnel is off blocks nothing and counts no usage.
+     */
+    @Test
+    fun websiteEngineBlocker_namesOnlyTheStatesThatNeedTheUser() {
+        // Missing consent is the one class only the platform dialog can clear, in every state.
+        for (state in VpnEngineState.entries) {
+            assertEquals(
+                state.name,
+                VpnLifecycle.WebsiteEngineBlocker.NEEDS_CONSENT,
+                VpnLifecycle.websiteEngineBlocker(consented = false, state),
+            )
+        }
+        // Healthy and startable states are not alarms: STOPPED with consent starts at the next
+        // ensure boundary, and DEGRADED is a live tunnel owned by the S9.4 engine banner.
+        assertNull(VpnLifecycle.websiteEngineBlocker(consented = true, VpnEngineState.ACTIVE))
+        assertNull(VpnLifecycle.websiteEngineBlocker(consented = true, VpnEngineState.STARTING))
+        assertNull(VpnLifecycle.websiteEngineBlocker(consented = true, VpnEngineState.DEGRADED))
+        assertNull(VpnLifecycle.websiteEngineBlocker(consented = true, VpnEngineState.STOPPED))
+        // Terminal down states: only an explicit retry brings the tunnel back.
+        assertEquals(
+            VpnLifecycle.WebsiteEngineBlocker.DOWN,
+            VpnLifecycle.websiteEngineBlocker(consented = true, VpnEngineState.FAILED),
+        )
+        assertEquals(
+            VpnLifecycle.WebsiteEngineBlocker.DOWN,
+            VpnLifecycle.websiteEngineBlocker(consented = true, VpnEngineState.REVOKED),
+        )
     }
 
     private fun decide(hasRules: Boolean, consented: Boolean, state: VpnEngineState) =

@@ -120,12 +120,15 @@ class EnhancedModeHealthMonitor @Inject constructor(
         manager.notify(NOTIFICATION_ID, notification)
     }
 
-    private companion object {
+    internal companion object {
         const val PREFS_NAME = "enhanced_mode_health"
         const val KEY_WAS_ENABLED = "was_enabled"
         const val CHANNEL_ID = "enhanced_mode_health"
-        // 1003: distinct from the FGS (1001) and degraded (1002) notifications — a shared id
-        // would replace the "Protection active" FGS notification with the health alert.
-        const val NOTIFICATION_ID = 1003
+        // 1004: distinct from FGS (1001), degraded (1002), and outage (1003) — a shared id
+        // replaces the other alert in the shade (finding #9, 2026-10-16: this carried 1003,
+        // which the later outage surface also took; a swallowed transition alert never
+        // re-posts because refresh() only notifies on a fresh enabled→disabled turn).
+        // Guarded by ProtectionNotificationIdsTest.
+        const val NOTIFICATION_ID = 1004
     }
 }

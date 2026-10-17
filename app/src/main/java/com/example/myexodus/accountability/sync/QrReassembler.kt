@@ -8,6 +8,8 @@ import java.util.Arrays
  * each frame many times); a session change resets the buffer, so pointing the camera at
  * a different phone mid-transfer is safe. Tolerates arbitrary frame loss — missing chunks
  * simply keep the session incomplete (§11: 30% frame loss must not require a restart).
+ * Hostile or corrupt headers are inert: a frame that contradicts the current session's
+ * shape is ignored, and no decode-valid frame can index outside the session buffer.
  */
 class QrReassembler {
 
@@ -34,9 +36,12 @@ class QrReassembler {
 
     /**
      * Ingests one decoded frame. Returns true only on the transition to complete (duplicates
-     * of a finished session return false). A frame for a different session — or an empty
-     * [payload] — resets the buffer, so pointing the camera at another phone mid-transfer
-     * starts a fresh session.
+     * of a finished session return false). A frame for a different session resets the buffer,
+     * so pointing the camera at another phone mid-transfer starts a fresh session. A frame
+     * that contradicts the current session's shape instead of starting one — empty payload,
+     * or a [QrChunkCodec.Chunk.chunkCount] different from the session's first frame — is
+     * ignored: it can only be corruption or hostile input, and it must never flush real
+     * progress or index outside the counters the first frame sized.
      */
     fun accept(chunk: QrChunkCodec.Chunk): Boolean {
         if (chunk.payload.isEmpty()) return isComplete
@@ -48,7 +53,7 @@ class QrReassembler {
             receivedFlags = BooleanArray(chunk.chunkCount)
             received = 0
             lastChunkSize = 0
-        } else if (isComplete) {
+        } else if (isComplete || chunk.chunkCount != expectedCount) {
             return false
         }
         if (receivedFlags[chunk.chunkIndex]) return isComplete

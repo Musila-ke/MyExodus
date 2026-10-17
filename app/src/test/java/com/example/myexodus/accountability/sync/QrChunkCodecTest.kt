@@ -68,8 +68,47 @@ class QrChunkCodecTest {
     }
 
     @Test
+    fun envelopeAtTheLegalCap_encodesAndReassembles() {
+        // §8.4 rules accept `envelope.size() < 1048576`; the largest legal envelope
+        // (1,048,575 bytes) needs exactly MAX_CHUNKS chunks — the old floor division
+        // (1_048_576 / 592 = 1771) rejected this last 143-byte sliver of the legal range.
+        val max = randomBytes(QrChunkCodec.MAX_ENVELOPE_BYTES - 1)
+        val frames = QrChunkCodec.encode(max)
+        assertEquals(QrChunkCodec.MAX_CHUNKS, frames.size)
+        val reassembled = QrReassembler().apply {
+            frames.forEach { accept(QrChunkCodec.decode(it)) }
+        }
+        assertTrue(reassembled.isComplete)
+        assertArrayEquals(max, reassembled.assembledPayload())
+    }
+
+    @Test
     fun oversizedPayload_isRejected() {
+        // Exactly 1 MiB: one byte over the rules' strict `<`.
+        assertThrows(IllegalArgumentException::class.java) {
+            QrChunkCodec.encode(ByteArray(QrChunkCodec.MAX_ENVELOPE_BYTES))
+        }
         val tooBig = ByteArray(QrChunkCodec.MAX_CHUNKS * QrChunkCodec.CHUNK_PAYLOAD_SIZE + 1)
         assertThrows(IllegalArgumentException::class.java) { QrChunkCodec.encode(tooBig) }
+    }
+
+    @Test
+    fun emptyPayloadAndBadSessionId_areRejected() {
+        assertThrows(IllegalArgumentException::class.java) { QrChunkCodec.encode(ByteArray(0)) }
+        assertThrows(IllegalArgumentException::class.java) {
+            QrChunkCodec.encode(byteArrayOf(1), sessionId = ByteArray(3))
+        }
+    }
+
+    /** The decode-side count bound is what caps the reassembler's buffer allocation
+     *  (chunkCount × 592 bytes) — a header claiming more than any legal envelope produces
+     *  must be refused at the gate, not carried into the session counters. */
+    @Test
+    fun chunkCountBoundary_isInclusiveAtMax_andRefusedAboveIt() {
+        val atMax = byteArrayOf(0, 0, 0, 1, 0x06, 0xEC.toByte(), 0, 0) + ByteArray(10) // count = 1772
+        assertEquals(QrChunkCodec.MAX_CHUNKS, QrChunkCodec.decode(atMax).chunkCount)
+
+        val overMax = byteArrayOf(0, 0, 0, 1, 0x06, 0xED.toByte(), 0, 0) + ByteArray(10) // count = 1773
+        assertThrows(IllegalArgumentException::class.java) { QrChunkCodec.decode(overMax) }
     }
 }

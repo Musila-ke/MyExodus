@@ -14,6 +14,7 @@ import com.example.myexodus.secrets.SecretsStatus
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.functions.FirebaseFunctions
 import java.security.PrivateKey
 import java.security.Signature
@@ -112,6 +113,7 @@ internal class FakeCloud {
     var corruptPartnerResponseSignature = false
     var denyNextRespond = false
     var failNextRegistration = false
+    var failNextActivationWait = false
     var tamperTranscriptHashForUid: String? = null
 
     class TokenDocState(
@@ -205,6 +207,15 @@ internal class FakeExchange(
         expectedTranscriptHash: String,
         timeoutMillis: Long,
     ): PairingStatus {
+        if (cloud.failNextActivationWait) {
+            cloud.failNextActivationWait = false
+            // Models the production rethrow: awaitPairingActivation propagates non-denial
+            // transport failures out of the flow's submit wrappers (PairingExchange).
+            throw FirebaseFirestoreException(
+                "simulated transport drop",
+                FirebaseFirestoreException.Code.UNAVAILABLE,
+            )
+        }
         val deadline = scheduler.currentTime + timeoutMillis
         while (true) {
             val state = cloud.pairings[pairId]
@@ -341,7 +352,12 @@ internal class FakeSecrets : SecretsRepository {
     override val pairingKey = MutableStateFlow<ByteArray?>(null)
     override val escapeCode = MutableStateFlow<ByteArray?>(null)
 
+    /** Models the disk-full class: DataStore edit / keystore write throws after the
+     *  enrollment row is already durable (finding #12). */
+    var failStorePairingKey = false
+
     override suspend fun storePairingKey(material: ByteArray) {
+        if (failStorePairingKey) throw java.io.IOException("simulated vault write failure")
         pairingKey.value = material
     }
 

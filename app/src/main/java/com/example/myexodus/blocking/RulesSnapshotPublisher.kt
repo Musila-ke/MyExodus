@@ -5,6 +5,7 @@ import android.util.Log
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -100,38 +101,61 @@ class RulesSnapshotPublisher(
     suspend fun loadFromDb() = loadMutex.withLock { buildAndPublish() }
 
     private suspend fun buildAndPublish() {
-        val store = storeFactory.open()
-        if (store == null) {
-            degrade("rules store unavailable")
-            return
-        }
-        val rules = try {
-            store.restrictionRuleDao().getActiveRules()
-        } catch (e: Throwable) {
-            Log.e(TAG, "Authoritative snapshot load failed", e)
-            degrade("db read failed: ${e.javaClass.simpleName}")
-            return
-        }
-        // Version authority is Room (plan §4), not a publisher-local counter: survives
-        // restart, monotone per write transaction, consistent across all engines.
-        val version = try {
-            store.policyVersionDao().current()
-        } catch (e: Throwable) {
-            Log.e(TAG, "Policy version read failed", e)
-            degrade("policy version read failed: ${e.javaClass.simpleName}")
-            return
-        }
-        val snapshot = RulesSnapshot.build(rules, version, System.currentTimeMillis())
-        snapshot.writeTo(cacheFile)
         try {
-            snapshot.writeTo(deCacheFile)
+            val store = storeFactory.open()
+            if (store == null) {
+                degrade("rules store unavailable")
+                return
+            }
+            val rules = try {
+                store.restrictionRuleDao().getActiveRules()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.e(TAG, "Authoritative snapshot load failed", e)
+                degrade("db read failed: ${e.javaClass.simpleName}")
+                return
+            }
+            // Version authority is Room (plan §4), not a publisher-local counter: survives
+            // restart, monotone per write transaction, consistent across all engines.
+            val version = try {
+                store.policyVersionDao().current()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.e(TAG, "Policy version read failed", e)
+                degrade("policy version read failed: ${e.javaClass.simpleName}")
+                return
+            }
+            val snapshot = RulesSnapshot.build(rules, version, System.currentTimeMillis())
+            // Both caches are best-effort speed-ups; the publish below is the authority. A
+            // cache I/O failure (disk-full class, B-10) must neither abort the publish nor
+            // escape into the handler-less service scopes that cold-load this — the DE write
+            // alone being wrapped let a CE-cache write failure crash-loop every boot and
+            // service start (finding #10, 2026-10-16).
+            try {
+                snapshot.writeTo(cacheFile)
+            } catch (e: Throwable) {
+                Log.e(TAG, "Snapshot cache write failed", e)
+            }
+            try {
+                snapshot.writeTo(deCacheFile)
+            } catch (e: Throwable) {
+                // DE copy is best-effort reconciliation; a failure must not degrade the CE path.
+                Log.e(TAG, "Device-protected cache write failed", e)
+            }
+            ref.set(snapshot)
+            _state.value = SnapshotState.Ready(snapshot.version)
+            Log.i(TAG, "Authoritative snapshot v${snapshot.version}: ${snapshot.appRules.size} app, ${snapshot.urlRules.size} url rules")
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
-            // DE copy is best-effort reconciliation; a failure must not degrade the CE path.
-            Log.e(TAG, "Device-protected cache write failed", e)
+            // Totality (finding #1's pattern): the class contract is "authoritative failure →
+            // Degraded(reason), last published snapshot stays in use" — an unexpected thrower
+            // (open()'s pre-open steps, a future step) must surface as Degraded, never as a
+            // crash in the callers' handler-less scopes.
+            degrade("snapshot publish failed: ${e.javaClass.simpleName}")
         }
-        ref.set(snapshot)
-        _state.value = SnapshotState.Ready(snapshot.version)
-        Log.i(TAG, "Authoritative snapshot v${snapshot.version}: ${snapshot.appRules.size} app, ${snapshot.urlRules.size} url rules")
     }
 
     private fun degrade(reason: String) {

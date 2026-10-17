@@ -95,10 +95,14 @@ private fun CrisisResourceCard(resource: CrisisResource) {
                     Button(
                         onClick = {
                             // DIAL, not CALL: the call button stays a user action (no CALL_PHONE
-                            // permission, no surprise dialing).
-                            context.startActivity(
-                                Intent(Intent.ACTION_DIAL, "tel:${resource.phone}".toUri()),
-                            )
+                            // permission, no surprise dialing). Wrapped like the URL action: a
+                            // device with no dialer (tablet class) must leave this screen usable,
+                            // never crash the one surface that must open instantly.
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_DIAL, "tel:${resource.phone}".toUri()),
+                                )
+                            }
                         },
                         modifier = Modifier.weight(1f),
                     ) {

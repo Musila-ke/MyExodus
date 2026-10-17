@@ -14,8 +14,13 @@ object QrChunkCodec {
     const val CHUNK_PAYLOAD_SIZE = 592
     const val FRAME_SIZE = HEADER_SIZE + CHUNK_PAYLOAD_SIZE
 
-    /** Bound matches §8.4's 1 MiB envelope cap: a header claiming more is malformed. */
-    const val MAX_CHUNKS = 1_048_576 / CHUNK_PAYLOAD_SIZE
+    /** §8.4 mailbox rules cap the envelope at `envelope.size() < 1048576` (strict), so the
+     *  largest envelope any transfer can legally carry is 1,048,575 bytes. */
+    const val MAX_ENVELOPE_BYTES = 1_048_576
+
+    /** ceil((MAX_ENVELOPE_BYTES − 1) / 592) = 1772 — the largest count a legal envelope
+     *  produces, and the bound for header validation: a header claiming more is malformed. */
+    const val MAX_CHUNKS = 1_772
 
     data class Chunk(
         val sessionId: ByteArray,
@@ -37,9 +42,10 @@ object QrChunkCodec {
     /** Splits [payload] into §6.3 frames; only non-final chunks are padded to 592 bytes. */
     fun encode(payload: ByteArray, sessionId: ByteArray = newSessionId()): List<ByteArray> {
         require(payload.isNotEmpty()) { "empty payload" }
+        require(payload.size < MAX_ENVELOPE_BYTES) { "payload exceeds the 1 MiB envelope cap" }
         require(sessionId.size == 4) { "session id must be 4 bytes" }
+        // chunkCount for the largest legal envelope (1,048,575 bytes) is exactly MAX_CHUNKS.
         val chunkCount = (payload.size + CHUNK_PAYLOAD_SIZE - 1) / CHUNK_PAYLOAD_SIZE
-        require(chunkCount <= MAX_CHUNKS) { "payload too large for one QR session" }
         return (0 until chunkCount).map { i ->
             val start = i * CHUNK_PAYLOAD_SIZE
             val end = minOf(start + CHUNK_PAYLOAD_SIZE, payload.size)

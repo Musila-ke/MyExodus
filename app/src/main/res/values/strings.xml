@@ -125,11 +125,32 @@
     <string name="home_grid_empty_body">Your ladder fills in as each clean day passes.</string>
     <string name="home_grid_error_body">Couldn\'t load your milestones. MyExodus can\'t reach its local database right now. Your data is safe.</string>
     <string name="home_grid_retry">Try again</string>
+    <!-- Hero card caption (one per state, same honesty rules as the grid above) and its unit.
+         Sweep finding (2026-10-16): these four captions and the day/attempt units were the only
+         raw copy literals left in the UI — invisible to the strings.xml copy audits. -->
+    <string name="home_streak_caption_loading">Reading your streak…</string>
+    <string name="home_streak_caption_none">No habit tracked yet. A streak starts counting the day you set one up.</string>
+    <string name="home_streak_caption_next">Next milestone: %1$d-day mark — %2$d days to go.</string>
+    <string name="home_streak_caption_complete">Milestone ladder complete — extraordinary.</string>
+    <plurals name="home_streak_days_unit">
+        <item quantity="one">day</item>
+        <item quantity="other">days</item>
+    </plurals>
+    <plurals name="home_block_row_attempts">
+        <item quantity="one">%1$d attempt</item>
+        <item quantity="other">%1$d attempts</item>
+    </plurals>
     <string name="home_title">Home</string>
     <string name="home_streak_cta">Set up a habit</string>
     <string name="home_blocks_empty_title">No blocks yet</string>
     <string name="home_blocks_empty_body">Blocks you create under Rules show up here with their live status.</string>
     <string name="home_blocks_add">Add a block</string>
+    <!-- Owner request 2026-10-17: the eye toggle beside "Your blocks" hides the most identifying
+         part of Home from someone glancing at the phone. The hidden state persists across
+         launches; the toggle itself never leaves the header. -->
+    <string name="home_blocks_hide">Hide your blocks</string>
+    <string name="home_blocks_show">Show your blocks</string>
+    <string name="home_blocks_hidden">Blocks hidden for privacy</string>
 
     <!-- Partner activity (AD-11/NFR2). Owner ruling 2026-09-29: with N partners every partner
          notification must name which partner it concerns — the `_named` forms are the
@@ -271,6 +292,16 @@
     <string name="editor_target_duplicate">That’s already in your block list. Edit the existing block instead.</string>
     <string name="dialog_ok">OK</string>
 
+    <!-- Website engine off (owner report 2026-10-17): the rule editor states the tunnel
+         dependency up front and asks again at save, so a rule is never created silently inert. -->
+    <string name="editor_engine_off_consent">Website blocking is off — this rule won’t block the site or count its usage until you turn it on.</string>
+    <string name="editor_engine_off_retry">Website blocking is off — this rule won’t work until the connection starts. Another VPN app can block it.</string>
+    <string name="editor_engine_off_turn_on">Turn on</string>
+    <string name="editor_engine_off_try_again">Try again</string>
+    <string name="editor_engine_off_dialog_title">Turn on website blocking?</string>
+    <string name="editor_engine_off_dialog_body">This website rule won’t block the site or count its daily usage until website blocking is on. Turn it on now?</string>
+    <string name="editor_engine_off_save_anyway">Save anyway</string>
+
     <!-- Write failures -->
     <string name="error_self_block">MyExodus can’t block itself — pick a different app.</string>
     <string name="error_limit_reached">You’ve reached the maximum number of blocks.</string>
@@ -411,9 +442,12 @@
     <!-- The large card's data strip: tiny captions over one short value each. -->
     <string name="widget_habit_label">Habit</string>
     <string name="widget_next_label">Next</string>
-    <!-- "Day 30 in 23d": the rung and its distance in one cell. The bare separator ("Day 30 ·
-         23d") read as a date or a time (user-flagged 2026-09-27); "in" states the relation. -->
-    <string name="widget_next_value">Day %1$d in %2$dd</string>
+    <!-- "23d to 30-day mark": the distance leads and the rung is named as an amount of days
+         free. Two bare day-quantities side by side ("30 days in 23d", and before that "30 days ·
+         23d") read as a contradiction or a date (user-flagged 2026-09-27 and 2026-10-17);
+         "to a … mark" states the relation unambiguously. The rung is never an ordinal day: the
+         display day at that boundary is one higher (ADR #128's never-0 convention). -->
+    <string name="widget_next_value">%2$dd to %1$d-day mark</string>
     <!-- The tall card's progress band: caption left, rung value right, bar underneath. -->
     <string name="widget_next_milestone_label">Next milestone</string>
     <string name="widget_checked_label">Checked</string>
@@ -425,30 +459,42 @@
     <string name="widget_ago_minutes">%1$dm ago</string>
     <string name="widget_ago_hours">%1$dh ago</string>
     <string name="widget_ago_days">%1$dd ago</string>
-    <!-- The next 7/30/90 rung as the compact variant's one-line sentence. -->
+    <!-- The next 7/30/90 rung as the compact variant's one-line sentence. Mark phrasing for
+         the same reason as widget_next_value. -->
     <plurals name="widget_next_milestone">
-        <item quantity="one">Day %1$d in %2$d day</item>
-        <item quantity="other">Day %1$d in %2$d days</item>
+        <item quantity="one">%2$d day to a %1$d-day mark</item>
+        <item quantity="other">%2$d days to a %1$d-day mark</item>
     </plurals>
     <string name="widget_status_protected">Protected</string>
     <string name="widget_status_unprotected">Not protected</string>
     <string name="widget_status_unverified">Unverified</string>
-    <!-- Widget v2.1 (owner correction 2026-10-16): the wide cards' actions are icon-only
-         controls (wave = log an urge, speech bubble = reach out). The v2 text pills spelled
-         private intent to anyone glancing at the home screen — the owner: "we need to think of
-         user privacy, an icon would have helped". No action word is ever drawn on the launcher
-         surface; these two strings exist only as content descriptions, which TalkBack reads
-         and nothing renders. -->
+    <!-- Widget v2.1/v2.2 (owner corrections 2026-10-16/17): the wide cards' actions are
+         icon-only controls (restart = log a relapse, wave = log an urge, speech bubble = reach
+         out). The v2 text pills spelled private intent to anyone glancing at the home screen —
+         the owner: "we need to think of user privacy, an icon would have helped". No action word
+         is ever drawn on the launcher surface; these strings exist only as content descriptions,
+         which TalkBack reads and nothing renders. The log controls use the same glyphs as the
+         app's own buttons (streak card / Recovery), so one icon means one action. The discreet
+         descriptions keep the vocabulary pair too — TalkBack is spoken aloud, and a bystander
+         must not hear the word the card refused to show. -->
+    <string name="widget_action_relapse">Log a relapse</string>
+    <string name="widget_action_reset">Reset the count</string>
     <string name="widget_action_urge">Log an urge</string>
+    <string name="widget_action_urge_discreet">Save this moment</string>
     <string name="widget_action_reach_out">Reach out</string>
-    <!-- The hold-to-confirm surface the controls open (one shared shape for both actions: title,
-         one line of what will happen, the ring, the hint). Both actions execute only on a
-         completed hold — release early cancels. The urge surface carries the widget's disclosure
-         pair: the app's own vocabulary ("urge") only after the user opted into disclosure (FR5),
-         and its copy mirrors the app's Log-this-urge sheet (strings_recovery.xml) — logging
-         keeps the block, and nothing is shared with the partner. No day count is quoted: the
-         widget behind the surface already shows the number, and a number written here could
-         disagree with it by the time the hold lands. -->
+    <!-- The hold-to-confirm surface the controls open (one shared shape for all three actions:
+         title, one line of what will happen, the ring, the hint). All actions execute only on a
+         completed hold — release early cancels. The log surfaces carry the widget's disclosure
+         pair: the app's own vocabulary only after the user opted into disclosure (FR5). The urge
+         copy mirrors the app's Log-this-urge sheet (strings_recovery.xml) — logging keeps the
+         block, nothing is shared. The relapse copy is the app's own statement of fact: the
+         current streak ends, the best run stays on record. No day count is quoted: the widget
+         behind the surface already shows the number, and a number written here could disagree
+         with it by the time the hold lands. -->
+    <string name="widget_hold_relapse_title">Log a relapse?</string>
+    <string name="widget_hold_relapse_body">Your current streak ends and a new one starts at Day 1. Your best run stays on record.</string>
+    <string name="widget_hold_reset_title">Reset the count?</string>
+    <string name="widget_hold_reset_body">The current count ends and a new one starts at Day 1.</string>
     <string name="widget_hold_urge_title">Log an urge?</string>
     <string name="widget_hold_urge_body">Your block stays in place — this is not an override, and nothing is shared.</string>
     <string name="widget_hold_urge_title_discreet">Save this moment?</string>
@@ -466,6 +512,19 @@
          storage. Content pinned by WidgetActionStateTest's vocabulary guard. -->
     <string name="widget_urge_saved">Urge logged — your block is still in place.</string>
     <string name="widget_urge_saved_discreet">Saved — nothing was shared.</string>
+    <!-- The relapse outcomes. "Already logged" is the idempotency window talking: the rollover
+         the user asked for just happened, so it is reported as success-adjacent, not as an
+         error. The logged/gone/failed outcomes carry the same discreet pair as the titles/bodies
+         — the surface a hold opens must not print the word the card just refused to show (device
+         leg caught "Relapse logged" on a discreet surface, 2026-10-16). Content pinned by
+         WidgetActionStateTest's vocabulary guards. -->
+    <string name="widget_relapse_logged">Relapse logged — a new streak starts at Day 1.</string>
+    <string name="widget_relapse_logged_discreet">Count reset — a new one starts at Day 1.</string>
+    <string name="widget_relapse_already_logged">Already logged.</string>
+    <string name="widget_relapse_gone">This streak is no longer active. Open the app.</string>
+    <string name="widget_relapse_gone_discreet">This count is no longer active. Open the app.</string>
+    <string name="widget_relapse_failed">Couldn\'t log the relapse.</string>
+    <string name="widget_relapse_failed_discreet">Couldn\'t log the reset.</string>
     <!-- Partner dashboard (plan §7 item 12 / FR3): the paired device's last-known shared
          state. Copy never promises real-time delivery (AD-05 best-effort cadence) and keeps
          the §9 chain states distinct — "some history missing" is neutral; the unverified
@@ -850,7 +909,9 @@
     <string name="streaks_free_since">Free since %1$s</string>
     <string name="streaks_rung_reached">Reached</string>
     <string name="streaks_rung_days_away">%1$d days away</string>
-    <string name="streaks_rung_day">Day %1$d</string>
+    <!-- Rungs are amounts ("7 days"), not ordinal days: the day the threshold is crossed renders
+         one higher under the never-0 display (ADR #128). Owner-flagged 2026-10-17. -->
+    <string name="streaks_rung_day">%1$d days</string>
     <string name="streaks_relapse_title">Had a slip?</string>
     <string name="streaks_relapse_body">Logging a relapse ends the current count and starts a new one at Day 1. Your best run stays on record — progress you\'ve made isn\'t erased.</string>
     <string name="streaks_relapse_action">Log a relapse</string>
@@ -858,10 +919,13 @@
     <string name="streaks_relapse_confirm_title">Log a relapse?</string>
     <string name="streaks_relapse_confirm_body">Your current streak of %1$d %2$s ends and a new one starts at Day 1. Your best run stays on record.</string>
     <string name="streaks_relapse_confirm_action">Log it</string>
+    <string name="streaks_relapse_error_before_start">That relapse time is earlier than this streak\'s start. Check your device\'s date and time settings, then try again.</string>
+    <string name="streaks_relapse_error_store">MyExodus can\'t reach its local database right now, so nothing was logged. Try again in a moment.</string>
     <string name="streaks_cancel">Cancel</string>
     <string name="streaks_done">Nice — keep going</string>
     <string name="streaks_milestone_channel_name">MyExodus milestones</string>
-    <string name="streaks_milestone_notification_title">Day %1$d free from %2$s</string>
+    <!-- Amount, not ordinal: on firing the app's own counter reads "Day 8" (never-0 display). -->
+    <string name="streaks_milestone_notification_title">%1$d days free from %2$s</string>
     <string name="streaks_milestone_notification_text">Your streak hit %1$d days. Open MyExodus to keep it going.</string>
     <!-- Timeline spoke. Its week labels and expectation copy stay in StreaksPresentation.kt —
          see the scope note above. -->
@@ -888,6 +952,10 @@
     <string name="streaks_setup_change">Change</string>
     <string name="streaks_setup_date_note">Your count starts now, on this phone — only tracked time adds days. The date is remembered as when you stopped; it doesn\'t add days by itself.</string>
     <string name="streaks_setup_start">Start my streak</string>
+    <string name="streaks_setup_error_future">That start date is in the future, so the count can\'t begin there. Pick today or an earlier date and try again.</string>
+    <string name="streaks_setup_error_invalid">Something in the setup didn\'t look right. Check your answers and try again.</string>
+    <string name="streaks_setup_error_clock">Your device\'s date looks off, so MyExodus can\'t start counting safely. Check your date and time settings, then try again.</string>
+    <string name="streaks_setup_error_store">MyExodus can\'t reach its local database right now. Your data is safe — try again in a moment.</string>
     <string name="streaks_picker_confirm">OK</string>
     <string name="streaks_picker_title">Your habits</string>
     <string name="streaks_picker_add">Add habit</string>

@@ -27,7 +27,8 @@ data class Outbox(
     @ColumnInfo(name = "last_attempt_at") val lastAttemptAtEpochMillis: Long? = null,
     @ColumnInfo(name = "attempt_count") val attemptCount: Int = 0,
     /** Step 18 (AD-23): when this client last read the mailbox document back to look for the
-     *  relay's rejection marker. Null = never checked — the row is due exactly one look. */
+     *  relay's rejection marker. Null = never checked; the row is due from then until an hour
+     *  passes without a check (ADR #53's self-healing due window — see [OutboxDao.relayCheckDue]). */
     @ColumnInfo(name = "relay_checked_at") val relayCheckedAtEpochMillis: Long? = null,
     /** Step 18: the marker the read-back found (`RATE_LIMITED`, `PAIRING_INVALID`, …), or null
      *  for none. Kept as the raw value — distinct from a network failure by construction,

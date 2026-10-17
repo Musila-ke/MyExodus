@@ -18,11 +18,15 @@ import com.example.myexodus.notifications.NotificationAccess
  * broadcast, and until now the alarm was the *only* caller that posted — so a missed firing
  * meant the milestone was never announced at all (the owner's Day 7 crossed during a
  * three-minute reboot window; the row sat achieved-and-unclaimed with no notification). The
- * atomic claim was always designed for exactly-once across paths, so it now also backs two
- * catch-up callers: [catchUpAfterBoot] (Decision 9's `BOOT_COMPLETED` evaluation trigger,
- * invoked by [MilestoneBootReceiver]) and [deliverUnclaimed] (the app-foreground evaluation
- * backstop, invoked after the streaks ViewModel's refresh). Whichever path runs first posts;
- * the rest return on the consumed claim.
+ * atomic claim was always designed for exactly-once across paths, so it now also backs
+ * [catchUpAll], one sweep with two callers: [MilestoneBootReceiver] after boot reconciliation
+ * (Decision 9's `BOOT_COMPLETED` evaluation trigger) and the streaks ViewModel on every
+ * app-foreground refresh. Finding #22 (device-caught 2026-10-16): the first foreground version
+ * delivered only the *displayed* habit, so an unfocused habit's missed crossing sat
+ * achieved-and-unclaimed with no retry (its day-7 alarm left the queue unposted, and a 16-day
+ * uptime meant the boot sweep never ran) — the sweep now covers every active habit, and its
+ * per-habit evaluation also re-arms each habit's projected alarms. Whichever path runs first
+ * posts; the rest return on the consumed claim.
  */
 class MilestoneAlerter(
     private val context: Context,
@@ -45,27 +49,19 @@ class MilestoneAlerter(
     }
 
     /**
-     * §14 catch-up at boot: every active habit is evaluated (a crossing that happened while the
-     * device was off is stamped here), then any achieved-but-unclaimed milestone is delivered.
-     * Runs right after the boot alarm reconciliation; an unavailable store (pre-unlock) skips
-     * silently — the foreground backstop repeats this.
+     * §14 catch-up sweep: every active habit is evaluated (a crossing that happened while the
+     * device was off — or while no alarm could fire — is stamped here), then any
+     * achieved-but-unclaimed milestone is delivered. Runs right after the boot alarm
+     * reconciliation and on every app-foreground refresh; the foreground run is what covers
+     * OEM-suppressed alarms with no reboot, for every habit, focused or not (finding #22). An
+     * unavailable store (pre-unlock) skips silently — the next trigger repeats the sweep.
      */
-    suspend fun catchUpAfterBoot() {
+    suspend fun catchUpAll() {
         val store = storeFactory.open() ?: return
         store.recoveryStreakDao().activeHabitIds().forEach { habitId ->
             repository.evaluate(habitId)
             postUnclaimedFor(store, habitId)
         }
-    }
-
-    /**
-     * §14 catch-up on the foreground evaluation backstop: the caller has just evaluated
-     * [habitId]; anything achieved but never claimed is delivered now. Covers alarms an OEM
-     * suppressed or dropped with no reboot — the one case the boot catch-up cannot see.
-     */
-    suspend fun deliverUnclaimed(habitId: String) {
-        val store = storeFactory.open() ?: return
-        postUnclaimedFor(store, habitId)
     }
 
     private suspend fun postUnclaimedFor(store: AppRulesStore, habitId: String) {

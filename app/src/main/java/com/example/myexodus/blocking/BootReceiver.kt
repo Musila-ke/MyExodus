@@ -38,15 +38,24 @@ class BootReceiver : BroadcastReceiver() {
         // incl. Infinix/TECNO) — the device matrix needs to see this fire (2026-08-28 research).
         if (BuildConfig.DEBUG) Log.i(TAG, "${intent.action} received")
         publisher.loadFastPath()
+        // goAsync: without it the platform may kill the process the moment onReceive returns,
+        // silently dropping the authoritative reload and the post-boot tunnel ensure (the
+        // fast-path snapshot alone would leave website rules unenforced until the next app
+        // open). The budget is the receiver's own; the work is one small DB read.
+        val pending = goAsync()
         scope.launch {
-            publisher.loadFromDb()
-            // #26: same SSOT as the in-app pass — the publisher's url rules (the blocking
-            // policy itself). Runs after the authoritative load so a rule edit that predates
-            // the reboot is seen.
-            runCatching {
-                val hasRules = publisher.snapshot.urlRules.isNotEmpty()
-                VpnLifecycle.ensure(context.applicationContext, hasRules)
-            }.onFailure { Log.w(TAG, "tunnel ensure-pass failed", it) }
+            try {
+                publisher.loadFromDb()
+                // #26: same SSOT as the in-app pass — the publisher's url rules (the blocking
+                // policy itself). Runs after the authoritative load so a rule edit that predates
+                // the reboot is seen.
+                runCatching {
+                    val hasRules = publisher.snapshot.urlRules.isNotEmpty()
+                    VpnLifecycle.ensure(context.applicationContext, hasRules)
+                }.onFailure { Log.w(TAG, "tunnel ensure-pass failed", it) }
+            } finally {
+                pending.finish()
+            }
         }
         if (settings.enhancedModeEnabled) {
             EnforcementForegroundService.start(context)

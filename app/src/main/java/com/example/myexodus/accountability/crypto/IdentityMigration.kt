@@ -3,6 +3,7 @@ package com.example.myexodus.accountability.crypto
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * §7.6/§9/§8.2 Identity Migration: triggered when the signing key is permanently
@@ -25,11 +26,20 @@ class IdentityMigration @Inject constructor(
     }
 
     /** [rotateKeys] is the Keystore-backed rotation; tests inject a plain-key substitute. */
-    suspend fun migrate(rotateKeys: () -> Unit): MigrationResult {
-        runCatching { rotateKeys() }.getOrElse { return MigrationResult.Failed(it.message ?: "rotation failed") }
-        val epoch = epochStore.bump()
-        val pairs = enrollmentDao.all()
-        pairs.forEach { enrollmentDao.delete(it) }
-        return MigrationResult.Migrated(epoch = epoch, reEnrollmentRequired = pairs.size)
-    }
+    suspend fun migrate(rotateKeys: () -> Unit): MigrationResult =
+        try {
+            rotateKeys()
+            val epoch = epochStore.bump()
+            val pairs = enrollmentDao.all()
+            pairs.forEach { enrollmentDao.delete(it) }
+            MigrationResult.Migrated(epoch = epoch, reEnrollmentRequired = pairs.size)
+        } catch (e: CancellationException) {
+            // Cancellation is not a migration outcome — never swallowed into Failed.
+            throw e
+        } catch (e: Exception) {
+            // The whole sequence, not just rotation: the call site's contract is a returned
+            // Failed (it retries on the next resume); an escaping DB-step throw would crash
+            // the resume path (disk-full class) instead of retrying.
+            MigrationResult.Failed(e.message ?: "migration failed")
+        }
 }

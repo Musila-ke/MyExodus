@@ -120,7 +120,11 @@ class PartnerSyncCoordinator(
         var report = SyncReport(enrolled = true, unpairAdvanced = unpairAdvanced)
         var resolved = 0
         for (enrollment in enrollments) {
-            val one = syncPair(enrollment, wakeMessageId) ?: continue
+            // Per-pair isolation covers THROWN failures too (e.g. an SQLite error under disk
+            // pressure): the slice is skipped, every other pair still runs, the pass returns.
+            val one = runCatching { syncPair(enrollment, wakeMessageId) }
+                .onFailure { Log.w(TAG, "pair ${enrollment.pairId} slice failed", it) }
+                .getOrNull() ?: continue
             resolved++
             report = report.copy(
                 eventsLinked = report.eventsLinked + one.eventsLinked,

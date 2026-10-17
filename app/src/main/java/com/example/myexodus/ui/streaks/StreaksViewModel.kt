@@ -22,9 +22,10 @@ import kotlinx.coroutines.launch
  * consume [state] via `collectAsStateWithLifecycle` — and owns the two evaluation triggers,
  * [refresh] from `init` and from `MainActivity.onResume`. Nothing here runs because Compose
  * recomposed (Decision 9); this is the ViewModel boundary the plan names for exactly that.
- * [refresh] also rides the §14 catch-up delivery ([MilestoneAlerter.deliverUnclaimed]) at the
- * same boundary: an alarm the platform suppressed or dropped is delivered at the next open
- * instead of never.
+ * [refresh] also rides the §14 catch-up sweep ([MilestoneAlerter.catchUpAll]) at the same
+ * boundary: an alarm the platform suppressed or dropped is delivered at the next open instead
+ * of never — for every habit, not just the displayed one (finding #22, device-caught
+ * 2026-10-16), and each habit's evaluation re-arms its projected alarms.
  */
 @HiltViewModel
 class StreaksViewModel @Inject constructor(
@@ -59,20 +60,22 @@ class StreaksViewModel @Inject constructor(
     /** True while the setup form is open to add another habit (a habit already exists). */
     val addingHabit: StateFlow<Boolean> = _addingHabit.asStateFlow()
 
-    private val _setupError = MutableStateFlow<String?>(null)
+    private val _setupError = MutableStateFlow<SetupError?>(null)
 
-    /** Setup-form error line (what/why/action copy); null when there is nothing to show. */
-    val setupError: StateFlow<String?> = _setupError.asStateFlow()
+    /** Setup-form failure (what/why/action, plan §9); null when there is nothing to show. The
+     *  screen maps it to copy — resources stay out of the ViewModel (finding #20). */
+    val setupError: StateFlow<SetupError?> = _setupError.asStateFlow()
 
     private val _relapseInFlight = MutableStateFlow(false)
 
     /** §9 first line of duplicate-tap defense: the control disables while a write is out. */
     val relapseInFlight: StateFlow<Boolean> = _relapseInFlight.asStateFlow()
 
-    private val _relapseNote = MutableStateFlow<String?>(null)
+    private val _relapseFeedback = MutableStateFlow<RelapseFeedback?>(null)
 
-    /** Supportive, non-punitive line after a logged relapse; null before one is logged. */
-    val relapseNote: StateFlow<String?> = _relapseNote.asStateFlow()
+    /** Outcome of the last logged relapse; null before one is logged. The screen resolves it to
+     *  copy (support line or error); the support text stays the test-pinned pure function. */
+    val relapseFeedback: StateFlow<RelapseFeedback?> = _relapseFeedback.asStateFlow()
 
     init {
         refresh()
@@ -85,7 +88,9 @@ class StreaksViewModel @Inject constructor(
         // plain app resume (device-caught 2026-09-19, whole-class fix: every launch below).
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                repository.refreshActive()?.let { milestoneAlerter.deliverUnclaimed(it.habitId) }
+                repository.refreshActive()
+                // §14 sweep for every active habit (finding #22) — see the class KDoc.
+                milestoneAlerter.catchUpAll()
                 _habits.value = repository.habits()
                 // The repository's own truth, not an unconditional true: a store-open failure
                 // returns without a definite answer, and claiming resolved would show "no habit
@@ -107,7 +112,7 @@ class StreaksViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             repository.selectHabit(habitId)
             _habits.value = repository.habits()
-            _relapseNote.value = null
+            _relapseFeedback.value = null
         }
     }
 
@@ -139,7 +144,7 @@ class StreaksViewModel @Inject constructor(
                 recoveryStartAt = recoveryStartAt,
             )) {
                 is HabitRepository.OnboardingResult.Ready -> {
-                    _relapseNote.value = null
+                    _relapseFeedback.value = null
                     _addingHabit.value = false
                     _habits.value = repository.habits()
                 }
@@ -147,19 +152,16 @@ class StreaksViewModel @Inject constructor(
                 is HabitRepository.OnboardingResult.Rejected -> {
                     _setupError.value = when (result.reason) {
                         HabitRepository.OnboardingResult.Rejected.Reason.START_IN_FUTURE ->
-                            "That start date is in the future, so the count can't begin there. " +
-                                "Pick today or an earlier date and try again."
+                            SetupError.START_IN_FUTURE
 
                         HabitRepository.OnboardingResult.Rejected.Reason.INVALID_DURATION ->
-                            "Something in the setup didn't look right. Check your answers and try again."
+                            SetupError.INVALID_DURATION
 
                         HabitRepository.OnboardingResult.Rejected.Reason.IMPLAUSIBLE_CLOCK ->
-                            "Your device's date looks off, so MyExodus can't start counting safely. " +
-                                "Check your date and time settings, then try again."
+                            SetupError.IMPLAUSIBLE_CLOCK
 
                         HabitRepository.OnboardingResult.Rejected.Reason.STORE_UNAVAILABLE ->
-                            "MyExodus can't reach its local database right now. Your data is safe — " +
-                                "try again in a moment."
+                            SetupError.STORE_UNAVAILABLE
                     }
                 }
             }
@@ -178,24 +180,20 @@ class StreaksViewModel @Inject constructor(
         val current = state.value ?: return
         if (_relapseInFlight.value) return
         _relapseInFlight.value = true
-        _relapseNote.value = null
+        _relapseFeedback.value = null
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val endedDays = daysFree(current.currentStreakElapsedMs)
                 val bestDays = daysFree(current.allTimeMaxElapsedMs)
                 when (repository.logRelapse(current.habitId)) {
                     is HabitRepository.RelapseResult.RolledOver ->
-                        _relapseNote.value = relapseSupportNote(endedDays, bestDays)
+                        _relapseFeedback.value = RelapseFeedback.Support(endedDays, bestDays)
 
                     HabitRepository.RelapseResult.RejectedBeforeStreakStart ->
-                        _relapseNote.value =
-                            "That relapse time is earlier than this streak's start. " +
-                                "Check your device's date and time settings, then try again."
+                        _relapseFeedback.value = RelapseFeedback.RejectedBeforeStart
 
                     HabitRepository.RelapseResult.StoreUnavailable ->
-                        _relapseNote.value =
-                            "MyExodus can't reach its local database right now, so nothing was logged. " +
-                                "Try again in a moment."
+                        _relapseFeedback.value = RelapseFeedback.StoreUnavailable
 
                     HabitRepository.RelapseResult.DuplicateIgnored,
                     HabitRepository.RelapseResult.NoActiveStreak,
@@ -205,5 +203,18 @@ class StreaksViewModel @Inject constructor(
                 _relapseInFlight.value = false
             }
         }
+    }
+
+    /** Setup-form failure the screen maps to copy (finding #20); resources stay out of VMs. */
+    enum class SetupError { START_IN_FUTURE, INVALID_DURATION, IMPLAUSIBLE_CLOCK, STORE_UNAVAILABLE }
+
+    /** The last relapse outcome, resolved to display copy by the screen (finding #20). */
+    sealed interface RelapseFeedback {
+        /** A rolled-over streak, with the numbers the support line needs — no error. */
+        data class Support(val endedDays: Int, val bestDays: Int) : RelapseFeedback
+
+        data object RejectedBeforeStart : RelapseFeedback
+
+        data object StoreUnavailable : RelapseFeedback
     }
 }

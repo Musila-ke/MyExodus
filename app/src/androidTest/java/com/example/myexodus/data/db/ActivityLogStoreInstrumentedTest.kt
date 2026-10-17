@@ -91,7 +91,14 @@ class ActivityLogStoreInstrumentedTest {
         store.insert(event("fresh", "inst-1", createdAt = now))
         val deleted = store.purgeOlderThan(now - 14L * 24 * 60 * 60 * 1000)
         assertEquals(1, deleted)
-        assertEquals(1L, store.count())
+        // Pin WHICH row survived (2026-10-16 review): a bare deleted==1/count==1 pair also
+        // passes for an inverted boundary (`created_at >= ?`), which would purge the newest
+        // rows and keep the stale one — the exact opposite of the retention contract.
+        val survivors = mutableListOf<String>()
+        store.databaseForTest()!!.rawQuery(
+            "SELECT event_id FROM ${ActivityLogSchema.TABLE}", null,
+        ).use { cursor -> while (cursor.moveToNext()) survivors += cursor.getString(0) }
+        assertEquals(listOf("fresh"), survivors)
     }
 
     @Test

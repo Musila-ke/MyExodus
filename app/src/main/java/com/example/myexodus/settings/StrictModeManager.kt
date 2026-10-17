@@ -40,10 +40,14 @@ class StrictModeManager internal constructor(
         get() = strictModeEnabled && cooldownRemainingMillis > 0L
 
     val cooldownRemainingMillis: Long
-        get() = if (strictModeEnabled) {
-            maxOf(0L, prefs.getLong(KEY_COOLDOWN_UNTIL, 0L) - nowMillis())
-        } else {
-            0L
+        get() {
+            if (!strictModeEnabled) return 0L
+            val remaining = prefs.getLong(KEY_COOLDOWN_UNTIL, 0L) - nowMillis()
+            // The shipped setter never writes a deadline more than one cooldown out. Anything
+            // beyond it is a corrupt/legacy record — a 2026-10-04 device-test sentinel
+            // (9_999_999_999_999) rendered "unlock in 2,279,933h" until 2026-10-17. An impossible
+            // record fails open: it cannot represent a lock the user chose.
+            return if (remaining in 1..COOLDOWN_MILLIS) remaining else 0L
         }
 
     /** The in-app disable controls are locked until the 24h cooldown expires. */

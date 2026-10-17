@@ -54,7 +54,8 @@ class LatencyProfiler(
         pendingShowNanos.clear()
     }
 
-    /** Call at decision time; pairs with [recordSubmission] called after [show] returns. */
+    /** Call at decision time — only when a submission will follow: the entry lives until
+     *  [recordSubmission] consumes it, and unsubmitted decisions have no other consumer. */
     fun recordDecision(generation: Long, detectionTimeNanos: Long, decisionTimeNanos: Long) {
         if (!shouldSample()) return
         decisionsByGeneration[generation] = Pair(detectionTimeNanos, decisionTimeNanos)
@@ -99,6 +100,9 @@ class LatencyProfiler(
         val showNanos = pendingShowNanos.remove(displayId) ?: return
         recordPresentation(showNanos, SystemClock.elapsedRealtimeNanos(), -1L)
     }
+
+    /** Pending decision pairs awaiting submission (seam for the caller-contract test). */
+    internal fun pendingDecisionCount(): Int = decisionsByGeneration.size
 
     /** (p50, p95, p99) in milliseconds per stage: detection, submission, presentation. */
     fun percentilesMillis(): Triple<LongArray, LongArray, LongArray> {

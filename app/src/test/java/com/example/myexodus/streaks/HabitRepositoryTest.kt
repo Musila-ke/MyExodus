@@ -367,6 +367,24 @@ class HabitRepositoryTest {
     }
 
     @Test
+    fun evaluate_whenTheAnomalyLogCannotBeWritten_stillSettlesAndHolds() = runBlocking {
+        // Finding #13 (2026-10-16): the backward-clock path appends its anomaly from inside
+        // the evaluation write transaction — an I/O failure there must drop the evidence
+        // line, not roll back the hold (or throw into the caller's scope).
+        seedProfile()
+        val habitId = (onboard() as HabitRepository.OnboardingResult.Ready).state.habitId
+        anomalyFile.delete()
+        anomalyFile.mkdirs()
+        assertTrue("fixture must occupy the log path", anomalyFile.isDirectory)
+
+        now = TimeReadings(tWallMillis = T0 - 3_600_000, rBootMillis = 500, bootCount = 8)
+        val held = repository.evaluate(habitId)!!
+
+        assertEquals(0L, held.currentStreakElapsedMs)
+        assertEquals(0L, store.recoveryStreakDao().getActiveStreak(habitId)!!.rowVersion)
+    }
+
+    @Test
     fun logRelapse_rollsOver_carriesRecordForward_andPreCreatesNewMilestones() = runBlocking {
         seedProfile()
         val firstStreakId = (onboard() as HabitRepository.OnboardingResult.Ready).state.streakId

@@ -478,6 +478,32 @@ class ChainStateStoreTest {
     }
 
     @Test
+    fun gapFill_conflictingPredecessorLink_isTamperSuspect_notSilentAdvance() = runTest {
+        // The fill-time link check (ChainStateStore.kt fillGap): a gap row is absorbed only if
+        // its stored predecessor link matches the head that actually formed. Sender built
+        // 1→2→3; only 3 arrives first, so it buffers as PENDING_GAP and opens the repair.
+        val e1 = envelope(1)
+        val e2 = chained(2, e1)
+        store.receiveRemote(pairId, e1)
+        store.receiveRemote(pairId, chained(3, e2))
+        assertEquals(ChainHead.REPAIR_PENDING, head()?.repairState)
+
+        // A conflicting sequence-2 that chains off e1 is structurally plausible, so it is
+        // accepted and advances the head — the fork only becomes visible at fill time.
+        assertEquals(
+            ChainStateStore.AppendResult.Appended,
+            store.receiveRemote(pairId, chained(2, e1, seed = 99)),
+        )
+        assertEquals(2L, head()?.lastSequence)
+
+        // The re-delivered sequence-3's stored link (the real 2's hash) no longer matches the
+        // head → AD-08 hash-verification failure during an active repair → TAMPER_SUSPECTED.
+        assertEquals(ChainStateStore.AppendResult.Fork, store.receiveRemote(pairId, chained(3, e2)))
+        assertEquals(ChainHead.REPAIR_TAMPER_SUSPECTED, head()?.repairState)
+        assertTrue(head()!!.forked)
+    }
+
+    @Test
     fun flagTamperIfRepairing_isTrueOnlyWhileARepairIsActive() = runTest {
         store.appendLocal(pairId, envelope(1))
         assertEquals(false, store.flagTamperIfRepairing(pairId))

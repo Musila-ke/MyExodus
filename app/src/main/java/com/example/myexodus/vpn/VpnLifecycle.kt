@@ -32,6 +32,31 @@ object VpnLifecycle {
     enum class Action { START, STOP, NONE }
 
     /**
+     * Why the tunnel cannot serve website rules right now; null = it is up, starting, or
+     * startable by the next [ensure]. The two surfaced classes are the ones only the user can
+     * clear: a missing one-time consent, and a terminal down state [ensure] retries.
+     */
+    enum class WebsiteEngineBlocker {
+        /** The system consent is not on file — only the platform dialog can grant it. */
+        NEEDS_CONSENT,
+
+        /** The last establish failed, or the tunnel was revoked — [ensure] can retry. */
+        DOWN,
+    }
+
+    /**
+     * The single "website blocking is off" predicate, shared by the Rules list row and the rule
+     * editor. STOPPED with consent is deliberately null: every [ensure] boundary (app resume,
+     * rules load, save) starts it, so warning there would flash a false alarm on a healthy
+     * start path. DEGRADED is a live tunnel — the S9.4 engine banner owns that state.
+     */
+    fun websiteEngineBlocker(consented: Boolean, state: VpnEngineState): WebsiteEngineBlocker? = when {
+        !consented -> WebsiteEngineBlocker.NEEDS_CONSENT
+        state == VpnEngineState.FAILED || state == VpnEngineState.REVOKED -> WebsiteEngineBlocker.DOWN
+        else -> null
+    }
+
+    /**
      * The whole policy, pure: start when there is something to enforce (at least one live
      * website rule — block-only or limited, the tunnel serves both) and consent is on file;
      * stop when nothing is left to enforce. REVOKED is a startable state: revoke clears the

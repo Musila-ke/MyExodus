@@ -51,6 +51,8 @@ import java.time.format.FormatStyle
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 private const val PAGE_SIZE = 50
@@ -88,13 +90,21 @@ private fun HistoryList(
     var offset by remember { mutableIntStateOf(0) }
     var exhausted by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
+    // Finding #16 (2026-10-16): the pager reads `offset`, fetches, then appends — two taps
+    // inside one fetch window both read the same offset and both append, duplicating rows and
+    // advancing past records never shown. The button shows no progress, so the second tap is
+    // what a real user does. Serialized: the waiting tap then loads the *next* page, which is
+    // what a double-tap on "Load more" asks for.
+    val loadLock = remember { Mutex() }
 
-    suspend fun loadMore() = withContext(Dispatchers.IO) {
-        val page = sessions.page(PAGE_SIZE, offset)
-        rows = rows + page
-        offset += page.size
-        exhausted = page.size < PAGE_SIZE
-        loaded = true
+    suspend fun loadMore() = loadLock.withLock {
+        withContext(Dispatchers.IO) {
+            val page = sessions.page(PAGE_SIZE, offset)
+            rows = rows + page
+            offset += page.size
+            exhausted = page.size < PAGE_SIZE
+            loaded = true
+        }
     }
 
     LaunchedEffect(Unit) { loadMore() }

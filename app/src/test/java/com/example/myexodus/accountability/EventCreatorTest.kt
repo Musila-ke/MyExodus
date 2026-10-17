@@ -180,8 +180,11 @@ class EventCreatorTest {
     }
 
     // Note: a same-millisecond double-create collapses to Duplicate via the chain store
-    // (covered by ChainStateStoreTest); the retry-then-transmit path for deletion requests
-    // is covered in BilateralDeletionTest.duplicateDeletionRequest_stillTransmits.
+    // (covered by ChainStateStoreTest); under the current deletion protocol the delivery
+    // retry rides the journal — see BilateralDeletionTest's
+    // undeliveredRequest_journalBytesSurviveForLaterRedelivery and
+    // reEnteringInitiate_continuesWithoutSecondRequest (the 79141a0 rewrite replaced the
+    // older duplicateDeletionRequest_stillTransmits this note used to cite).
 
     private fun signing(): Signature = Signature.getInstance("SHA256withECDSA").apply {
         initSign(mySigning.private)

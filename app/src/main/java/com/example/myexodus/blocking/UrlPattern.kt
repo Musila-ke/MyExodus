@@ -11,10 +11,13 @@ import java.util.Locale
  *
  * Canonicalization rules applied by [parseStructure] (shared by pattern and candidate):
  * host lowercased; punycode/IDN decoded to Unicode AND raw ASCII form both retained and
- * matched; default ports (80/443) stripped, an explicit non-default port becomes part of the
- * host component; userinfo (`user@`) stripped entirely; path retained only when the rule
- * explicitly includes a non-root path prefix; `http`/`https` equivalent unless the rule
- * specifies a scheme; `blob:`, `data:`, `javascript:` never canonicalized (always allowed).
+ * matched; default ports (80/443) stripped — including on scheme-less text, where the port
+ * cannot distinguish anything the omnibox shows (it elides default ports), so a rule typed
+ * as `example.com:80` must canon to what the address bar reads back; an explicit scheme keeps
+ * a port that is non-default for it; userinfo (`user@`) stripped entirely; path retained only
+ * when the rule explicitly includes a non-root path prefix; `http`/`https` equivalent unless
+ * the rule specifies a scheme; `blob:`, `data:`, `javascript:` never canonicalized (always
+ * allowed).
  *
  * Matching (see [UrlPattern.matches]): registrable-domain suffix with a dot boundary —
  * `example.com` matches `sub.example.com` but never `example.com.evil.com`. Linear scan over
@@ -133,10 +136,13 @@ data class UrlPattern(
             val hostLower = host.lowercase(Locale.ROOT)
             val ascii = runCatching { IDN.toASCII(hostLower) }.getOrDefault(hostLower)
             val unicode = runCatching { IDN.toUnicode(ascii) }.getOrDefault(hostLower)
+            // Default ports are elided by the omnibox regardless of scheme, so scheme-less
+            // 80/443 must canon away too — a rule typed as "example.com:80" that kept port 80
+            // could never match the address-bar text the scanner reads back ("example.com").
             val normalizedPort = when {
                 port == null -> null
-                explicitScheme == "http" && port == 80 -> null
-                explicitScheme == "https" && port == 443 -> null
+                port == 80 && explicitScheme != "https" -> null
+                port == 443 && explicitScheme != "http" -> null
                 else -> port
             }
             val path = pathRaw?.substringBefore('?')?.substringBefore('#')

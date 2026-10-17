@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.res.Resources
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.R
+import com.example.myexodus.widget.WidgetActionViewModel.RelapseOutcome
 import com.example.myexodus.widget.WidgetActionViewModel.UrgeOutcome
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -51,13 +52,52 @@ class WidgetActionStateTest {
     }
 
     @Test
+    fun relapseCopy_coversTheWholeDisclosureMatrix() {
+        // Interactive states owe no message: the hint below the ring is the copy then.
+        RelapseOutcome.entries.forEach { outcome ->
+            listOf(true, false).forEach { discreet ->
+                if (outcome == RelapseOutcome.None || outcome == RelapseOutcome.InFlight) {
+                    assertNull(relapseOutcomeRes(outcome, discreet))
+                } else {
+                    assertTrue(
+                        "$outcome (discreet=$discreet) has no copy",
+                        relapseOutcomeRes(outcome, discreet) != null,
+                    )
+                }
+            }
+        }
+        // The states with a disclosure pair, pinned exactly so a rewire is a test failure.
+        assertEquals(R.string.widget_relapse_logged_discreet, relapseOutcomeRes(RelapseOutcome.Logged, true))
+        assertEquals(R.string.widget_relapse_logged, relapseOutcomeRes(RelapseOutcome.Logged, false))
+        assertEquals(R.string.widget_relapse_gone_discreet, relapseOutcomeRes(RelapseOutcome.Gone, true))
+        assertEquals(R.string.widget_relapse_gone, relapseOutcomeRes(RelapseOutcome.Gone, false))
+        assertEquals(R.string.widget_relapse_failed_discreet, relapseOutcomeRes(RelapseOutcome.Failed, true))
+        assertEquals(R.string.widget_relapse_failed, relapseOutcomeRes(RelapseOutcome.Failed, false))
+        // Vocabulary-free, shared across modes.
+        listOf(true, false).forEach {
+            assertEquals(
+                R.string.widget_relapse_already_logged,
+                relapseOutcomeRes(RelapseOutcome.AlreadyLogged, it),
+            )
+        }
+    }
+
+    @Test
     fun discreetCopy_neverCarriesRecoveryVocabulary() {
-        // The outcome is not the only surface a hold opens: the titles/bodies are the same
-        // disclosure contract, and every discreet string must hold it.
+        // The outcome is not the only surface a hold opens: the titles/bodies, content
+        // descriptions and the reset pair are the same disclosure contract, and every discreet
+        // string must hold it.
         val discreetStrings = listOf(
             R.string.widget_urge_saved_discreet,
             R.string.widget_hold_urge_title_discreet,
             R.string.widget_hold_urge_body_discreet,
+            R.string.widget_hold_reset_title,
+            R.string.widget_hold_reset_body,
+            R.string.widget_relapse_logged_discreet,
+            R.string.widget_relapse_gone_discreet,
+            R.string.widget_relapse_failed_discreet,
+            R.string.widget_action_urge_discreet,
+            R.string.widget_action_reset,
         )
         discreetStrings.forEach { res ->
             val text = resources.getString(res).lowercase()
@@ -90,12 +130,48 @@ class WidgetActionStateTest {
     }
 
     @Test
-    fun holdRing_isArmedForExactlyTheIdleState() {
+    fun urgeHoldRing_isArmedForExactlyTheIdleState() {
         // InFlight is a write in progress; Saved is terminal. Only the armed idle state accepts
         // a gesture.
         assertEquals(
             setOf(UrgeOutcome.None),
             UrgeOutcome.entries.filter { urgeHoldArmed(it) }.toSet(),
+        )
+    }
+
+    @Test
+    fun relapseOnly_theSuccessStatesAutoFinish() {
+        assertTrue(relapseAutoFinishes(RelapseOutcome.Logged))
+        assertTrue(relapseAutoFinishes(RelapseOutcome.AlreadyLogged))
+        // Terminal problems stay open: their copy must be read before the surface leaves.
+        assertFalse(relapseAutoFinishes(RelapseOutcome.Gone))
+        assertFalse(relapseAutoFinishes(RelapseOutcome.Failed))
+        assertFalse(relapseAutoFinishes(RelapseOutcome.InFlight))
+        assertFalse(relapseAutoFinishes(RelapseOutcome.None))
+    }
+
+    @Test
+    fun relapseEveryAutoFinishingState_carriesItsCopy() {
+        // A state that closes the surface without a message would self-dismiss silently.
+        RelapseOutcome.entries.forEach { outcome ->
+            if (relapseAutoFinishes(outcome)) {
+                listOf(true, false).forEach { discreet ->
+                    assertTrue(
+                        "$outcome (discreet=$discreet) auto-finishes but has no copy",
+                        relapseOutcomeRes(outcome, discreet) != null,
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
+    fun relapseHoldRing_isArmedForExactlyTheInteractiveOutcomes() {
+        // Failed stays armed: the write never happened and re-holding is the retry — the state
+        // shipped with a disabled ring there once, a dead end the surface's own hint pointed at.
+        assertEquals(
+            setOf(RelapseOutcome.None, RelapseOutcome.Failed),
+            RelapseOutcome.entries.filter { relapseHoldArmed(it) }.toSet(),
         )
     }
 }

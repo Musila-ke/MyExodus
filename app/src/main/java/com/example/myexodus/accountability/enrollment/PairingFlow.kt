@@ -148,7 +148,15 @@ class PairingFlow(
      * on timeout or a failed verification (in which case the token is deleted).
      */
     suspend fun awaitPartner(token: PairingToken, timeoutMillis: Long): InitiatorAwait? {
-        val response = exchange.pollTokenResponse(token, timeoutMillis) ?: return null
+        val response = exchange.pollTokenResponse(token, timeoutMillis)
+        if (response == null) {
+            // Timeout ends the attempt: the token is dead server-side (its TTL lapses, so it
+            // is deliberately not deleted), and the screen drops its token reference — no
+            // back-out or retry can reach cancel from here, so the key must go now
+            // (§19.5 / ADR #106).
+            discardAttemptKey(token.sessionId)
+            return null
+        }
         val transcript = transcriptBytes(token.sessionId, response.partnerPayload.agreementPublicKey)
         val verification = enrollmentFlow.verifyPartnerMaterial(
             token.sessionId,
@@ -198,7 +206,15 @@ class PairingFlow(
     ): Outcome {
         // Any terminal outcome that is not Paired means this attempt is over: its per-pair
         // key would never be reachable from an enrollment again (§19.5 / ADR #106).
-        val outcome = submitInitiatorSignatureInternal(await, token, myUid, signature)
+        val outcome = try {
+            submitInitiatorSignatureInternal(await, token, myUid, signature)
+        } catch (t: Throwable) {
+            // A throw (e.g. a transport failure inside the activation wait) is terminal too,
+            // and the screen clears its token reference on failure — cancel is unreachable
+            // from there, so this catch is the discard's only remaining chance.
+            discardAttemptKey(await.sessionId)
+            throw t
+        }
         if (outcome !is Outcome.Paired) discardAttemptKey(await.sessionId)
         return outcome
     }
@@ -438,7 +454,14 @@ class PairingFlow(
         signature: Signature,
         myLabel: String? = null,
     ): Outcome {
-        val outcome = finishJoinInternal(preparation, myUid, signature, myLabel)
+        val outcome = try {
+            finishJoinInternal(preparation, myUid, signature, myLabel)
+        } catch (t: Throwable) {
+            // Same as the initiator half: a throw is terminal and bypasses every other
+            // discard path (§19.5 / ADR #106).
+            discardAttemptKey(preparation.token.sessionId)
+            throw t
+        }
         if (outcome !is Outcome.Paired) discardAttemptKey(preparation.token.sessionId)
         return outcome
     }
@@ -616,7 +639,13 @@ class PairingFlow(
                 myAgreementKeyAlias = aliasOf(sessionId),
             ),
         )
-        secretsRepository.storePairingKey(enrollmentFlow.derivePairingKey(cek))
+        // Post-durable like the snapshot below: the enrollment row and agreement key are already
+        // committed, and the vault value is derivable from them (HKDF of the CEK), so a vault
+        // write failure (disk-full class) is logged and swallowed — before this guard it threw
+        // out of finalizePairing and the ceremony rendered the connectivity failure copy over a
+        // successfully paired device (finding #12, 2026-10-16).
+        runCatching { secretsRepository.storePairingKey(enrollmentFlow.derivePairingKey(cek)) }
+            .onFailure { Log.w(TAG, "pairing-key vault write failed for $durablePairId", it) }
         // Post-durable: the enrollment and key are already committed, so a snapshot failure is
         // logged and swallowed — the pairing outcome must reflect the pairing, not the extra.
         runCatching { onEnrolled(durablePairId) }

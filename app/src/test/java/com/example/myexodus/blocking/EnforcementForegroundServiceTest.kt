@@ -93,6 +93,36 @@ class EnforcementForegroundServiceTest {
         assertNull(EnforcementForegroundService.currentForegroundAfterPoll(null, null))
     }
 
+    // --- blocker launch latch (finding #46: a refused background launch must not latch forever) ---
+
+    @Test
+    fun launch_dueWithNoLatchOrADifferentTarget() {
+        assertTrue(EnforcementForegroundService.blockLaunchDue(null, APP, 0L, 1_000L))
+        assertTrue(EnforcementForegroundService.blockLaunchDue(OTHER, APP, 1_000L, 1_001L))
+    }
+
+    @Test
+    fun launch_suppressedWhileThatTargetsLaunchMayStillBeInFlight() {
+        assertFalse(
+            EnforcementForegroundService.blockLaunchDue(
+                APP, APP, 1_000L,
+                1_000L + EnforcementForegroundService.BLOCK_LAUNCH_GRACE_MS - 1,
+            ),
+        )
+    }
+
+    @Test
+    fun launch_retriedOnceTheGraceExpires() {
+        // The refused launch never reaches BlockerActivity.onDestroy; without the retry the
+        // latch outlives every recovery (grant of the overlay permission, user re-entry).
+        assertTrue(
+            EnforcementForegroundService.blockLaunchDue(
+                APP, APP, 1_000L,
+                1_000L + EnforcementForegroundService.BLOCK_LAUNCH_GRACE_MS,
+            ),
+        )
+    }
+
     // --- platform-foreground oracle for Path A's foreign-close confirmation (ADR #107) ---
 
     @Test

@@ -24,8 +24,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * §8 Step 8 execution leg — stock-Android proof. The XOS device runs no WorkManager jobs at
- * all (ADR #27 / task #22), so the maintenance job's real execution is verified here: the
+ * §8 Step 8 execution leg. WM dispatch cannot be depended on to fire this job on schedule —
+ * XOS specifically (ADR #27 as amended 2026-10-01: dispatch observed, not a guarantee, and no
+ * OEM build guarantees it) — so the maintenance job's real execution is verified here: the
  * periodic worker dispatched by the production WorkManager, and its stale-row rollover
  * (UsageAccountingEngine.rolloverStaleDays). The production pin is next 00:05
  * (dumpsys-verified separately); a production
@@ -33,8 +34,9 @@ import org.junit.runner.RunWith
  * one-second-past [PeriodicWorkRequestBuilder.setNextScheduleTimeOverride] — AFTER
  * cancelling the existing spec: WM 2.11 honours a past-time override only while the work
  * has never run (periodCount == 0), clamping it to lastEnqueue + interval otherwise, and
- * UPDATE on a CANCELLED spec deletes and re-enqueues it fresh. It restores the production
- * enqueue in a finally-style tail.
+ * UPDATE on a CANCELLED spec deletes and re-enqueues it fresh. The production pin and the
+ * test row are restored in a finally, so a failed run never leaves the device on the test
+ * spec (finding #24, 2026-10-16 — the restore used to be a happy-path tail).
  */
 @RunWith(AndroidJUnit4::class)
 class DailyMaintenanceWorkerInstrumentedTest {
@@ -93,27 +95,30 @@ class DailyMaintenanceWorkerInstrumentedTest {
             DAILY_MAINTENANCE_WORK_NAME, ExistingPeriodicWorkPolicy.UPDATE, dueNow,
         )
 
-        // Real dispatch: WorkManager → scheduler → the @HiltWorker doWork() body.
-        val today = LocalDate.now().toString()
-        val deadline = System.currentTimeMillis() + 30_000L
-        var rolled: DailyUsageTracker? = null
-        while (System.currentTimeMillis() < deadline) {
-            val row = trackerDao.findByPackage(profile.userId, pkg)
-            if (row?.localDateAnchor == today) { rolled = row; break }
-            delay(500)
+        try {
+            // Real dispatch: WorkManager → scheduler → the @HiltWorker doWork() body.
+            val today = LocalDate.now().toString()
+            val deadline = System.currentTimeMillis() + 30_000L
+            var rolled: DailyUsageTracker? = null
+            while (System.currentTimeMillis() < deadline) {
+                val row = trackerDao.findByPackage(profile.userId, pkg)
+                if (row?.localDateAnchor == today) { rolled = row; break }
+                delay(500)
+            }
+            val row = rolled ?: error("maintenance job did not roll the stale row within 30s")
+
+            assertEquals(0L, row.msUsedToday)
+            assertEquals(WarningState.NOT_DUE, row.warning1State)
+            assertEquals(WarningState.NOT_DUE, row.warning2State)
+            assertFalse(row.blockedToday)
+        } finally {
+            // Restore the production state even on failure: drop the test spec, re-pin next
+            // 00:05, and remove the test row (looked up — `rolled` may be null on timeout).
+            workManager.cancelUniqueWork(DAILY_MAINTENANCE_WORK_NAME)
+            awaitCancelled(workManager)
+            trackerDao.findByPackage(profile.userId, pkg)?.let { trackerDao.delete(it) }
+            enqueueDailyMaintenance(context)
         }
-        val row = rolled ?: error("maintenance job did not roll the stale row within 30s")
-
-        assertEquals(0L, row.msUsedToday)
-        assertEquals(WarningState.NOT_DUE, row.warning1State)
-        assertEquals(WarningState.NOT_DUE, row.warning2State)
-        assertFalse(row.blockedToday)
-
-        // Restore the production state: drop the test spec, then re-pin next 00:05.
-        workManager.cancelUniqueWork(DAILY_MAINTENANCE_WORK_NAME)
-        awaitCancelled(workManager)
-        trackerDao.delete(row)
-        enqueueDailyMaintenance(context)
     }
 
     private suspend fun awaitCancelled(workManager: WorkManager) {

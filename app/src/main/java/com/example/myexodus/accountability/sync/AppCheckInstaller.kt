@@ -66,7 +66,9 @@ object AppCheckInstaller {
         FirebaseAppCheck.getInstance().getAppCheckToken(false).await() != null
     }
         .onFailure { Log.w(TAG, "App Check token fetch failed — not an identity signal", it) }
-        .isSuccess
+        // getOrDefault, not isSuccess: the block's value is the real answer (a null token in
+        // a "successful" task must still read as no), while a thrown fetch reads as no too.
+        .getOrDefault(false)
 
     private const val TAG = "AppCheckInstaller"
 }

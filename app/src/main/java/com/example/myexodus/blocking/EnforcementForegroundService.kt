@@ -130,8 +130,10 @@ class EnforcementForegroundService : Service() {
     @Volatile private var lastObservedForegroundPackage: String? = null
 
     /** Previous tick's view of [ProtectionStatus.requiresExplicitReEnable]; its true→false edge
-     *  is the pause release the credit-edge audit fires on (ADR #160). Ticks run strictly one
-     *  at a time through [tickWithTimeout]'s Future, so a plain field suffices. */
+     *  is the pause release the credit-edge audit fires on (ADR #160). A timed-out tick body
+     *  keeps running on its abandoned thread, so ticks are not strictly serialized — but the
+     *  flag read and its write are adjacent with no binder call between, and a redundantly
+     *  fired audit is idempotent (its overlap check), so a plain field suffices. */
     private var lastTickSawReenableRequired = false
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -645,9 +647,16 @@ class EnforcementForegroundService : Service() {
                 val outcome = scanner.evaluate(latest, packageName, publisher.snapshot, end)
                 feedUsage(latest, scheduleBlocked = outcome is AppBlockDecision.Launch)
                 maybeAccountUsage()
-                if (outcome is AppBlockDecision.Launch && activeBlockTarget != outcome.packageName) {
+                if (outcome is AppBlockDecision.Launch && blockLaunchDue(
+                        activeBlockTarget,
+                        outcome.packageName,
+                        activeBlockTargetSinceElapsedMs,
+                        SystemClock.elapsedRealtime(),
+                    )
+                ) {
                     Log.i(TAG, "detected ${outcome.packageName} — launching blocker")
                     activeBlockTarget = outcome.packageName
+                    activeBlockTargetSinceElapsedMs = SystemClock.elapsedRealtime()
                     runCatching { launchBlocker(outcome) }
                     // §6 attempt log: recorded on the detection path (the durable local
                     // record; partner delivery is the PartnerSync worker's reconcile).
@@ -886,7 +895,11 @@ class EnforcementForegroundService : Service() {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 usageOverlay.hideAll(usageStateMachine.currentGeneration)
-                closeUsageSession()
+                // Bank the final delta only while Path B still holds accounting authority; a
+                // session surviving an authority flip (the ≤1-poll reset gap) would otherwise
+                // credit the flip tail Path A now owns — drop-not-double, the same rule every
+                // handoff in both paths follows.
+                if (pathBHoldsAuthority()) closeUsageSession() else usageSessions.reset()
             }
         }
         val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
@@ -914,6 +927,7 @@ class EnforcementForegroundService : Service() {
         notePlatformForeground(null, SystemClock.elapsedRealtime())
         usageOverlay.detachAll()
         activeBlockTarget = null
+        activeBlockTargetSinceElapsedMs = 0L
         // §8 Step 6: the service is no longer running, so it can no longer hold authority.
         // (Idempotent — the master switch's stop path and a system kill land here alike.)
         runCatching { statusMonitor.refresh() }
@@ -1005,9 +1019,30 @@ class EnforcementForegroundService : Service() {
         }
 
         /** Package the blocker is currently covering; null when none. Cleared in
-         *  BlockerActivity.onDestroy; the poll skips relaunching while it is set. */
+         *  BlockerActivity.onDestroy; the poll suppresses a relaunch only within
+         *  [BLOCK_LAUNCH_GRACE_MS] of the attempt (review finding #46). */
         @Volatile
         var activeBlockTarget: String? = null
+
+        /** Elapsed-realtime stamp of the last [activeBlockTarget] write. */
+        @Volatile
+        var activeBlockTargetSinceElapsedMs: Long = 0L
+
+        /** A denied background activity start never reaches BlockerActivity.onDestroy, so a
+         *  latch with no age bound would silently disable the block for the rest of the
+         *  process (no overlay grant → every launch refused). After the grace the same target
+         *  is retried; once the activity is up, its own RESUMED is the latest usage event and
+         *  the scanner no longer asks for a launch. Covers the emulator-measured ~4 s display
+         *  latency with margin. Pure for direct testing. */
+        const val BLOCK_LAUNCH_GRACE_MS = 10_000L
+
+        fun blockLaunchDue(
+            latchedPackage: String?,
+            targetPackage: String,
+            latchedAtElapsedMs: Long,
+            nowElapsedMs: Long,
+        ): Boolean = latchedPackage != targetPackage ||
+            nowElapsedMs - latchedAtElapsedMs >= BLOCK_LAUNCH_GRACE_MS
 
         fun start(context: Context) {
             val intent = Intent(context, EnforcementForegroundService::class.java)

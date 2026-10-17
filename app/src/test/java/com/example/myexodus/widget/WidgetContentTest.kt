@@ -1,14 +1,37 @@
 package com.example.myexodus.widget
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
+import com.example.myexodus.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * The widget view's arithmetic. The milestone line names a future day, so an off-by-one here is a
  * wrong claim rendered on the user's home screen, not a cosmetic slip.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class WidgetContentTest {
+
+    private val context: Context = ApplicationProvider.getApplicationContext()
+
+    @Test
+    fun milestoneCopy_namesTheRungAsAMark_andTheDistanceSeparately() {
+        // The rung is the completed-day threshold (7 days free), never the ordinal display day,
+        // which is one higher (#128). Two bare day-quantities side by side read as a
+        // contradiction (owner-flagged 2026-10-17), so the form is "distance to mark".
+        assertEquals("6d to 7-day mark", milestoneText(context, 7, 6))
+        assertEquals("6 days to a 7-day mark", milestoneSentence(context, 7, 6))
+        assertEquals(
+            "Next milestone: 7-day mark — 6 days to go.",
+            context.getString(R.string.home_streak_caption_next, 7, 6),
+        )
+    }
 
     @Test
     fun nextMilestone_isTheFirstRungAhead() {

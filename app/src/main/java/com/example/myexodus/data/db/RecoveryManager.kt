@@ -28,6 +28,21 @@ class RecoveryManager(
     /** Plaintext backup kept until the encrypted store has opened on a later cold start. */
     val rulesDbBackupFile: File get() = File(rulesDbFile.path + CONVERSION_BACKUP_SUFFIX)
 
+    /**
+     * Plan §8.5's pre-unlock cache lives as a second copy of the CE snapshot cache under
+     * device-protected storage. The reset contract ("destroys … the rules snapshot cache")
+     * covers both, or a user-confirmed wipe leaves the restricted-package list on disk and
+     * the next locked boot enforces pre-reset rules (finding #11, 2026-10-16 — §8.5's
+     * reconciliation only overwrites it once the app authoritatively publishes again).
+     * Same two-step idiom as [RulesSnapshotPublisher]: there is no single-call getter.
+     */
+    private val deviceProtectedSnapshotCacheFile: File
+        get() {
+            val de = if (appContext.isDeviceProtectedStorage) appContext
+                     else appContext.createDeviceProtectedStorageContext()
+            return File(de.filesDir, SNAPSHOT_CACHE_NAME)
+        }
+
     /** Room-built encrypted database while the conversion is in flight. */
     val rulesDbTempFile: File get() = File(rulesDbFile.path + CONVERSION_TEMP_SUFFIX)
 
@@ -63,6 +78,7 @@ class RecoveryManager(
         }
         cleanupConversionArtifacts()
         snapshotCacheFile.delete()
+        deviceProtectedSnapshotCacheFile.delete()
         legacyKeyManager.resetKeyMaterial()
         activityLogKeyManager.resetKeyMaterial()
         rulesStoreKeyManager.resetKeyMaterial()

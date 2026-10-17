@@ -36,6 +36,15 @@ class MailboxMessageHandlerTest {
         pairId: String? = "pair-1",
     ) = MailboxDocument(messageId, senderId, payload, 1_700_000_000_000L, pairId)
 
+    /** One [MailboxMessageHandler] `onAppended` invocation, field-for-field. */
+    private data class AppendedHook(
+        val pairId: String,
+        val senderKeyId: String,
+        val sequence: Long,
+        val payload: EventPayload,
+        val serverTsEpochMillis: Long?,
+    )
+
     private class Fake {
         var alreadyProcessed = false
         var outcome: MailboxEventProcessor.EnvelopeResult =
@@ -43,6 +52,7 @@ class MailboxMessageHandlerTest {
         var appendResult: ChainStateStore.AppendResult = ChainStateStore.AppendResult.Appended
         var ackError: Exception? = null
         var notifyError: Exception? = null
+        var onAppendedError: Exception? = null
         var tamperRepairing = false
         var deletionShredded = true
 
@@ -54,6 +64,7 @@ class MailboxMessageHandlerTest {
         val notifyPayloads = mutableListOf<EventPayload>()
         val repairResponses = mutableListOf<Triple<String, Long, ByteArray>>()
         val deletionRequests = mutableListOf<Triple<String, String, Long?>>()
+        val appendedHooks = mutableListOf<AppendedHook>()
         var tamperChecks = 0
 
         val handler = MailboxMessageHandler(
@@ -80,6 +91,10 @@ class MailboxMessageHandlerTest {
             },
             respondToRequest = { pairId, sequence, hash -> repairResponses += Triple(pairId, sequence, hash) },
             flagTamperIfRepairing = { tamperChecks++; tamperRepairing },
+            onAppended = { pairId, senderKeyId, sequence, payload, serverTs ->
+                onAppendedError?.let { throw it }
+                appendedHooks += AppendedHook(pairId, senderKeyId, sequence, payload, serverTs)
+            },
             now = { 42L },
         )
 
@@ -254,6 +269,79 @@ class MailboxMessageHandlerTest {
         val rejected = Fake().apply { appendResult = ChainStateStore.AppendResult.Rejected }
         assertEquals(MailboxMessageHandler.Kind.REJECTED, on(rejected, doc()).kind)
         assertEquals(emptyList<Pair<String, String>>(), rejected.acks)
+    }
+
+    @Test
+    fun appended_firesOnAppended_withTheDocumentMetadata() {
+        val fake = Fake()
+
+        on(fake, doc())
+
+        // AD-16 seam: the hook carries the decoded payload plus the mailbox document's server
+        // timestamp — the DI consumer anchors approval expiry on exactly these five fields.
+        assertEquals(
+            listOf(
+                AppendedHook(
+                    pairId = "pair-1",
+                    senderKeyId = "partner-sender",
+                    sequence = 1L,
+                    payload = EventPayload(text = "blocked:x"),
+                    serverTsEpochMillis = 1_700_000_000_000L,
+                ),
+            ),
+            fake.appendedHooks,
+        )
+    }
+
+    @Test
+    fun onlyAppended_firesOnAppended() {
+        listOf(
+            ChainStateStore.AppendResult.Duplicate,
+            ChainStateStore.AppendResult.Gap,
+            ChainStateStore.AppendResult.Fork,
+            ChainStateStore.AppendResult.Rejected,
+        ).forEach { outcome ->
+            val fake = Fake().apply { appendResult = outcome }
+            on(fake, doc())
+            assertEquals("$outcome must not fire the hook", emptyList<AppendedHook>(), fake.appendedHooks)
+        }
+
+        val deletion = Fake().apply {
+            outcome = MailboxEventProcessor.EnvelopeResult.Valid(
+                Fake.envelope(),
+                EventPayload(type = EventPayload.TYPE_DELETION_REQUEST, text = ""),
+            )
+        }
+        on(deletion, doc())
+        assertEquals("the deletion path never chains, so it never hooks", emptyList<AppendedHook>(), deletion.appendedHooks)
+
+        // sync_request IS an append — the hook fires (the DI consumer classifies it to
+        // NotActivity); only the generic notification is suppressed.
+        val sync = Fake().apply {
+            outcome = MailboxEventProcessor.EnvelopeResult.Valid(
+                Fake.envelope(),
+                EventPayload(
+                    type = EventPayload.TYPE_SYNC_REQUEST,
+                    text = "sync_request",
+                    expectedPreviousSequence = 1,
+                    expectedPreviousHash = ByteArray(32),
+                ),
+            )
+        }
+        on(sync, doc())
+        assertEquals(1, sync.appendedHooks.size)
+        assertEquals(EventPayload.TYPE_SYNC_REQUEST, sync.appendedHooks.single().payload.type)
+    }
+
+    @Test
+    fun throwingOnAppended_neverEscapes_andTheRestOfThePipelineStillRuns() {
+        val fake = Fake().apply { onAppendedError = IllegalStateException("hook blew up") }
+
+        val result = on(fake, doc())
+
+        assertEquals(MailboxMessageHandler.Kind.APPENDED, result.kind)
+        assertEquals("the ack preceded the hook", listOf("uid-me" to "m1"), fake.acks)
+        assertEquals("notify still ran after the hook failure", listOf("pair-1" to EventPayload.TYPE_ACTIVITY), fake.notified)
     }
 
     @Test

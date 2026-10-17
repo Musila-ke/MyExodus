@@ -78,6 +78,21 @@ class LatencyProfilerTest {
     }
 
     @Test
+    fun everyPendingDecision_isConsumedByItsSubmission() {
+        // Finding #45: recordDecision stores an entry until recordSubmission removes it. The
+        // service must therefore record only decisions that will actually submit — this pins
+        // the consume half of that contract, and that stray submissions add nothing.
+        val profiler = LatencyProfiler(Application(), sampleDenominator = 1)
+        assertEquals(0, profiler.pendingDecisionCount())
+        profiler.recordDecision(generation = 3L, detectionTimeNanos = 0L, decisionTimeNanos = 1_000_000L)
+        assertEquals(1, profiler.pendingDecisionCount())
+        profiler.recordSubmission(generation = 3L, displayId = 0, showTimeNanos = 2_000_000L)
+        assertEquals(0, profiler.pendingDecisionCount())
+        profiler.recordSubmission(generation = 4L, displayId = 0, showTimeNanos = 3_000_000L)
+        assertEquals(0, profiler.pendingDecisionCount())
+    }
+
+    @Test
     fun untrackedSubmission_isANoOp() {
         val profiler = LatencyProfiler(Application(), sampleDenominator = 100)
         profiler.recordDecision(

@@ -111,6 +111,10 @@ abstract class EnhancedModeDeviceSuite {
     // --- database seeding -------------------------------------------------------------
 
     protected fun resetData() {
+        // Wipes the LIVE store on whatever device this runs on — intended on the physical
+        // device (the suite must seed from a clean store), cost-stated in ADR #122 honest
+        // limit (b). Never run this suite on a handset whose rules/ledger/pairing-era data
+        // matters without the owner knowing; the throwaway-store change is a product call.
         val healthStore = DatabaseHealthStore()
         val recovery = RecoveryManager(
             context,

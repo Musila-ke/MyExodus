@@ -17,6 +17,50 @@ class EnvelopeTest {
         createdAtEpochMillis = 1_700_000_000_000L,
     )
 
+    private fun hex(b: ByteArray): String = b.joinToString("") { "%02x".format(it) }
+
+    /**
+     * §12 profile pin, the envelope's counterpart of EventPayloadTest's golden vectors: the
+     * unsigned envelope's canonical bytes and its domain-separated [eventHash] are the exact
+     * material every signature covers (EventCreator signs it; MailboxEventProcessor verifies
+     * partner events by recomputing it; ChainStateStore recomputes it for duplicate and
+     * gap-reconciliation checks). If petero-cbor's encoding profile or [ENVELOPE_DOMAIN] ever
+     * drifts, stored and in-flight envelopes stop re-verifying silently — so these are literal
+     * encodings captured from petero-cbor 4.5.6, pinned rather than computed.
+     */
+    @Test
+    fun goldenVector_unsignedEnvelope_byteStable() {
+        val fixed = UnsignedEnvelope(
+            senderKeyId = "ab".repeat(32),
+            epoch = 0,
+            sequence = 7,
+            previousEventHash = ByteArray(32) { it.toByte() },
+            nonce = ByteArray(12) { it.toByte() },
+            ciphertext = byteArrayOf(1, 2, 3, 4, 5),
+            createdAtEpochMillis = 1_700_000_000_000L,
+        )
+        assertEquals(
+            "a86163450102030405616500616b784061626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616e4c000102030405060708090a0b61705820000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f61730761741b0000018bcfe56800617601",
+            hex(fixed.canonicalBytes()),
+        )
+        assertEquals(
+            "41e86ddc4bf27d04648ece7303fea5e05ecb08c134864c2446fb3e4fd4c04cd2",
+            hex(eventHash(fixed)),
+        )
+
+        // keyEpoch > 0 (AD-12): the appended field sorts after every 2-byte key under RFC 8949
+        // length-first ordering — pinned so the extension bytes and their hash stay frozen too.
+        val rotated = fixed.copy(keyEpoch = 3)
+        assertEquals(
+            "a96163450102030405616500616b784061626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616e4c000102030405060708090a0b61705820000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f61730761741b0000018bcfe56800617601626b6503",
+            hex(rotated.canonicalBytes()),
+        )
+        assertEquals(
+            "b8938a45fdd0be184ee8826b22b7b0426252c55c4a591a389ec2b348c0197d4b",
+            hex(eventHash(rotated)),
+        )
+    }
+
     @Test
     fun canonicalBytes_areDeterministic() {
         val e = envelope()

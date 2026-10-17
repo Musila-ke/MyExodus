@@ -269,6 +269,40 @@ class PartnerActivityJournalTest {
         assertEquals("the message rides the sender's own snapshot (3 completed = Day 4)", 4, row.daysFree)
     }
 
+    /**
+     * §10.6 / Req 15 choke point (v16 comment: "a body the partner's phone would refuse to pin
+     * must never be sent"): the input domain — blank, whitespace-only, exact bound, over bound,
+     * and NFC folding before the length check — pinned with consent present so only the text
+     * bound can be the refusal.
+     */
+    @Test
+    fun motivationalMessage_textBound_isEnforcedAtTheJournalChokePoint() = runBlocking {
+        seedProfile()
+        seedHabit()
+        seedStreakConsent()
+
+        assertNull(PartnerActivityJournal.normalizeMessage(""))
+        assertNull(PartnerActivityJournal.normalizeMessage("   \n\t "))
+        val max = "x".repeat(EventPayload.MAX_ACTIVITY_TEXT_LENGTH)
+        assertEquals(max, PartnerActivityJournal.normalizeMessage("  $max  "))
+        assertNull(PartnerActivityJournal.normalizeMessage("x".repeat(EventPayload.MAX_ACTIVITY_TEXT_LENGTH + 1)))
+        assertEquals("NFC folds before the bound: e + combining accent = one char", "é", PartnerActivityJournal.normalizeMessage("  é  "))
+
+        assertFalse(
+            "a refused body emits nothing",
+            PartnerActivityJournal.emitForProfile(
+                store, PROFILE_ID, EventPayload.TYPE_MOTIVATIONAL_MESSAGE, NOW, text = "x".repeat(EventPayload.MAX_ACTIVITY_TEXT_LENGTH + 1),
+            ),
+        )
+        assertTrue(journalRows().isEmpty())
+        assertTrue(
+            PartnerActivityJournal.emitForProfile(
+                store, PROFILE_ID, EventPayload.TYPE_MOTIVATIONAL_MESSAGE, NOW, text = max,
+            ),
+        )
+        assertEquals(max, journalRows().single().text)
+    }
+
     // --- Addressing (#96, schema v14) ---------------------------------------------------------
 
     @Test

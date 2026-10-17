@@ -25,6 +25,7 @@ val Context.widgetSnapshotDataStore: DataStore<Preferences> by preferencesDataSt
 private val KEY_ENFORCEMENT = stringPreferencesKey("enforcement_state")
 private val KEY_STREAK_DAYS = intPreferencesKey("streak_days")
 private val KEY_HABIT_LABEL = stringPreferencesKey("habit_label")
+private val KEY_HABIT_ID = stringPreferencesKey("habit_id")
 private val KEY_DISCREET = booleanPreferencesKey("discreet_mode")
 private val KEY_EVAL_UTC = longPreferencesKey("eval_utc")
 private val KEY_EVAL_ELAPSED = longPreferencesKey("eval_elapsed")
@@ -62,6 +63,14 @@ data class ProtectionSnapshot(
      *  is the wrong track as far as the user can tell). Null = no habit / not known yet;
      *  absent in samples written before this field existed, which renders unlabelled. */
     val habitLabel: String?,
+    /** The identity behind [streakDays]/[habitLabel] (owner ruling 2026-10-17): the widget's
+     *  "Log a relapse" control must end exactly the streak track the widget displays, and the
+     *  label alone cannot bind a write (two habits may share a label, and a selection flipped in
+     *  the app would silently re-target the wrong track). The writer stamps the id at the same
+     *  read that produced the number, so the control can never disagree with the count above it.
+     *  Null = a sample from before this field existed, or no habit — the relapse control stays
+     *  hidden rather than binding a guessed track. */
+    val habitId: String?,
     /** When the streak fields above were last actually read from the store, and what the
      *  accumulator stood at then. Absent = never verified (or a sample from before this field
      *  existed), which the writer treats as "refresh now". The pair is what lets the day count
@@ -95,6 +104,9 @@ fun snapshotFrom(prefs: Preferences?): ProtectionSnapshot? {
         },
         streakDays = prefs[KEY_STREAK_DAYS],
         habitLabel = prefs[KEY_HABIT_LABEL],
+        // Absent (pre-v2 sample or no habit) = null: the relapse control hides until a real
+        // read stamps the id — never a fabricated binding.
+        habitId = prefs[KEY_HABIT_ID],
         // Absent accumulator = the sample predates the field (or nothing was verified):
         // the writer reads that as "verify now", so a partial record fails toward refresh.
         streakSample = prefs[KEY_STREAK_ELAPSED_MS]?.let { elapsedMs ->
@@ -119,6 +131,8 @@ fun MutablePreferences.putSnapshot(snapshot: ProtectionSnapshot) {
     if (streakDays == null) remove(KEY_STREAK_DAYS) else this[KEY_STREAK_DAYS] = streakDays
     val habitLabel = snapshot.habitLabel
     if (habitLabel == null) remove(KEY_HABIT_LABEL) else this[KEY_HABIT_LABEL] = habitLabel
+    val habitId = snapshot.habitId
+    if (habitId == null) remove(KEY_HABIT_ID) else this[KEY_HABIT_ID] = habitId
     val streakSample = snapshot.streakSample
     if (streakSample == null) {
         remove(KEY_STREAK_ELAPSED_MS)

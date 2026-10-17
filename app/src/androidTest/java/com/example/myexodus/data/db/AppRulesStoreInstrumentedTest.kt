@@ -15,8 +15,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Real-device suite for the plain rules store (Enhanced Mode spec §8 Step 1). Every test
- * starts from a clean slate via [RecoveryManager.resetAllData].
+ * On-device suite for the plain rules store (Enhanced Mode spec §8 Step 1). Emulator-only:
+ * clean-slate resets go through `resetAllDataEmulatorOnly`, the gated no-op-off-emulator
+ * wrapper (DeviceSafety.kt) — a raw [RecoveryManager.resetAllData] here would wipe the
+ * handset's production store.
  */
 @RunWith(AndroidJUnit4::class)
 class AppRulesStoreInstrumentedTest {

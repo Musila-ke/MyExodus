@@ -30,6 +30,8 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -70,6 +72,7 @@ import com.example.myexodus.blocking.usage.AccountingOutage
 import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.entity.RestrictionRule
+import com.example.myexodus.settings.HomeSettings
 import com.example.myexodus.streaks.HabitState
 import com.example.myexodus.ui.AppMark
 import com.example.myexodus.ui.RuleRowState
@@ -109,6 +112,8 @@ import java.time.ZoneId
 @Composable
 fun HomeScreen(
     store: AppRulesStore,
+    /** Owner request 2026-10-17: the "Your blocks" privacy toggle's persisted state. */
+    homeSettings: HomeSettings,
     monitor: EnhancedModeHealthMonitor,
     degradation: ProtectionDegradation?,
     authority: ProtectionAuthority?,
@@ -205,6 +210,9 @@ fun HomeScreen(
     val splashDays = habit?.let { splashMilestones(it) }?.map { it.milestoneDay }.orEmpty()
     // SOS §8.14 (V1 Req 35): paired + notifications off.
     val checkInsAtRisk = partnerNames.isNotEmpty() && !partnerNotificationsEnabled
+    // Owner request 2026-10-17: hidden across launches, because the whole point is that a
+    // glance at the phone does not disclose the blocked apps and sites.
+    var blocksHidden by remember { mutableStateOf(homeSettings.blocksHidden) }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -333,21 +341,46 @@ fun HomeScreen(
         }
         item(key = "blocks") {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    stringResource(R.string.home_blocks_section),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                BlocksCard(
-                    rules = rules,
-                    countsByTarget = countsByTarget,
-                    nowEpochMillis = nowMillis,
-                    // Same-instant coherence with the banner: when nothing can detect apps,
-                    // a schedule-derived "Blocked now" would contradict "blocks won't start".
-                    protectionPaused = authority == ProtectionAuthority.DEGRADED_NO_DETECTION ||
-                        degradation == ProtectionDegradation.DEGRADED_NO_DETECTION,
-                    onOpenRules = onOpenRules,
-                    onOpenRule = onOpenRule,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(R.string.home_blocks_section),
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(
+                        onClick = {
+                            blocksHidden = !blocksHidden
+                            homeSettings.blocksHidden = blocksHidden
+                        },
+                    ) {
+                        Icon(
+                            imageVector = if (blocksHidden) {
+                                Icons.Outlined.VisibilityOff
+                            } else {
+                                Icons.Outlined.Visibility
+                            },
+                            contentDescription = stringResource(
+                                if (blocksHidden) R.string.home_blocks_show else R.string.home_blocks_hide,
+                            ),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (blocksHidden) {
+                    HiddenBlocksCard()
+                } else {
+                    BlocksCard(
+                        rules = rules,
+                        countsByTarget = countsByTarget,
+                        nowEpochMillis = nowMillis,
+                        // Same-instant coherence with the banner: when nothing can detect apps,
+                        // a schedule-derived "Blocked now" would contradict "blocks won't start".
+                        protectionPaused = authority == ProtectionAuthority.DEGRADED_NO_DETECTION ||
+                            degradation == ProtectionDegradation.DEGRADED_NO_DETECTION,
+                        onOpenRules = onOpenRules,
+                        onOpenRule = onOpenRule,
+                    )
+                }
             }
         }
     }
@@ -476,11 +509,11 @@ private fun StreakHeroCard(
     // that's indistinguishable from "still loading" — never claim the habit is gone early.
     val loading = days == null && !streakResolved
     val caption = when {
-        loading -> "Reading your streak…"
-        days == null -> "No habit tracked yet. A streak starts counting the day you set one up."
+        loading -> stringResource(R.string.home_streak_caption_loading)
+        days == null -> stringResource(R.string.home_streak_caption_none)
         nextMilestoneDay != null && daysToNext != null ->
-            "Next milestone: Day $nextMilestoneDay — $daysToNext to go."
-        else -> "Milestone ladder complete — extraordinary."
+            stringResource(R.string.home_streak_caption_next, nextMilestoneDay, daysToNext)
+        else -> stringResource(R.string.home_streak_caption_complete)
     }
     Surface(
         color = MaterialTheme.colorScheme.primaryContainer,
@@ -526,7 +559,7 @@ private fun StreakHeroCard(
                         )
                         Spacer(Modifier.width(10.dp))
                         Text(
-                            if (days == 1) "day" else "days",
+                            pluralStringResource(R.plurals.home_streak_days_unit, days),
                             style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.padding(bottom = 10.dp),
                         )
@@ -651,6 +684,35 @@ private fun StatTile(
     }
 }
 
+/** The hidden state keeps the section's footprint and states why it is empty; the header's eye
+ *  is the way back. */
+@Composable
+private fun HiddenBlocksCard() {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.VisibilityOff,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                stringResource(R.string.home_blocks_hidden),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 @Composable
 private fun BlocksCard(
     rules: List<RestrictionRule>?,
@@ -736,8 +798,7 @@ private fun BlockRow(
         append(scheduleSummary(rule, res))
         if (attempts > 0) {
             append(" · ")
-            append(attempts)
-            append(if (attempts == 1) " attempt" else " attempts")
+            append(res.getQuantityString(R.plurals.home_block_row_attempts, attempts, attempts))
         }
     }
     Row(

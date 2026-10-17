@@ -99,6 +99,7 @@ import com.example.myexodus.data.db.DatabaseHealthStore
 import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.settings.biometricEnrollSettingsIntent
 import com.example.myexodus.settings.EnhancedModeSettings
+import com.example.myexodus.settings.HomeSettings
 import com.example.myexodus.settings.SetupStateStore
 import com.example.myexodus.settings.notificationSettingsIntent
 import com.example.myexodus.settings.StrictModeManager
@@ -225,6 +226,7 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var crashReporting: CrashReporting
     @Inject lateinit var setupStateStore: SetupStateStore
     @Inject lateinit var widgetSettings: WidgetSettings
+    @Inject lateinit var homeSettings: HomeSettings
     @Inject lateinit var partnerDashboardSource: PartnerDashboardSource
     // §19.4 item 4: the production pairing protocol behind the ceremony screen, and the §19.5
     // supported-user pick the dashboard and ceremony share.
@@ -545,6 +547,7 @@ class MainActivity : FragmentActivity() {
                         strictMode = strictMode,
                         settings = settings,
                         crashReporting = crashReporting,
+                        homeSettings = homeSettings,
                         widgetSettings = widgetSettings,
                         onWidgetSettingsChanged = widgetSnapshotWriter::publish,
                         degradation = degradation,

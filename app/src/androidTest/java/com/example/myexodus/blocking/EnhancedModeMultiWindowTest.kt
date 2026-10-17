@@ -42,10 +42,12 @@ class EnhancedModeMultiWindowTest : EnhancedModeDeviceSuite() {
         val vb = Rect().also { victimWindow!!.getBoundsInScreen(it) }
         val isFullscreen =
             vb.width() >= metrics.widthPixels - 50 && vb.height() >= metrics.heightPixels - 50
-        if (isFullscreen) {
-            Log.i(TAG, "split-screen not engaged — skipping (manual XOS split gesture required)")
-            return@runTest
-        }
+        // A real JUnit assumption, not a silent green (finding #25, 2026-10-16): a
+        // not-engaged split must report SKIPPED in the runner, never PASS without proof.
+        org.junit.Assume.assumeFalse(
+            "split-screen not engaged — manual XOS split gesture required",
+            isFullscreen,
+        )
 
         val overlayWindow = windows.firstOrNull {
             it.type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY
@@ -58,11 +60,23 @@ class EnhancedModeMultiWindowTest : EnhancedModeDeviceSuite() {
             "overlay $ob must cover the restricted pane $vb",
             ob.contains(vb.left + vb.width() / 2, vb.top + vb.height() / 2),
         )
-        // Allowed pane: with a 50/50 split the display center belongs to the other pane.
-        val cx = metrics.widthPixels / 2
-        val cy = metrics.heightPixels / 2
+        // Allowed pane: assert against the peer window's center when it is visible. The
+        // display center only equals a point inside the OTHER pane for a left/top-pane
+        // victim at exactly 50/50 (finding #25: Rect.contains is right/bottom-exclusive, so
+        // a right/bottom-pane victim made the display center land IN the victim's pane and
+        // false-failed); the peer's own center is robust to pane order and divider position.
+        val peer = windows.firstOrNull {
+            it !== victimWindow && it.type == AccessibilityWindowInfo.TYPE_APPLICATION
+        }
+        val peerBounds = peer?.let { w -> Rect().also { w.getBoundsInScreen(it) } }
+        val (cx, cy) = if (peerBounds != null) {
+            peerBounds.centerX() to peerBounds.centerY()
+        } else {
+            metrics.widthPixels / 2 to metrics.heightPixels / 2
+        }
         assertFalse(
-            "overlay $ob must not cover the allowed pane (display center $cx,$cy)",
+            "overlay $ob must not cover the allowed pane " +
+                "(point $cx,$cy; peer=${peerBounds ?: "none visible, asserted display center"})",
             ob.contains(cx, cy),
         )
         // Correct displayId.

@@ -69,9 +69,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * The widget's hold-to-confirm surface (widget v2.1, owner correction 2026-10-16): the widget's
- * icon controls open this translucent card, and both actions execute only through a full hold of
- * the ring — release early cancels, the ring filling executes.
+ * The widget's hold-to-confirm surface (widget v2.2, owner rulings 2026-10-15/16/17): the
+ * widget's icon controls open this translucent card, and every action — log a relapse, log an
+ * urge, reach out — executes only through a full hold of the ring. Release early cancels; the
+ * ring filling executes.
  *
  * Why an Activity: no launcher RemoteViews/Glance host delivers touch streams, so the growing
  * ring cannot live on the widget itself (ADR #159; javap-verified against glance-appwidget
@@ -92,6 +93,7 @@ class WidgetActionActivity : ComponentActivity() {
     private val viewModel: WidgetActionViewModel by viewModels()
 
     private var openTarget by mutableStateOf<String?>(null)
+    private var openHabitId by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -104,10 +106,11 @@ class WidgetActionActivity : ComponentActivity() {
                     // Re-opened as a different action (singleTop → onNewIntent): a fresh key
                     // restores the ring to its armed state instead of inheriting the last
                     // session's progress.
-                    key(target) {
+                    key(target, openHabitId) {
                         WidgetActionScreen(
                             viewModel = viewModel,
                             target = target,
+                            habitId = openHabitId,
                             onDismiss = { finish() },
                         )
                     }
@@ -122,20 +125,26 @@ class WidgetActionActivity : ComponentActivity() {
         viewModel.reset()
     }
 
-    /** False (and finish) for a malformed launch — an unknown target has no surface to render. */
+    /** False (and finish) for a malformed launch — a relapse control without a bound habitId has
+     *  no track to end, and an unknown target has no surface to render. */
     private fun parseTarget(intent: Intent): Boolean {
         val target = intent.getStringExtra(EXTRA_TARGET)
-        if (target != TARGET_URGE && target != TARGET_SOS) {
+        val habitId = intent.getStringExtra(EXTRA_HABIT_ID)
+        val known = target == TARGET_URGE || target == TARGET_RELAPSE || target == TARGET_SOS
+        if (!known || (target == TARGET_RELAPSE && habitId == null)) {
             finish()
             return false
         }
         openTarget = target
+        openHabitId = habitId
         return true
     }
 
     companion object {
         const val EXTRA_TARGET = "widget_action_target"
+        const val EXTRA_HABIT_ID = "widget_action_habit_id"
         const val TARGET_URGE = "urge"
+        const val TARGET_RELAPSE = "relapse"
         const val TARGET_SOS = "sos"
     }
 }
@@ -143,12 +152,18 @@ class WidgetActionActivity : ComponentActivity() {
 /**
  * The control's launch intent, built here so the widget file and this surface share one
  * definition of the contract. NEW_TASK: the tap arrives from the launcher's process; SINGLE_TOP:
- * a second tap reaches [WidgetActionActivity.onNewIntent] instead of stacking a copy.
+ * a second tap reaches [WidgetActionActivity.onNewIntent] instead of stacking a copy. [habitId]
+ * binds a relapse to the exact track the tapped control displayed; the other targets ignore it.
  */
-internal fun widgetActionIntent(context: Context, target: String): Intent =
+internal fun widgetActionIntent(
+    context: Context,
+    target: String,
+    habitId: String? = null,
+): Intent =
     Intent(context, WidgetActionActivity::class.java)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         .putExtra(WidgetActionActivity.EXTRA_TARGET, target)
+        .putExtra(WidgetActionActivity.EXTRA_HABIT_ID, habitId)
 
 /** The success state closes itself once the line has been read; the widget behind the scrim is
  *  the real feedback. Long enough for the sentence, short enough to feel immediate. */
@@ -162,22 +177,31 @@ private const val HOLD_CONFIRM_MILLIS = 1_200
 private fun WidgetActionScreen(
     viewModel: WidgetActionViewModel,
     target: String,
+    habitId: String?,
     onDismiss: () -> Unit,
 ) {
     val urge by viewModel.urge.collectAsStateWithLifecycle()
+    val relapse by viewModel.relapse.collectAsStateWithLifecycle()
     val partner by viewModel.partner.collectAsStateWithLifecycle()
     val sosState by viewModel.sos.state.collectAsStateWithLifecycle()
 
     val urgeBusy = urge == WidgetActionViewModel.UrgeOutcome.InFlight
+    val relapseBusy = relapse == WidgetActionViewModel.RelapseOutcome.InFlight
     val sosBusy = sosState == SosViewModel.SosSendState.Sending
     // Dismissal (scrim tap / Back) is allowed in every state except a write actually racing —
     // a mid-write finish would cancel the view-model scope under the repository call.
-    val busy = urgeBusy || sosBusy
+    val busy = urgeBusy || relapseBusy || sosBusy
 
     // The auto-close belongs to the action that produced it: a control tap switching targets
     // (onNewIntent) must not inherit the other action's finishing timer.
     LaunchedEffect(target, urge) {
         if (target == WidgetActionActivity.TARGET_URGE && urgeAutoFinishes(urge)) {
+            delay(AUTO_CLOSE_MILLIS)
+            onDismiss()
+        }
+    }
+    LaunchedEffect(target, relapse) {
+        if (target == WidgetActionActivity.TARGET_RELAPSE && relapseAutoFinishes(relapse)) {
             delay(AUTO_CLOSE_MILLIS)
             onDismiss()
         }
@@ -193,14 +217,31 @@ private fun WidgetActionScreen(
     BackHandler(enabled = busy) { /* a write in flight outlives Back */ }
 
     val context = LocalContext.current
-    // The disclosure flag for this action's copy, read at open. Discreet defaults to true until
-    // the read lands (FR5: a missing store must never disclose on a guess).
-    var discreet by remember { mutableStateOf(true) }
-    LaunchedEffect(target) {
-        if (target != WidgetActionActivity.TARGET_URGE) return@LaunchedEffect
-        discreet = withContext(Dispatchers.IO) {
-            runCatching { snapshotFrom(context.widgetSnapshotDataStore.data.first())?.discreet }
-                .getOrNull() ?: true
+    // What the stored record says about this action's surface, read at open: the disclosure flag
+    // for both log actions, and — for a relapse — the label only when the record still binds the
+    // habitId this surface will end. A mismatch means the widget render is stale, and naming a
+    // track other than the one being ended is exactly the mislabel this guard exists to refuse.
+    // Discreet defaults to true until the read lands (FR5: a missing store must never disclose
+    // on a guess).
+    var surfaceInfo by remember { mutableStateOf(SurfaceInfo(discreet = true, matchedLabel = null)) }
+    LaunchedEffect(target, habitId) {
+        if (target != WidgetActionActivity.TARGET_URGE &&
+            target != WidgetActionActivity.TARGET_RELAPSE
+        ) {
+            return@LaunchedEffect
+        }
+        surfaceInfo = withContext(Dispatchers.IO) {
+            val snap = runCatching { snapshotFrom(context.widgetSnapshotDataStore.data.first()) }
+                .getOrNull()
+            SurfaceInfo(
+                discreet = snap?.discreet ?: true,
+                matchedLabel = snap
+                    ?.takeIf {
+                        target == WidgetActionActivity.TARGET_RELAPSE &&
+                            habitId != null && it.habitId == habitId && !it.discreet
+                    }
+                    ?.habitLabel,
+            )
         }
     }
 
@@ -228,22 +269,115 @@ private fun WidgetActionScreen(
                     .padding(horizontal = 24.dp, vertical = 28.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                if (target == WidgetActionActivity.TARGET_SOS) {
-                    SosSurface(
+                when (target) {
+                    WidgetActionActivity.TARGET_SOS -> SosSurface(
                         viewModel = viewModel,
                         partner = partner,
                         sosState = sosState,
                         onDismiss = onDismiss,
                     )
-                } else {
-                    UrgeSurface(
+
+                    WidgetActionActivity.TARGET_RELAPSE -> RelapseSurface(
                         viewModel = viewModel,
-                        discreet = discreet,
+                        habitId = habitId,
+                        info = surfaceInfo,
+                        outcome = relapse,
+                        onDismiss = onDismiss,
+                    )
+
+                    else -> UrgeSurface(
+                        viewModel = viewModel,
+                        discreet = surfaceInfo.discreet,
                         outcome = urge,
                     )
                 }
             }
         }
+    }
+}
+
+/** The stored record's contribution to a log surface. */
+private data class SurfaceInfo(val discreet: Boolean, val matchedLabel: String?)
+
+@Composable
+private fun RelapseSurface(
+    viewModel: WidgetActionViewModel,
+    habitId: String?,
+    info: SurfaceInfo,
+    outcome: WidgetActionViewModel.RelapseOutcome,
+    onDismiss: () -> Unit,
+) {
+    Text(
+        text = stringResource(
+            if (info.discreet) R.string.widget_hold_reset_title else R.string.widget_hold_relapse_title,
+        ),
+        style = MaterialTheme.typography.titleLarge,
+        textAlign = TextAlign.Center,
+        color = MaterialTheme.colorScheme.onSurface,
+    )
+    Spacer(Modifier.height(6.dp))
+    info.matchedLabel?.let {
+        Text(
+            text = it,
+            style = MaterialTheme.typography.labelMedium,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(2.dp))
+    }
+    Text(
+        text = stringResource(
+            if (info.discreet) R.string.widget_hold_reset_body else R.string.widget_hold_relapse_body,
+        ),
+        style = MaterialTheme.typography.bodyMedium,
+        textAlign = TextAlign.Center,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(24.dp))
+    HoldRing(
+        enabled = relapseHoldArmed(outcome),
+        onConfirm = { habitId?.let(viewModel::logRelapse) },
+        fill = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        if (outcome == WidgetActionViewModel.RelapseOutcome.InFlight) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(26.dp),
+                strokeWidth = 3.dp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Image(
+                painter = painterResource(R.drawable.ic_log_relapse),
+                contentDescription = null,
+                colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onSurfaceVariant),
+                modifier = Modifier.size(40.dp),
+            )
+        }
+    }
+    Spacer(Modifier.height(16.dp))
+    relapseOutcomeRes(outcome, discreet = info.discreet)?.let {
+        Text(
+            text = stringResource(it),
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            color = when (outcome) {
+                WidgetActionViewModel.RelapseOutcome.Logged,
+                WidgetActionViewModel.RelapseOutcome.AlreadyLogged,
+                -> MaterialTheme.colorScheme.primary
+
+                else -> MaterialTheme.colorScheme.error
+            },
+        )
+        Spacer(Modifier.height(8.dp))
+    }
+    when (outcome) {
+        WidgetActionViewModel.RelapseOutcome.None,
+        WidgetActionViewModel.RelapseOutcome.Failed,
+        -> HoldHint()
+
+        // The dead end explains itself and offers the only real next step.
+        WidgetActionViewModel.RelapseOutcome.Gone -> CloseButton(onDismiss = onDismiss)
+        else -> Unit
     }
 }
 
@@ -284,7 +418,7 @@ private fun UrgeSurface(
             )
         } else {
             Image(
-                painter = painterResource(R.drawable.ic_widget_urge),
+                painter = painterResource(R.drawable.ic_log_urge),
                 contentDescription = null,
                 colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onSurfaceVariant),
                 modifier = Modifier.size(40.dp),
