@@ -40,9 +40,9 @@ rewritten, no schema/security changed, no ADR overridden. Findings are separated
 | A-09 | Pairing security | Both callables enforce App Check; Firestore rules are least-privilege (function-only bookkeeping); envelopes AES-256-GCM with sequence-derived nonces; unreadable-pair epoch invalidation device-run | Verified guarantee (client/backend) | — | HIGH for code/rules; MEDIUM for end-to-end | `functions/index.js:64`, `functions/partner-sos.js:211`; `firestore.rules`; `EventCipher.kt:21-36`; ADR #113/#125 device legs; memory `pairing_emulator_closed` |
 | A-10 | Data protection | `allowBackup=false` + cloud/transfer exclusions for every store; SQLCipher stores; reset only behind a dialog; destructive data/db suites emulator-guarded | Verified guarantee | — | HIGH | Manifest; `data_extraction_rules.xml`; `backup_rules.xml`; `MainActivity.kt:1159-1171`; `RecoveryManager.kt:74`; ADR #116/#122 |
 | A-11 | Boot/locked boot | DE snapshot restores enforcement pre-unlock; stale expiry can persist in the DE cache until the authoritative load (bounded to the locked window) | Sub-case of A-02, bounded | Low | HIGH (code) / MEDIUM (live locked-boot run) | `RulesSnapshotPublisher.kt:84-99`, `BootReceiver.kt`; ADR #37 |
-| A-12 | SOS | Backend deployed inert behind server kill switch; client FAB always present (RC gate removed); FAB-tap/repair device legs parked | Known state, owner-gated | Medium (feature incomplete by plan) | MEDIUM | ADR #158/#171; SOS memory; §12.3 legs previously green |
-| A-13 | Two-device / platform legs | Pairing two-device legs, direct BOOT_COMPLETED delivery, live midnight rollover, and release-flavor device runs remain blocked | Unresolved uncertainty | — | — | Only one physical device; no safe reboot; no clock control; release APK not distributed |
-| A-14 | Test evidence | Fresh full JVM suite green; prior device legs (PF 8/8, exhaustive review 12/12) unchanged | Verified evidence | — | HIGH | `testDebugUnitTest` today: 1,796/0/0/0 |
+| A-12 | SOS | Backend deployed inert behind server kill switch; client FAB always present (RC gate removed); FAB-tap leg GREEN 2026-10-18, repair-sweep leg GREEN 2026-10-18 (mapping §5.4) | CLOSED (single-device scope) | Medium (feature incomplete by plan) | MEDIUM | ADR #158/#171; SOS memory; §12.3 legs previously green |
+| A-13 | Two-device / platform legs | Pairing two-device legs, production-signed physical install, and OEM matrix remain blocked. Closed later on 2026-10-18: direct `BOOT_COMPLETED` + live midnight rollover (API-37, E-11/E-12), physical X6532 reboot (E-21), release-variant smoke (E-22) | Partially closed same day (addendum below) | — | — | One physical device; production signing not cut over; OEM matrix needs hardware |
+| A-14 | Test evidence | Fresh full JVM suite green; prior device legs (PF 8/8, exhaustive review 12/12) unchanged; after the same-day A-01…A-04 fixes the suite was 205 suites / 1,811 tests / 0/0/0 | Verified evidence | — | HIGH | `testDebugUnitTest` at audit time: 1,796/0/0/0; closing run 1,811/0/0/0 |
 
 Severity scale: impact × likelihood × exposure × detectability × recovery. "Verified defect" =
 code path proven by direct reading; no device run asserts the user-visible behaviour yet.
@@ -96,7 +96,7 @@ proportional evidence, and that the important failure modes found are named abov
 | Pairing / identity | MEDIUM–HIGH | Crypto/rules/epoch legs green; two-device end-to-end blocked |
 | Activity layer | HIGH | Device leg 2026-09-29 |
 | Notifications / INV-7 | HIGH | ADR #179 device-proven; PRIVATE visibility |
-| SOS | MEDIUM | Backend inert, client ungated; FAB-tap legs parked |
+| SOS | MEDIUM–HIGH | Backend inert, client ungated; FAB-tap + repair-sweep legs GREEN 2026-10-18 (mapping §5.4, single-device scope); live two-device delivery not re-run |
 | Streaks / milestones / widget | HIGH | Device-proven delivery catch-up and widget v3 |
 | Recovery / override / signing | HIGH | Both signing-fallback legs proven |
 | Build / distribution | MEDIUM | Debug pipeline proven; release signing not cut over; GitHub Releases pending |
@@ -232,7 +232,19 @@ private DNS `off`, launcher foreground.
   is validation/copy only and needs none.
 - It does **not** resolve OPD #27 (whether release should ever enable website metering). With A-03,
   release builds now tell the truth either way; the product decision remains open.
-- It does **not** unblock A-12/A-13 legs (two-device pairing/SOS, direct BOOT_COMPLETED, live
-  midnight rollover, release-flavor device run, OEM matrix). Those remain named, not faked.
+- It does **not** unblock A-12/A-13 legs (two-device pairing/SOS, live midnight rollover,
+  production-signed physical-device run, OEM matrix). Those remain named, not faked. A
+  **release-variant smoke on the API-37 emulator** (rebuild from HEAD, debug-keystore signed)
+  ran green on 2026-10-18 — see confidence sweep E-22; only the production signer and physical
+  install remain.
+- **Later on 2026-10-18 the physical reboot leg closed** (A-13 partially): the X6532 was rebooted
+  over USB, the process started pre-unlock via `LOCKED_BOOT_COMPLETED`, and the post-unlock
+  `BOOT_COMPLETED` path re-armed the FGS and VPN with the rule, day key and accessibility service
+  restored. Evidence and the honest note about the erased log line: confidence sweep E-21.
+- **Also on 2026-10-18 the two parked SOS Step-14 legs closed (A-12, single-device scope):** the
+  FAB-tap sender E2E ran through the shipped UI (nudge `e8958e62…`, `sent`), and the repair sweep
+  resumed an injected stalled `nudgePushQueue` doc (5-minute scheduler finalized `sent`,
+  pushAttempts 1→2, queue deleted). Kill switch restored `false` and verified. Details: SOS
+  mapping §5.4. Live two-device delivery for these nudges was not re-run (X6532C absent).
 - A-05 (window-only DNS over-block) and A-06 (ECH/DoH attribution) are unchanged by design; A-11's
   locked-boot stale-expiry sub-case is bounded and unchanged.

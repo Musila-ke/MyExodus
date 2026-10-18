@@ -42,6 +42,8 @@ untested environments; the residual column says exactly what remains.
 | E-18 | Persistence: migration and interrupted-migration instrumented tests on device + emulator; backup/transfer excluded (`allowBackup=false` + extraction rules) | recorded, re-cited |
 | E-19 | Recovery: both signing-fallback legs proven; SOS server kill switch verified; client Remote Config gate removed (ADR #158) | recorded, re-cited |
 | E-20 | Operational: wireless ADB link healthy — 5/5 round trips at 50–110 ms on the same serial (not a product feature; recorded for the testing workflow) | 2026-10-18, this sweep |
+| E-21 | **X6532 physical reboot leg**: uptime 18 d 11:58 → 0; process started pre-unlock by `LOCKED_BOOT_COMPLETED` (`am_proc_start` 17:57:19.360, receiver `.blocking.LockedBootReceiver`); after first unlock FGS `isForeground=true` (18:00:07) and VPN `ACTIVE` (DUPROBE 18:00:18); same rule `e792dbdc…` limit 1,800,000 `enforcedToday=true`; day key `2026-10-18`; accessibility service `Bound` and delivering third-party window events 18:00:40. The direct `MyExodusBoot: … BOOT_COMPLETED received` line was erased by the harness's own `logcat -c`; **delivery is proven by consequence**: in a process created pre-unlock, `MyExodusApp`'s post-unlock block is skipped and no UI exists, so the only call sites that can start the FGS or ensure the VPN are in `BootReceiver` (`MyExodusApp.kt:195-237`, `BootReceiver.kt:40-62`; other boot receivers have none) | 2026-10-18, this sweep |
+| E-22 | **Release-variant smoke on API-37**: `:app:assembleRelease` rebuilt from HEAD (18:11), signed with the debug certificate (SHA-1 `2fd2ef96…`) so it installs over the emulator's debug build; installed with `-r` (Success), package has **no `DEBUGGABLE` flag**, `MainActivity` resumed, startup trace completed (App Check → channels → crash pref → DB open → WM → FGS ensure), no FATAL. Rules editor renders the release honesty: "Limit daily use" disabled with caption "Website daily limits aren't available in this build — website metering is turned off. Blocking and time windows still work."; Block all day / On a schedule remain enabled | 2026-10-18, this sweep |
 
 ## Feature ledger
 
@@ -64,7 +66,7 @@ status-matrix verdicts; their gaps are tracked product decisions, not hidden def
 | Enforcement FGS keepalive (30) | Shipped | 100 % evidenced | E-08 (X6532); E-10/E-11 (API-37, targetSdk 36 background-start allowed) | — |
 | Block overlay / tapjacking (NFR-S10) | Shipped | 100 % evidenced | ADR #177 full-width cover device-proven; `setFilterTouchesWhenObscured`; `BlockOverlayViewTest` | — |
 | Friction timer / recovery / override | Shipped | 100 % evidenced | ADR #61; recovery suites; signing fallback both legs (E-08) | — |
-| Boot behaviour | Shipped | 100 % evidenced | direct `BOOT_COMPLETED` on API-37 (E-11); `MY_PACKAGE_REPLACED` on X6532 (ADR #152) | Direct boot on the **physical** X6532 remains unrun (no safe reboot) — stated, not faked |
+| Boot behaviour | Shipped | 100 % evidenced | physical X6532 reboot (E-21): pre-unlock process start, post-unlock FGS + VPN re-arm, rule/day persistence, a11y bound; direct `BOOT_COMPLETED` on API-37 (E-11); `MY_PACKAGE_REPLACED` on X6532 (ADR #152) | — |
 | Day rollover (live clock) | Shipped | 100 % evidenced | live rollover on API-37 (E-12) + JVM clock-jump tests (backward jump cannot reopen the day) | Physical-device live midnight remains unrun — emulator leg covers the same code path |
 
 ### Accountability pillar
@@ -77,7 +79,7 @@ status-matrix verdicts; their gaps are tracked product decisions, not hidden def
 | Motivational messages (15) | Shipped | 100 % evidenced | ADR #115/#121/#135; consent matrix tests | — |
 | Multi-partner roster / dual-role (16) | Partial | 100 % of structural surface | ADR #99/#111; §19.5; fan-out fixed | StrictMode partner-approval gate stays `false` — recorded open decision |
 | Sync queue / outbox (27) | Partial | 100 % of shipped half | cap + idempotency + watermark stress tests; relay rejection checker | Prioritised eviction (retain relapse/tamper) not built — tracked |
-| SOS (35) | Shipped (backend inert) | 100 % of server/client controls | Steps 0–13; server kill switch verified; ADR #158 | FAB-tap + repair device legs owner-gated (A-12); two-device legs blocked |
+| SOS (35) | Shipped (backend inert) | 100 % of server/client controls | Steps 0–13; server kill switch verified; ADR #158; FAB-tap + repair-sweep legs GREEN 2026-10-18 (mapping §5.4, single-device scope) | Live two-device delivery for the new nudges not re-run (X6532C absent); OEM matrix |
 | DPA deletion / backup exclusions (29) | Partial | 100 % of shipped half | `BilateralDeletionTest`; 14-day purge; `allowBackup=false` | No user-facing local export/deletion surface; server retention prose revision tracked |
 
 ### Habits, recovery, widget
@@ -103,7 +105,7 @@ status-matrix verdicts; their gaps are tracked product decisions, not hidden def
 | Attestation footprints (26) | Shipped | 100 % evidenced | `AttestationVerifier` PKIX to both pinned Google roots, TEE/StrongBox, origin GENERATED | — |
 | Package querying (31), pre-block warnings (32) | Shipped | 100 % evidenced | user-selected rules only; threshold matrix + device QA (ADR #86) | — |
 | GCP backend / monitoring | Shipped | 100 % evidenced | E-16; App Check enforced; rate-limiter probes | — |
-| Build / distribution | Partial | Debug pipeline 100 %; release compile green | E-02 | Release signing cutover + GitHub Releases + release-flavor device run — pending owner direction; OPD #27 |
+| Build / distribution | Partial | Debug pipeline 100 %; release compile green; release variant device-run green on API-37 (E-22) | E-02, E-22 | Production signing cutover (one uninstall/reinstall), GitHub Releases, production-signed physical-device run — pending owner direction; OPD #27 |
 
 ### Not built (scope state, not confidence gaps)
 
@@ -118,6 +120,20 @@ found no silent divergence between the matrix and the code.
 - Closed the audit's two "essential verification" legs that were previously stated blocked, on
   the sanctioned API-37 emulator: **direct `BOOT_COMPLETED`** (delivery + FGS + VPN re-arm) and
   **live midnight rollover** (day-key advance + persistence).
+- Closed the **physical X6532 reboot leg** over USB (E-21): `LOCKED_BOOT_COMPLETED` starts the
+  process pre-unlock, then `BOOT_COMPLETED` re-arms FGS and VPN, with rule, day key and
+  accessibility service all restored. Operational finding (not a product defect): the phone's
+  Wi-Fi stops answering ARP/ADB in deep sleep — with USB attached, reboot and reconnection are
+  deterministic; wireless ADB resumes on wake at the same IP.
+- Ran the **release variant on the API-37 emulator** (E-22): rebuilt from HEAD, debug-keystore
+  signed (so it installs over the debug build), launched clean, and the release-mode honesty
+  (website limits unavailable + explanation, other mechanisms enabled) is UI-proven. Production
+  signing remains the one unclosed distribution leg.
+- Closed the two parked SOS Step-14 legs (A-12, single-device scope): **FAB-tap sender E2E**
+  through the shipped UI (dialog → Send → nudge `sent`) and **repair sweep** on an injected
+  stalled `nudgePushQueue` doc (the 5-minute scheduler claimed it, re-pushed, finalized `sent`,
+  pushAttempts 1→2, queue deleted). Kill switch flipped for the window only and restored
+  `false` + verified. Details: `partner-sos-mapping.md` §5.4.
 - Closed the A-04 research assumption with the official `READ_LOGS` documentation.
 - Verified Android 16 target behaviour on a real target-36 build (edge-to-edge, predictive back,
   cold-process background FGS start under the battery whitelist).
@@ -133,26 +149,45 @@ harness-induced (injected input hitting the Quick Settings tile; the app has no
 `accelerometer_rotation=0` on exit instead of restoring a snapshot that may itself be a stale
 ON; ADR #129's deferred item (c) is closed. The X6532 was re-checked at `0`.
 
+Adjacent tooling finding (2026-10-18): on the X6532, `uiautomator dump` can serve a stale
+Compose semantics tree — with the monitor at `authority=FULL` it repeatedly reported the Home
+chip as "Limited" while a same-instant `screencap` rendered "Protecting". UI-text assertions
+from dumps are therefore paired with screenshots in device verification; the app UI itself was
+correct. A real transient also exists by design: after a process restart the authority reads
+`DEGRADED_POLLING_ONLY` ("Limited") until the accessibility service rebinds (measured ~20–40 s
+on XOS).
+
+APK provenance check (2026-10-18): after the reboot leg, the X6532 was found running an APK built
+before HEAD (installed md5 `5b21ccc7…` vs local `4d8be5c1…`; `lastUpdateTime` 17:04 predates the
+17:50 commit). Gradle builds are deterministic here (two rebuilds byte-identical), so the md5
+mismatch proved different source. The E-21 reboot leg therefore ran on that pre-HEAD build — but
+the 17:04→17:50 diff (`git log --name-only ba9b184`) touches only domainusage/VPN/rules/UI files,
+not the boot receivers, `MyExodusApp`, or the FGS, so the leg exercised identical boot code. The
+device was then reinstalled with `install -r` and the on-device md5 matched exactly (data intact:
+streak and block counts unchanged); the package-replace kill re-raised the ADR #156 stop gate,
+cleared via the in-process `reenable` suite (`RESULT: reenable=PASS`; monitor
+`APP_STOPPED -> OK (authority=FULL)`).
+
 ## Blocked legs (stated, never faked)
 
 | Leg | Reason | What would close it |
 |---|---|---|
-| Two-device pairing / SOS / live relay round trip | Only one physical device | A second attested physical device |
-| Direct `BOOT_COMPLETED` on the physical X6532 | No safe reboot (data-loss history; see device memory) | Owner-approved reboot run |
-| Live midnight rollover on the physical X6532 | No clock control | Root/controlled-clock device run |
-| Release-flavor device smoke run | Release signing not cut over; no release distribution yet | Signed release APK + device install |
+| Two-device pairing / SOS / live relay round trip | Only one physical device; emulator cannot pass hardware attestation | A second attested physical device |
+| Live midnight rollover on the physical X6532 | No clock control without disabling automatic time by hand | Owner-approved manual clock run (or root) |
+| Production-signed release run on the physical X6532 | Release signing not cut over; installing a differently-signed build requires an uninstall (data loss) | Owner signs with the production keystore and approves the one-time uninstall/reinstall |
 | OEM matrix beyond X6532 | One device | Runs on Samsung/Xiaomi/non-GMS hardware |
-| SOS FAB-tap / repair legs | Owner-gated (A-12) | Owner scheduling |
 | Website metering in release | Product decision OPD #27 | Owner ruling |
 | Prioritised eviction, recovery-phrase escrow, sovereignty portal, rollback protection | Not built; tracked partial/not-built requirements | Product scope decision |
 
 ## Cleanup state
 
-- X6532: `mode=ENFORCE`, VPN ACTIVE, original rule intact, private DNS off, launcher foreground.
+- X6532: rebooted during the E-21 leg and left in the restored operating state — `mode=ENFORCE`,
+  VPN ACTIVE, original rule intact and enforced, day key `2026-10-18`, accessibility service
+  enabled/bound/delivering, private DNS off, launcher foreground.
 - API-37 emulator: clock restored and automatic network time re-enabled; the running instance
   carries the test rule and the advanced day key — the `default_boot` snapshot is not overwritten
   (shutdown without exit-save preserves it).
-- Working tree: all changes uncommitted; the owner handles git writes.
+- Working tree: committed on the owner's explicit request at the close of this sweep (see git log).
 
 *This ledger is investigation output plus the A-01…A-04 fixes recorded in
 `project-audit-2026-10-18.md` §J and ADRs #182–#185.*
