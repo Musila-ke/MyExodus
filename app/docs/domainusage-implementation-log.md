@@ -1093,4 +1093,10 @@ meter and the toggle, answered from code + tests, and one real defect found and 
   `du-status` reported `status=Active mode=ENFORCE vpn=ACTIVE day=2026-10-19` after local midnight
   — the app-tracker live-clock leg that had been oracle/JVM-only. The AVD's system_server later
   died (`Can't find service: activity`) after the overnight run, blocking further emulator legs;
-  the physical X6532 carries the device legs of record.
+  the physical X6532 carries the device legs of record. The AVD recovered on its own (00:33) and
+  the app restarted cleanly against its persisted rule (`rule id=… enforcedToday=true`); the
+  tunnel stayed `STOPPED` only because nothing had called `VpnLifecycle.ensure` since the platform
+  restart — the documented `START_NOT_STICKY` design (`DnsSinkholeVpnService.kt:188`, plan §8.4),
+  not a regression. The live instagram.com attribution probe stays blocked on the AVD's own
+  DNS/IPv6 upstream and is redundant: ADR #179 already metered instagram.com to 25/30 min on the
+  X6532.
