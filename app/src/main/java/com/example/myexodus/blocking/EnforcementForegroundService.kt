@@ -138,6 +138,7 @@ class EnforcementForegroundService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var pollingJob: Job? = null
+    private var periodicAuditJob: Job? = null
     private var screenOffReceiver: BroadcastReceiver? = null
 
     /** Fresh thread per submission; a wedged binder call abandons its thread (it un-wedges
@@ -296,7 +297,7 @@ class EnforcementForegroundService : Service() {
      * against a re-run of itself. [endWallMs] is the moment live accounting resumes — the
      * process start at a service start, "now" at a pause release.
      */
-    private suspend fun reconcileUncreditedSpan(endWallMs: Long) {
+    private suspend fun reconcileUncreditedSpan(endWallMs: Long, minStaleMs: Long = 0L) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         runCatching {
             if (!hasUsageAccess()) return
@@ -309,12 +310,26 @@ class EnforcementForegroundService : Service() {
                 tracked.map { it.blockedPackage },
                 midnight,
             )
+            // Periodic passes (2026-10-18, the 42-minute uncredited span) probe only packages
+            // whose credit edge has gone stale. A healthy ticker rewrites the edge every 10 s;
+            // probing a fresh edge would claim its in-flight tail before the next tick credits
+            // it — §8.9's overlap check covers written rows, not that tail.
+            val bootOriginWall = System.currentTimeMillis() - SystemClock.elapsedRealtime()
+            val staleBefore = endWallMs - minStaleMs
+            val targets = if (minStaleMs <= 0L) tracked else tracked.filter { rule ->
+                maxOf(
+                    anchors[rule.blockedPackage] ?: Long.MIN_VALUE,
+                    midnight,
+                    bootOriginWall,
+                ) <= staleBefore
+            }
+            if (targets.isEmpty()) return
             // Binder work on the isolated tick pool: a usage-stats or appops call can wedge
             // indefinitely on this device (2026-08-30 finding, see [tickWithTimeout]), and this
             // is the one place outside the poll loop that makes such calls.
             val paused = status.requiresExplicitReEnable
             val probe = onBinderThread<ReconcileProbe?> {
-                probeUncreditedWindows(tracked, anchors, midnight, paused, endWallMs)
+                probeUncreditedWindows(targets, anchors, midnight, paused, endWallMs)
             } ?: return
             if (probe.windows.isEmpty()) return
             val nowWall = System.currentTimeMillis()
@@ -568,6 +583,7 @@ class EnforcementForegroundService : Service() {
     private suspend fun pollLoop() {
         var lastQueryEndMillis = 0L
         var ticks = 0L
+        var lastAuditWallMs = System.currentTimeMillis()
         // Handoff A→B (device QA 2026-09-15): while Path A held authority the machine was
         // reset every tick, and after the flip a narrow window stays eventless as long as
         // the user sits in one app — re-acquisition then waited on the next real
@@ -597,6 +613,21 @@ class EnforcementForegroundService : Service() {
             // inside the executor — the coroutine itself must stay binder-free.
             runCatching { lastQueryEndMillis = tickWithTimeout(++ticks, lastQueryEndMillis) }
                 .onFailure { Log.w(TAG, "tick failed", it) }
+            // Self-healing credit edge (2026-10-18): the start/pause-release audits only run
+            // at seams, so a session that died mid-run stayed uncredited for 42 minutes while
+            // the process lived on. A 60 s pass heals any package whose edge went stale from
+            // the platform's own foreground record; §8.9's overlap check keeps it from ever
+            // crediting time a live row already covers.
+            val nowWallMs = System.currentTimeMillis()
+            if (nowWallMs - lastAuditWallMs >= PERIODIC_AUDIT_INTERVAL_MS &&
+                periodicAuditJob?.isActive != true
+            ) {
+                lastAuditWallMs = nowWallMs
+                periodicAuditJob = scope.launch {
+                    runCatching { reconcileUncreditedSpan(nowWallMs, PERIODIC_AUDIT_MIN_STALE_MS) }
+                        .onFailure { Log.w(TAG, "periodic credit-edge audit failed", it) }
+                }
+            }
             delay(POLL_INTERVAL_MILLIS)
         }
     }
@@ -968,6 +999,14 @@ class EnforcementForegroundService : Service() {
 
         /** Heartbeat log cadence in poll ticks (≈30s): tick count, usage access, degradation. */
         const val HEARTBEAT_TICKS = 20L
+
+        /** Periodic credit-edge audit cadence: bounds how long a stalled ledger can stay
+         *  under-counted while the process is alive. */
+        const val PERIODIC_AUDIT_INTERVAL_MS = 60_000L
+
+        /** A package is probed only when its credit edge is this stale — a live ticker's edge
+         *  is ≤10 s old, and its in-flight tail is not yet an overlap-checkable row. */
+        const val PERIODIC_AUDIT_MIN_STALE_MS = 45_000L
 
         /** Path B's baseline accounting cadence (enforcement plan v2 §8 Step 5). */
         const val USAGE_TICK_DEFAULT_MS = 30_000L

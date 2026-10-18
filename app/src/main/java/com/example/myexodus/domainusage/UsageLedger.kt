@@ -32,6 +32,14 @@ class UsageLedger(
     /** The keys of the current rule snapshot; tick thread only. */
     private val activeKeys = HashSet<String>()
 
+    /**
+     * The startup load's persisted totals, kept for the day. A `(id, revision)` pair that first
+     * appears mid-session — the rule was disabled when the engine loaded — must still start from
+     * what it already used, or a restart plus re-enable would mint a fresh quota (ADR #188).
+     * Cleared at the rollover: the new day's counters all start at zero.
+     */
+    private var persistedTotals: Map<String, Long> = emptyMap()
+
     @Volatile
     var dayKey: String = initialDayKey
         private set
@@ -62,6 +70,7 @@ class UsageLedger(
      * references them.
      */
     fun applyRules(rules: List<DomainRule>, seededTotals: Map<String, Long> = emptyMap()) {
+        if (seededTotals.isNotEmpty()) persistedTotals = seededTotals
         activeKeys.clear()
         for (rule in rules) {
             val key = "${rule.id}:${rule.revision}"
@@ -72,7 +81,7 @@ class UsageLedger(
                     ruleId = rule.id,
                     revision = rule.revision,
                     pattern = rule.pattern,
-                    initialTotalMs = seededTotals[key] ?: 0L,
+                    initialTotalMs = seededTotals[key] ?: persistedTotals[key] ?: 0L,
                     dailyLimitMs = rule.dailyLimitMs,
                     enforcedToday = rule.enforcedToday,
                     expiresAtWallMs = rule.expiresAt,
@@ -161,6 +170,11 @@ class UsageLedger(
             }
         }
         dayKey = newKey
+        // A counter absent from the new day's snapshot has no quota to enforce and no total to
+        // protect; the keep-until-rollover rule in dropStaleCounters ends here. The persisted
+        // day totals are yesterday's — a mid-day re-enable must not seed them into today.
+        persistedTotals = emptyMap()
+        byKey.keys.retainAll(activeKeys)
         return DayRollover(oldKey, newKey, finals)
     }
 
@@ -237,9 +251,15 @@ class UsageLedger(
     }
 
     /**
-     * §8 S5.2: a counter whose rule is gone is dropped once no flow references it. A dirty
+     * §8 S5.2: a superseded revision's counter is dropped once no flow references it. A dirty
      * counter waits for its pending write — dropping it would lose up to `PERSIST_INTERVAL_MS`
      * of already-accrued usage.
+     *
+     * A rule that merely left the snapshot keeps its counter for the rest of the day. The
+     * snapshot drops disabled rules, so dropping on absence would hand a disabled-then-
+     * re-enabled rule (same id, same revision) a fresh quota — a one-toggle bypass. Absent
+     * ids are pruned at the day rollover instead; only a revision change (the pattern edit
+     * the drop exists for) drops here.
      */
     private fun dropStaleCounters() {
         val iterator = byKey.entries.iterator()
@@ -247,7 +267,8 @@ class UsageLedger(
             val entry = iterator.next()
             if (entry.key in activeKeys) continue
             if (entry.value.changedSincePersist) continue
-            if (flows.isEmpty(entry.key)) iterator.remove()
+            val current = currentRevisionByRuleId[entry.value.ruleId] ?: continue
+            if (current != entry.value.revision && flows.isEmpty(entry.key)) iterator.remove()
         }
     }
 

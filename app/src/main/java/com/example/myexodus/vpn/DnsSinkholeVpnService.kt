@@ -56,7 +56,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Slice 3 VPN PoC spike (plan §7 step 3, §8.4) — full-tunnel DNS sinkhole:
- *  - TUN 192.0.2.1/32 + fd00:14:14::1/128, routes 0.0.0.0/0 + ::/0, MTU 1400,
+ *  - TUN 192.0.2.1/32 + fd00:14:14::1/128, routes 0.0.0.0/0 + ::/0, MTU 1500 (ADR #186),
  *    addDnsServer() advertising resolvers on the TUN subnet (plan §6).
  *    TUN_V4 is TEST-NET (RFC 5737), never used on real networks: on the X6532 the
  *    carrier APN (ccmni1) owns a kernel 10.0.0.0/8 route, so a 10.x TUN address
@@ -437,7 +437,9 @@ class DnsSinkholeVpnService : VpnService() {
     private fun dnsReceiveLoop(socket: DatagramSocket, isV6: Boolean) {
         if (isV6) dnsLoop6Alive = true else dnsLoop4Alive = true
         evaluateHealth() // the loop is up now — may flip an early DEGRADED(DNS_LOOP_DOWN) to ACTIVE
-        val buf = ByteArray(2048)
+        // EDNS0 answers can exceed any MTU-sized buffer (DNSSEC records); a short buffer truncates
+        // them silently (recvfrom(2)), handing the resolver a malformed reply.
+        val buf = ByteArray(VpnPacket.MAX_UDP_DATAGRAM)
         try {
             while (running) {
                 val dp = DatagramPacket(buf, buf.size)
@@ -529,7 +531,8 @@ class DnsSinkholeVpnService : VpnService() {
             "${InetAddress.getByAddress(ip.dst).hostAddress}:${udp.dstPort}"
 
     private fun udpReceiveLoop(flow: UdpFlow) {
-        val buf = ByteArray(VpnPacket.MTU)
+        // Protocol maximum, never [VpnPacket.MTU]: see [VpnPacket.MAX_UDP_DATAGRAM].
+        val buf = ByteArray(VpnPacket.MAX_UDP_DATAGRAM)
         while (running) {
             val dp = DatagramPacket(buf, buf.size)
             try { flow.socket!!.receive(dp) } catch (e: IOException) { break }

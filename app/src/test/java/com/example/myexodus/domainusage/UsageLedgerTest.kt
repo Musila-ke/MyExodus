@@ -164,25 +164,59 @@ class UsageLedgerTest {
     }
 
     @Test
-    fun aRemovedRulesCounterWaitsForItsPendingWrite() {
+    fun aDisabledRuleKeepsTodaysTotal_soReEnablingCannotResetTheQuota() {
+        // The owner's toggle leg (2026-10-19): the snapshot drops disabled rules, so absence
+        // must not discard the accounting identity. A same-day disable → re-enable used to
+        // restart the counter at 0 — a one-toggle quota bypass.
         val ledger = ledger()
-        ledger.applyRules(listOf(rule()))
+        ledger.applyRules(listOf(rule(limit = 10_000L)))
         val c = ledger.counterFor("r1", 0)!!
-        advanceTo(1_000)
-        c.touch(1_000)
+        advanceTo(0)
+        c.touch(0)
+        advanceTo(20_000) // past the idle tail, so the accrual is final
         ledger.tick()
+        val accrued = c.totalMs
+        assertTrue("the idle tail alone must have exhausted a 10 s limit", accrued >= 10_000L)
 
-        ledger.applyRules(emptyList())
-        advanceTo(2_000)
-        ledger.tick()
-        assertNotNull("dirty: the accrued seconds are not written yet", ledger.counterFor("r1", 0))
-
-        advanceTo(20_000) // past the idle tail, so nothing accrues again
-        ledger.tick()
+        ledger.applyRules(emptyList()) // user toggles the rule off
         ledger.acknowledge("r1", 0L, c.generation)
         advanceTo(21_000)
         ledger.tick()
-        assertNull(ledger.counterFor("r1", 0))
+        assertNotNull("disabled, not discarded", ledger.counterFor("r1", 0L))
+        assertEquals(accrued, c.totalMs)
+
+        ledger.applyRules(listOf(rule(limit = 10_000L))) // toggled back on, same revision
+        assertEquals("the day's total survives the toggle", accrued, ledger.usageTodayMs("r1"))
+        advanceTo(30_000)
+        ledger.tick()
+        assertTrue("and still exhausts the quota", c.exhausted)
+    }
+
+    @Test
+    fun aRuleFirstSeenMidSession_seedsFromTheStartupLoad() {
+        // The restart case: the rule was disabled when the engine loaded its totals, so no
+        // counter exists. Enabling it mid-day must adopt the persisted total, not start at 0.
+        val ledger = ledger()
+        ledger.applyRules(emptyList(), seededTotals = mapOf("r1:0" to 5_000L))
+        ledger.applyRules(listOf(rule()))
+        assertEquals(5_000L, ledger.usageTodayMs("r1"))
+    }
+
+    @Test
+    fun absentRulesCountersArePrunedAtTheDayRollover_andYesterdayTotalsNeverSeedToday() {
+        val ledger = ledger()
+        ledger.applyRules(listOf(rule()), seededTotals = mapOf("r1:0" to 5_000L))
+        ledger.counterFor("r1", 0L)!!.touch(0)
+        advanceTo(1_000)
+        ledger.tick()
+
+        ledger.applyRules(emptyList()) // off for the rest of the day
+        advanceTo(12 * 3_600_000L + 1_000) // wall crosses 2026-09-21T00:00Z
+        assertNotNull("the rollover landed", ledger.tick())
+        assertNull("a counter absent from the new day is dropped", ledger.counterFor("r1", 0L))
+
+        ledger.applyRules(listOf(rule())) // re-enabled on the new day
+        assertEquals("yesterday's total must not seed today", 0L, ledger.usageTodayMs("r1"))
     }
 
     @Test

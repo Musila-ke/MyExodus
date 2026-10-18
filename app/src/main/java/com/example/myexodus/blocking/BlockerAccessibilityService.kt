@@ -11,6 +11,7 @@ import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import android.view.Display
@@ -134,8 +135,37 @@ class BlockerAccessibilityService : AccessibilityService() {
         // engine always decides against some snapshot, never against "no rules".
         publisher.loadFastPath()
         // §8 Step 4 connect-time usage re-acquire (see the function doc).
-        reacquireUsageSessionOnConnect()
+        reacquireUsageSession()
+        mainHandler.postDelayed(sessionWatchdog, SESSION_WATCHDOG_MS)
         scope.launch { publisher.loadFromDb() }
+    }
+
+    /**
+     * Every 30 s: a tracked app must never sit foreground with no session. The oracle is Path
+     * B's fresh (≤1.5 s) poll answer, so this catches every way a session can be missing —
+     * a dropped deferred WSC, an event storm, a lost unlock signal — not just the screen-off
+     * path. It also restarts a ticker coroutine that died while its session stayed open
+     * ([syncUsageTicker] is a no-op when one is alive). Re-opening anchors at now; the span
+     * before detection is the FGS credit-edge audit's job, never this watchdog's guess.
+     */
+    private fun verifyUsageSession() {
+        if (!settings.enhancedModeEnabled) return
+        syncUsageTicker()
+        val oracle = EnforcementForegroundService.platformForegroundPackage ?: return
+        val ageMs = SystemClock.elapsedRealtime() -
+            EnforcementForegroundService.platformForegroundObservedAtElapsedMs
+        if (!platformForegroundConfirms(oracle, oracle, ageMs)) return
+        if (usageSessions.activePackage == oracle) return
+        if (BuildConfig.DEBUG) Log.i(TAG, "session watchdog: tracked foreground without session pkg=$oracle")
+        reacquireUsageSession()
+    }
+
+    private val sessionWatchdog = object : Runnable {
+        override fun run() {
+            runCatching { verifyUsageSession() }
+                .onFailure { Log.w(TAG, "session watchdog failed", it) }
+            mainHandler.postDelayed(this, SESSION_WATCHDOG_MS)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
@@ -481,23 +511,30 @@ class BlockerAccessibilityService : AccessibilityService() {
 
     // --- Daily-usage sessions (enforcement plan v2 §8 Step 4, §6 steps 2–4) ----------------
 
-    /** Connect-time usage re-acquire (user-ruled 2026-09-15, Open Product Decisions #10; beyond
-     *  the plan's §8 Step 4 text, which opens sessions only on window-state transitions). A
-     *  bind while a tracked app is already foreground emits no event for that app, so without
-     *  this the session opens only at the next transition — the [bind → next event] span goes
-     *  uncredited under FULL authority. Mirrors Path B's authority-regained lookback: the
-     *  session anchors at connect-now, never at an earlier observation time — the pre-connect
-     *  span belongs to whichever path held authority before, and double-crediting is worse
-     *  than a visible under-count. rootInActiveWindow is the decisive signal (same rationale
-     *  as [deferredWsc] — XOS window-list lag); bounded retries cover a just-connected
-     *  service whose window list is not populated yet. */
-    private fun reacquireUsageSessionOnConnect(attempt: Int = 0) {
+    /** Usage re-acquire for every seam where a tracked app can be foreground with no session
+     *  open (user-ruled 2026-09-15, Open Product Decisions #10; beyond the plan's §8 Step 4
+     *  text, which opens sessions only on window-state transitions). A bind, a screen-on and
+     *  an unlock while a tracked app is already foreground emit no WSC for that app, so
+     *  without this the session opens only at the next transition — the [seam → next event]
+     *  span goes uncredited under FULL authority. That is exactly the 2026-10-18 incident:
+     *  screen-off closed the session at 19:44:05, no reopen followed at unlock, and 42
+     *  foreground minutes never reached the counter. Mirrors Path B's authority-regained
+     *  lookback: the session anchors at now, never at an earlier observation time — the
+     *  pre-seam span is healed by the FGS credit-edge audit from the platform record, and
+     *  double-crediting is worse than a visible under-count. rootInActiveWindow is the
+     *  decisive signal (same rationale as [deferredWsc] — XOS window-list lag); bounded
+     *  retries cover a just-unlocked service whose window list is not populated yet. */
+    private fun reacquireUsageSession(attempt: Int = 0) {
         if (!settings.enhancedModeEnabled) return
+        // Nothing is in the foreground while the screen is dark, and on XOS the window list and
+        // the FGS oracle both lag the power state — without this guard the 30 s watchdog
+        // re-opened sessions throughout a screen-off window (device-caught 2026-10-18).
+        if (!(getSystemService(POWER_SERVICE) as PowerManager).isInteractive) return
         val packageName = runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull()
         if (packageName.isNullOrEmpty() || packageName == this.packageName) {
             if (attempt < MAX_CONNECT_REACQUIRE_ATTEMPTS) {
                 mainHandler.postDelayed(
-                    { reacquireUsageSessionOnConnect(attempt + 1) },
+                    { reacquireUsageSession(attempt + 1) },
                     DEFERRED_WSC_MS,
                 )
             }
@@ -511,7 +548,7 @@ class BlockerAccessibilityService : AccessibilityService() {
         val scheduleBlocked =
             engine.decideApp(packageName, System.currentTimeMillis()) is BlockDecision.Block
         if (BuildConfig.DEBUG) {
-            Log.i(TAG, "connect re-acquire pkg=$packageName scheduleBlocked=$scheduleBlocked")
+            Log.i(TAG, "session re-acquire pkg=$packageName scheduleBlocked=$scheduleBlocked")
         }
         syncUsageSession(packageName, displayId, scheduleBlocked)
     }
@@ -1038,18 +1075,38 @@ class BlockerAccessibilityService : AccessibilityService() {
      *  suite's locked-state check raced it and lost). Hiding at screen-off removes the overlay
      *  before the screen ever shows it again; the normal pipeline re-shows on the next
      *  foreground WSC after unlock, and emergency exclusion covers the keyguard itself.
-     *  ACTION_SCREEN_OFF is only deliverable to runtime-registered receivers. */
+     *  ACTION_SCREEN_OFF is only deliverable to runtime-registered receivers.
+     *
+     *  Screen-on/unlock re-acquire the session: the app that was foreground before the screen
+     *  went dark emits no WSC when it becomes visible again — the keyguard transition is what
+     *  the pipeline sees — so waiting on a WSC loses every minute until the user next touches
+     *  another app (device-proven 2026-10-18: 42 min). ACTION_USER_PRESENT fires once the
+     *  keyguard is gone; ACTION_SCREEN_ON covers devices/ROMs without a keyguard. */
     private fun registerScreenOffReceiver() {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
+                        // onReceive must return within ~10 s; the re-acquire makes accessibility
+                        // binder calls (rootInActiveWindow, window list) that block under load —
+                        // emulator-caught as a SCREEN_ON broadcast ANR (2026-10-18). The work
+                        // still runs on the main thread, just after the broadcast returns.
+                        mainHandler.post { reacquireUsageSession() }
+                        return
+                    }
+                }
                 overlay.hideAll(stateMachine.currentGeneration)
                 // Screen off = nothing visible: the session's final tick credits real usage up
                 // to the moment the screen went dark, then stops (no phantom accrual while
-                // off). Re-opens at the next foreground WSC, same as the overlay re-arm.
+                // off). Re-opens via the screen-on/unlock branch above (2026-10-18 fix) or the
+                // next foreground WSC, whichever lands first.
                 closeUsageSession()
             }
         }
-        val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
+        val filter = IntentFilter(Intent.ACTION_SCREEN_OFF).apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
@@ -1122,9 +1179,13 @@ class BlockerAccessibilityService : AccessibilityService() {
         /** Path A's session ticker cadence (enforcement plan v2 §8 Step 4). */
         private const val USAGE_TICK_MS = 10_000L
 
-        /** Bounded re-checks for the connect-time usage re-acquire while the active root is
-         *  still resolving (~1.2s worst case — mirrors the deferred-WSC lag handling). */
+        /** Bounded re-checks for the usage re-acquire while the active root is still
+         *  resolving (~1.2s worst case — mirrors the deferred-WSC lag handling). */
         private const val MAX_CONNECT_REACQUIRE_ATTEMPTS = 3
+
+        /** Cadence of the no-session-with-tracked-foreground watchdog. Three poll ticks at
+         *  Path B's 1.5 s cadence re-stamp the oracle well inside its 5 s freshness window. */
+        private const val SESSION_WATCHDOG_MS = 30_000L
 
         /** Delay before the block close's second kill attempt: performGlobalAction is
          *  asynchronous, and killBackgroundProcesses only lands once the target is genuinely

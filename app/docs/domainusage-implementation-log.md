@@ -1057,3 +1057,40 @@ the billing incident, not a new alert (ADR #180).
 **Suite after the batch: 205 suites / 1,811 tests / 0 failures / 0 errors / 0 skipped**
 (+15 net over the audit baseline of 1,796). `assembleDebug` and `compileReleaseKotlin` both
 succeed.
+
+**Owner audit batch (2026-10-19, overnight mandate; ADR #188).** The owner's questions about the
+meter and the toggle, answered from code + tests, and one real defect found and fixed.
+
+- **Where the figure comes from (audit #9).** A website rule's "used today" is that
+  `(rule id, revision)` counter in `UsageLedger` — time attributed at flow open by DNS answer or
+  TLS SNI, from every app on the device, with a 15 s idle tail per activity streak. Matching is a
+  registrable-domain suffix on a dot boundary (`UrlPatternTest`), so `instagram.com` matches
+  `i.instagram.com` but not `cdninstagram.com`; background/keep-alive flows explain a 30-minute
+  reading against ~15 minutes of perceived browsing, and the UI floors to whole minutes. The
+  emulator live-attribution probe was blocked by the emulator's own DNS/IPv6 state (control
+  `nc -w 3 1.1.1.1 443` produced a relayed TCP flow and `nc -w 3 instagram.com 443` timed out with
+  no flow; historical logs show `EHOSTUNREACH` from the AVD's IPv6 upstream) — attribution itself
+  is code-pinned and was device-proven by ADR #179's site-named warnings.
+- **Rule created after usage (audit #11).** Website: a new rule id (or edited revision) starts at
+  0 with no backfill — pinned by `UsageLedgerTest`'s revision and seeding cases. App: both save
+  and enable seams call `UsageAccountingEngine.reconcileWithPlatform`, which seeds the tracker
+  monotonically from the platform record and journals `MIGRATION_CARRYOVER`
+  (`UsageAccountingEngineTest` cases `reconcile_seedsFreshTracker_andBlocksWhenPlatformIsOverLimit`,
+  the monotone pin, and the zero/inactive no-ops).
+- **Toggle off/on (audit #10, defect).** The snapshot drops disabled rules, and the ledger used
+  to drop their counters once written, so re-enabling the same `(id, revision)` restarted the day
+  at 0 — a one-toggle quota reset. Fixed: absence no longer drops (only a superseded revision
+  does), the startup totals seed a rule first seen mid-session, and absent counters prune at the
+  rollover with yesterday's totals cleared. JVM pins:
+  `aDisabledRuleKeepsTodaysTotal_soReEnablingCannotResetTheQuota`,
+  `aRuleFirstSeenMidSession_seedsFromTheStartupLoad`,
+  `absentRulesCountersArePrunedAtTheDayRollover_andYesterdayTotalsNeverSeedToday`.
+- **Screen-on re-acquire posting (#187 addendum).** The inline call in the SCREEN_ON receiver
+  ANR'd the broadcast on the emulator under load; it is now posted to the main handler after the
+  broadcast returns.
+- **Live midnight rollover (emulator, real clock).** In the same process (pid 10720), the Chrome
+  tracker row rolled from 69,435 ms anchored 2026-10-18 to 37,845 ms anchored 2026-10-19, and
+  `du-status` reported `status=Active mode=ENFORCE vpn=ACTIVE day=2026-10-19` after local midnight
+  — the app-tracker live-clock leg that had been oracle/JVM-only. The AVD's system_server later
+  died (`Can't find service: activity`) after the overnight run, blocking further emulator legs;
+  the physical X6532 carries the device legs of record.

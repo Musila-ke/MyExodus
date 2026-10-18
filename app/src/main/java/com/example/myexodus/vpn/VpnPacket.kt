@@ -9,8 +9,22 @@ import java.nio.ByteBuffer
  */
 object VpnPacket {
 
-    const val MTU = 1400
+    /**
+     * The TUN MTU. This relay crafts raw IP packets with no encapsulation, so the device-facing
+     * link is a normal 1500-byte Ethernet path: an upstream datagram of 1472 payload bytes
+     * (1500 − 20 IP − 8 UDP) must fit without exceeding the interface MTU (ADR #186).
+     */
+    const val MTU = 1500
     const val MAX_TCP_SEGMENT = 1200
+
+    /**
+     * The UDP receive buffer size. Never size a `DatagramSocket` read buffer to [MTU]: a datagram
+     * larger than the buffer is silently truncated (recvfrom(2): "excess bytes may be discarded"),
+     * and QUIC servers size their datagrams to the real 1500-byte path, not to our TUN. A
+     * 1400-byte buffer corrupted every 1401–1472-byte QUIC packet — HTTP/3 video stalled while
+     * TCP pages loaded (ADR #186).
+     */
+    const val MAX_UDP_DATAGRAM = 65535
     const val PROTO_ICMP = 1
     const val PROTO_TCP = 6
     const val PROTO_UDP = 17
