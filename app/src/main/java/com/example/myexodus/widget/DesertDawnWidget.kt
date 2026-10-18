@@ -159,9 +159,9 @@ private fun viewFor(context: Context, snapshot: ProtectionSnapshot?): WidgetView
     val nowUtc = System.currentTimeMillis()
     val nowElapsed = SystemClock.elapsedRealtime()
     val nowBootCount = systemBootCount(context)
-    // streakDays is the ordinal display day (ADR #128); the rung math stays in completed days,
-    // so convert here. coerceAtLeast guards a stale pre-ruling snapshot that still reads 0.
-    val milestone = nextMilestone(snapshot?.streakDays?.minus(1)?.coerceAtLeast(0))
+    // streakDays is the displayed day count (completed, floored at 1 — ADR #176); the rung
+    // distance is measured on that same scale, so it is the number minus the rung, directly.
+    val milestone = nextMilestone(snapshot?.streakDays)
     val view = WidgetView(
         status = displayedStatusFor(
             snapshot = snapshot,

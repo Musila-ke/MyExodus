@@ -413,7 +413,7 @@ class BlockerAccessibilityService : AccessibilityService() {
                     // short). A single fixed-delay re-run assumed that "a moment" has one length;
                     // the animation can outlast it. Re-sample until two consecutive samples agree
                     // on the target rect, capped, skipped whenever the cover is gone.
-                    settleCover(generation, displayId, packageName, previous = null, attempt = 1)
+                    settleCover(displayId, packageName, previous = null, attempt = 1)
                 }
             }
             is BlockDecision.Allow -> {
@@ -849,13 +849,23 @@ class BlockerAccessibilityService : AccessibilityService() {
         blockOtherRestrictedWindows(generation)
     }
 
-    /** Settle re-run: re-cover until the deciding package's target rect is stable across two
-     *  consecutive samples (or [COVER_SETTLE_MAX_ATTEMPTS] is hit). [previous] is the last sample;
-     *  null on entry so the first re-run always happens, matching the pre-loop behavior. A sample
-     *  that reads no window is "not yet stable" — the window list can be momentarily empty
-     *  mid-switch, and treating that as settled would freeze the cover at the animation rect. */
+    /** Settle re-run: re-bound the live card until the deciding package's target rect is stable
+     *  across two consecutive samples (or [COVER_SETTLE_MAX_ATTEMPTS] is hit). [previous] is the
+     *  last sample; null on entry so the first re-run always happens, matching the pre-loop
+     *  behavior. A sample that reads no window is "not yet stable" — the window list can be
+     *  momentarily empty mid-switch, and treating that as settled would freeze the cover at the
+     *  animation rect.
+     *
+     *  The live scene, not the decision generation, is this pass's liveness gate: the launcher's
+     *  Allow arrives right after our own eviction and advances the generation, which used to end
+     *  the loop early and freeze the card at the evicted app's exit-animation rect (X6532,
+     *  2026-10-18 — a 480x1440 card stayed over the 720x1600 display and over the launcher).
+     *
+     *  A window rect is the target only while the blocked app is still the active foreground. An
+     *  evicted app can keep a shrunken window listed through its exit animation; that rect must
+     *  not outlive the app's foreground state — the card belongs on the whole bar-free display.
+     *  (Split-screen pane coverage is unaffected: there the blocked window is the foreground.) */
     private fun settleCover(
-        generation: Long,
         displayId: Int,
         packageName: String,
         previous: Rect?,
@@ -864,13 +874,21 @@ class BlockerAccessibilityService : AccessibilityService() {
         if (attempt > COVER_SETTLE_MAX_ATTEMPTS) return
         mainHandler.postDelayed(
             {
-                if (generation != stateMachine.currentGeneration || !overlay.isShown(displayId)) {
-                    return@postDelayed
-                }
-                val current = restrictedWindowBounds(displayId, packageName)
+                val scene = overlay.currentContent(displayId) as? OverlayContent.AppBlocked
+                if (scene?.packageName != packageName) return@postDelayed
+                val foreground =
+                    rootInActiveWindow?.packageName?.toString() == packageName
+                val current = if (foreground) restrictedWindowBounds(displayId, packageName) else null
                 if (current != null && current == previous) return@postDelayed
-                coverBlockedApp(generation, displayId, packageName)
-                settleCover(generation, displayId, packageName, current, attempt + 1)
+                // Current generation, not the one this pass started under: the scene check
+                // above is the authority, and show()'s block→block branch re-bounds only.
+                overlay.show(
+                    stateMachine.currentGeneration,
+                    displayId,
+                    coverTarget(foreground, current, overlay.displayBounds(displayId)),
+                    scene,
+                )
+                settleCover(displayId, packageName, current, attempt + 1)
             },
             COVER_SETTLE_INTERVAL_MS,
         )
@@ -1121,6 +1139,14 @@ class BlockerAccessibilityService : AccessibilityService() {
          *  pathological window-list (~4.2s worst case), matching DEFERRED_WSC's bounded-retry
          *  posture — a genuinely stale block must not re-cover forever. */
         private const val COVER_SETTLE_MAX_ATTEMPTS = 6
+
+        /** The settle pass's target (pure for direct testing): a listed window rect counts only
+         *  while its package is the active foreground. An evicted app can keep a shrunken window
+         *  listed through its exit animation; that rect must not outlive the foreground state —
+         *  the card belongs on the whole bar-free display (X6532, 2026-10-18: a 480x1440 card
+         *  froze at the exit-animation rect and stayed over the launcher). */
+        fun coverTarget(foreground: Boolean, windowBounds: Rect?, displayBounds: Rect): Rect =
+            if (foreground && windowBounds != null) windowBounds else displayBounds
 
         /** How long Path B's poll oracle may go unrefreshed and still overrule a foreground
          *  transition (ADR #107): the poll re-stamps it every ≤1.5 s, so 5 s spans several

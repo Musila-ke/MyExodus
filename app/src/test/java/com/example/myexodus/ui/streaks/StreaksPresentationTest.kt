@@ -53,22 +53,27 @@ class StreaksPresentationTest {
         assertEquals(3, habitDays(3 * day + day / 2))
     }
 
-    /** Owner ruling 2026-10-03 (ADR #128): the displayed count is ordinal — Day 1 at start
-     *  (also when backdated), then one up per completed 24h day, never 0. */
+    /** Owner rulings ADR #128 and ADR #176 (2026-10-18): the displayed count is completed
+     *  whole days, floored at 1 so a fresh streak never reads 0. */
     @Test
-    fun daysFree_isTheOrdinalDisplayDay_neverZero() {
+    fun daysFree_isCompletedDays_flooredAtOne() {
         assertEquals(1, daysFree(0))
         assertEquals(1, daysFree(day - 1))
-        assertEquals(2, daysFree(day))
-        assertEquals(4, daysFree(3 * day + day / 2))
+        assertEquals(1, daysFree(day))
+        assertEquals(2, daysFree(2 * day))
+        assertEquals(3, daysFree(3 * day + day / 2))
     }
 
-    /** The countdown stays on completed days so it agrees with the milestone's own 24h firing
-     *  moment: "Day 7" completes `daysUntil` days from now = `7 - daysFree + 1`. */
+    /** The countdown is measured on the displayed-day scale, so day + distance always equals
+     *  the milestone. The device-proven complaint this pins down (2026-10-18): "day 3, 7-day
+     *  mark in 5 days — total is 8". */
     @Test
-    fun daysUntil_matchesTheOrdinalCountdown() {
-        assertEquals(7 - daysFree(0) + 1, daysUntil(state(elapsedMs = 0), 7))
-        assertEquals(7 - daysFree(6 * day) + 1, daysUntil(state(elapsedMs = 6 * day), 7))
+    fun dayCountPlusCountdown_alwaysEqualsTheMilestone() {
+        val samples = listOf(0L, 1L, day - 1, day, 3 * day, 6 * day, 6 * day + day / 2)
+        samples.forEach { elapsed ->
+            assertEquals(7, daysFree(elapsed) + daysUntil(state(elapsedMs = elapsed), 7))
+        }
+        assertEquals(0, daysUntil(state(elapsedMs = 7 * day), 7))
     }
 
     @Test
@@ -82,7 +87,7 @@ class StreaksPresentationTest {
 
     @Test
     fun daysUntil_measuresFromLiveStreak_andFloorsAtZero() {
-        assertEquals(7, daysUntil(state(), 7))
+        assertEquals(6, daysUntil(state(), 7))
         assertEquals(27, daysUntil(state(elapsedMs = 3 * day), 30))
         assertEquals(0, daysUntil(state(elapsedMs = 10 * day), 7))
     }

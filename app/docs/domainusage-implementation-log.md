@@ -928,3 +928,25 @@ once-per-threshold, seeded-total no-replay, limit-change re-arm, superseded-revi
 regressions (`editing_autocompletePreview_defersTheScan`, `editing_commitAfterEditing_blocksNormally`,
 `editing_evaluatedAtFireTime_notEventTime`), taking the full suite to **1783 tests / 0 failures /
 0 errors / 0 skipped** (BUILD SUCCESSFUL 12m38s). Metering, accounting and warnings are untouched.
+
+## Relay send-window flow control — the download-stall fix (2026-10-18, ADR #175)
+
+Owner report: browser downloads slow, a small WhatsApp video hung then sat at 53% until the VPN
+was turned off. Root cause: the userspace relay synthesized the upstream→device TCP side with no
+send window, no retransmission and no zero-window probing; a paused device reader caused ~4 MB to
+be written past its advertised window and discarded by the kernel, wedging the flow permanently
+(device-proven freeze at 6,495,000 of 10,485,760 bytes). Fix: `vpn/TcpSendWindow.kt` (SND.UNA /
+SND.WND, in-flight queue, RTO retransmission 1 s→8 s, zero-window probing), window-paced relay
+writes, bounded `SO_TIMEOUT` reads, a bounded FIN drain, and the per-packet hot-path logging
+deleted.
+
+**Device verification (X6532, 2026-10-18).** `speedtest.tele2.net/10MB.zip` (`Content-Length:
+10,485,760`; measured header 240 bytes), reader `kill -STOP`ped 8 s: the file held at exactly
+1,243,200 bytes for the whole pause, then resumed and completed at **10,486,000 bytes = header +
+full body**, `nc` exiting on its own. A clean run completed the same file in ~40 s (~262 KB/s on
+the test WiFi), matching the first-5-second rate — no first-pass throughput cost.
+
+**Regression.** Full JVM suite: **1792 tests / 0 failures / 0 errors / 0 skipped**
+(`TcpSendWindowTest` 6/6; `+9` from 1783 = 6 relay + 3 cover-target tests). The one mid-sweep
+failure was an unrelated same-millisecond ordering tie in `AttemptLogTest`, fixed with `id`
+tie-breakers in `AttemptLogDao` (ADR #178).

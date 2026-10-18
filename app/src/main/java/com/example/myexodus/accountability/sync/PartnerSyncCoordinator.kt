@@ -316,7 +316,10 @@ class PartnerSyncCoordinator(
                 ?: return null
             val streak = store.recoveryStreakDao().getActiveStreak(anchor.progressId)
             base = Aggregate(
-                daysFree = streak?.let { (it.currentStreakElapsedMs / StreakTimer.DAY_MS).toInt() + 1 } ?: 0,
+                // Same displayed day count as the sender's own surfaces (ADR #128/#176).
+                daysFree = streak?.let {
+                    maxOf(1, (it.currentStreakElapsedMs / StreakTimer.DAY_MS).toInt())
+                } ?: 0,
                 relapseCount = anchor.totalRelapses,
                 milestones = achievedDays(store, streak?.streakId),
                 coachingProgress = row.coachingProgress,

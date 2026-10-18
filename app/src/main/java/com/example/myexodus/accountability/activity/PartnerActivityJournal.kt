@@ -125,10 +125,11 @@ object PartnerActivityJournal {
                 habitProgressId = habit?.progressId,
                 text = text,
                 occurredAtMs = occurredAtMs,
-                // Ordinal display day, the same count the sender's own app shows (owner ruling
-                // 2026-10-03, ADR #128): a fresh streak reports Day 1, never 0. A profile with
-                // no streak at all still reports 0 — there is nothing to floor.
-                daysFree = streak?.let { (it.currentStreakElapsedMs / StreakTimer.DAY_MS).toInt() + 1 } ?: 0,
+                // The same displayed day count the sender's own surfaces render — completed
+                // days floored at 1, never 0 (ADR #128/#176). No streak at all still reports 0.
+                daysFree = streak?.let {
+                    maxOf(1, (it.currentStreakElapsedMs / StreakTimer.DAY_MS).toInt())
+                } ?: 0,
                 relapseCount = habit?.totalRelapses ?: 0,
                 // Achieved days of the *current* streak — a relapse's fresh streak reports none.
                 milestonesReached = encodeMilestoneDays(achieved),

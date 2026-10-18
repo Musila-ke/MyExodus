@@ -414,9 +414,8 @@ private fun MilestoneBand(view: WidgetView) {
     val days = view.streakDays ?: return
     val target = view.nextMilestoneDay ?: return
     val away = view.nextMilestoneDaysAway ?: return
-    // streakDays is the ordinal display day (ADR #128); the fraction counts completed days.
-    // coerceAtLeast guards a stale persisted snapshot written by the pre-ruling build.
-    val fraction = milestoneFraction((days - 1).coerceAtLeast(0), target) ?: return
+    // streakDays is the displayed day count, already on the completed-day scale (ADR #176).
+    val fraction = milestoneFraction(days, target) ?: return
 
     // One nested band (see TallContent): flat, these are 3 more children in the tall card's outer
     // Column, which Glance truncates at 10.

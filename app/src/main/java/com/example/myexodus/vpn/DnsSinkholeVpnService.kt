@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -37,6 +38,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.util.Random
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
@@ -82,7 +84,9 @@ import kotlinx.coroutines.launch
  * [RulesSnapshotPublisher]) — see [DomainBlocklist] for matching semantics and its documented
  * ceilings (no time-window evaluation at DNS layer; path-pinned rules are the Accessibility
  * engine's job). TCP/53 and TCP/853 ride the transparent relay byte-for-byte (no TCP-DNS
- * parsing); ICMP and IP fragments are dropped; no device-side retransmit buffering.
+ * parsing); ICMP and IP fragments are dropped. The relay's device-facing send side honours the
+ * device's advertised window and retransmits unacknowledged segments ([TcpSendWindow], ADR #175);
+ * the engine's inspection hold is the only device-side buffering.
  */
 enum class VpnEngineState { STOPPED, STARTING, ACTIVE, DEGRADED, FAILED, REVOKED }
 
@@ -109,6 +113,16 @@ class DnsSinkholeVpnService : VpnService() {
         const val UPSTREAM_DNS_V4 = "8.8.8.8"
         const val UPSTREAM_DNS_V6 = "2001:4860:4860::8888"
         const val FLOW_IDLE_SWEEP_MS = 300_000L
+
+        /** Bounded upstream reads: an idle flow still gets its hole-repair timer run. */
+        const val RELAY_READ_TIMEOUT_MS = 1_000
+
+        /** Window-full polling slice on the relay thread (never a busy wait). */
+        const val SEND_WAIT_SLICE_MS = 100L
+
+        /** Bounded wait for the tail to be acknowledged before FIN + teardown. */
+        const val FIN_DRAIN_MS = 2_000L
+        const val DRAIN_POLL_MS = 50L
 
         /** SOS §8.13: GMS is disallowed from the TUN so FCM push delivery is never
          *  sinkholed (no runtime permission needed for a disallow entry). */
@@ -538,10 +552,12 @@ class DnsSinkholeVpnService : VpnService() {
                 if (flow.connected.get() && tcp.payloadLength == 0) sendSynAck(flow) // SYN retransmit after connect
                 return
             }
-            val f = TcpFlow(key, ip.src, tcp.srcPort, ip.dst, tcp.dstPort, ip.isV6, tcp.seq + 1)
             // ISN chosen once per flow: re-randomizing it on SYN retransmit made the device
             // challenge every re-sent SYN-ACK (out-of-window SYN -> TCPSYNChallenge storm).
-            f.seqToDevice = isnRandom.nextInt() + 1
+            val f = TcpFlow(
+                key, ip.src, tcp.srcPort, ip.dst, tcp.dstPort, ip.isV6,
+                tcp.seq + 1, isnRandom.nextInt(), tcp.window,
+            )
             flows[key] = f
             // After the map insert: an exhausted-rule admission resets the flow, and that reset
             // must find (and remove) the flow it decided against.
@@ -553,8 +569,11 @@ class DnsSinkholeVpnService : VpnService() {
         if (flow == null) return // never saw the SYN; the device retransmits it
 
         if (tcp.rst) { Log.i(TAG, "tcp dev rst key=$key ack=${tcp.ack} win=${tcp.window}"); teardown(flow); return }
-        if (tcp.payloadLength == 0 && tcp.ackFlag) {
-            Log.i(TAG, "tcp dev ack key=$key seq=${tcp.seq} ack=${tcp.ack} win=${tcp.window}")
+        // Every ACK-bearing segment carries the device's current receive window; the send side
+        // reserves sequence space from it. Ignoring these is what wedged downloads on a
+        // zero window (device-proven 2026-10-18, ADR #175).
+        if (tcp.ackFlag) {
+            flow.sendWindow.onAck(tcp.seq, tcp.ack, tcp.window, SystemClock.elapsedRealtime())
         }
         if (tcp.payloadLength > 0 && flow.connected.get()) {
             when {
@@ -592,7 +611,6 @@ class DnsSinkholeVpnService : VpnService() {
                         }
                         ClientDataResult.Reset -> Unit // the Engine already RST the device
                     }
-                    Log.i(TAG, "tcp fwd dev->up key=$key ${tcp.payloadLength}B seq=${tcp.seq} ack=${tcp.ack}")
                 } catch (e: IOException) { teardown(flow) }
             }
         }
@@ -613,6 +631,10 @@ class DnsSinkholeVpnService : VpnService() {
             socket.tcpNoDelay = true
             protect(socket)
             socket.connect(InetSocketAddress(InetAddress.getByAddress(flow.dstIp), flow.dstPort), 5_000)
+            // Bounded reads: an upstream that has gone quiet must still let the relay run its
+            // retransmission timer (SocketTimeoutException in relayLoop), else a hole under a
+            // tail segment would wait on read() for data that will never come.
+            socket.soTimeout = RELAY_READ_TIMEOUT_MS
             Log.i(TAG, "tcp connect upstream OK dst=$dstHost:${flow.dstPort}")
         } catch (e: IOException) {
             // Address family unreachable on the physical network (e.g. v4-only carrier):
@@ -662,7 +684,6 @@ class DnsSinkholeVpnService : VpnService() {
     }
 
     private fun sendAck(flow: TcpFlow, win: Int = -1) {
-        Log.i(TAG, "tcp re-ack key=${flow.key} seq=${flow.seqToDevice} ack=${flow.ackToDevice} win=$win")
         writeTun(
             VpnPacket.buildTcpSegment(
                 src = flow.dstIp, dst = flow.deviceIp,
@@ -677,27 +698,37 @@ class DnsSinkholeVpnService : VpnService() {
         val buf = ByteArray(VpnPacket.MAX_TCP_SEGMENT)
         try {
             while (running && !flow.closed.get()) {
-                val n = flow.socket!!.inputStream.read(buf)
+                val n = try {
+                    flow.socket!!.inputStream.read(buf)
+                } catch (e: SocketTimeoutException) {
+                    // Upstream idle: run the repair timer so a hole cannot wedge the flow.
+                    flow.sendWindow.dueRetransmit(SystemClock.elapsedRealtime())
+                        ?.let { sendRelaySegment(flow, it, psh = false) }
+                    continue
+                }
                 if (n <= 0) break // upstream closed -> inject FIN
                 flow.tap.onServerData(n)
-                val seq = flow.seqToDevice
-                flow.seqToDevice = seq + n
-                val seg = VpnPacket.buildTcpSegment(
-                    src = flow.dstIp, dst = flow.deviceIp,
-                    srcPort = flow.dstPort, dstPort = flow.devicePort,
-                    seq = seq, ack = flow.ackToDevice,
-                    psh = true, ackFlag = true,
-                    payload = buf, payloadOffset = 0, payloadLength = n,
-                )
-                val base = if (flow.isV6) 40 else 20
-                if (firstSegHex) { firstSegHex = false
-                    Log.i(TAG, "tcp seghex PRE ${seg.size}B cksum=${VpnPacket.readShort(seg, base + 16)} hex=${seg.joinToString("") { "%02x".format(it) }}")
+                var off = 0
+                while (off < n) {
+                    if (!running || flow.closed.get()) return
+                    val now = SystemClock.elapsedRealtime()
+                    val seg = flow.sendWindow.reserveSend(buf, off, n - off, SEND_WAIT_SLICE_MS, now)
+                    if (seg != null) {
+                        sendRelaySegment(flow, seg, psh = true)
+                        off += seg.length
+                        continue
+                    }
+                    // Window full: repair a hole, or probe a zero window so the device
+                    // re-advertises it (RFC 1122 §4.2.2.17).
+                    flow.sendWindow.dueRetransmit(now)?.let { sendRelaySegment(flow, it, psh = false) }
+                    flow.sendWindow.reserveProbe(buf, off, now)?.let {
+                        sendRelaySegment(flow, it, psh = false)
+                        off += 1
+                    }
                 }
-                val ok = writeTun(seg)
-                Log.i(TAG, "tcp fwd up->dev key=${flow.key} ${n}B seq=$seq doff=${seg[base + 12].toInt() ushr 4} flags=${seg[base + 13].toInt() and 0xFF} win=${VpnPacket.readShort(seg, base + 14)} cksum=${VpnPacket.readShort(seg, base + 16)} ok=$ok")
-                flow.lastActivity = System.currentTimeMillis()
             }
             if (flow.closed.get()) return
+            drainUnacked(flow)
             writeTun(
                 VpnPacket.buildTcpSegment(
                     src = flow.dstIp, dst = flow.deviceIp,
@@ -711,6 +742,44 @@ class DnsSinkholeVpnService : VpnService() {
         } finally {
             teardown(flow)
         }
+    }
+
+    /**
+     * Bounded wait for the tail to be acknowledged before FIN. Teardown follows the FIN, so a
+     * hole left under it would be the same permanent wedge the flow-control fix removes: the
+     * device would keep ACKing the hole and nothing would be left to retransmit.
+     */
+    private fun drainUnacked(flow: TcpFlow) {
+        val deadline = SystemClock.elapsedRealtime() + FIN_DRAIN_MS
+        while (running && !flow.closed.get() && flow.sendWindow.hasUnacked() &&
+            SystemClock.elapsedRealtime() < deadline
+        ) {
+            flow.sendWindow.dueRetransmit(SystemClock.elapsedRealtime())
+                ?.let { sendRelaySegment(flow, it, psh = false) }
+            try {
+                Thread.sleep(DRAIN_POLL_MS)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return
+            }
+        }
+    }
+
+    private fun sendRelaySegment(flow: TcpFlow, seg: TcpSendWindow.Segment, psh: Boolean) {
+        val packet = VpnPacket.buildTcpSegment(
+            src = flow.dstIp, dst = flow.deviceIp,
+            srcPort = flow.dstPort, dstPort = flow.devicePort,
+            seq = seg.seq, ack = flow.ackToDevice,
+            psh = psh, ackFlag = true,
+            payload = seg.payload, payloadOffset = 0, payloadLength = seg.length,
+        )
+        if (firstSegHex) {
+            firstSegHex = false
+            val base = if (flow.isV6) 40 else 20
+            Log.i(TAG, "tcp seghex PRE ${packet.size}B cksum=${VpnPacket.readShort(packet, base + 16)} hex=${packet.joinToString("") { "%02x".format(it) }}")
+        }
+        writeTun(packet)
+        flow.lastActivity = System.currentTimeMillis()
     }
 
     private fun teardown(flow: TcpFlow) {
@@ -849,11 +918,17 @@ class DnsSinkholeVpnService : VpnService() {
         val dstPort: Int,
         val isV6: Boolean,
         initialAckToDevice: Int,
+        isn: Int,
+        deviceWindow: Int,
     ) : FlowControl {
         val connected = AtomicBoolean(false)
         val closed = AtomicBoolean(false)
         @Volatile var ackToDevice: Int = initialAckToDevice
-        @Volatile var seqToDevice: Int = 0
+
+        /** Send-side sequence and window state ([TcpSendWindow]); [seqToDevice] is its next seq. */
+        val sendWindow = TcpSendWindow(isn, deviceWindow)
+        val seqToDevice: Int get() = sendWindow.nextSeq
+
         @Volatile var socket: Socket? = null
         @Volatile var finSeen: Boolean = false
         @Volatile var lastActivity: Long = System.currentTimeMillis()

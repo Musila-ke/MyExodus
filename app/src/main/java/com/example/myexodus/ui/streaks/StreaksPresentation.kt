@@ -16,25 +16,25 @@ import com.example.myexodus.streaks.WithdrawalWeek
 fun habitDays(elapsedMs: Long): Int = (elapsedMs / StreakTimer.DAY_MS).toInt()
 
 /**
- * The ordinal day number every user-facing count renders: the day of the run the user is
- * *in*, so a freshly started (or backdated) streak shows Day 1 — never 0. Owner ruling
- * 2026-10-03 (ADR #128): "lets never tell the user 0 we show 1 then we proceed from there".
+ * The day count every user-facing surface renders: completed whole days, floored at 1 so a
+ * freshly started (or backdated) streak never reads 0 — owner rulings 2026-10-03 (ADR #128)
+ * and 2026-10-18 (ADR #176, which replaced the ordinal +1). The floor is display-only: the
+ * engine still counts whole elapsed days and milestones still fire at their 24h thresholds
+ * (§6.2 anti-minting).
  *
- * The engine stays untouched: the accumulator still counts whole elapsed days and milestones
- * still fire at their 24h thresholds (§6.2 anti-minting). The +1 lives only here, at the
- * display boundary — after N completed days the user is on Day N+1. [daysUntil] deliberately
- * stays on completed days, which is the same thing as `milestoneDay - daysFree(elapsed) + 1`:
- * "Day 7" completes `7 - completed` days from now, the truthful countdown.
+ * Every countdown is measured on this same scale ([daysUntil]), so the visible day count and
+ * the distance to the next rung always add up to the milestone total: the day the "One week
+ * free" card fires the hero reads 7, not 8.
  */
-fun daysFree(elapsedMs: Long): Int = habitDays(elapsedMs) + 1
+fun daysFree(elapsedMs: Long): Int = maxOf(1, habitDays(elapsedMs))
 
 /** Next unachieved milestone of the active streak (rows are day-ordered), if any. */
 fun nextMilestone(state: HabitState): MilestoneEvent? =
     state.milestones.firstOrNull { it.achievedAt == null }
 
-/** Whole days until a milestone day; 0 once it is reached. */
+/** Whole days until a milestone day, on the displayed-day scale; 0 once it is reached. */
 fun daysUntil(state: HabitState, milestoneDay: Int): Int =
-    (milestoneDay - habitDays(state.currentStreakElapsedMs)).coerceAtLeast(0)
+    (milestoneDay - daysFree(state.currentStreakElapsedMs)).coerceAtLeast(0)
 
 /** Unacknowledged milestone cards for the splash surface (REQ-12), day-ordered. */
 fun splashMilestones(state: HabitState): List<MilestoneEvent> =

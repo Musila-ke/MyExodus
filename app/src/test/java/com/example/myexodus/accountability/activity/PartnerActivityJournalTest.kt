@@ -88,7 +88,7 @@ class PartnerActivityJournalTest {
         val row = journalRows().single()
         assertEquals(EventPayload.TYPE_STREAK_UPDATED, row.kind)
         assertEquals("the consent key the reconcile filter joins on (v16)", HABIT_ID, row.habitProgressId)
-        assertEquals("7 completed days = ordinal Day 8 (ADR #128)", 8, row.daysFree)
+        assertEquals("7 completed days = the displayed count (ADR #176)", 7, row.daysFree)
         assertEquals(2, row.relapseCount)
         assertEquals("7", row.milestonesReached)
         assertEquals(2, row.coachingProgress)
@@ -266,7 +266,7 @@ class PartnerActivityJournalTest {
 
         val row = journalRows().single()
         assertEquals("You've got this — day by day.", row.text)
-        assertEquals("the message rides the sender's own snapshot (3 completed = Day 4)", 4, row.daysFree)
+        assertEquals("the message rides the sender's own snapshot (3 completed days)", 3, row.daysFree)
     }
 
     /**

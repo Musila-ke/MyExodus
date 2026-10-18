@@ -390,8 +390,8 @@ class HabitRepositoryTest {
         val firstStreakId = (onboard() as HabitRepository.OnboardingResult.Ready).state.streakId
 
         now = TimeReadings(tWallMillis = T0 + 5 * StreakTimer.DAY_MS, rBootMillis = 1_000 + 5 * StreakTimer.DAY_MS, bootCount = 7)
-        // 5 completed days = the 6th ordinal day (ADR #128).
-        assertEquals(6, repository.evaluate(habitIdOf())!!.currentDay)
+        // 5 completed days = the displayed count (ADR #176).
+        assertEquals(5, repository.evaluate(habitIdOf())!!.currentDay)
 
         val result = repository.logRelapse(habitIdOf()) as HabitRepository.RelapseResult.RolledOver
         val state = result.state
@@ -554,12 +554,12 @@ class HabitRepositoryTest {
         seedStreakConsent(habitIdOf())
 
         now = TimeReadings(tWallMillis = T0 + StreakTimer.DAY_MS, rBootMillis = RB0 + StreakTimer.DAY_MS, bootCount = 7)
-        // One completed day = ordinal Day 2 — the count the user's own surfaces show (ADR #128).
-        assertEquals(2, repository.evaluate(habitIdOf())!!.currentDay)
+        // One completed day = the count the user's own surfaces show (ADR #176).
+        assertEquals(1, repository.evaluate(habitIdOf())!!.currentDay)
 
         val rows = journalRows()
         assertEquals(listOf(EventPayload.TYPE_STREAK_UPDATED), rows.map { it.kind })
-        assertEquals(2, rows.single().daysFree)
+        assertEquals(1, rows.single().daysFree)
 
         // Re-evaluating inside the same day adds nothing — the gate is the day boundary.
         now = TimeReadings(tWallMillis = T0 + StreakTimer.DAY_MS + 60_000, rBootMillis = RB0 + StreakTimer.DAY_MS + 60_000, bootCount = 7)

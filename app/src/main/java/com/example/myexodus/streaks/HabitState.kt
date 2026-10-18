@@ -20,9 +20,8 @@ data class HabitState(
     val currentStreakElapsedMs: Long,
     /** Habit-level record across all streaks; never rendered as the live streak (Decision 13). */
     val allTimeMaxElapsedMs: Long,
-    /** Ordinal display day of [currentStreakElapsedMs] — the day of the run the user is in,
-     *  so a fresh streak is Day 1, never 0 (owner ruling 2026-10-03, ADR #128). Completed
-     *  days stay in [currentStreakElapsedMs]; this is the display boundary's +1. */
+    /** Whole completed days of [currentStreakElapsedMs], floored at 1 so a fresh streak never
+     *  reads 0 (owner rulings ADR #128, display scale revised by ADR #176). */
     val currentDay: Int,
     val habitDurationYears: Int,
     val severity: WithdrawalSeverity,

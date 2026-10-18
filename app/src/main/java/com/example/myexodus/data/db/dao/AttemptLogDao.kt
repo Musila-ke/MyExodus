@@ -18,7 +18,7 @@ interface AttemptLogDao {
     @Insert
     suspend fun insert(attempt: AttemptLog): Long
 
-    @Query("SELECT * FROM attempt_log ORDER BY occurred_at_epoch_millis DESC LIMIT :limit")
+    @Query("SELECT * FROM attempt_log ORDER BY occurred_at_epoch_millis DESC, id DESC LIMIT :limit")
     suspend fun recent(limit: Int): List<AttemptLog>
 
     /**
@@ -37,7 +37,7 @@ interface AttemptLogDao {
             "AND occurred_at_epoch_millis >= :sinceMs " +
             "AND NOT EXISTS (SELECT 1 FROM attempt_mirror_link l " +
             "WHERE l.attempt_id = attempt_log.id AND l.pair_id = :pairId) " +
-            "ORDER BY occurred_at_epoch_millis ASC LIMIT :limit",
+            "ORDER BY occurred_at_epoch_millis ASC, id ASC LIMIT :limit",
     )
     suspend fun pendingEventCreation(pairId: String, sinceMs: Long, limit: Int): List<AttemptLog>
 

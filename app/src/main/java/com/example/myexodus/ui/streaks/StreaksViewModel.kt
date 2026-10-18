@@ -197,8 +197,10 @@ class StreaksViewModel @Inject constructor(
         _relapseFeedback.value = null
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val endedDays = daysFree(current.currentStreakElapsedMs)
-                val bestDays = daysFree(current.allTimeMaxElapsedMs)
+                // Completed days, not the floored display count: "you showed up N days in a
+                // row" must not claim a day the user had not finished.
+                val endedDays = habitDays(current.currentStreakElapsedMs)
+                val bestDays = habitDays(current.allTimeMaxElapsedMs)
                 when (repository.logRelapse(current.habitId)) {
                     is HabitRepository.RelapseResult.RolledOver ->
                         _relapseFeedback.value = RelapseFeedback.Support(endedDays, bestDays)

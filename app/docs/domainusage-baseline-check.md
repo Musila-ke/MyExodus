@@ -30,10 +30,12 @@ to the 5-tuple at S6. Step records from S1 on live in `app/docs/domainusage-impl
 
 ## Evidence per item
 
-**P1 — PASS.** `DnsSinkholeVpnService.connectUpstream()` (`vpn/DnsSinkholeVpnService.kt:399-421`)
+**P1 — PASS.** `DnsSinkholeVpnService.connectUpstream()` (`vpn/DnsSinkholeVpnService.kt:626-659`)
 opens one `Socket` per flow, `protect()`s it, connects, and hands it to a per-flow
-`relayLoop()` (`:462-499`). Device-side segments are handled by `handleTcp()` (`:346-397`).
+`relayLoop()` (`:697-783`). Device-side segments are handled by `handleTcp()` (`:540-624`).
 This is the ADR #19 transparent relay, 3× ALL=PASS on the X6532 (ADR #19, gates 16/17/18).
+*(Line numbers re-read 2026-10-18 against the ADR #175 relay; the relay now also applies
+send-side window pacing and retransmission — device-verified 2026-10-18, see P10 and ADR #175.)*
 
 **P2 — PARTIAL, fixed in S0.**
 - (a) Both directions visible: client→server in `handleTcp()` (`:376-389`), server→client in
@@ -130,11 +132,13 @@ IPv4/IPv6 TCP RST|ACK to the TUN fd via `VpnPacket.buildTcpSegment()`
 §6.10 — does not exist; S8 implements it (expected implementation work per S0.4, not a stop).
 **Closed at S8** — `VpnPacket.buildIcmpPortUnreachable` (v4 + ICMPv6), wired at both drop sites.
 
-**P10 — PASS.** `TcpFlow` tracks `ackToDevice` and `seqToDevice` (`:594-610`), maintained on
-every relayed byte on both paths (`:383-384`, `:468-469`, `:392`), and `sendRst()` builds its
-segment from exactly those values at call time. The synthesized RST|ACK is therefore valid
-for the device's TCP state machine (this is the mechanism the existing connect-failure RST
-already relies on).
+**P10 — PASS.** `TcpFlow` (`:913-950`) carries `ackToDevice` and, since ADR #175, a
+`TcpSendWindow` whose `nextSeq` is the `seqToDevice` value (it advances on every reserved
+device-facing byte and only within the device's advertised window; RST still builds from the
+current values at call time). The synthesized RST|ACK is therefore valid for the device's TCP
+state machine (the mechanism the existing connect-failure RST already relies on). *(Revised
+2026-10-18: `seqToDevice` was a plain counter maintained on every relayed byte at
+`:383-384/:468-469/:392`; those references describe the pre-#175 code.)*
 
 ## Additional facts S0 was asked to resolve (§16 items)
 
