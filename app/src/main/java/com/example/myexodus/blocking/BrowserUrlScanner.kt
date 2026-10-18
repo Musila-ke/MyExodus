@@ -74,7 +74,7 @@ class BrowserUrlScanner(
         val found = ADDRESS_BAR_IDS
             .map { "$packageName:id/$it" }
             .firstOrNull { hasView(tree, it) } ?: return null
-        Log.d(TAG, "address bar discovered: $packageName -> $found")
+        if (BuildConfig.DEBUG) Log.d(TAG, "address bar discovered: $packageName -> $found")
         viewIdByPackage[packageName] = found
         return found
     }
@@ -123,11 +123,12 @@ class BrowserUrlScanner(
                 canonical == null ->
                     if (SCHEME_PREFIX.containsMatchIn(text.trim())) BlockDecision.Allow
                     else {
-                        Log.d(TAG, "url scan no-op: unparseable, not a scheme navigation '$text'")
+                        // A-04/INV-7: address-bar text is a URL — debug diagnostics only.
+                        if (BuildConfig.DEBUG) Log.d(TAG, "url scan no-op: unparseable, not a scheme navigation '$text'")
                         return@Runnable
                     }
                 !isPageLike(canonical) && rule == null -> {
-                    Log.d(TAG, "url scan no-op: not a page-like address '$text'")
+                    if (BuildConfig.DEBUG) Log.d(TAG, "url scan no-op: not a page-like address '$text'")
                     return@Runnable
                 }
                 else -> engine.decideUrl(

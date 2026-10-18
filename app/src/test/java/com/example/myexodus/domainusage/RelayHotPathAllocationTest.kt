@@ -79,7 +79,9 @@ class RelayHotPathAllocationTest {
     @Test
     fun touchAllocatesNothing() {
         assumeTrue("JVM exposes per-thread allocation", bean.isThreadAllocatedMemorySupported)
-        val counter = RuleCounter("r1", 0L, dailyLimitMs = 3_600_000L, enforcedToday = true)
+        val counter = RuleCounter(
+            "r1", 0L, pattern = "example.com", dailyLimitMs = 3_600_000L, enforcedToday = true,
+        )
         var elapsed = 0L
 
         val growth = minWindowGrowth(WARMUP, WINDOWS, PER_WINDOW) {

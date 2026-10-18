@@ -251,12 +251,12 @@
     <string name="editor_window_hint">Blocked between these times, on the days you pick.</string>
     <string name="editor_daily_limit_title">Limit daily use</string>
     <string name="editor_daily_limit_hint">Blocked after this much use in a day, on the days you pick. Resets at midnight.</string>
+    <string name="editor_website_limits_unavailable">Website daily limits aren\'t available in this build — website metering is turned off. Blocking and time windows still work.</string>
     <string name="editor_limit_hours">Hours</string>
     <string name="editor_limit_minutes">Minutes</string>
     <string name="editor_limit_preview">= blocked after %1$s a day</string>
     <string name="editor_daily_limit_invalid">Enter at least 1 minute for the daily limit.</string>
     <string name="editor_daily_limit_too_large">A daily limit must be under 24 hours. A day only has 24 hours, so this would never block — pick a shorter limit.</string>
-    <string name="editor_limit_exceeds_window">This limit is longer than the rule’s time window, so it could never fire — the window closes first. Shorten the limit or widen the window.</string>
     <!-- Website daily limits: save-time validation, scope notices (plan §8 S9, FR-2/FR-10) -->
     <string name="editor_site_limit_has_path">Limits apply to a whole site. Use “%1$s” instead.</string>
     <string name="editor_site_limit_use_it">Use it</string>
@@ -266,7 +266,7 @@
     <string name="editor_site_limit_never_block">This site is needed for internet connectivity or help resources and can’t be limited.</string>
     <string name="editor_site_limit_resolver">This is a DNS service and can’t be limited.</string>
     <string name="editor_site_limit_duplicate">This site already has a limit set.</string>
-    <string name="editor_limit_scope_notice">Limits apply to this site and its subdomains. Other domains used by the same service aren’t counted.</string>
+    <string name="editor_limit_scope_notice">Limits apply to this site and its subdomains, across every app on this device — including the site’s own app. Other domains used by the same service aren’t counted.</string>
     <string name="editor_limit_connection_notice">Usage is measured per connection your device makes to this site, not per page or request — a site that reuses one connection for several pages may show usage differently than expected.</string>
     <string name="editor_active_days">Active on</string>
     <string name="editor_from">From</string>
@@ -872,14 +872,16 @@
     <string name="domain_usage_channel_name">Website limits</string>
     <string name="domain_usage_vpn_stopped_title">Website limits paused</string>
     <string name="domain_usage_vpn_stopped_text">The VPN stopped, so website limits are not being applied.</string>
-    <!-- FR3 threshold warning. INV-7: never names the site. -->
+    <!-- FR3 threshold warning. ADR #179 (owner direction 2026-10-18): names the rule's site;
+         the notification is VISIBILITY_PRIVATE so a secure lock screen conceals the text. -->
     <string name="domain_usage_limit_warning_title">Website limit almost used up</string>
-    <string name="domain_usage_limit_warning_text">%1$d min left on a website limit today. Tap to review your rules.</string>
-    <string name="domain_usage_limit_warning_soon">Less than a minute left on a website limit today. Tap to review your rules.</string>
+    <string name="domain_usage_limit_warning_text">%1$s: %2$d min left today. Tap to review your rules.</string>
+    <string name="domain_usage_limit_warning_soon">%1$s: less than a minute left today. Tap to review your rules.</string>
     <!-- Rules screen: usage line and engine status banner (plan §8 S9.3/S9.4) -->
     <string name="rules_used_today">Used today: %1$d / %2$d min</string>
     <string name="domain_usage_banner_private_dns">Private DNS is on, so website limits may not apply. Set Private DNS to Off or Automatic in system settings.</string>
     <string name="domain_usage_banner_off">Website limits are temporarily off.</string>
+    <string name="domain_usage_banner_unavailable">Website limits aren\'t available in this build. Blocking and time windows still work.</string>
     <!-- #26 activation row (ADR #140). Copy is priming for the platform VPN-consent dialog
          that the tap opens: states the concrete stake (blocks + limits both ride the tunnel),
          names the system screen about to appear so it doesn't surprise, and says it's

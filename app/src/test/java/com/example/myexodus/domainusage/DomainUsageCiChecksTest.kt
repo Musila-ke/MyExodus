@@ -131,6 +131,35 @@ class DomainUsageCiChecksTest {
     }
 
     @Test
+    fun ungatedSensitiveLogInTheVpnService_fails() {
+        val root = cleanScanRoot()
+        writeVpnService(
+            root,
+            VPN_SERVICE_BODY + "fun log(q: Q) { Log.i(\"T\", \"nxdomain \" + q.qname) }\n",
+        )
+
+        val (exit, output) = run(scanRoot = root)
+
+        assertNotEquals(output, 0, exit)
+        assertTrue(output, output.contains("FAIL [INV-7]"))
+        assertTrue(output, output.contains("DnsSinkholeVpnService.kt"))
+    }
+
+    @Test
+    fun aDebugGuardedSensitiveLogInTheVpnService_passes() {
+        val root = cleanScanRoot()
+        writeVpnService(
+            root,
+            VPN_SERVICE_BODY +
+                "fun log(q: Q) { if (BuildConfig.DEBUG) Log.i(\"T\", \"nxdomain \" + q.qname) }\n",
+        )
+
+        val (exit, output) = run(scanRoot = root)
+
+        assertEquals(output, 0, exit)
+    }
+
+    @Test
     fun aCallToTheVpnBypassInAnySourceFile_fails() {
         val root = cleanScanRoot()
         root.resolve("main/java/com/example/myexodus/blocking/Other.kt").apply {

@@ -42,7 +42,8 @@ class UsageLedgerTest {
         enforcedToday: Boolean = true,
         pattern: String = "example.com",
         revision: Long = 0L,
-    ) = DomainRule("r1", revision, pattern, limit, enforcedToday)
+        expiresAt: Long = 0L,
+    ) = DomainRule("r1", revision, pattern, limit, enforcedToday, expiresAt)
 
     private class RecordingControl : FlowControl {
         var resets = 0
@@ -406,11 +407,11 @@ class UsageLedgerTest {
         assertTrue("nothing below the first threshold", ledger.takeLimitWarnings().isEmpty())
 
         drive(ledger, c, 50_000L, 50_000L)
-        assertEquals(listOf(LimitWarning(1, 50_000L)), ledger.takeLimitWarnings())
+        assertEquals(listOf(LimitWarning(1, 50_000L, "example.com")), ledger.takeLimitWarnings())
         assertTrue("a consumed crossing never repeats", ledger.takeLimitWarnings().isEmpty())
 
         drive(ledger, c, 51_000L, 90_000L)
-        assertEquals(listOf(LimitWarning(2, 10_000L)), ledger.takeLimitWarnings())
+        assertEquals(listOf(LimitWarning(2, 10_000L, "example.com")), ledger.takeLimitWarnings())
         assertTrue(ledger.takeLimitWarnings().isEmpty())
     }
 
@@ -430,7 +431,7 @@ class UsageLedgerTest {
         drive(ledger, ledger.counterFor("r1", 0)!!, 2_000L, 32_000L)
         assertEquals(
             "the level-2 crossing still fires after the restart",
-            listOf(LimitWarning(2, 10_000L)),
+            listOf(LimitWarning(2, 10_000L, "example.com")),
             ledger.takeLimitWarnings(),
         )
     }
@@ -446,7 +447,7 @@ class UsageLedgerTest {
         // Raising the limit moves both thresholds above the current total: they re-arm.
         ledger.applyRules(listOf(rule(limit = 200_000L))) // thresholds 100 s and 180 s
         drive(ledger, c, 61_000L, 100_000L)
-        assertEquals(listOf(LimitWarning(1, 100_000L)), ledger.takeLimitWarnings())
+        assertEquals(listOf(LimitWarning(1, 100_000L, "example.com")), ledger.takeLimitWarnings())
 
         // Lowering it back below the total warns about nothing retroactively.
         ledger.applyRules(listOf(rule(limit = 100_000L)))
@@ -467,5 +468,56 @@ class UsageLedgerTest {
         drive(ledger, old, 2_000L, 100_000L)
         assertEquals("the old revision still accrued", 100_000L, old.totalMs)
         assertTrue("only the current revision can notify", ledger.takeLimitWarnings().isEmpty())
+    }
+
+    // --- audit A-02: expiry enforced by the tick, no snapshot rebuild required ---
+
+    @Test
+    fun expiryFreezesTheTotalAtTheExpiryInstant() {
+        val expiry = wallStart.toEpochMilli() + 10_000L
+        val ledger = ledger()
+        ledger.applyRules(listOf(rule(expiresAt = expiry)))
+        val c = ledger.counterFor("r1", 0)!!
+
+        drive(ledger, c, 0L, 20_000L)
+
+        assertEquals(
+            "accrual stops exactly at the expiry instant, though the rule is still in the index",
+            10_000L,
+            c.totalMs,
+        )
+    }
+
+    @Test
+    fun aLapsedRuleDoesNotSweepFlowsAndClearsExhaustion() {
+        val expiry = wallStart.toEpochMilli() + 10_000L
+        val ledger = ledger()
+        ledger.applyRules(listOf(rule(limit = 5_000L, expiresAt = expiry)))
+        val c = ledger.counterFor("r1", 0)!!
+        val control = RecordingControl()
+        flows.register(c.key, control)
+
+        drive(ledger, c, 0L, 12_000L)
+
+        assertTrue("the rule exhausted while live", control.resets >= 1)
+        assertFalse("a lapsed rule has no quota left to exhaust", c.exhausted)
+        assertEquals("the total stays at the expiry instant", 10_000L, c.totalMs)
+        val resetsAtExpiry = control.resets
+        drive(ledger, c, 13_000L, 20_000L)
+        assertEquals("no flow is swept after expiry", resetsAtExpiry, control.resets)
+    }
+
+    @Test
+    fun extendingALapsedRuleThroughANewSnapshotReArmsAccounting() {
+        val base = wallStart.toEpochMilli()
+        val ledger = ledger()
+        ledger.applyRules(listOf(rule(expiresAt = base + 10_000L)))
+        val c = ledger.counterFor("r1", 0)!!
+        drive(ledger, c, 0L, 12_000L)
+        assertEquals(10_000L, c.totalMs)
+
+        ledger.applyRules(listOf(rule(expiresAt = base + 30_000L)))
+        drive(ledger, c, 13_000L, 14_000L)
+        assertEquals("the extended rule accrues again", 14_000L, c.totalMs)
     }
 }

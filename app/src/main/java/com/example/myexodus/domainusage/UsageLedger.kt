@@ -46,6 +46,16 @@ class UsageLedger(
     }
 
     /**
+     * §14 debug surface: the exact accrued milliseconds for every live rule's current revision.
+     * The UI displays whole minutes; a verification run reads this to compare the meter's own
+     * arithmetic against ground truth without the display floor in the way.
+     */
+    fun debugTotals(): List<Pair<String, Long>> =
+        currentRevisionByRuleId.entries
+            .mapNotNull { (ruleId, revision) -> byKey["$ruleId:$revision"]?.let { it.pattern to it.totalMs } }
+            .sortedBy { it.first }
+
+    /**
      * §8 S5.2: applies a rule snapshot on the tick thread. New `(id, revision)` pairs start from
      * their persisted total or 0; a pattern edit (D-32) leaves the old revision's counter to the
      * flows still open on it; removed rules' counters are dropped by [tick] once nothing
@@ -61,9 +71,11 @@ class UsageLedger(
                 byKey[key] = RuleCounter(
                     ruleId = rule.id,
                     revision = rule.revision,
+                    pattern = rule.pattern,
                     initialTotalMs = seededTotals[key] ?: 0L,
                     dailyLimitMs = rule.dailyLimitMs,
                     enforcedToday = rule.enforcedToday,
+                    expiresAtWallMs = rule.expiresAt,
                 ).also { seedWarnings(it) }
             } else {
                 if (existing.dailyLimitMs != rule.dailyLimitMs) {
@@ -73,6 +85,7 @@ class UsageLedger(
                     seedWarnings(existing)
                 }
                 existing.enforcedToday = rule.enforcedToday
+                existing.retargetExpiry(rule.expiresAt)
             }
             currentRevisionByRuleId[rule.id] = rule.revision
         }
@@ -101,6 +114,7 @@ class UsageLedger(
     fun tick(): DayRollover? {
         val now = clock.elapsedMs()
         val wallNow = wallClock.now(anchoredZone)
+        val wallNowMs = wallClock.nowMillis()
         val candidate = wallNow.toLocalDate().toString()
         val rollover = when {
             dayKey.isEmpty() -> {
@@ -112,9 +126,16 @@ class UsageLedger(
         }
         diagnoseClockJump(wallNow, now)
         for (counter in byKey.values) {
+            // Audit A-02: freeze at the exact instant the wall-clock expiry passed, mapped onto
+            // the monotonic timeline, before this tick recomputes. An expired rule's counter is
+            // still recomputed below — that call books the final pre-expiry milliseconds.
+            if (counter.expiresAtWallMs > 0L && wallNowMs > counter.expiresAtWallMs) {
+                counter.markExpiry(now - (wallNowMs - counter.expiresAtWallMs))
+            }
             if (counter.enforcedToday) counter.recompute(now)
+            else counter.discardPendingStreaks()
         }
-        evaluateExhaustion()
+        evaluateExhaustion(wallNowMs)
         dropStaleCounters()
         return rollover
     }
@@ -163,8 +184,10 @@ class UsageLedger(
      */
     fun takeLimitWarnings(): List<LimitWarning> {
         var out: ArrayList<LimitWarning>? = null
+        val wallNowMs = wallClock.nowMillis()
         for (counter in byKey.values) {
             if (!counter.enforcedToday || counter.dailyLimitMs <= 0L) continue
+            if (counter.expiresAtWallMs > 0L && wallNowMs > counter.expiresAtWallMs) continue
             if (currentRevisionByRuleId[counter.ruleId] != counter.revision) continue
             val (threshold1, threshold2) = UsageAccountingEngine.calculateWarningThresholdsMs(counter.dailyLimitMs)
             val remaining = (counter.dailyLimitMs - counter.totalMs).coerceAtLeast(0L)
@@ -172,11 +195,15 @@ class UsageLedger(
                 !counter.warning2Fired && counter.totalMs >= threshold2 -> {
                     counter.warning1Fired = true
                     counter.warning2Fired = true
-                    (out ?: ArrayList<LimitWarning>(2).also { out = it }).add(LimitWarning(2, remaining))
+                    (out ?: ArrayList<LimitWarning>(2).also { out = it }).add(
+                        LimitWarning(2, remaining, counter.pattern),
+                    )
                 }
                 !counter.warning1Fired && counter.totalMs >= threshold1 -> {
                     counter.warning1Fired = true
-                    (out ?: ArrayList<LimitWarning>(2).also { out = it }).add(LimitWarning(1, remaining))
+                    (out ?: ArrayList<LimitWarning>(2).also { out = it }).add(
+                        LimitWarning(1, remaining, counter.pattern),
+                    )
                 }
             }
         }
@@ -191,8 +218,14 @@ class UsageLedger(
     }
 
     /** §6.5 step 5: exhaustion follows the ledger total; in `ENFORCE` a new exhaustion sweeps. */
-    private fun evaluateExhaustion() {
+    private fun evaluateExhaustion(wallNowMs: Long) {
         for (counter in byKey.values) {
+            // A lapsed rule has no quota left to exhaust: it must not sweep flows, and any
+            // residual exhausted flag is cleared so nothing else consults it (audit A-02).
+            if (counter.expiresAtWallMs > 0L && wallNowMs > counter.expiresAtWallMs) {
+                counter.exhausted = false
+                continue
+            }
             val over = counter.totalMs >= counter.dailyLimitMs
             if (over && !counter.exhausted) {
                 counter.exhausted = true
@@ -231,8 +264,12 @@ class UsageSnapshot(
     val generation: Long,
 )
 
-/** FR3: one threshold crossing to surface; [remainingMs] is the budget left at the crossing. */
-data class LimitWarning(val level: Int, val remainingMs: Long)
+/**
+ * FR3: one threshold crossing to surface; [remainingMs] is the budget left at the crossing and
+ * [pattern] is the rule's own site (ADR #179 — the owner overrode INV-7's notification clause;
+ * logs, exceptions and storage still never carry hostnames).
+ */
+data class LimitWarning(val level: Int, val remainingMs: Long, val pattern: String)
 
 /** §6.7: the day-key change, carrying the outgoing day's final rows to persist. */
 class DayRollover(

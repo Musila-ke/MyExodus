@@ -553,7 +553,7 @@ no open rows.
 | 4 (ledger is enforcement source) | `DomainUsageEngineHooksTest.anExhaustedRuleCutsANon443FlowAtAttribution`, `anExhaustedRuleDropsTheUdpFlowBeforeAnythingIsOpened`; device I-7, I-19 |
 | 5 (persisted active_ms never decreases) | `RuleUsageDaoTest` (single-statement `upsertMax` with `ON CONFLICT DO UPDATE MAX`), `UsagePersistenceTest` (retry/generation cases) |
 | 6 (ordinary exceptions caught, VME rethrown) | `DomainUsageEngineBreakerTest.virtualMachineError_isCountedAndRethrown`, `ordinaryException_returnsFallbackAndCounts`, `twentyExceptionsWithinWindow_tripBreaker` (7 tests) |
-| 7 (no hostnames/IPs/DNS names in logs/exceptions/notifications/storage) | CI check `INV-7` (no interpolated `Log.` inside `domainusage`) + `DomainUsageCiChecksTest.interpolatedLogInsideDomainusageMain_fails`; S-4 storage shape is `(rule_id, revision, day_key, active_ms)` only — `RuleUsageDaoTest`; device walk of the notification/banner strings |
+| 7 (no hostnames/IPs/DNS names in logs/exceptions/storage; since ADR #179 the warning notification names only the rule's own site) | CI check `INV-7` (no interpolated `Log.` inside `domainusage`) + `DomainUsageCiChecksTest.interpolatedLogInsideDomainusageMain_fails`; S-4 storage shape is `(rule_id, revision, day_key, active_ms)` only — `RuleUsageDaoTest`; device walk of the notification/banner strings |
 | 8 (unattributed/ambiguous never blocked; ECH never blocked for being ECH) | `AttributionResolverTest` (10), `TlsClientHelloParserTest` ECH cases; device I-2 (ambiguous allowed) |
 | 9 (own traffic never in TUN) | CI check `INV-9` (`addDisallowedApplication` must be present) + `DomainUsageCiChecksTest.vpnServiceWithoutTheDisallowedApplicationCall_fails`, `vpnServiceMissingEntirely_fails`; device I-17 (fixed leg) **PASS 2026-09-22** on a verified-quiet baseline (§4.2) |
 | 10 (`allowBypass` never called) | CI check `INV-10` (token absent anywhere under the scan root) + `DomainUsageCiChecksTest.aCallToTheVpnBypassInAnySourceFile_fails` |
@@ -576,7 +576,7 @@ no open rows.
 - [x] RuleEditor validation + notices + usage display + status banner shipped with string resources (S9; device-verified in S9 close).
 - [x] `addDisallowedApplication(APPLICATION_ID)` present; `allowBypass()` absent; no IPv6 config added (CI checks INV-9/INV-10; S0 P6 note).
 - [x] `DOMAIN_USAGE_MODE`: debug `ENFORCE`, release `OFF` (§13; `app/build.gradle.kts`).
-- [x] No hostnames/IPs/DNS names in logs/storage/notifications/exceptions (CI INV-7 + review).
+- [x] No hostnames/IPs/DNS names in logs/storage/exceptions; the warning notification names only the rule's own site (ADR #179, 2026-10-18) (CI INV-7 + review).
   *Caveat recorded, not hidden:* all feature logs comply (CI-backed). The baseline service keeps
   pre-existing diagnostic logs (`nxdomain ${query.qname}`, `tcp connect upstream dst=…`, hex packet
   dumps) that predate this feature and are outside its §3.3 authority — flagged here for a separate
@@ -694,7 +694,7 @@ mechanism existed (ADR #172). The fix touches no metering, attribution, DNS or r
 | A restart never replays a crossed threshold | `seededTotalsDoNotReplayAlreadyCrossedWarnings` | **PASS** |
 | A limit change re-arms above the total; lowering never fires retroactively | `changingTheLimitReseedsWarnings` | **PASS** |
 | A superseded revision never warns | `aSupersededRevisionNeverWarns` | **PASS** |
-| The warning notification renders with INV-7-safe copy | Device X6532: limit temporarily 41m → usage 30→32 → notification id=3, channel `domain_usage_status`, "Website limit almost used up" / "9 min left on a website limit today…" (no hostname); rule restored to 30m | **PASS** |
+| The warning notification renders with INV-7-safe copy | Device X6532: limit temporarily 41m → usage 30→32 → notification id=3, channel `domain_usage_status`, "Website limit almost used up" / "9 min left on a website limit today…" (no hostname); rule restored to 30m. *Superseded 2026-10-18 by ADR #179: the warning now names the rule's own site — see the dated section below.* | **PASS (historical)** |
 | The internet path is intact after the change | Device: example.com rendered through the VPN, `url scan 'example.com' -> Allow`, VPN counters advancing | **PASS** |
 
 **Suite at this fix:** full JVM **1780 tests / 0 failures / 0 errors / 0 skipped** (+8
@@ -707,3 +707,50 @@ address-bar edit-session gate (`editing_autocompletePreview_defersTheScan`,
 `editing_commitAfterEditing_blocksNormally`, `editing_evaluatedAtFireTime_notEventTime`). Current
 full-suite total: **1783 tests / 0 failures / 0 errors / 0 skipped** (BUILD SUCCESSFUL 12m38s).
 The gate changes no metering or accounting; the URL-blocking device evidence is in ADR #174.
+
+**2026-10-18 (owner report) — the limit warning now names the rule's site (ADR #179).** Owner
+report: "9 min left on a website limit" named no site while the only rule was `instagram.com`.
+INV-7's notification clause was amended on owner direction; logs, exceptions and storage are
+unchanged. `RuleCounter` carries the rule's normalized pattern, `LimitWarning` carries it to
+`DomainUsageHost`, and notification id 3 renders "%1$s: %2$d min left today…" with
+`VISIBILITY_PRIVATE` (a secure lock screen conceals the text). `RuleEditor`'s scope notice now states
+that metering spans every app, including the site's own app. Device-proven on the X6532 the same
+day: the posted notification read `instagram.com: 4 min left today. Tap to review your rules.` with
+`vis=PRIVATE` (evidence row below).
+
+| Check | Evidence | Result |
+|---|---|---|
+| Each crossing carries the rule's pattern (level 1, level 2) | `UsageLedgerTest.limitWarnings_fireOnceAtEachThreshold` (expected `LimitWarning(level, remaining, "example.com")`) | **PASS** |
+| The pattern survives seeded totals and a re-armed limit; a superseded revision still never warns | `seededTotalsDoNotReplayAlreadyCrossedWarnings`, `changingTheLimitReseedsWarnings`, `aSupersededRevisionNeverWarns` | **PASS** |
+| The notification renders the site name | **PASS** — X6532, debug APK installed `install -r` (SHA-256 `8b18fb1a…64aa5` matched the built APK). Rule `instagram.com` at 30 min; usage driven from 24 to `25 / 30 min`; notification id 3 posted at `when=1792324576827` (2026-10-18 14:56:16.827 EAT) on channel `domain_usage_status`, `vis=PRIVATE`: title "Website limit almost used up", text **"instagram.com: 4 min left today. Tap to review your rules."** Rule left at its original 30 m, VPN `VALIDATED`. The first attempt was blocked (phone off-network); on the re-run a temporary 30→25 edit fired nothing, correctly — thresholds are `limit − 10`/`limit − 5` and lowering a limit does not warn retroactively. | **PASS** |
+| The warning copy stays whole under a secure lock screen | `VISIBILITY_PRIVATE` on the posted record (`vis=PRIVATE`, `vis=0` in the dump). Text concealment itself is OEM lock-screen behavior and is not separately re-tested. | **PASS (flag)** |
+
+**Suite:** full JVM **205 classes / 1,792 tests / 0 failures / 0 errors / 0 skipped** (XML
+results 2026-10-18 14:26; BUILD SUCCESSFUL). No test methods added — existing warning assertions
+were tightened to pin the pattern.
+
+## 14. Audit-fix batch — A-01…A-04 (2026-10-18)
+
+The same-day project audit (`project-audit-2026-10-18.md`, ledger A-01…A-14) produced four fixes,
+each with a regression and an ADR (#182–#185). The suite gained 15 net tests.
+
+| Check | Evidence | Result |
+|---|---|---|
+| Expiry carried onto the snapshot model | `DomainRuleProviderTest.expiryIsCarriedOntoTheDomainRule_auditA02` | **PASS** |
+| An expired blocklist entry stops blocking with no rebuild | `DomainBlocklistTest.expiredRule_stopsBlockingWithoutARebuild_auditA02` | **PASS** |
+| The DNS shaper forwards every qtype once the rule has lapsed | `DnsShaperTest.aLapsedRuleForwardsEveryQtypeEvenIfTheIndexStillCarriesIt_auditA02` | **PASS** |
+| A lapsed rule neither binds SNI nor marks a DNS candidate limited | `AttributionResolverTest.aLapsedSniRuleDoesNotBindEvenThoughTheIndexStillCarriesIt`, `aLapsedDnsCandidateIsTreatedAsUnlimitedNotAsALimitedSite`, `expiredCandidatesAreIgnored` | **PASS** |
+| Accrual freezes at the expiry instant, including a stalled streak; an extension re-arms | `UsageLedgerTest.expiryFreezesTheTotalAtTheExpiryInstant`; `RuleCounterTest.markExpiryBooksUpToTheExpiryInstantAndNothingAfter`, `markExpiryClampsAStreakClosedWhileTheTickWasStalled`, `retargetExpiryReArmsAccrualForAnExtendedRule` | **PASS** |
+| A limit longer than the window is accepted; exactly one day is still rejected | `RuleModeTest.validate_limitLongerThanItsWindow_isAccepted_dayScopedQuota` (plus the retained full-day/zero/always-on cases) | **PASS** |
+| Ungated sensitive VPN log fails the shipped CI script | `DomainUsageCiChecksTest.ungatedSensitiveLogInTheVpnService_fails` | **PASS** |
+| The same log behind `BuildConfig.DEBUG` passes the shipped CI script | `DomainUsageCiChecksTest.aDebugGuardedSensitiveLogInTheVpnService_passes` | **PASS** |
+| Website limits unavailable outside ENFORCE; app limits always available | `RuleModeTest.websiteLimitMechanism_needsEnforce_butAppLimitsNeverDo` | **PASS** |
+| Device: expiry decided at query time from a stale snapshot | X6532 debug APK: AAAA through the tunnel `an=0` before the expiry, `an=2` (Cloudflare) after it, app never opened, no rebuild; temp rule removed afterwards | **PASS** |
+| Device: honest UI when the engine is OFF | X6532 debug override OFF: Rules banner + editor caption rendered; "Limit daily use" node `checked=true, enabled=false`; "Block all day"/"On a schedule" `enabled=true`; "30 Minutes" preserved | **PASS** |
+| Release variant compiles with the debug-gated expressions | `compileReleaseKotlin` BUILD SUCCESSFUL (`BuildConfig.DEBUG` = constant false) | **PASS** |
+| Device restored after the legs | override cleared, process restarted, `status=Active mode=ENFORCE vpn=ACTIVE`, original rule intact, private DNS `off`, launcher foreground | **PASS** |
+
+**Suite after the batch:** full JVM **205 suites / 1,811 tests / 0 failures / 0 errors /
+0 skipped** (+15 net; audit baseline 1,796). Honest limits: A-02's device leg used a temporary
+website rule and AAAA probes, not a full browsing session; the release-variant evidence is
+compilation, not a release-APK device run (release is not distributed — A-13).

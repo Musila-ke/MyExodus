@@ -36,12 +36,17 @@ class AndroidDomainUsageHost(private val context: Context) : DomainUsageHost {
         )
     }
 
-    override fun postWebsiteLimitWarning(level: Int, remainingMs: Long) {
-        // INV-7: the copy names the feature, never the site.
+    override fun postWebsiteLimitWarning(level: Int, remainingMs: Long, pattern: String) {
+        // ADR #179 (owner direction 2026-10-18): the copy names the rule's own site.
+        // VISIBILITY_PRIVATE (the default) makes a secure lock screen conceal the text.
         val text = if (remainingMs < 60_000L) {
-            context.getString(R.string.domain_usage_limit_warning_soon)
+            context.getString(R.string.domain_usage_limit_warning_soon, pattern)
         } else {
-            context.getString(R.string.domain_usage_limit_warning_text, (remainingMs / 60_000L).toInt())
+            context.getString(
+                R.string.domain_usage_limit_warning_text,
+                pattern,
+                (remainingMs / 60_000L).toInt(),
+            )
         }
         postStatusNotification(
             WARNING_NOTIFICATION_ID,
@@ -80,6 +85,8 @@ class AndroidDomainUsageHost(private val context: Context) : DomainUsageHost {
                         ),
                     )
                     .setAutoCancel(true)
+                    // ADR #179: private visibility — a secure lock screen conceals the site.
+                    .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
                     .build(),
             )
         } catch (e: Exception) {

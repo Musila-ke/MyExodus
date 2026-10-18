@@ -38,11 +38,13 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun DomainUsageDebugSection(engine: DomainUsageEngine) {
     var counters by remember { mutableStateOf(engine.counters.snapshot()) }
+    var totals by remember { mutableStateOf(engine.debugTotals()) }
     val status by engine.status.collectAsStateWithLifecycle()
 
     LaunchedEffect(engine) {
         while (true) {
             counters = engine.counters.snapshot()
+            totals = engine.debugTotals()
             delay(2_000)
         }
     }
@@ -68,6 +70,40 @@ internal fun DomainUsageDebugSection(engine: DomainUsageEngine) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        HorizontalDivider()
+        Text(
+            "Rule totals (current revision, exact ms)",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            if (totals.isEmpty()) {
+                Text(
+                    "(no live rules)",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+            totals.forEach { (pattern, totalMs) ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        pattern,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                    SelectionContainer {
+                        Text(
+                            totalMs.toString(),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                }
+            }
+        }
         HorizontalDivider()
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Counter.entries.forEach { counter ->

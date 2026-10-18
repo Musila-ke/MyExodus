@@ -20,8 +20,9 @@ class UsageTickLoopTest {
             override fun elapsedMs(): Long = testScheduler.currentTime
         }
         val wall = object : WallClock {
-            override fun now(zone: ZoneId): LocalDateTime =
-                LocalDateTime.ofInstant(Instant.parse("2026-09-20T12:00:00Z"), zone)
+            private val instant = Instant.parse("2026-09-20T12:00:00Z")
+            override fun now(zone: ZoneId): LocalDateTime = LocalDateTime.ofInstant(instant, zone)
+            override fun nowMillis(): Long = instant.toEpochMilli()
         }
         val ledger = UsageLedger(mono, wall, counters, FlowRegistry(counters), EngineMode.ENFORCE, zone)
         ledger.applyRules(listOf(DomainRule("r1", 0L, "example.com", 3_600_000L, true)))
@@ -53,6 +54,7 @@ class UsageTickLoopTest {
         val wall = object : WallClock {
             override fun now(zone: ZoneId): LocalDateTime =
                 LocalDateTime.ofInstant(wallStart.plusMillis(testScheduler.currentTime), zone)
+            override fun nowMillis(): Long = wallStart.toEpochMilli() + testScheduler.currentTime
         }
         val ledger = UsageLedger(mono, wall, counters, FlowRegistry(counters), EngineMode.ENFORCE, zone)
         val rollovers = mutableListOf<DayRollover>()
@@ -75,8 +77,9 @@ class UsageTickLoopTest {
             override fun elapsedMs(): Long = testScheduler.currentTime
         }
         val wall = object : WallClock {
-            override fun now(zone: ZoneId): LocalDateTime =
-                LocalDateTime.ofInstant(Instant.parse("2026-09-20T12:00:00Z"), zone)
+            private val instant = Instant.parse("2026-09-20T12:00:00Z")
+            override fun now(zone: ZoneId): LocalDateTime = LocalDateTime.ofInstant(instant, zone)
+            override fun nowMillis(): Long = instant.toEpochMilli()
         }
         val ledger = UsageLedger(mono, wall, counters, FlowRegistry(counters), EngineMode.ENFORCE, zone)
 

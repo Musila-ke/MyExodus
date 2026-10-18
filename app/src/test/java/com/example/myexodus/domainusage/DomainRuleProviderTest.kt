@@ -168,6 +168,22 @@ class DomainRuleProviderTest {
     }
 
     @Test
+    fun expiryIsCarriedOntoTheDomainRule_auditA02() = runTest {
+        seedProfile()
+        val dao = factory.open()!!.restrictionRuleDao()
+        // Far-future constant rather than a wall-clock read: wall-clock calls are forbidden in
+        // domainusage test files (S1.4), and the publisher already drops expired rules.
+        val expiry = 4_102_444_800_000L // 2100-01-01T00:00:00Z
+        dao.insert(urlRule("a.example.com", ruleId = "r-exp", dailyLimitMs = 3_600_000L, blockExpiresAt = expiry))
+        publisher.loadFromDb()
+
+        val rule = provider.snapshot().single()
+        assertEquals(expiry, rule.expiresAt)
+        assertFalse(rule.isExpiredAt(expiry))
+        assertTrue(rule.isExpiredAt(expiry + 1))
+    }
+
+    @Test
     fun rulesFlowReEmitsWhenTheRuleTablePublishes() = runTest {
         seedProfile()
         val repository = RulesRepository(factory, publisher)
@@ -207,6 +223,7 @@ class DomainRuleProviderTest {
         dailyLimitMs: Long,
         days: String = "1111111",
         severityLevel: String = "HIGH",
+        blockExpiresAt: Long = 0L,
     ) = RestrictionRule(
         ruleId = ruleId,
         profileId = "p-1",
@@ -217,7 +234,7 @@ class DomainRuleProviderTest {
         timeRangeStart = null,
         timeRangeEnd = null,
         activeDaysOfWeek = days,
-        blockExpiresAt = 0L,
+        blockExpiresAt = blockExpiresAt,
         severityLevel = severityLevel,
     )
 

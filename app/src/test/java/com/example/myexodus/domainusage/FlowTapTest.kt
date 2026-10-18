@@ -25,7 +25,8 @@ class FlowTapTest {
         }
     }
 
-    private fun counter(id: String = "r1") = RuleCounter(id, 0L, dailyLimitMs = 3_600_000L, enforcedToday = true)
+    private fun counter(id: String = "r1") =
+        RuleCounter(id, 0L, pattern = "limited.example", dailyLimitMs = 3_600_000L, enforcedToday = true)
 
     private fun attach(c: RuleCounter) {
         engine.ledger = ledger

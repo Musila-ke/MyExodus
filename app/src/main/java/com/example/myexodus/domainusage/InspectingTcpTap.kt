@@ -130,10 +130,11 @@ internal class InspectingTcpTap(
     /** Terminal: bind the flow to a `(rule, revision)` identity, or leave it unmetered (INV-8). */
     private fun decide(decided: TlsClientHelloParser.Result?): ClientDataResult {
         terminal = true
+        val nowMillis = engine.wallClock.nowMillis()
         val rule = if (decided is TlsClientHelloParser.Result.Sni) {
-            engine.resolver.bySni(decided.host, engine.ruleIndex)
+            engine.resolver.bySni(decided.host, engine.ruleIndex, nowMillis)
         } else {
-            (engine.resolver.byDns(dstIp, engine.ruleIndex) as? AttributionResolver.Dns.Hit)?.rule
+            (engine.resolver.byDns(dstIp, engine.ruleIndex, nowMillis) as? AttributionResolver.Dns.Hit)?.rule
         }
         val bound = rule?.let { engine.counterFor(it) }
         counter = bound

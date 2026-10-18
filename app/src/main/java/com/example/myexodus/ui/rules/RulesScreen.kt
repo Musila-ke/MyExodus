@@ -63,6 +63,7 @@ import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.isExpiredAt
 import com.example.myexodus.domainusage.DomainUsageEngine
+import com.example.myexodus.domainusage.EngineMode
 import com.example.myexodus.domainusage.EngineStatus
 import com.example.myexodus.domainusage.PublicSuffixList
 import com.example.myexodus.ui.APP_MARK_SIZE
@@ -174,13 +175,22 @@ fun RulesScreen(
     // S9.4 banner copy. The engine's own status is the source; an unknown future reason falls
     // back to the generic line rather than showing nothing.
     val engineStatus by domainUsageEngine.status.collectAsStateWithLifecycle()
+    // Audit A-03: the engine's runtime mode is the same value every enforcement path reads
+    // (S1.3 override included). It is a volatile, not a State — the 5 s tick above already
+    // recomposes this screen, so a mode changed at the next engine start is picked up.
+    val websiteLimitsMode: EngineMode = domainUsageEngine.mode
     val engineBannerMessage = when (val s = engineStatus) {
         is EngineStatus.Degraded -> when (s.reason) {
             EngineStatus.Reason.PRIVATE_DNS -> stringResource(R.string.domain_usage_banner_private_dns)
             EngineStatus.Reason.DB_ERROR, EngineStatus.Reason.INTERNAL_ERROR ->
                 stringResource(R.string.domain_usage_banner_off)
         }
-        else -> null
+        // Shown only when a limited rule exists (the `.takeIf { hasLimitedSite }` below).
+        else -> if (websiteLimitMechanismAvailable(isApp = false, mode = websiteLimitsMode)) {
+            null
+        } else {
+            stringResource(R.string.domain_usage_banner_unavailable)
+        }
     }
 
     // #26 (activation): does anything live need the tunnel, and is it up? The tunnel serves
@@ -254,6 +264,7 @@ fun RulesScreen(
                     platformUsage = platformUsage,
                     psl = psl,
                     websiteEngineBlocker = engineBlocker,
+                    websiteLimitsMode = websiteLimitsMode,
                     onEnableWebsiteEngine = enableWebsiteEngine,
                     onDone = { route = ROUTE_LIST },
                     modifier = modifier,

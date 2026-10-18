@@ -12,6 +12,9 @@
 # 5. `allowBypass` must not appear anywhere under the scan root (INV-10/S-10).
 # 6. The VPN service must call `addDisallowedApplication` (INV-9/S-10: own traffic stays out of
 #    the TUN), so removing the line fails CI rather than a review someone may skip.
+# 7. Baseline log hygiene (A-04/INV-7): a production `Log.` call carrying a qname, an address,
+#    a flow key, a packet hex dump, or address-bar text must be guarded by `BuildConfig.DEBUG`
+#    on the same or the immediately preceding line — release builds emit no user DNS/URL data.
 #
 # Paths are overridable so the checks themselves can be tested (U-13); the plan's `git grep`
 # is replaced by a filesystem grep — same semantics over the domainusage paths, but it also
@@ -63,6 +66,20 @@ fi
 violations="$(grep -rn 'Log\.' "$SCAN_ROOT/main" 2>/dev/null | grep "/domainusage/" | grep '\$' || true)"
 if [ -n "$violations" ]; then
   echo "FAIL [INV-7] interpolated Log call in domainusage production code (logs carry counters only):" >&2
+  echo "$violations" >&2
+  status=1
+fi
+
+violations="$(find "$SCAN_ROOT/main" -name '*.kt' -exec awk '
+  FNR == 1 { prev = "" }
+  /Log\./ && /(qname|hostAddress|inetAddresses|hex=|key=|dst=|src=\$|\$text|\$key|%02x)/ {
+    if ($0 ~ /BuildConfig\.DEBUG/ || prev ~ /BuildConfig\.DEBUG/) { prev = $0; next }
+    print FILENAME ":" FNR ":" $0
+  }
+  { prev = $0 }
+' {} + 2>/dev/null || true)"
+if [ -n "$violations" ]; then
+  echo "FAIL [INV-7] ungated host/URL log in production sources (guard with BuildConfig.DEBUG):" >&2
   echo "$violations" >&2
   status=1
 fi

@@ -41,8 +41,8 @@ internal class FakeDomainUsageHost(
 
     val limitWarnings = java.util.concurrent.CopyOnWriteArrayList<LimitWarning>()
 
-    override fun postWebsiteLimitWarning(level: Int, remainingMs: Long) {
-        limitWarnings.add(LimitWarning(level, remainingMs))
+    override fun postWebsiteLimitWarning(level: Int, remainingMs: Long, pattern: String) {
+        limitWarnings.add(LimitWarning(level, remainingMs, pattern))
     }
 
     override fun registerPrivateDnsMonitor(onStrictChanged: (Boolean) -> Unit): () -> Unit {
@@ -119,6 +119,8 @@ internal class FakeWallClock(
     var instant: Instant = Instant.parse("2026-09-20T12:00:00Z"),
 ) : WallClock {
     override fun now(zone: ZoneId): LocalDateTime = LocalDateTime.ofInstant(instant, zone)
+
+    override fun nowMillis(): Long = instant.toEpochMilli()
 }
 
 /**

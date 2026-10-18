@@ -262,7 +262,8 @@ class DnsSinkholeVpnService : VpnService() {
             evaluateHealth()
             runCatching {
                 val tun = NetworkInterface.getNetworkInterfaces().toList().firstOrNull { it.name.contains("tun") }
-                Log.i(TAG, "tun iface ${tun?.name} addresses=${tun?.inetAddresses?.toList()?.joinToString { it.hostAddress } ?: "NONE"}")
+                // A-04/INV-7: interface addresses are device IPs — debug diagnostics only.
+                if (BuildConfig.DEBUG) Log.i(TAG, "tun iface ${tun?.name} addresses=${tun?.inetAddresses?.toList()?.joinToString { it.hostAddress } ?: "NONE"}")
             }
         } catch (e: Exception) {
             Log.e(TAG, "start failed", e)
@@ -363,7 +364,7 @@ class DnsSinkholeVpnService : VpnService() {
     private fun dispatch(packet: ByteArray) {
         val ip = VpnPacket.parseIp(packet)
         if (ip == null) {
-            if (++pktLog <= 10) Log.w(TAG, "tun drop parse v${packet[0].toInt() ushr 4} len=${packet.size} hex=${packet.take(48).joinToString("") { "%02x".format(it) }}")
+            if (++pktLog <= 10 && BuildConfig.DEBUG) Log.w(TAG, "tun drop parse v${packet[0].toInt() ushr 4} len=${packet.size} hex=${packet.take(48).joinToString("") { "%02x".format(it) }}")
             return
         }
         if (ip.protocol != VpnPacket.PROTO_UDP && ip.protocol != VpnPacket.PROTO_TCP && ++pktLog <= 10) {
@@ -373,7 +374,7 @@ class DnsSinkholeVpnService : VpnService() {
             VpnPacket.PROTO_TCP -> handleTcp(ip, packet)
             VpnPacket.PROTO_UDP -> {
                 val udp = VpnPacket.parseUdp(ip, packet)
-                if (udp?.dstPort == 53 && ++dnsQueriesSeen <= 5) {
+                if (udp?.dstPort == 53 && ++dnsQueriesSeen <= 5 && BuildConfig.DEBUG) {
                     Log.i(TAG, "tun dns query v${ip.version} src=${ip.src[ip.src.size - 1]} size=${packet.size}")
                 }
                 handleUdp(ip, packet)
@@ -403,10 +404,12 @@ class DnsSinkholeVpnService : VpnService() {
         // Two decision sites compose here (S0 hazard 1): the policy blocklist stays authoritative
         // and answers first; the usage shaper only sees queries the blocklist did not answer, so a
         // query is never answered twice.
-        if (blocklist.isBlocked(query.qname)) {
+        if (blocklist.isBlocked(query.qname, System.currentTimeMillis())) {
             val reply = DnsMessages.buildNxDomain(query, packet, udp.payloadOffset)
             val out = VpnPacket.buildUdpPacket(ip.dst, ip.src, udp.dstPort, udp.srcPort, reply)
-            Log.i(TAG, "nxdomain ${query.qname} v${ip.version} rule=policy written=${writeTun(out)}")
+            val written = writeTun(out)
+            // A-04/INV-7: the qname is user DNS data — debug diagnostics only.
+            if (BuildConfig.DEBUG) Log.i(TAG, "nxdomain ${query.qname} v${ip.version} rule=policy written=$written")
             return
         }
         val payload = packet.copyOfRange(udp.payloadOffset, udp.payloadOffset + udp.payloadLength)
@@ -540,7 +543,7 @@ class DnsSinkholeVpnService : VpnService() {
     private fun handleTcp(ip: VpnPacket.IpHeader, packet: ByteArray) {
         val tcp = VpnPacket.parseTcp(ip, packet)
         if (tcp == null) {
-            if (++pktLog <= 10) Log.w(TAG, "tun drop tcp-parse v${ip.version} len=${packet.size} hex=${packet.take(64).joinToString("") { "%02x".format(it) }}")
+            if (++pktLog <= 10 && BuildConfig.DEBUG) Log.w(TAG, "tun drop tcp-parse v${ip.version} len=${packet.size} hex=${packet.take(64).joinToString("") { "%02x".format(it) }}")
             return
         }
         val key = tcpKey(ip, tcp)
@@ -548,7 +551,7 @@ class DnsSinkholeVpnService : VpnService() {
 
         if (tcp.syn && !tcp.ackFlag) {
             if (flow != null) {
-                Log.i(TAG, "tcp syn retransmit key=$key payload=${tcp.payloadLength}")
+                if (BuildConfig.DEBUG) Log.i(TAG, "tcp syn retransmit key=$key payload=${tcp.payloadLength}")
                 if (flow.connected.get() && tcp.payloadLength == 0) sendSynAck(flow) // SYN retransmit after connect
                 return
             }
@@ -562,13 +565,13 @@ class DnsSinkholeVpnService : VpnService() {
             // After the map insert: an exhausted-rule admission resets the flow, and that reset
             // must find (and remove) the flow it decided against.
             f.tap = engine.tcpFlowOpened(ip.dst, tcp.dstPort, f)
-            Log.i(TAG, "tcp syn flow $key seq=${tcp.seq} payload=${tcp.payloadLength} win=${tcp.window} hex=${packet.take(64).joinToString("") { "%02x".format(it) }}")
+            if (BuildConfig.DEBUG) Log.i(TAG, "tcp syn flow $key seq=${tcp.seq} payload=${tcp.payloadLength} win=${tcp.window} hex=${packet.take(64).joinToString("") { "%02x".format(it) }}")
             thread(name = "vpn-connect-$key") { connectUpstream(f) }
             return
         }
         if (flow == null) return // never saw the SYN; the device retransmits it
 
-        if (tcp.rst) { Log.i(TAG, "tcp dev rst key=$key ack=${tcp.ack} win=${tcp.window}"); teardown(flow); return }
+        if (tcp.rst) { if (BuildConfig.DEBUG) Log.i(TAG, "tcp dev rst key=$key ack=${tcp.ack} win=${tcp.window}"); teardown(flow); return }
         // Every ACK-bearing segment carries the device's current receive window; the send side
         // reserves sequence space from it. Ignoring these is what wedged downloads on a
         // zero window (device-proven 2026-10-18, ADR #175).
@@ -626,7 +629,7 @@ class DnsSinkholeVpnService : VpnService() {
     private fun connectUpstream(flow: TcpFlow) {
         val socket = Socket()
         val dstHost = InetAddress.getByAddress(flow.dstIp).hostAddress
-        Log.i(TAG, "tcp connect upstream dst=$dstHost:${flow.dstPort} v6=${flow.isV6}")
+        if (BuildConfig.DEBUG) Log.i(TAG, "tcp connect upstream dst=$dstHost:${flow.dstPort} v6=${flow.isV6}")
         try {
             socket.tcpNoDelay = true
             protect(socket)
@@ -635,12 +638,12 @@ class DnsSinkholeVpnService : VpnService() {
             // retransmission timer (SocketTimeoutException in relayLoop), else a hole under a
             // tail segment would wait on read() for data that will never come.
             socket.soTimeout = RELAY_READ_TIMEOUT_MS
-            Log.i(TAG, "tcp connect upstream OK dst=$dstHost:${flow.dstPort}")
+            if (BuildConfig.DEBUG) Log.i(TAG, "tcp connect upstream OK dst=$dstHost:${flow.dstPort}")
         } catch (e: IOException) {
             // Address family unreachable on the physical network (e.g. v4-only carrier):
             // RST the device's connect so its stack falls back to the next address
             // (RFC 8305 / libcore iterates on ConnectException) instead of hanging.
-            Log.w(TAG, "tcp connect upstream FAIL dst=$dstHost:${flow.dstPort} err=${e.message ?: e.javaClass.simpleName}")
+            if (BuildConfig.DEBUG) Log.w(TAG, "tcp connect upstream FAIL dst=$dstHost:${flow.dstPort} err=${e.message ?: e.javaClass.simpleName}")
             sendRst(flow)
             teardown(flow)
             return
@@ -680,7 +683,9 @@ class DnsSinkholeVpnService : VpnService() {
             seq = flow.seqToDevice - 1, ack = flow.ackToDevice,
             syn = true, ackFlag = true,
         )
-        Log.i(TAG, "tcp synack key=${flow.key} seq=${flow.seqToDevice - 1} ack=${flow.ackToDevice} ok=${writeTun(synAck)} hex=${synAck.take(60).joinToString("") { "%02x".format(it) }}")
+        val written = writeTun(synAck)
+        // A-04/INV-7: flow key embeds both IPs and hex is packet content — debug only.
+        if (BuildConfig.DEBUG) Log.i(TAG, "tcp synack key=${flow.key} seq=${flow.seqToDevice - 1} ack=${flow.ackToDevice} ok=$written hex=${synAck.take(60).joinToString("") { "%02x".format(it) }}")
     }
 
     private fun sendAck(flow: TcpFlow, win: Int = -1) {
@@ -776,7 +781,7 @@ class DnsSinkholeVpnService : VpnService() {
         if (firstSegHex) {
             firstSegHex = false
             val base = if (flow.isV6) 40 else 20
-            Log.i(TAG, "tcp seghex PRE ${packet.size}B cksum=${VpnPacket.readShort(packet, base + 16)} hex=${packet.joinToString("") { "%02x".format(it) }}")
+            if (BuildConfig.DEBUG) Log.i(TAG, "tcp seghex PRE ${packet.size}B cksum=${VpnPacket.readShort(packet, base + 16)} hex=${packet.joinToString("") { "%02x".format(it) }}")
         }
         writeTun(packet)
         flow.lastActivity = System.currentTimeMillis()
@@ -804,7 +809,7 @@ class DnsSinkholeVpnService : VpnService() {
                 if (now - flow.lastActivity > FLOW_IDLE_SWEEP_MS) {
                     flow.tap.onClosed()
                     try { flow.socket?.close() } catch (e: IOException) {}
-                    Log.d(TAG, "swept udp flow $key")
+                    if (BuildConfig.DEBUG) Log.d(TAG, "swept udp flow $key")
                     true
                 } else false
             }

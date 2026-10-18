@@ -9,8 +9,9 @@ import kotlinx.coroutines.flow.map
 /**
  * S2.6: adapts the existing website rules into [DomainRule]s. The source is the published
  * [RulesSnapshotPublisher] snapshot, not the raw table — "which website rules are live" then
- * has exactly one definition in the app (disabled and expired rules are already dropped there,
- * and no wall-clock read is needed here).
+ * has exactly one definition in the app (disabled and already-expired rules are dropped there,
+ * and no wall-clock read is needed here). Expiry that falls due between rebuilds is carried on
+ * [DomainRule.expiresAt] and enforced by the decision points, never by this adapter.
  *
  * Adaptations from the plan's wording, recorded in the implementation log: `id` is the
  * existing rule id as-is (a String in this codebase, so no `toString()`), and `pattern` is
@@ -60,6 +61,7 @@ class DomainRuleProvider(
             pattern = pattern,
             dailyLimitMs = limit,
             enforcedToday = dayScopeCoversToday(rule.activeDaysOfWeek, rule.timezone),
+            expiresAt = rule.blockExpiresAt,
         )
     }
 

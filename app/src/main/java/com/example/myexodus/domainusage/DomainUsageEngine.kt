@@ -144,6 +144,9 @@ class DomainUsageEngine(
      */
     fun usageTodayMs(ruleId: String): Long? = ledger?.usageTodayMs(ruleId)
 
+    /** §14 debug surface: exact per-rule totals (see [UsageLedger.debugTotals]). */
+    fun debugTotals(): List<Pair<String, Long>> = ledger?.debugTotals().orEmpty()
+
     /** §4.5: adopt a rule snapshot (S7's publisher collector calls this, on the tick thread). */
     internal fun updateRules(rules: List<DomainRule>) {
         ruleIndex = RuleIndex.build(rules, counters)
@@ -161,7 +164,7 @@ class DomainUsageEngine(
             // hook stays pass-through — including DNS shaping, which would otherwise suppress
             // AAAA/SVCB for a matching rule before its totals are known.
             val index = if (ledger == null) noRuleIndex else ruleIndex
-            when (val decision = shaper.decide(bytes, mode, index, exhausted)) {
+            when (val decision = shaper.decide(bytes, mode, index, wallClock.nowMillis(), exhausted)) {
                 is DnsShaper.Decision.Respond -> DnsQueryResult.Respond(decision.bytes, decision.bytes.size)
                 DnsShaper.Decision.Forward -> DnsQueryResult.Forward
             }
@@ -196,7 +199,7 @@ class DomainUsageEngine(
     fun udpFlowOpened(dstIp: ByteArray, dstPort: Int, control: FlowControl): UdpAdmission {
         if (mode == EngineMode.OFF) return allowPassThrough
         return hook<UdpAdmission>(allowPassThrough) {
-            val rule = (resolver.byDns(dstIp, ruleIndex) as? AttributionResolver.Dns.Hit)?.rule
+            val rule = (resolver.byDns(dstIp, ruleIndex, wallClock.nowMillis()) as? AttributionResolver.Dns.Hit)?.rule
             val counter = rule?.let { counterFor(it) } ?: return@hook allowPassThrough
             if (mode == EngineMode.ENFORCE && counter.exhausted) {
                 // §6.4/§6.10: dropped, not reset — the ICMP Port-Unreachable nudge is S8's.
@@ -212,7 +215,7 @@ class DomainUsageEngine(
 
     /** §4.6 for non-443 flows: DNS fallback at open; an exhausted rule is cut at attribution. */
     private fun attributeAtOpen(dstIp: ByteArray, control: FlowControl): FlowTap {
-        val rule = (resolver.byDns(dstIp, ruleIndex) as? AttributionResolver.Dns.Hit)?.rule
+        val rule = (resolver.byDns(dstIp, ruleIndex, wallClock.nowMillis()) as? AttributionResolver.Dns.Hit)?.rule
         val counter = rule?.let { counterFor(it) }
         if (counter == null) {
             counters.inc(Counter.flows_unattributed)
@@ -326,7 +329,7 @@ class DomainUsageEngine(
                 onRollover = { rollover -> dbScope.launch { persistRollover(rollover) } },
                 onTick = {
                     for (warning in ledger.takeLimitWarnings()) {
-                        host.postWebsiteLimitWarning(warning.level, warning.remainingMs)
+                        host.postWebsiteLimitWarning(warning.level, warning.remainingMs, warning.pattern)
                     }
                 },
                 onPersistDue = {

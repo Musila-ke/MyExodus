@@ -8,6 +8,9 @@ import org.junit.Test
 
 class DnsMessagesTest {
 
+    /** The blocklist fixtures here never expire; any decision instant is in range. */
+    private val NOW_MS = Long.MAX_VALUE
+
     @Test
     fun parseQuery_roundTrip() {
         val packet = DnsMessages.buildQuery("www.example.com", 0x1234)
@@ -22,7 +25,7 @@ class DnsMessagesTest {
         val packet = DnsMessages.buildQuery("Blocked.Example.COM", 7)
         val query = DnsMessages.parseQuery(packet, 0)!!
         assertEquals("blocked.example.com", query.qname)
-        assertTrue(DomainBlocklist.of("blocked.example.com").isBlocked(query.qname))
+        assertTrue(DomainBlocklist.of("blocked.example.com").isBlocked(query.qname, NOW_MS))
     }
 
     @Test
@@ -60,15 +63,15 @@ class DnsMessagesTest {
         // The spike's blocked targets, matched via the engine matcher (the allowed test
         // target example.com is deliberately not in the set).
         val list = DomainBlocklist.of("blocked.example.com", "betting.example.com", "gambling.example.com")
-        assertTrue(list.isBlocked("blocked.example.com"))
-        assertTrue(list.isBlocked("www.blocked.example.com"))
-        assertTrue(list.isBlocked("betting.example.com"))
-        assertTrue(list.isBlocked("gambling.example.com"))
-        assertFalse("the allowed test target must resolve", list.isBlocked("example.com"))
-        assertFalse(list.isBlocked("www.example.com"))
-        assertFalse(list.isBlocked("notblocked.example.com"))
-        assertFalse(list.isBlocked("example.com.evil.net"))
-        assertFalse(list.isBlocked(""))
+        assertTrue(list.isBlocked("blocked.example.com", NOW_MS))
+        assertTrue(list.isBlocked("www.blocked.example.com", NOW_MS))
+        assertTrue(list.isBlocked("betting.example.com", NOW_MS))
+        assertTrue(list.isBlocked("gambling.example.com", NOW_MS))
+        assertFalse("the allowed test target must resolve", list.isBlocked("example.com", NOW_MS))
+        assertFalse(list.isBlocked("www.example.com", NOW_MS))
+        assertFalse(list.isBlocked("notblocked.example.com", NOW_MS))
+        assertFalse(list.isBlocked("example.com.evil.net", NOW_MS))
+        assertFalse(list.isBlocked("", NOW_MS))
     }
 
     private fun readRd(packet: ByteArray): Boolean =

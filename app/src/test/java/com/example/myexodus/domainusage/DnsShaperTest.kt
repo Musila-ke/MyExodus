@@ -17,6 +17,9 @@ class DnsShaperTest {
     private val exhaustedIndex = RuleIndex.build(listOf(exhaustedRule), counters)
     private val liveIndex = RuleIndex.build(listOf(liveRule), counters)
 
+    /** Wall instant at which the non-expiring fixture rules are live. */
+    private val NOW_MS = 1_000_000L
+
     private fun queryBytes(name: String, type: Int, id: Int = 0x1234): ByteArray =
         DnsFixtures.query(name, type, id)
 
@@ -25,9 +28,10 @@ class DnsShaperTest {
         type: Int = DnsMessage.TYPE_A,
         mode: EngineMode = EngineMode.ENFORCE,
         index: RuleIndex = liveIndex,
+        nowMillis: Long = NOW_MS,
         isExhausted: Boolean = false,
     ): DnsShaper.Decision =
-        shaper.decide(queryBytes(name, type), mode, index) { isExhausted }
+        shaper.decide(queryBytes(name, type), mode, index, nowMillis) { isExhausted }
 
     // --- §6.1 truth table ---
 
@@ -152,23 +156,51 @@ class DnsShaperTest {
     fun parseFailureAndNonStandardQueriesForwardAndCount() {
         assertEquals(
             DnsShaper.Decision.Forward,
-            shaper.decide(ByteArray(5), EngineMode.ENFORCE, exhaustedIndex) { true },
+            shaper.decide(ByteArray(5), EngineMode.ENFORCE, exhaustedIndex, NOW_MS) { true },
         )
         assertEquals(1L, counters.get(Counter.dns_parse_fail))
 
         val twoQuestions = queryBytes("example.com", DnsMessage.TYPE_A).also { it[4] = 0; it[5] = 2 }
         assertEquals(
             DnsShaper.Decision.Forward,
-            shaper.decide(twoQuestions, EngineMode.ENFORCE, exhaustedIndex) { true },
+            shaper.decide(twoQuestions, EngineMode.ENFORCE, exhaustedIndex, NOW_MS) { true },
         )
         assertEquals("NotStandard is not a parse failure", 1L, counters.get(Counter.dns_parse_fail))
     }
 
     @Test
+    fun aLapsedRuleForwardsEveryQtypeEvenIfTheIndexStillCarriesIt_auditA02() {
+        val lapsedRule = DomainRule(
+            "r3", 0, "example.com", 3_600_000, enforcedToday = true, expiresAt = NOW_MS,
+        )
+        val lapsedIndex = RuleIndex.build(listOf(lapsedRule), counters)
+        for (type in listOf(
+            DnsMessage.TYPE_A,
+            DnsMessage.TYPE_AAAA,
+            DnsMessage.TYPE_SVCB,
+            DnsMessage.TYPE_HTTPS,
+            15,
+        )) {
+            assertEquals(
+                "type=$type",
+                DnsShaper.Decision.Forward,
+                decide(type = type, index = lapsedIndex, nowMillis = NOW_MS + 1, isExhausted = true),
+            )
+        }
+        assertEquals("nothing shaped, nothing counted as shaped", 0L, counters.get(Counter.dns_nxdomain_served))
+        assertEquals(0L, counters.get(Counter.dns_nodata_aaaa))
+        assertEquals(0L, counters.get(Counter.dns_nodata_https))
+        assertTrue(
+            "at the expiry instant itself the rule is still live",
+            decide(type = DnsMessage.TYPE_AAAA, index = lapsedIndex, nowMillis = NOW_MS) is DnsShaper.Decision.Respond,
+        )
+    }
+
+    @Test
     fun everyQueryIncrementsTheQueryCounterAtAnyMode() {
-        shaper.decide(queryBytes("example.com", DnsMessage.TYPE_A), EngineMode.OFF, liveIndex) { false }
-        shaper.decide(queryBytes("example.com", DnsMessage.TYPE_AAAA), EngineMode.ACCOUNT, liveIndex) { false }
-        shaper.decide(queryBytes("example.com", DnsMessage.TYPE_AAAA), EngineMode.ENFORCE, liveIndex) { false }
+        shaper.decide(queryBytes("example.com", DnsMessage.TYPE_A), EngineMode.OFF, liveIndex, NOW_MS) { false }
+        shaper.decide(queryBytes("example.com", DnsMessage.TYPE_AAAA), EngineMode.ACCOUNT, liveIndex, NOW_MS) { false }
+        shaper.decide(queryBytes("example.com", DnsMessage.TYPE_AAAA), EngineMode.ENFORCE, liveIndex, NOW_MS) { false }
         assertEquals(3L, counters.get(Counter.dns_queries))
     }
 

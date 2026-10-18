@@ -24,35 +24,49 @@ import java.util.Locale
  *    plan §1/FR-7). Answering NXDOMAIN here ended every connection before a byte could be
  *    counted, so a plain daily-limit rule never loaded at all — device-caught 2026-09-21,
  *    found by the §12.2 matrix run.
+ * Expiry is consulted at decision time (audit A-02), not only when the snapshot is rebuilt: an
+ * entry carries its rule's `blockExpiresAt`, so a rule that lapses between rebuilds stops
+ * answering NXDOMAIN immediately. The `>` boundary matches `RestrictionRule.isExpiredAt` and
+ * `BlockDecisionEngine`.
+ *
  * Remaining ceiling, documented not silently hidden: a rule whose only mechanism is a time
- * window still blocks all day here — the DNS layer has no clock; the Accessibility engine
- * enforces the window accurately.
+ * window still blocks all day here — the DNS layer's clock is only used for expiry, never for
+ * time-of-day windows; the Accessibility engine enforces the window accurately (ADR #66).
  */
 class DomainBlocklist private constructor(
-    private val domains: List<String>,
+    private val entries: List<Entry>,
 ) {
-    fun isBlocked(qname: String): Boolean {
+    private class Entry(val name: String, val expiresAt: Long)
+
+    fun isBlocked(qname: String, nowMillis: Long): Boolean {
         val q = normalize(qname)
-        return domains.any { q == it || q.endsWith(".$it") }
+        return entries.any {
+            (q == it.name || q.endsWith(".${it.name}")) &&
+                (it.expiresAt == 0L || nowMillis <= it.expiresAt)
+        }
     }
 
-    val size: Int get() = domains.size
+    val size: Int get() = entries.size
 
     companion object {
         val EMPTY = DomainBlocklist(emptyList())
 
         fun fromUrlPatterns(patterns: List<UrlPattern>): DomainBlocklist {
-            val names = patterns.asSequence()
+            val entries = patterns.asSequence()
                 .filter { it.pathPrefix == null }
                 .filter { it.isAlwaysOn || it.dailyLimitMs <= 0L }
-                .mapNotNull { it.hostAscii.takeIf { host -> host.isNotEmpty() && !host.contains(':') } }
-                .map { normalize(it) }
+                .mapNotNull { pattern ->
+                    pattern.hostAscii
+                        .takeIf { host -> host.isNotEmpty() && !host.contains(':') }
+                        ?.let { Entry(normalize(it), pattern.blockExpiresAt) }
+                }
                 .toList()
-            return DomainBlocklist(names)
+            return DomainBlocklist(entries)
         }
 
         /** A blocklist from raw names — used by unit tests and the spike harness. */
-        fun of(vararg names: String): DomainBlocklist = DomainBlocklist(names.map { normalize(it) })
+        fun of(vararg names: String): DomainBlocklist =
+            DomainBlocklist(names.map { Entry(normalize(it), 0L) })
 
         fun normalize(name: String): String {
             var n = name.trim().lowercase(Locale.ROOT)

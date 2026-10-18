@@ -25,16 +25,21 @@ class AttributionResolver(
         data object Ambiguous : Dns
     }
 
-    /** FR-3(a): a valid SNI is authoritative; a miss here never falls back to DNS. */
-    fun bySni(host: String, index: RuleIndex): DomainRule? = index.match(host)
+    /**
+     * FR-3(a): a valid SNI is authoritative; a miss here never falls back to DNS. A rule whose
+     * `blockExpiresAt` has passed is a miss at this instant (audit A-02) — the snapshot may
+     * still carry it until the next rebuild, but a lapsed rule must not bind or meter new flows.
+     */
+    fun bySni(host: String, index: RuleIndex, nowMillis: Long): DomainRule? =
+        index.match(host)?.takeUnless { it.isExpiredAt(nowMillis) }
 
     /** §4.6: the DNS-answer fallback, keyed by the flow's destination address. */
-    fun byDns(ip: ByteArray, index: RuleIndex): Dns {
+    fun byDns(ip: ByteArray, index: RuleIndex, nowMillis: Long): Dns {
         val names = observations.candidates(ip)
         if (names.isEmpty()) return Dns.None
-        val first = index.match(names[0])
+        val first = liveMatch(names[0], index, nowMillis)
         for (i in 1 until names.size) {
-            if (index.match(names[i])?.id != first?.id) {
+            if (liveMatch(names[i], index, nowMillis)?.id != first?.id) {
                 counters.inc(Counter.dns_fallback_ambiguous)
                 return Dns.Ambiguous
             }
@@ -43,4 +48,8 @@ class AttributionResolver(
         counters.inc(Counter.dns_fallback_attributed)
         return Dns.Hit(first)
     }
+
+    /** An expired match is not a candidate: that name is no longer a limited site. */
+    private fun liveMatch(name: String, index: RuleIndex, nowMillis: Long): DomainRule? =
+        index.match(name)?.takeUnless { it.isExpiredAt(nowMillis) }
 }

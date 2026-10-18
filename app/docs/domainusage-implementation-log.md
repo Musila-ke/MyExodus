@@ -486,7 +486,7 @@ green. No S5 source change was needed after the interruption.
 | S7.3 `start()` per §6.8 — mode resolution (S1.3 debug override), zone anchoring, `max(today, persisted)` day key (INV-3), startup load on `domainusage-db`, D-32 revision seeding before the first snapshot adapts, ledger attach + `applyRules(snapshot, totals)`, tick loop, rule-snapshot collector on the tick thread, Private-DNS monitor | `domainusage/DomainUsageEngine.kt` (`start`), `domainusage/UsageTickLoop.kt` |
 | S7.3 `stop()` per §6.9 — single-execution guard, cancel tick, one bounded `runBlocking` flush, monitor unregister, store/registry clear, VPN-stopped notification | `domainusage/DomainUsageEngine.kt` (`stop`, `flushOnStop`) |
 | S7.3 service wiring — `start()` after `establish()`, `stop()` from `onDestroy`/`onRevoke`, `seedRevisions` bound to the provider (closes S6's carried D-32 gap) | `vpn/DnsSinkholeVpnService.kt` |
-| S7.4 notification — dedicated `domain_usage_status` channel, one notification, suppressed without permission (both the 33+ runtime permission and the channel-level switch), copy from string resources so INV-7 holds (names the feature, never a site) | `domainusage/AndroidDomainUsageHost.kt` |
+| S7.4 notification — dedicated `domain_usage_status` channel, one notification, suppressed without permission (both the 33+ runtime permission and the channel-level switch), copy from string resources. Since ADR #179 (2026-10-18) the warning names the rule's own site and is `VISIBILITY_PRIVATE` (a secure lock screen conceals the text); logs, exceptions and storage still carry no hostnames | `domainusage/AndroidDomainUsageHost.kt` |
 | S7.5 `PrivateDnsMonitor` (D-34) — `NET_CAPABILITY_INTERNET` + `NOT_VPN` callback, per-`Network` strict flag in a `ConcurrentHashMap`, recomputed from the tracked set on every `onLinkPropertiesChanged`/`onCapabilitiesChanged`/`onLost`, so the status can never outlive the network it was seen on; strict = `isPrivateDnsActive() && privateDnsServerName != null` | `domainusage/PrivateDnsMonitor.kt` |
 | S7.6 status — `StateFlow<EngineStatus>`, composed highest-severity-first | `domainusage/DomainUsageEngine.kt` (`refreshStatus`) |
 
@@ -898,7 +898,8 @@ from the persisted total on attach (no restart replay), re-seeded on a limit cha
 rollover, and gated to the current revision. `UsageTickLoop` gains an `onTick` hook (inside the
 existing exception guard) that posts `DomainUsageHost.postWebsiteLimitWarning`;
 `AndroidDomainUsageHost` renders notification id 3 on `domain_usage_status` with INV-7-safe copy.
-No metering, attribution, DNS, relay or persistence code changed.
+No metering, attribution, DNS, relay or persistence code changed. (Superseded in part 2026-10-18 by
+ADR #179: the warning now names the rule's own site — see the dated section below.)
 
 **Cross-browser.** Usage is keyed `(ruleId, revision)` with no app identity, so every browser's
 traffic to the site feeds one counter; toolbar discovery is per package (`url_bar`,
@@ -950,3 +951,109 @@ the test WiFi), matching the first-5-second rate — no first-pass throughput co
 (`TcpSendWindowTest` 6/6; `+9` from 1783 = 6 relay + 3 cover-target tests). The one mid-sweep
 failure was an unrelated same-millisecond ordering tie in `AttemptLogTest`, fixed with `id`
 tie-breakers in `AttemptLogDao` (ADR #178).
+
+## Site-named limit warnings — the dated section (2026-10-18, ADR #179)
+
+Owner report: the warning said "9 min left on a website limit today" without naming the site. INV-7's
+notification clause was amended on owner direction (logs/exceptions/storage still never carry
+hostnames): `RuleCounter` carries the rule's normalized `pattern`, `LimitWarning` passes it through
+`takeLimitWarnings()` to `DomainUsageHost.postWebsiteLimitWarning(level, remainingMs, pattern)`, and
+notification id 3 renders "%1$s: %2$d min left today…" with `VISIBILITY_PRIVATE` (a secure lock
+screen conceals the text). `RuleEditor`'s scope notice now states metering spans every app,
+including the site's own app.
+
+**JVM.** `domainusage` **257 tests, 0 failures/errors/skips**; full suite **205 classes / 1,792
+tests / 0/0/0** (2026-10-18 14:26). Existing warning assertions were tightened to pin the pattern.
+
+**Device (X6532, 2026-10-18, debug APK `install -r`, SHA-256 `8b18fb1a…64aa5`).** Rule
+`instagram.com` at 30 min; Instagram driven to `Used today: 25 / 30 min`; notification id 3 posted
+at `when=1792324576827` (14:56:16.827 EAT), channel `domain_usage_status`, `vis=PRIVATE`:
+**"instagram.com: 4 min left today. Tap to review your rules."** The remaining minutes floor (the
+crossing left 4.99 min). Rule restored to its original 30 m, VPN `VALIDATED`, enforcement FGS up.
+A temporary 30→25 edit during the run fired nothing, correctly: thresholds for limits ≥ 10 min are
+`limit − 10` / `limit − 5`, and `seedWarnings` marks already-crossed thresholds as fired so a
+lowered limit never warns retroactively.
+
+## Meter invariant-exactness — the differential-oracle fixes (2026-10-18, ADR #181)
+
+Owner mandate: no chance of a wrong duration. A 500-seed differential oracle (independent
+union-of-tails merge, mixed sub-tick / idle-tail / idle-gap timelines, half splitting the day)
+found two defects the hand-written U-14 cases missed:
+
+1. **Stalled tick lost a closed streak.** `touch`'s `sessionStart` reset on an idle gap discarded
+   the prior streak when no `recompute` ran during it (INV-16 violated). Fix: relay threads enqueue
+   a closed streak into `RuleCounter.pendingStreaks`; `recompute`/`splitDayAt` drain it, clamped by
+   `lastAccountedElapsed` so racing duplicates book nothing. The per-chunk path stays allocation-free
+   except when a gap actually closes a streak.
+2. **Day split credited idle pre-activity time.** The no-live-interval branch pulled `sessionStart`
+   back to the midnight boundary even when the new streak started after it (+3,181 ms, oracle seed
+   14). Fix: `sessionStart = max(boundary, sessionStart)` in both branches; `book(boundary)` already
+   enforces the floor. `resetForNewDay` clears the queue/sentinel; unenforced counters discard.
+
+The debug Protection page now also renders **exact per-rule totals** (`debugTotals()`, pattern →
+`totalMs`, current revision) — the ground-truth seam for the device legs below.
+
+**JVM.** New regressions: stalled-streak (16,000 ms), several gaps before one tick (31,000 ms),
+midnight-stalled split (10,000/6,000), plus the 500-seed oracle. `domainusage` **29 suites / 261
+tests / 0/0/0**; full suite **205 suites / 1,796 tests / 0 failures / 0 errors / 0 skipped**.
+
+**Device (X6532, 2026-10-18; debug APK installed with `install -r`, on-device SHA-256 matched).**
+Temporary rule `speedtest.tele2.net`, shell `nc` transfers through the tunnel.
+- Duration: wall 1,751 + 25,284 ms; prediction (windows + 2 tails) **57,035 ms**; exact **55,708 ms**
+  (difference = DNS + connect + first-chunk latency, 1,327 ms).
+- Idle: 34 s between runs → wall-clock meter would read ≈75 s; exact total excluded it.
+- Overlap: two parallel 10 MB downloads, wall 30,277 ms → delta **44,644 ms** vs ≈44.8 s union
+  prediction (sum would be ≈90 s).
+- Display: 100,352 ms → `Used today: 1 / 720 min`; 1,805,473 ms → `30 / 30 min` (floor division).
+- Persistence: force-stop + relaunch → totals byte-identical (100,352 / 1,805,473), new PID, VPN up.
+- Isolation: Chrome + Brave browsing (53 new TCP/443 flows) left both rule totals unchanged.
+  `sni_ech` 11→37 is Chromium GREASE ECH (`Result.Ech`, DNS fallback; RFC 9849 §6.2), not a parser
+  failure — `sni_malformed`/`sni_toolarge`/`inspect_*` all 0, `flow_resets_new` 0.
+
+Honest limits: the window start is bounded to the `nc` wall window (not an ms-exact relay
+timestamp); midnight rollover is oracle/JVM-proven, not device-run; a hard kill may lose up to
+`PERSIST_INTERVAL_MS` (10 s) by design.
+
+**UDP/QUIC leg (same device day).** Temp `example.org` rule (1 m/day), resolved through the tunnel
+to 104.20.26.136, driven with toybox `nc -u -q 1`. Two single 600-byte datagrams >15 s apart booked
+exactly **30,000 ms** (two tails). A sustained loop — 17 accepted datagrams over 30.3 s — plus one
+tail read **75,014 ms** vs 75,000 ms predicted (+14 ms tick alignment). The 18th datagram opened
+after exhaustion and was dropped: `udp_dropped=1`; `hook_exceptions=0`, `fatal_vm_error=0`,
+`flow_resets_new=0`. The site-named warning fired ("example.org: less than a minute left today").
+Temp rule deleted; the original four rules restored. The single wedged `nc` was a harness quirk (a
+dropped UDP flow leaves toybox netcat blocked on read), not an engine defect.
+
+**R-03 live check (same day, read-only).** Policy 4769902381008384079 read back with the pinned
+`status = "ok"` filter; `autoClose` 3600 s; zero open incidents (`projects.alerts`); the ok-series
+is continuous (358 points, 07:27Z→13:24Z). The 2026-10-18 warning the owner saw was the close of
+the billing incident, not a new alert (ADR #180).
+
+**Audit-fix batch (2026-10-18, owner mandate; ADRs #182–#185).** The same-day project audit
+(`project-audit-2026-10-18.md`) found four actionable defects; all four are now fixed.
+
+- **A-02 — expiry at decision time (ADR #182).** `DomainRule` carries `expiresAt`;
+  `AttributionResolver`, `DnsShaper.decide(nowMillis)`, and `DomainBlocklist` all refuse an expired
+  match, and `DnsSinkholeVpnService.handleDns` passes wall time. `RuleCounter.markExpiry` /
+  `retargetExpiry` clamp accrual to the expiry instant on the monotonic clock; `UsageLedger.tick`
+  marks and skips lapsed counters. The publish-time filter stays but is no longer load-bearing.
+  Device: a stale snapshot shaped AAAA to NODATA (`an=0`) before expiry and forwarded the real
+  Cloudflare record (`an=2`) after it, with the app never opened.
+- **A-01 — false validation removed (ADR #183).** The editor no longer rejects a limit longer than
+  the rule's window. The engines accrue all day and fire the quota on day scope
+  (`BlockDecisionEngine` Rule 2); the window is an additional block period (Rule 1). Only the
+  real bounds remain.
+- **A-04 — INV-7 closed for release (ADR #184).** Every qname/IP/URL/hex diagnostic in
+  `DnsSinkholeVpnService` and `BrowserUrlScanner` is now behind `BuildConfig.DEBUG`; the two log
+  lines that wrote the TUN inline were restructured so release still writes packets. CI check 7
+  fails any ungated sensitive `Log.` line in main sources. (The audit's A-04 row missed the
+  scanner; the fix covers it.)
+- **A-03 — honest non-enforcing UI (ADR #185).** Outside ENFORCE, the Rules list shows an
+  unavailable banner and the editor disables the website daily-limit switch with a caption; an
+  existing limit is preserved, app limits are unaffected. Device-proven with the debug override:
+  banner + caption rendered, "Limit daily use" node `checked=true, enabled=false`, other mechanisms
+  enabled; then the override was cleared, the process restarted, and the device returned to
+  `mode=ENFORCE`, VPN `ACTIVE`, private DNS `off`, original rule intact.
+
+**Suite after the batch: 205 suites / 1,811 tests / 0 failures / 0 errors / 0 skipped**
+(+15 net over the audit baseline of 1,796). `assembleDebug` and `compileReleaseKotlin` both
+succeed.

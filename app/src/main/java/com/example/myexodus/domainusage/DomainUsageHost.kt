@@ -25,9 +25,10 @@ interface DomainUsageHost {
 
     /**
      * FR3: a website rule crossed a warning threshold. The host applies the notification
-     * permission test; the copy names no site (INV-7).
+     * permission test. [pattern] is the rule's own site — named in the copy per ADR #179
+     * (owner direction 2026-10-18; logs/exceptions/storage still hold to INV-7).
      */
-    fun postWebsiteLimitWarning(level: Int, remainingMs: Long)
+    fun postWebsiteLimitWarning(level: Int, remainingMs: Long, pattern: String)
 
     /**
      * §8 S7.5/D-34: start strict-Private-DNS tracking, reporting every change of the recomputed

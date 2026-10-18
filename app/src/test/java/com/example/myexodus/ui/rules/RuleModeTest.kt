@@ -1,8 +1,11 @@
 package com.example.myexodus.ui.rules
 
 import com.example.myexodus.data.db.entity.RestrictionRule
+import com.example.myexodus.domainusage.EngineMode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -95,41 +98,46 @@ class RuleModeTest {
     }
 
     @Test
-    fun validate_limitLongerThanItsWindow_isRejected() {
-        // Owner report 2026-10-04: "1h duration + 2h limit is incoherent" — the window's
-        // allowed hour is all the usage there can ever be, so a 2h limit can never fire.
-        assertEquals(
-            ModeError.LimitExceedsWindow,
+    fun validate_limitLongerThanItsWindow_isAccepted_dayScopedQuota() {
+        // Audit A-01: the window is an additional *block* period (BlockDecisionEngine Rule 1),
+        // not the only time the site can be used. Usage outside it still accrues, and the
+        // quota fires at `usageTodayMs >= dailyLimitMs` on any active day (Rule 2). A 2 h
+        // limit beside a 1 h block window is therefore meaningful, not incoherent — the old
+        // rejection rested on reading the window as an allowance.
+        assertNull(
+            "1h block window + 2h daily quota: quota counts all use that day",
             validateBlockMode(false, true, true, 18 * 60L, 19 * 60L, 120L),
         )
         assertNull(
-            "a limit equal to the window can still fire at its edge",
-            validateBlockMode(false, true, true, 18 * 60L, 19 * 60L, 60L),
-        )
-        assertEquals(
-            "overnight 22:00–07:00 is a 9h window — a 10h limit cannot fit",
-            ModeError.LimitExceedsWindow,
+            "overnight 22:00–07:00 (9h block) + 10h quota",
             validateBlockMode(false, true, true, 22 * 60L, 7 * 60L, 10 * 60L),
         )
         assertNull(
-            "8h fits inside the 9h overnight window",
-            validateBlockMode(false, true, true, 22 * 60L, 7 * 60L, 8 * 60L),
-        )
-        assertNull(
-            "a limit with no window has nothing to contradict",
+            "a limit with no window",
             validateBlockMode(false, false, true, 22 * 60L, 7 * 60L, 20 * 60L),
         )
         assertNull(
-            "always-on overrides both mechanisms, so the pair is inert like the other checks",
+            "always-on overrides both mechanisms",
             validateBlockMode(true, true, true, 22 * 60L, 7 * 60L, 10 * 60L),
+        )
+        assertEquals(
+            "a full day is still unreachable and rejected",
+            ModeError.LimitTooLarge,
+            validateBlockMode(false, true, true, 18 * 60L, 19 * 60L, MINUTES_PER_DAY.toLong()),
         )
     }
 
     @Test
-    fun windowLengthMinutes_countsOvernightWindowsToMidnightAndOn() {
-        assertEquals(60L, windowLengthMinutes(18 * 60L, 19 * 60L))
-        assertEquals(9 * 60L, windowLengthMinutes(22 * 60L, 7 * 60L))
-        assertEquals(MINUTES_PER_DAY - 1L, windowLengthMinutes(60L, 59L))
+    fun websiteLimitMechanism_needsEnforce_butAppLimitsNeverDo() {
+        // Audit A-03: OFF and ACCOUNT never shape or block, so a website limit stored under
+        // either is inert — the editor must not offer the switch. App quotas ride the
+        // accessibility usage accounting and are live in every mode.
+        assertFalse(websiteLimitMechanismAvailable(isApp = false, mode = EngineMode.OFF))
+        assertFalse(websiteLimitMechanismAvailable(isApp = false, mode = EngineMode.ACCOUNT))
+        assertTrue(websiteLimitMechanismAvailable(isApp = false, mode = EngineMode.ENFORCE))
+        EngineMode.entries.forEach {
+            assertTrue("app limits are mode-free", websiteLimitMechanismAvailable(isApp = true, mode = it))
+        }
     }
 
     @Test

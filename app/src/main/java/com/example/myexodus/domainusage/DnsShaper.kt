@@ -25,12 +25,15 @@ class DnsShaper(
 
     /**
      * @param query exact DNS payload of the query packet.
+     * @param nowMillis wall clock at decision time — a rule whose `blockExpiresAt` has passed no
+     *   longer shapes an answer, even if the last snapshot still carries it (audit A-02).
      * @param isExhausted whether the ledger currently flags [DomainRule] as over its daily limit.
      */
     fun decide(
         query: ByteArray,
         mode: EngineMode,
         ruleIndex: RuleIndex,
+        nowMillis: Long,
         isExhausted: (DomainRule) -> Boolean,
     ): Decision {
         counters.inc(Counter.dns_queries)
@@ -38,6 +41,7 @@ class DnsShaper(
         if (parsed !is DnsMessage.Parsed.Query) return Decision.Forward
         if (mode != EngineMode.ENFORCE) return Decision.Forward
         val rule = ruleIndex.match(parsed.question.name) ?: return Decision.Forward
+        if (rule.isExpiredAt(nowMillis)) return Decision.Forward
         if (isExhausted(rule)) {
             counters.inc(Counter.dns_nxdomain_served)
             return Decision.Respond(

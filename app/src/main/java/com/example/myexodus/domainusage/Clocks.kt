@@ -24,4 +24,10 @@ class SystemMonotonicClock : MonotonicClock {
  */
 interface WallClock {
     fun now(zone: ZoneId): LocalDateTime
+
+    /**
+     * Epoch milliseconds — the form rule expiry is stored in (`blockExpiresAt`). Used for
+     * expiry decisions only; durations still come from [MonotonicClock] (INV-2).
+     */
+    fun nowMillis(): Long
 }

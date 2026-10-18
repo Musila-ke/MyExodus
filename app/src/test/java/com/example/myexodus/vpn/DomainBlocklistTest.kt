@@ -8,36 +8,39 @@ import org.junit.Test
 
 class DomainBlocklistTest {
 
+    /** The fixture rules below never expire (`blockExpiresAt = Long.MAX_VALUE`). */
+    private val NOW_MS = Long.MAX_VALUE
+
     private val blocklist = DomainBlocklist.of("blocked.example.com")
 
     @Test
     fun exactMatch_isBlocked() {
-        assertTrue(blocklist.isBlocked("blocked.example.com"))
+        assertTrue(blocklist.isBlocked("blocked.example.com", NOW_MS))
     }
 
     @Test
     fun subdomain_suffixPolicy_blocks() {
         // Plan §8.4 default: blocking example.com also blocks subdomains (dot boundary).
-        assertTrue(blocklist.isBlocked("www.blocked.example.com"))
-        assertTrue(blocklist.isBlocked("a.b.blocked.example.com"))
+        assertTrue(blocklist.isBlocked("www.blocked.example.com", NOW_MS))
+        assertTrue(blocklist.isBlocked("a.b.blocked.example.com", NOW_MS))
     }
 
     @Test
     fun suffixPolicy_noCrossDomainMatch() {
-        assertFalse(blocklist.isBlocked("blocked.example.com.evil.com"))
-        assertFalse(blocklist.isBlocked("xblocked.example.com"))
-        assertFalse(blocklist.isBlocked("example.com"))
+        assertFalse(blocklist.isBlocked("blocked.example.com.evil.com", NOW_MS))
+        assertFalse(blocklist.isBlocked("xblocked.example.com", NOW_MS))
+        assertFalse(blocklist.isBlocked("example.com", NOW_MS))
     }
 
     @Test
     fun caseInsensitive() {
-        assertTrue(blocklist.isBlocked("BLOCKED.Example.COM"))
+        assertTrue(blocklist.isBlocked("BLOCKED.Example.COM", NOW_MS))
     }
 
     @Test
     fun trailingDot_normalizedOnBothSides() {
-        assertTrue(blocklist.isBlocked("blocked.example.com."))
-        assertTrue(DomainBlocklist.of("blocked.example.com.").isBlocked("blocked.example.com"))
+        assertTrue(blocklist.isBlocked("blocked.example.com.", NOW_MS))
+        assertTrue(DomainBlocklist.of("blocked.example.com.").isBlocked("blocked.example.com", NOW_MS))
     }
 
     @Test
@@ -48,8 +51,8 @@ class DomainBlocklistTest {
         val list = DomainBlocklist.fromUrlPatterns(
             listOf(pattern("https://bücher.example")),
         )
-        assertTrue(list.isBlocked(puny))
-        assertTrue(list.isBlocked("www.$puny"))
+        assertTrue(list.isBlocked(puny, NOW_MS))
+        assertTrue(list.isBlocked("www.$puny", NOW_MS))
     }
 
     @Test
@@ -59,7 +62,7 @@ class DomainBlocklistTest {
             listOf(pattern("https://example.com/forum")),
         )
         assertEquals(0, list.size)
-        assertFalse(list.isBlocked("example.com"))
+        assertFalse(list.isBlocked("example.com", NOW_MS))
     }
 
     @Test
@@ -76,12 +79,12 @@ class DomainBlocklistTest {
             listOf(pattern("https://example.com"), pattern("https://example.org/path")),
         )
         assertEquals(1, list.size)
-        assertTrue(list.isBlocked("sub.example.com"))
+        assertTrue(list.isBlocked("sub.example.com", NOW_MS))
     }
 
     @Test
     fun emptyList_blocksNothing() {
-        assertFalse(DomainBlocklist.EMPTY.isBlocked("anything.example"))
+        assertFalse(DomainBlocklist.EMPTY.isBlocked("anything.example", NOW_MS))
     }
 
     @Test
@@ -93,8 +96,8 @@ class DomainBlocklistTest {
             listOf(pattern("https://example.com", isAlwaysOn = false, dailyLimitMs = 1_800_000)),
         )
         assertEquals(0, list.size)
-        assertFalse(list.isBlocked("example.com"))
-        assertFalse(list.isBlocked("www.example.com"))
+        assertFalse(list.isBlocked("example.com", NOW_MS))
+        assertFalse(list.isBlocked("www.example.com", NOW_MS))
     }
 
     @Test
@@ -119,7 +122,27 @@ class DomainBlocklistTest {
             listOf(pattern("https://example.com", isAlwaysOn = true, dailyLimitMs = 1_800_000)),
         )
         assertEquals(1, list.size)
-        assertTrue(list.isBlocked("example.com"))
+        assertTrue(list.isBlocked("example.com", NOW_MS))
+    }
+
+    @Test
+    fun expiredRule_stopsBlockingWithoutARebuild_auditA02() {
+        // The snapshot still carries the rule; only the decision-time clock knows it lapsed.
+        val expiry = 1_000_000L
+        val list = DomainBlocklist.fromUrlPatterns(
+            listOf(pattern("https://example.com", blockExpiresAt = expiry)),
+        )
+        assertEquals(1, list.size)
+        assertTrue("at the expiry instant the rule is still live", list.isBlocked("example.com", expiry))
+        assertTrue(list.isBlocked("www.example.com", expiry - 1))
+        assertFalse("one millisecond later it must answer normally", list.isBlocked("example.com", expiry + 1))
+        assertFalse(list.isBlocked("www.example.com", expiry + 1))
+    }
+
+    @Test
+    fun zeroExpiry_neverExpires() {
+        val list = DomainBlocklist.fromUrlPatterns(listOf(pattern("https://example.com", blockExpiresAt = 0L)))
+        assertTrue(list.isBlocked("example.com", Long.MAX_VALUE))
     }
 
     @Test
@@ -130,7 +153,7 @@ class DomainBlocklistTest {
             listOf(pattern("https://example.com", isAlwaysOn = false, timeStart = 360, timeEnd = 1020)),
         )
         assertEquals(1, list.size)
-        assertTrue(list.isBlocked("example.com"))
+        assertTrue(list.isBlocked("example.com", NOW_MS))
     }
 
     private fun pattern(
@@ -139,6 +162,7 @@ class DomainBlocklistTest {
         dailyLimitMs: Long = 0,
         timeStart: Long? = null,
         timeEnd: Long? = null,
+        blockExpiresAt: Long = Long.MAX_VALUE,
     ): UrlPattern {
         val rule = com.example.myexodus.data.db.entity.RestrictionRule(
             ruleId = "r-" + raw.hashCode(),
@@ -150,7 +174,7 @@ class DomainBlocklistTest {
             timeRangeStart = timeStart,
             timeRangeEnd = timeEnd,
             activeDaysOfWeek = "1111111",
-            blockExpiresAt = Long.MAX_VALUE,
+            blockExpiresAt = blockExpiresAt,
             severityLevel = "MEDIUM",
         )
         return UrlPattern.from(rule)!!

@@ -60,6 +60,7 @@ import com.example.myexodus.blocking.UrlPattern
 import com.example.myexodus.blocking.usage.PlatformUsageReader
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.data.db.entity.RestrictionRule
+import com.example.myexodus.domainusage.EngineMode
 import com.example.myexodus.domainusage.HostNormalizer
 import com.example.myexodus.domainusage.MeteringConfig
 import com.example.myexodus.domainusage.PublicSuffixList
@@ -117,6 +118,11 @@ fun RuleEditorScreen(
      *  the warning is stated up front and re-asked at save, so a rule can never be created
      *  silently inert. Null for app rules and a healthy/startable tunnel. */
     websiteEngineBlocker: WebsiteEngineBlocker?,
+    /** The runtime engine mode (`DomainUsageEngine.mode`). A website daily limit can fire only
+     *  under [EngineMode.ENFORCE]; in any other mode the switch is shown disabled with a notice
+     *  rather than letting the build create an inert limit silently (audit A-03). App limits use
+     *  the accessibility usage accounting and are unaffected. */
+    websiteLimitsMode: EngineMode,
     onEnableWebsiteEngine: () -> Unit,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
@@ -183,7 +189,6 @@ fun RuleEditorScreen(
     val duplicateMessage = stringResource(R.string.editor_target_duplicate)
     val limitInvalidMessage = stringResource(R.string.editor_daily_limit_invalid)
     val limitTooLargeMessage = stringResource(R.string.editor_daily_limit_too_large)
-    val limitExceedsWindowMessage = stringResource(R.string.editor_limit_exceeds_window)
     val noModeMessage = stringResource(R.string.editor_mode_missing)
     val siteLimitInvalidMessage = stringResource(R.string.editor_site_limit_invalid)
     val siteLimitIpMessage = stringResource(R.string.editor_site_limit_ip)
@@ -242,7 +247,6 @@ fun RuleEditorScreen(
             modeError == ModeError.SameTime -> sameTimeMessage
             modeError == ModeError.LimitInvalid -> limitInvalidMessage
             modeError == ModeError.LimitTooLarge -> limitTooLargeMessage
-            modeError == ModeError.LimitExceedsWindow -> limitExceedsWindowMessage
             else -> null
         }
         if (invalid != null) {
@@ -494,14 +498,24 @@ fun RuleEditorScreen(
 
             // Rule 2 (daily quota). S9: open to website rules too — the metering engine clocks
             // time on the site's connections, so the mechanism it always had is now reachable
-            // (before S9 the switch was app-only and a website rule stored 0).
+            // (before S9 the switch was app-only and a website rule stored 0). A website limit
+            // is only live under ENFORCE (audit A-03): other modes show the switch disabled and
+            // say so, instead of storing a limit nothing will ever count against.
+            val limitMechanismAvailable = websiteLimitMechanismAvailable(isApp, websiteLimitsMode)
             ModeRow(
                 title = stringResource(R.string.editor_daily_limit_title),
                 hint = stringResource(R.string.editor_daily_limit_hint),
                 checked = limitEnabled,
-                enabled = !alwaysOn,
+                enabled = !alwaysOn && limitMechanismAvailable,
                 onCheckedChange = { limitEnabled = it },
             )
+            if (!isApp && !limitMechanismAvailable) {
+                Text(
+                    stringResource(R.string.editor_website_limits_unavailable),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (limitEnabled && !alwaysOn) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -910,13 +924,7 @@ internal fun clampStoredLimitMs(dailyLimitMs: Long): Long =
     }
 
 /** Validation outcome of the block-mode form; the caller maps it to copy. */
-internal enum class ModeError { NoneSelected, SameTime, LimitInvalid, LimitTooLarge, LimitExceedsWindow }
-
-/** Minutes a rule's window allows per active day — the usage a daily limit can possibly see.
- *  end <= start is the engine's overnight form (equal times are rejected before this runs). */
-internal fun windowLengthMinutes(startMinutes: Long, endMinutes: Long): Long =
-    if (endMinutes > startMinutes) endMinutes - startMinutes
-    else MINUTES_PER_DAY - startMinutes + endMinutes
+internal enum class ModeError { NoneSelected, SameTime, LimitInvalid, LimitTooLarge }
 
 /** A usage day is 24 h long, so a limit at or above this can never fire (user-reported
  *  2026-09-20: "30 hrs a day" was accepted and would have been an inert rule). */
@@ -934,12 +942,24 @@ internal fun parseLimitTotalMinutes(hours: String, minutes: String): Long? {
 }
 
 /**
+ * Audit A-03: a website daily limit fires only while the domain-usage engine enforces; `OFF`
+ * and `ACCOUNT` never shape or block. App limits are metered by the accessibility usage
+ * accounting and are live in every mode.
+ */
+internal fun websiteLimitMechanismAvailable(isApp: Boolean, mode: EngineMode): Boolean =
+    isApp || mode == EngineMode.ENFORCE
+
+/**
  * The editor's rules: at least one mechanism selected, a selected window must not be zero-length
- * (equal start/end is the engine's overnight form, ambiguous as a new rule), a selected
- * limit must total between 1 minute and one day, and — #19, owner report 2026-10-04 — a limit
- * beside a window must fit inside that window, or it is a setting that can never fire
- * ("1h duration + 2h limit is incoherent"). All checks are skipped for mechanisms
+ * (equal start/end is the engine's overnight form, ambiguous as a new rule), and a selected
+ * limit must total between 1 minute and one day. All checks are skipped for mechanisms
  * "all the time" overrides.
+ *
+ * There is deliberately no "limit longer than the window" rule (audit A-01). The window is an
+ * additional *block* period (BlockDecisionEngine Rule 1), not an allowance: usage outside it
+ * still accrues, and the quota fires at `usageTodayMs >= dailyLimitMs` on any active day
+ * (Rule 2, day-scoped). A 2 h limit beside a 1 h window is therefore meaningful, and rejecting
+ * it would block a coherent rule. `MINUTES_PER_DAY` remains the only upper bound.
  */
 internal fun validateBlockMode(
     alwaysOn: Boolean,
@@ -954,8 +974,6 @@ internal fun validateBlockMode(
     !alwaysOn && limitEnabled && limitTotalMinutes == null -> ModeError.LimitInvalid
     !alwaysOn && limitEnabled && limitTotalMinutes != null && limitTotalMinutes >= MINUTES_PER_DAY ->
         ModeError.LimitTooLarge
-    !alwaysOn && windowEnabled && limitEnabled && limitTotalMinutes != null &&
-        limitTotalMinutes > windowLengthMinutes(startMinutes, endMinutes) -> ModeError.LimitExceedsWindow
     else -> null
 }
 

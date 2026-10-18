@@ -226,7 +226,7 @@ When the Engine is dormant: `onDnsQuery` returns `Forward`, `tcpFlowOpened` retu
 | INV-4 | The ledger is the enforcement source. The database is never read to decide a block. |
 | INV-5 | Persisted `active_ms` never decreases for a given `(rule_id, revision, day_key)` (generation-guarded `MAX` upsert, §4.9). |
 | INV-6 (revised) | Every hook catches ordinary exceptions, increments `hook_exceptions`, and falls back to pass-through. A `VirtualMachineError` is recorded and rethrown, never swallowed (§5 D-35). |
-| INV-7 | Hostnames, IPs, DNS names never appear in logs, exceptions, notifications, or storage. |
+| INV-7 (revised 2026-10-18, ADR #179) | Hostnames, IPs, DNS names never appear in logs, exceptions, or storage. Notifications may name the rule's own site (owner direction 2026-10-18: a limit warning must say which site); the warning notification is `VISIBILITY_PRIVATE`, so the lock screen shows only the generic title. |
 | INV-8 | Unattributed/ambiguous flows are never blocked, in any mode. ECH-flagged flows are never blocked merely for being ECH (§4.6). |
 | INV-9 | The app's own traffic never enters the TUN. |
 | INV-10 | `allowBypass()` is never called. |
@@ -283,6 +283,8 @@ This replaces the prior draft's `dt = min(now - lastTick, TICK_DT_CAP_MS)` formu
   ```
 - Why this fixes both prior bugs at once: a single mid-interval packet no longer credits a full tick period, because `intervalStart` is bounded below by `lastAccountedElapsed` (nothing before the last accounted point is re-added) and `intervalEnd` is bounded above by `now` (nothing beyond the present is projected forward). A stalled tick thread no longer loses time, because the *entire* gap between `lastAccountedElapsed` and the (possibly idle-capped) present is credited in one shot on the next tick invocation, with no per-invocation cap discarding the remainder.
 - `MAX_TICK_GAP_DIAG_MS` is diagnostic only (logs a scheduling anomaly) and never truncates `activeMs`.
+
+**Implementation note (2026-10-18, ADR #181 — dated refinement, spec unchanged).** The identity above is correct *if every streak is booked before its `sessionStart` is reset*. `touch` resets it on an idle gap, so a `recompute` stalled across a gap silently lost the prior streak's tail (INV-16 violation, found by a 500-seed differential oracle). Implemented fix: `touch` enqueues a closed streak `[sessionStart, lastActivity + T_IDLE_MS]` into `RuleCounter.pendingStreaks`; `recompute`/`splitDayAt` drain the queue first, clamping each record to `lastAccountedElapsed` so racing duplicates are no-ops. The per-chunk path remains allocation-free (a record is created only when a gap closes a streak). A second oracle-found defect — `splitDayAt` rewinding `sessionStart` to the midnight boundary when the new streak started later, which credited idle pre-activity time (+3,181 ms) — is fixed by `sessionStart = max(boundary, sessionStart)` in both split branches (`book(boundary)` already enforces the accounting floor). INV-16 now holds by construction; see ADR #181 for the JVM/device evidence.
 
 ### 4.8 Day key — effective day key with a timezone anchor
 
@@ -857,7 +859,7 @@ Every item is marked **Resolved** (with the source used) or **Open** (with the r
 - [x] RuleEditor validation (including uniqueness and limit bounds), notices (scope + connection-level), usage display and status banner shipped with string resources. — S9; device-verified in the S9 close (report §9).
 - [x] VPN builder: `addDisallowedApplication(APPLICATION_ID)` present, `allowBypass()` absent, no IPv6 config added. — CI checks INV-9/INV-10; S0 P6 note.
 - [x] `DOMAIN_USAGE_MODE` configured per §13; release default `OFF`. — `app/build.gradle.kts` (debug `ENFORCE`, release `OFF`); report §9.
-- [x] No hostnames, IPs or DNS names in logs, storage, notifications or exceptions (code review). — CI INV-7 + review; the baseline service's pre-existing diagnostic logs are outside this feature's §3.3 authority and recorded as a separate-hardening caveat (report §9), not silently changed.
+- [x] No hostnames, IPs or DNS names in logs, storage or exceptions; notifications name only the rule's own site (revised 2026-10-18, ADR #179) (code review). — CI INV-7 + review; the baseline service's pre-existing diagnostic logs are outside this feature's §3.3 authority and recorded as a separate-hardening caveat (report §9), not silently changed.
 - [x] Usage data absent from every sync/relay payload (code review). — no domainusage types referenced from accountability/Firebase paths (report §9.1).
 - [x] `UsageAccountingEngine`, escape-hatch, pairing, and Recovery UI code unchanged (diff check). — report §9.1: zero diff under those trees.
 - [x] Rollback verified: mode `OFF` build removes all shaping and enforcement; Room downgrade migration verified against the actual SQLCipher setup in this project. — mode-gated engine (`EngineModeTest`); I-21b downgrade on the SQLCipher path.
