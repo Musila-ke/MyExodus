@@ -939,3 +939,47 @@ Honest limit: the device outbox held 0 rows, so the migration's live-row backfil
 1. **Split schema** — the plan's §8.9 `partner_event_outbox` is realized across `events` + `outbox` per S1.7, not as a new parallel table (ADR #197).
 2. **`schema_version`** travels inside the prepared envelope rather than as a column; adding a duplicate column would create two sources of truth for one value.
 3. **`message_id` as idempotency key** — §8.9 names a "scoped idempotency_key"; the scope is enforced by the `(pair, sender, event_id)` unique index plus create-only mailbox storage, while the key itself is the mailbox document id every retry reuses.
+
+## Appendix S5 — Step 5 relay API (executed 2026-10-21)
+
+**Verdict: PASS, no code change.** The existing mailbox pipeline was built to this contract (its files cite plan §8 Step 5 / AD-10) and already implements upload/fetch/ack for opaque envelopes. This gate mapped every required behavior to code and ran both server suites fresh (104/104 unit, 17/17 rules-emulator). No server change was needed for the new event contract because the payload crosses the relay as opaque bytes.
+
+### Requirement mapping
+
+| Step 5 required work | Implementation | Evidence |
+|---|---|---|
+| Accept opaque envelopes | `payload` is base64 ciphertext; the rules field allowlist has no plaintext field; the relay only measures decoded length, never decodes content (`relay-logic.js` `validatePayload`) | rules 17/17; `relay-blindness.test.js` 5/5 |
+| Authenticate the sender installation | Firebase auth + `senderUid == request.auth.uid` + membership re-check in the trigger; the installation identity (sender key id) travels inside the E2EE envelope and is verified cryptographically by the recipient — the relay cannot see it without breaking §8.1 (ADR #198) | rules "senderUid cannot be spoofed"; `pairingUsableForRelay` tests |
+| Verify active relationship authorization | Rules create gate (pairing `active`, sender **and** recipient both members) plus a defense-in-depth re-check in the trigger; `terminated` accepted only for the members-bound deletion-request race (ADR #107) | rules "a revoked relationship cannot queue new events", "another relationship's pairId…", "a pairId the sender does not belong to is denied"; relay tests |
+| Enforce size/rate limits | 8192-char storage bound (defense-in-depth) + 4096 decoded-byte relay cap; 10 messages/pair/minute and 200 messages/sender/day advanced in one Firestore transaction | relay "oversized payload is rejected before the pairing check"; `incrementWindows` tests |
+| Persist idempotently / stable receipt | Document id = the client-minted message id, create-only; a retry after a lost response is `ALREADY_EXISTS`, which the drainer records as accepted; the same id can never carry different bytes (create-only replay denied) | rules "a mailbox document is create-only"; `MailboxOutboxDrainerTest.drain_alreadyExists_marksSent_withoutRecordingAnAttempt` |
+| Fetch only for the intended recipient | Read = mailbox owner, or the author for its own sent document (needed for the Step 18 rejection marker) | rules read tests ×4 |
+| Acknowledge after recipient persistence | Per-installation `acks/{installationId}` written only by the recipient after processing; cleanup deletes at the 7-day floor once every registered non-stale installation has acked, or unconditionally at the 30-day cap | rules "only the recipient can acknowledge"; `mailbox-retention.test.js` |
+| Server retention until ack, expiry, or revocation | AD-18b retention stands. Revocation does not delete stored ciphertext early; the recipient key shred makes it unreadable and the cap removes it — Step 10 owns the revocation surface (recorded limit, not silent) | retention tests; Step 2 Appendix limit |
+| No payload logging, no new vendor | Relay log lines carry `messageId`/`pairId`/`relayStatus` only; Firestore + the existing scheduler; no Redis, no new service | code review of `relay.js`/`dispatch-record.js` |
+
+### Interpretations recorded (ADR #198)
+
+1. **"Authenticate the sender installation"** is satisfied by uid authentication + pair membership at the relay plus cryptographic sender authentication at the recipient. Installation identity is inside the sealed envelope; exposing it to the relay would violate §8.1.
+2. **"Stable acceptance receipt"** is the durable, create-only mailbox document under the client-minted id: creation success and `ALREADY_EXISTS` both mean accepted; rejections are explicit markers (`relayStatus` = `RATE_LIMITED` / `PAIRING_INVALID` / `OVERSIZED` / `INVALID_FORMAT`), never inferred.
+3. **Sender-side ciphertext after acceptance** — the plan says the sender *may* delete it; this client keeps the stored bytes for chain repair/replay until the 30-day §8.7 cap, which is stricter and JVM-proven (the Step 4 device outbox was empty, so live-row retention on-device is not claimed).
+
+### Validation matrix
+
+- **Unauthorized access** — cross-partner read/list denial, unauthenticated denial, sender spoof, non-member pairId, unknown pairing: rules tests.
+- **Duplicate upload** — create-only replay denied at the storage boundary; client retry maps `ALREADY_EXISTS` to SENT without re-recording an attempt.
+- **Retry after lost response** — same document id + same stored bytes (`MailboxOutboxDrainerCrashWindowTest`, drainer exact-bytes test).
+- **Payload size** — rules refuse at 8192 chars; relay distinguishes `OVERSIZED` from `INVALID_FORMAT` on decoded bytes.
+- **Retention** — floor/cap/all-acked/stale-exemption decisions unit-tested; deletion is function-only.
+- **Recipient acknowledgement** — ack rule test + `unackedInstallationIds` logic tests.
+- **Revocation** — create denial after termination; the members-bound `terminated` relay race is regression-tested.
+- **Server restart** — no in-memory server state: every decision reads/writes Firestore, and retry is owned by the scheduler sweep (AD-10c), so a restart loses nothing but an in-flight attempt.
+- **Queue backlog** — per-document triggers with `maxInstances: 10` and bounded dispatch batches. The mandated 100k-install load/soak is Step 8's test; it is **not** claimed here.
+
+Commands (run 2026-10-21): `npm test` → 104/104 pass; `npm run test:rules` → 17/17 pass (Firestore emulator).
+
+### Honest limits
+
+- Rejected messages are stored before the trigger rejects them (rules cannot decode the payload). The authorization hole that allowed foreign-mailbox fills was closed at the storage boundary in Step 2 (ADR #194); the remaining cost is a bounded junk row that cleanup removes. The rules fix is **still undeployed** (owner action).
+- A crash between mailbox acceptance and the first dispatch-record write means no push for that message; the recipient still fetches it on app start/resume — that is Step 6's delivery path, stated rather than papered over.
+- Nothing in this gate changes or deploys server code, so production behavior is exactly today's until Steps 6–9 land.
