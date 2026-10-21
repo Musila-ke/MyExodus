@@ -1307,7 +1307,7 @@ Governing report: `app/docs/partner-accountability-compatibility-report-2026-10-
 
 ### Release-readiness assessment
 
-Ready for the direct-APK release channel behind the existing rollout gate. No OEM-specific incompatibility was demonstrated, so no OEM-specific code was added. Remaining unknowns are hardware coverage (all non-Transsion families), reboot legs, profile changes and two-phone end-to-end — all blocked on device availability, not on observed defects. Step 12 (staged rollout / operational verification) remains owner-gated.
+Ready for the direct-APK release channel behind the existing rollout gate. No OEM-specific incompatibility was demonstrated, so no OEM-specific code was added. Remaining unknowns are hardware coverage (all non-Transsion families), reboot legs, profile changes and two-phone end-to-end — all blocked on device availability, not on observed defects. Step 12 was executed the same day (Appendix S12, ADR #207): the gate and live rollback are done; cohort/expand rollout stages remain owner-gated and are blocked on the release channel.
 
 ### Honest limits
 
@@ -1316,3 +1316,41 @@ Ready for the direct-APK release channel behind the existing rollout gate. No OE
 - App Standby Rare/Restricted rendering is JVM-pinned, not device-proven, because the platform clamped the debug override.
 - The network-loss leg was not re-run in Step 11 (cutting Wi-Fi cuts the only adb channel); Step 7's device-proven offline evidence stands.
 - Full JVM on the final source: **220 classes / 1,985 tests / 0 failures / 0 errors / 0 skipped**. Final build installed in place on the X6532 (pid 17836, `MY_PACKAGE_REPLACED`, FGS foreground, DB `user_version` 14, `EXEMPTED`, zero FATAL).
+
+## Appendix S12 — Step 12 staged rollout + operational verification (executed 2026-10-22)
+
+ADR #207 records the decisions; the operator recipe lives in `app/docs/MyExodus Monitoring.md` §7. The gate reuses the project's existing server kill switch (`config/features`, the same document the SOS switch lives on) — no new remote-config dependency, no new collection. Remote Config is being retired (ADR #171) and was not used.
+
+### Required work → implementation → evidence
+
+| Step 12 requirement | Implementation | Evidence |
+|---|---|---|
+| Gate event transport behind the existing feature-flag mechanism | `config/features.partnerAccountabilityEnabled` (absent doc/field = enabled; only explicit `false` off). Client transport: the mailbox create rule denies new envelope writes, so the `onDocumentCreated` relay never triggers; the author-visible marker for a relay rejection stays unchanged. In-flight transport: `retryDispatchSweep` returns before listing retryable records, so messages created before the flip are not pushed while the feature is off | Rules test `operator kill switch: an explicit false stops new sends…` (rules suite 20/20); sweep-gate tests (functions 147/147); live sweep proof below |
+| Gate DMS notification behavior | `dmsDeadlineWorker` returns `{ disabled: 'PARTNER_ACCOUNTABILITY' }` before any deadline transition or dispatch; no state mutation, no outbox row, no push | DMS suite 34/34 (`worker: the partner-accountability switch stops transitions and dispatch without touching state`); live worker proof below |
+| Do not add a new remote-config dependency solely for this feature | No RC parameter added (RC untouched and retiring, ADR #171); no new dependency, secret or service; one boolean field on the existing operator document | `firestore.rules`, `functions/dms-processor.js`, `functions/sweep.js`, `functions/dispatch-logic.js` diffs |
+| Roll out to internal devices | Internal stage = the X6532 running the current build (Steps 1–11 legs, compatibility report). The switch is server-side, so it governs every installed build, including any that predates it | Compatibility report; ADR #207 decision 6 |
+| Roll out to a small opted-in cohort, then expand | **BLOCKED** — distribution is a direct APK with no git remote, and the GitHub Releases repository required by ADR #171 does not exist; there is no channel to enroll a cohort on, and the owner is the only installer. Not simulated, not claimed | ADR #207 decision 6; ADR #171 |
+| Expand only after measured release criteria are met | Criteria defined with measurement sources and internal-device values (table below). Cohort values do not exist, so expansion is not evaluated | Table; this appendix |
+| Demonstrate rollback | Two live windows on the deployed backend: (1) flag `false` after the 22:50:02Z DMS pass → the **22:55:00.946Z** pass logged `dms worker disabled: partner accountability switched off`; flag restored `true` → the **23:00:02.075Z** pass logged `dms worker pass`. (2) flag `false` at **23:05:22Z** → the **23:06:05.013Z** sweep logged `dispatch sweep disabled: partner accountability switched off`; restored `true` immediately after (read-back `true`) | Cloud Logging entries for `dmsdeadlineworker` / `retrydispatchsweep`; `config/features` read-backs |
+| Confirm disabling stops new partner sends without deleting unrelated user data | No enforcement point deletes or rewrites anything. Live checks before, during and after the off window: pairing `SvBQFOk…_zmHLexVW…` status `active`; recipient message `5118f2de-bda6-48d9-a7df-d5ec244af869` present with payload length 308 | Firestore REST reads; ADR #207 |
+| Verify rollback in staging (§13) | There is no separate staging project; the demonstration ran against the deployed backend itself — a stronger environment than staging for this check. No user-visible client is affected because the app on the device was asleep and no UI send was attempted | ADR #207 verified section |
+
+### Measured release criteria (expansion gate)
+
+| Criterion | Measurement source | Internal-device value (2026-10-22) | Cohort gate |
+|---|---|---|---|
+| Duplicate partner-visible events | Partner-side dedupe outcomes (`ChainStateStore` `Duplicate` is suppressed) + create-only message id + emulator suites | 0 observed; one message relayed and none duplicated (JVM/emulator pin the replay denial) | 0 user-visible duplicates |
+| Lost events | Sequence-gap detection (`GAP_MARKER`, `POSSIBLE_MISSING_UPDATES`) and ack coverage | 0 `dispatch failed` in the 24 h ending 23:00Z; 3 `mailbox rejected` entries, all `RATE_LIMITED` on the non-live test pair `ALOAaMX…_EShLSCjo…` at 19:58Z — the designed author-visible classifier, not loss | 0 unexplained gaps; every gap resolves via resync |
+| DMS false positives | `dms_notification_outbox` rows + `notice_state` vs actual heartbeat receipt | 0 outbox rows, 0 notices, 0 ingestion outages; the live pair carries no DMS state (availability consent revoked in Step 10/11 teardown) | 0 notices for installs that checked in inside the 6 h window |
+| Notification delivery | Outbox statuses + `dispatch failed` / `dispatch sweep` logs | 1 relayed message awaits its ack because the paired second device (X6532C) is not on hand; 0 dead-lettered, 0 dispatch failures | 0 dead-lettered, 0 unaccounted notices |
+| Battery / network | `dumpsys batterystats` per app UID under stated conditions; heartbeat cadence intact | uid 10414: 320 mAh app-computed over the current cycle (9 h 23 m 55 s screen-on, 85.6% — mixed use with the full-tunnel VPN and enforcement FGS), FGS component 18.0 mAh, app wakelocks 78 s total. Conditions stated because the number is whole-app, not PA-only; PA adds no new wake source (the heartbeat piggybacks the existing FGS at 15 min + jitter; deadline work is server-side) | No regression beyond the same-conditions baseline; heartbeat cadence intact |
+| Baseline operational counts (24 h ending 23:00Z) | Cloud Logging | 52 `dms worker pass`, 0 `dispatch failed`, 0 circuit-breaker trips | — |
+
+### Honest limits
+
+- The on-device send-refusal leg was not executed: the X6532 was asleep behind a secure keyguard (`isKeyguardShowing=true`, `secure=true`; swipe/`wm dismiss-keyguard` no-op) without the owner credential. The transport boundary is proven by the rules emulator against the exact deployed source and by the deployed ruleset content re-read from the Rules API (`3adf7753-d6d5-43a4-bfe6-e030c15c03ab`, gate at line 77); the client's denial path leaves outbox rows pending with ≤6 h capped backoff (code-verified, `MailboxOutboxDrainer`/`OutboxBackoff`). Run the device leg when the device is unlocked.
+- Cohort/expand stages are blocked on the release channel, not on a defect; no cohort measurement exists.
+- Already-dispatched provider pushes cannot be recalled; the sweep gate prevents new pushes, not accepted ones.
+- After a long off window, queued client rows drain within their ≤6 h backoff cap of re-enable, and overdue DMS deadlines are processed on the next tick — truthful, not immediate.
+- The switch does not affect the SOS path or any other feature (separate `partnerSosEnabled` field).
+- The gate does not replace monitoring: the fleet late-burst breaker and its alert (ADR #201) still page the operator while the feature is on.

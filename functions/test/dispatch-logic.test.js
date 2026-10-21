@@ -106,19 +106,21 @@ test('an unregistered provider is terminal without touching the installation row
   assert.deepStrictEqual(h.calls.stale, []);
 });
 
-function sweepHarness(retryable) {
+function sweepHarness(retryable, gate) {
   const marks = [];
   const attempts = [];
   const logs = [];
+  const messages = [];
   const installations = {};
   const sweep = createSweepPass({
+    ...(gate ? { gate } : {}),
     listRetryable: async () => retryable,
     getInstallation: async (recipientUid, installationId) => installations[installationId] || null,
     markGone: async (record) => { marks.push(record.installationId); },
     attempt: async (recipientUid, messageId, installation, wake) => { attempts.push({ messageId, installation, wake }); },
-    logger: { info: (msg, fields) => logs.push(fields) },
+    logger: { info: (msg, fields) => { messages.push(msg); logs.push(fields); } },
   });
-  return { sweep, marks, attempts, logs, installations };
+  return { sweep, marks, attempts, logs, messages, installations };
 }
 
 test('sweep retries only the failed installation and counts gone rows terminal', async () => {
@@ -150,4 +152,30 @@ test('an empty sweep does nothing and logs nothing', async () => {
   const h = sweepHarness([]);
   assert.deepStrictEqual(await h.sweep(), { scanned: 0, redispatched: 0, terminal: 0 });
   assert.deepStrictEqual(h.logs, []);
+});
+
+test('sweep: the partner-accountability switch stops redispatch without touching records', async () => {
+  // ADR #207: a rollback must stop in-flight partner pushes too, not just new mailbox creates.
+  // The pass returns before listing, so no retry, no gone-mark, no state mutation.
+  const h = sweepHarness(
+    [{ ref: 'r1', recipientUid: 'bob', messageId: 'm1', installationId: 'live' }],
+    async () => false,
+  );
+  h.installations.live = { id: 'live', provider: 'fcm', token: 't' };
+
+  assert.deepStrictEqual(await h.sweep(), { scanned: 0, redispatched: 0, terminal: 0, disabled: true });
+  assert.deepStrictEqual(h.attempts, []);
+  assert.deepStrictEqual(h.marks, []);
+  assert.deepStrictEqual(h.messages, ['dispatch sweep disabled: partner accountability switched off']);
+});
+
+test('sweep: an enabled gate (or no gate dep) retries as before', async () => {
+  const h = sweepHarness(
+    [{ ref: 'r1', recipientUid: 'bob', messageId: 'm1', installationId: 'live' }],
+    async () => true,
+  );
+  h.installations.live = { id: 'live', provider: 'fcm', token: 't' };
+
+  assert.deepStrictEqual(await h.sweep(), { scanned: 1, redispatched: 1, terminal: 0 });
+  assert.strictEqual(h.attempts.length, 1);
 });

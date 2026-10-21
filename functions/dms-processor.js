@@ -532,6 +532,15 @@ function createDmsWorkerHandler({
       log.info('dms worker disabled');
       return { disabled: true };
     }
+    // Step 12 operator gate (2026-10-22, ADR #207): the same switch the mailbox create rule
+    // reads. An explicit false stops DMS transitions AND dispatch for this feature while
+    // leaving state, outbox and pairing documents untouched. Absent doc/field = enabled.
+    const featuresSnap = await db.doc('config/features').get();
+    const features = featuresSnap.exists ? featuresSnap.data() : {};
+    if (features.partnerAccountabilityEnabled === false) {
+      log.info('dms worker disabled: partner accountability switched off');
+      return { disabled: 'PARTNER_ACCOUNTABILITY' };
+    }
 
     const openOutageId = await findOpenIngestionOutage(db);
     if (openOutageId) {

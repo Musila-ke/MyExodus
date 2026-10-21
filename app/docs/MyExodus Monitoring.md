@@ -152,3 +152,34 @@ exactly one reason.
   measure it honestly outside a controlled harness.
 - XOS (the physical test device) dispatches no WorkManager jobs — the periodic telemetry rail
   only samples on OEMs that run WorkManager; noted for metric interpretation.
+
+## 7. Partner-accountability operator kill switch (Step 12, ADR #207)
+
+One boolean on the existing operator document — the same document the SOS switch lives on, no new dependency:
+
+```
+config/features.partnerAccountabilityEnabled   // absent doc or absent field = ENABLED; only explicit false = OFF
+```
+
+Flip with the Firestore REST recipe in the GCP API notes:
+
+```
+PATCH https://firestore.googleapis.com/v1/projects/myexodus-53804/databases/(default)/documents/config/features?updateMask.fieldPaths=partnerAccountabilityEnabled
+{"fields":{"partnerAccountabilityEnabled":{"booleanValue":false}}}   // restore: true
+```
+
+What an explicit `false` stops, at three boundaries — all server-side, so it covers every installed build without a client release:
+
+1. **New client sends** — the mailbox create rule denies every new envelope write (`firestore.rules`, "Step 12 operator gate"). The relay is `onDocumentCreated`, so it never triggers for a denied write.
+2. **DMS notifications** — `dmsDeadlineWorker` returns `{ disabled: 'PARTNER_ACCOUNTABILITY' }` before any deadline transition or dispatch; nothing is written, nothing is pushed.
+3. **In-flight pushes** — `retryDispatchSweep` returns before listing retryable records, so messages created before the flip are not retried while the feature is off.
+
+What it does **not** do: it does not delete or rewrite anything (pairings, mailbox messages, acks, client outbox rows, DMS state and outbox rows all stay), it does not affect the SOS path (`partnerSosEnabled` is separate), and it cannot recall a push the provider already accepted.
+
+Verification that a flip took effect (live-verified 2026-10-22):
+
+- flag `false` → next 5-minute worker pass logs `dms worker disabled: partner accountability switched off`; next even-minute sweep pass logs `dispatch sweep disabled: partner accountability switched off` (the pass that ran before the flip logged `dms worker pass`).
+- flag `true` → the next worker pass logs `dms worker pass` again.
+- Client side: a denied send leaves its outbox row pending with jittered exponential backoff capped at 6 h; it drains after re-enable. A denied send does **not** raise the OPD #30 re-pair card (that card only observes pairing-document read denials, which this switch does not touch).
+
+Rollback evidence and the measured rollout criteria are in plan Appendix S12; the decision record is ADR #207.

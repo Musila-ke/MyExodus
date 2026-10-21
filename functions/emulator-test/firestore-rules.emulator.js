@@ -107,6 +107,36 @@ test('a member of an active pair can write to the other member’s mailbox', asy
   );
 });
 
+test('operator kill switch: an explicit false stops new sends and leaves stored data readable', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'config', 'features'), { partnerAccountabilityEnabled: false });
+  });
+  await assertFails(
+    setDoc(doc(alice, mailbox('bob', 'switch-off')), message('alice', 'pair-alice-bob')),
+  );
+  // Rollback is not deletion: the pairing and an already-stored message survive and stay readable.
+  await assertSucceeds(getDoc(doc(alice, 'pairings/pair-alice-bob')));
+  await assertSucceeds(getDoc(doc(bob, mailbox('bob', 'from-alice'))));
+});
+
+test('operator kill switch: absent doc, absent field, or explicit true leaves sends enabled', async () => {
+  await assertSucceeds(
+    setDoc(doc(alice, mailbox('bob', 'no-config-doc')), message('alice', 'pair-alice-bob')),
+  );
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'config', 'features'), { partnerSosEnabled: false });
+  });
+  await assertSucceeds(
+    setDoc(doc(alice, mailbox('bob', 'field-absent')), message('alice', 'pair-alice-bob')),
+  );
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'config', 'features'), { partnerAccountabilityEnabled: true });
+  });
+  await assertSucceeds(
+    setDoc(doc(alice, mailbox('bob', 'explicit-true')), message('alice', 'pair-alice-bob')),
+  );
+});
+
 test('senderUid cannot be spoofed', async () => {
   await assertFails(
     setDoc(doc(alice, mailbox('bob', 'spoof')), message('bob', 'pair-alice-bob')),

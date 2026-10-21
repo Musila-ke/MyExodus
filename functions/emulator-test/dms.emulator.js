@@ -1044,6 +1044,17 @@ test('worker: a disabled deployment performs no reads that could transition stat
   assert.strictEqual(recorder.sends.length, 0);
 });
 
+test('worker: the partner-accountability switch stops transitions and dispatch without touching state', async () => {
+  await seedPairing();
+  await seedState({ lastReceivedAtMs: NOW - 7 * HOUR });
+  await db.doc('config/features').set({ partnerAccountabilityEnabled: false });
+  const recorder = pushRecorder();
+
+  assert.deepStrictEqual(await workerWith(recorder.sendPush)(), { disabled: 'PARTNER_ACCOUNTABILITY' });
+  assert.strictEqual((await stateRef().get()).data().notice_state, 'NONE');
+  assert.strictEqual(recorder.sends.length, 0);
+});
+
 test('payload: the wire message is fixed copy plus the generic sync key — no relationship identity', () => {
   const availability = _buildDmsMessage(
     { notice_type: NOTICE_AVAILABILITY, relationship_id: PAIR_ID }, ['tok-a'],

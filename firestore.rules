@@ -67,7 +67,14 @@ service cloud.firestore {
         // any paired user could post junk into any mailbox using their own active pairId;
         // the relay rejects it (PAIRING_INVALID) but only after storage, and before rate
         // limiting — an unthrottled mailbox-fill path. Free with the same get().
-        && recipientUid in get(/databases/$(database)/documents/pairings/$(request.resource.data.pairId)).data.members;
+        && recipientUid in get(/databases/$(database)/documents/pairings/$(request.resource.data.pairId)).data.members
+        // Step 12 operator gate (2026-10-22, ADR #207): the partner-accountability kill switch.
+        // Absent doc or absent field = enabled (this feature ships on); an explicit false
+        // stops NEW partner sends at the transport boundary while leaving every stored
+        // document (pairings, mailbox messages, acks) intact — rollback is not deletion.
+        // config/** is deny-all to clients; this rules-internal access costs one call.
+        && (!exists(/databases/$(database)/documents/config/features)
+            || get(/databases/$(database)/documents/config/features).data.get('partnerAccountabilityEnabled', true) != false);
       // Immutable after create; deletion is exclusively the scheduled cleanup function's
       // job (AD-18b). A client must never be able to delete a mailbox document.
       allow update, delete: if false;

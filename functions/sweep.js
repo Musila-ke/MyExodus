@@ -22,6 +22,13 @@ const db = getFirestore();
 const SWEEP_BATCH = 200;
 
 const runSweep = createSweepPass({
+  // Step 12 operator gate (ADR #207): same switch the mailbox create rule and the DMS worker
+  // read. Absent doc/field = enabled; only an explicit false stops partner push, including
+  // retries of records created before the flip. Records are left untouched.
+  gate: async () => {
+    const snap = await db.doc('config/features').get();
+    return !(snap.exists && snap.data().partnerAccountabilityEnabled === false);
+  },
   listRetryable: async () => {
     const stale = await db.collectionGroup('installations')
       .where('status', 'in', ['PENDING', 'FAILED_RETRYABLE'])

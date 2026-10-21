@@ -80,10 +80,18 @@ function createAttemptDispatch(deps) {
  *           getInstallation(recipientUid, installationId) → Promise<object|null>,
  *           markGone(record) → Promise<void>,
  *           attempt(recipientUid, messageId, installation, wakeData) → Promise<outcome>,
+ *           gate() → Promise<boolean> (optional; false stops the pass),
  *           logger }
  */
 function createSweepPass(deps) {
   return async function runSweep() {
+    // Step 12 operator gate (ADR #207): off means no partner push from this feature at all,
+    // including retries of messages created before the flip. Records are untouched; the next
+    // pass after re-enabling resumes them.
+    if (deps.gate && !(await deps.gate())) {
+      deps.logger.info('dispatch sweep disabled: partner accountability switched off');
+      return { scanned: 0, redispatched: 0, terminal: 0, disabled: true };
+    }
     const stale = await deps.listRetryable();
     if (stale.length === 0) return { scanned: 0, redispatched: 0, terminal: 0 };
 
