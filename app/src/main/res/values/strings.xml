@@ -45,6 +45,21 @@
     <string name="protection_state_protecting">Protecting</string>
     <string name="protection_state_limited">Limited</string>
     <string name="protection_state_off">Blocker off</string>
+    <!-- Owner correction 2026-10-21: "Limited" alone never says what is missing or what fixes
+         it. The explainer row renders only after the state persists (never during the XOS
+         accessibility-rebind window), and its Re-enable button opens Accessibility settings
+         directly — the mechanism that is actually down. -->
+    <string name="protection_limited_title">Protection is limited</string>
+    <string name="protection_limited_card_text">The accessibility service isn’t running, so blocks can start a few seconds late. Turn it back on to make blocking immediate.</string>
+    <!-- Owner correction 2026-10-21 (second pass): accessibility is not the only grant a
+         block needs. Each missing essential gets its own row naming the loss and its fix. -->
+    <string name="protection_limited_action">Turn on</string>
+    <string name="protection_overlay_off_title">Blocks can’t be shown</string>
+    <string name="protection_overlay_off_text">Display over other apps is off, so a block can’t cover a restricted app. Allow it to make blocks appear.</string>
+    <string name="protection_usage_off_title">Usage access is off</string>
+    <string name="protection_usage_off_text">Time limits can’t count usage without it. Turn usage access on so your limits and stats keep working.</string>
+    <string name="protection_website_off_title">Website blocks are off</string>
+    <string name="protection_website_off_text">Website blocks need the connection you approved with Android. Turn it back on to keep them enforced.</string>
 
     <!-- Notification channels and alert copy (ADR #91): channel names are user-visible in
          system notification settings, so they are resources like the content they carry. -->
@@ -791,6 +806,9 @@
     <!-- Plan Step 8: the server's availability notice channel ("A paired device has not checked
          in recently"). Created at startup so the channel exists before the first 6-hour notice. -->
     <string name="partner_channel_availability_name">MyExodus partner check-ins</string>
+    <!-- Plan Step 9 (§4/§8.9): the monitored device's own 45-minute reminder channel
+         (`checkin_reminders_v1`, DEFAULT importance — a best-effort nudge, not an alarm). -->
+    <string name="partner_channel_checkin_name">MyExodus check-in reminders</string>
 
     <!-- Partner SOS (V1 Req 35, plan §8.14/§8 Step 7): the nudge channel ("Accountability
          Check-ins"), the check-ins-off Home banner (plan copy), the ceremony's ask, and the

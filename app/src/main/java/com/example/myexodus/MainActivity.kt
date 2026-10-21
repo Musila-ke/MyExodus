@@ -589,7 +589,7 @@ class MainActivity : FragmentActivity() {
                                         .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
                                         .putExtra(
                                             Settings.EXTRA_CHANNEL_ID,
-                                            PartnerNotifications.CHANNEL_PARTNER_ALERTS,
+                                            PartnerNotifications.CHANNEL_ACCOUNTABILITY_EVENTS,
                                         ),
                                 )
                                 else -> if (canRequestNotifications) {

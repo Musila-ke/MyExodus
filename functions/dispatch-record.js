@@ -32,9 +32,16 @@ const attemptDispatch = createAttemptDispatch({
     await recordRef(messageId, installationId)
       .set({ ...patch, lastAttemptAt: FieldValue.serverTimestamp() }, { merge: true });
   },
+  // §7 Step 9: a provider-UNREGISTERED token is removed, not retained. The tombstone
+  // (`stale`) keeps the install out of dispatch, but it is NOT evidence the app was
+  // uninstalled — the next successful registration rewrites a fresh token and clears it.
   markInstallationStale: async (recipientUid, installationId) => {
     await db.doc(`users/${recipientUid}/push_installations/${installationId}`)
-      .set({ stale: true, staleAt: FieldValue.serverTimestamp() }, { merge: true });
+      .set({
+        stale: true,
+        staleAt: FieldValue.serverTimestamp(),
+        token: FieldValue.delete(),
+      }, { merge: true });
   },
   dispatch: dispatchViaProvider,
   isTokenInvalid,

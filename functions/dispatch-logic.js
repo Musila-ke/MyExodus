@@ -9,9 +9,11 @@
 const { UnknownProviderError } = require('./dispatch');
 const { MAX_ATTEMPTS } = require('./relay-logic');
 
-/** AD-11: the wake signal is generic; it never carries event content. */
+/** AD-11/§8.12: the wake signal is generic and versioned; it never carries event content,
+ *  relation/device identity, or activity-derived text. `messageId` is an opaque relay id
+ *  (not one of §8.12's forbidden fields) used to handle the triggering message first. */
 function wakeData(messageId) {
-  return { messageId, type: 'domain-event' };
+  return { v: '1', type: 'SYNC_AVAILABLE', messageId };
 }
 
 /**

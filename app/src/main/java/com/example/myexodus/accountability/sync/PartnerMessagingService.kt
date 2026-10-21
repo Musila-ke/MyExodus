@@ -10,11 +10,12 @@ import dagger.hilt.android.AndroidEntryPoint
 import android.util.Log
 
 /**
- * Plan §8 Step 7 (client side) / AD-11: the FCM receiver. The relay sends a data-only,
- * generic wake signal (`{messageId, type:"domain-event"}`) — never content, never a
- * notification block — so this service never renders anything itself; it hands the
- * messageId to the sync pipeline and lets the local processing path (dedup, verify,
- * decrypt, notify) own everything downstream.
+ * Plan §8 Step 7 / Step 9 (client side) / AD-11: the FCM receiver. Every push is a generic
+ * wake signal (§8.12: `{v:"1", type:"SYNC_AVAILABLE", messageId?}`) — never content — so
+ * this service never renders a partner event itself; it hands the optional messageId to the
+ * sync pipeline and lets the local processing path (dedup, verify, decrypt, notify) own
+ * everything downstream. A wake with no messageId still runs the pass, which is how in-app
+ * sync stays current when a visible notification is muted or never shown.
  *
  * The one exception (SOS §8.17/FR-20): a `partner_nudge` push IS rendered here, as a generic
  * local notification posted immediately — the payload carries no content to protect, and a
@@ -47,14 +48,22 @@ class PartnerMessagingService : FirebaseMessagingService() {
             }
             return
         }
-        val messageId = message.data[PARTNER_WAKE_MESSAGE_ID]
-        if (messageId.isNullOrBlank()) {
-            // Not our wake shape (or a console test send) — nothing actionable.
-            Log.i(TAG, "ignoring push without messageId (from ${message.from})")
-            return
+        when (val wake = PartnerPushParser.parse(message.data)) {
+            is PartnerPushWake.Sync -> {
+                if (wake.messageId != null) {
+                    Log.i(TAG, "wake for ${wake.messageId}")
+                } else {
+                    Log.i(TAG, "generic wake — full sync pass")
+                }
+                enqueueSync(wake.messageId)
+            }
+            // §8.12/§4: the server's reminder carries fixed OS copy and no event; there is
+            // nothing to pull. It still proves the push path works in the send metrics.
+            PartnerPushWake.CheckinReminder ->
+                Log.i(TAG, "check-in reminder shown by the OS — nothing to sync")
+            PartnerPushWake.Ignored ->
+                Log.i(TAG, "ignoring unrecognized push (from ${message.from})")
         }
-        Log.i(TAG, "wake for $messageId")
-        enqueueSync(messageId)
     }
 
     /** Token rotation: the new token must be registered or push dies silently (AD-18c).

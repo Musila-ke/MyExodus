@@ -25,7 +25,7 @@ object PartnerAlertHealth {
         /** POST_NOTIFICATIONS denied or app-level notifications off. */
         NOTIFICATIONS_OFF,
 
-        /** The `partner_alerts` channel exists and its importance is NONE. */
+        /** The `partner_accountability_events_v1` channel exists and its importance is NONE. */
         CHANNEL_OFF,
 
         /** Google Play services is missing or unavailable — FCM cannot register on this device. */
@@ -50,7 +50,7 @@ object PartnerAlertHealth {
     /** A channel the app has not created yet is not a channel the user muted. */
     private fun alertsChannelEnabled(context: Context): Boolean {
         val channel = context.getSystemService(NotificationManager::class.java)
-            .getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_ALERTS)
+            .getNotificationChannel(PartnerNotifications.CHANNEL_ACCOUNTABILITY_EVENTS)
         return channel == null || channel.importance != NotificationManager.IMPORTANCE_NONE
     }
 

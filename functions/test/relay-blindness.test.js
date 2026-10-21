@@ -70,7 +70,7 @@ test('no observable relay effect carries payload content or ciphertext', async (
   assert.strictEqual(effects.dispatched.length, 1);
   assert.deepStrictEqual(
     effects.dispatched[0].wakeData,
-    { messageId: 'message-1', type: 'domain-event' },
+    { v: '1', type: 'SYNC_AVAILABLE', messageId: 'message-1' },
     'push wake is the generic signal only',
   );
   const observable = JSON.stringify(effects);

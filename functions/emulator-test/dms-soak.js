@@ -110,7 +110,7 @@ async function main() {
   const app = initializeApp({ projectId: PROJECT_ID }, 'dms-soak');
   const db = getFirestore(app);
   const sendPush = async ({ installs }) => ({
-    delivered: installs.length,
+    providerAccepted: installs.length,
     invalidInstallations: [],
   });
   const worker = _createDmsWorkerHandler({ db, now: () => NOW, sendPush, log: silentLog });

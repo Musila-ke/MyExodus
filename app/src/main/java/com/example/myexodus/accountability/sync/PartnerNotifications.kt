@@ -32,7 +32,12 @@ import java.util.Date
  */
 object PartnerNotifications {
 
-    const val CHANNEL_PARTNER_ALERTS = "partner_alerts"
+    /** Plan Step 9 / task #29: one of the three immutable channels. `_v1` (not the old
+     *  `partner_alerts` id) because an app can silently LOWER its own channel's importance
+     *  and never raise it — a fresh id takes HIGH on every skin, and the old id is deleted at
+     *  startup so the settings screen never lists both. */
+    const val CHANNEL_ACCOUNTABILITY_EVENTS = "partner_accountability_events_v1"
+    internal const val CHANNEL_PARTNER_ALERTS_LEGACY = "partner_alerts"
     const val NOTIF_PARTNER_EVENT = 2001
 
     /** Plan Step 6: the user-triggered test alert. Tagged at post time, so its id can never
@@ -73,6 +78,12 @@ object PartnerNotifications {
      *  the payload itself is fixed generic copy. */
     const val CHANNEL_AVAILABILITY_ALERTS = "availability_alerts_v1"
 
+    /** Plan Step 9 (§4/§8.9): the monitored device's own 45-minute check-in reminder. The id
+     *  matches `CHANNEL_CHECKIN` in functions/dms-processor.js. DEFAULT — a best-effort nudge
+     *  is tray-visible, not a heads-up demand; its own channel so a user can silence
+     *  self-reminders without silencing partner accountability. */
+    const val CHANNEL_CHECKIN_REMINDERS = "checkin_reminders_v1"
+
     /** Per-pair notification id (§19.5 multi-partner): base + pairId hash, so N partners'
      *  entries coexist in the tray. A hash collision only degrades to the old
      *  replace-in-place behavior — never a lost alert for a different pair's item. */
@@ -89,24 +100,29 @@ object PartnerNotifications {
         )
     }
 
-    /** Plan Step 6: created at startup so the health reading and the first alert agree on the
-     *  channel's existence before any event arrives. Create-only — re-creating an existing
-     *  channel can silently rewrite its importance (device-observed 2026-10-04). */
-    fun ensurePartnerAlertsChannel(context: Context) {
+    /** Plan Step 6/Step 9: created at startup so the health reading and the first alert agree
+     *  on the channel's existence before any event arrives. Create-only — re-creating an
+     *  existing channel can silently rewrite its importance (device-observed 2026-10-04). */
+    fun ensureAccountabilityEventsChannel(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
-        if (manager.getNotificationChannel(CHANNEL_PARTNER_ALERTS) != null) return
-        manager.createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_PARTNER_ALERTS,
-                context.getString(R.string.partner_channel_activity_name),
-                NotificationManager.IMPORTANCE_HIGH,
-            ),
-        )
+        if (manager.getNotificationChannel(CHANNEL_ACCOUNTABILITY_EVENTS) == null) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ACCOUNTABILITY_EVENTS,
+                    context.getString(R.string.partner_channel_activity_name),
+                    NotificationManager.IMPORTANCE_HIGH,
+                ),
+            )
+        }
+        // Retired id: no device should keep a second, dentable partner-activity channel in
+        // system settings beside the immutable one.
+        manager.deleteNotificationChannel(CHANNEL_PARTNER_ALERTS_LEGACY)
     }
 
     /** Plan Step 8: created at startup so the six-hour notice's channel exists before the
-     *  first dispatch. Create-only, same device-observed reason as [ensurePartnerAlertsChannel]
-     *  — re-creating an existing channel can silently rewrite its importance. */
+     *  first dispatch. Create-only, same device-observed reason as
+     *  [ensureAccountabilityEventsChannel] — re-creating an existing channel can silently
+     *  rewrite its importance. */
     fun ensureAvailabilityAlertsChannel(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
         if (manager.getNotificationChannel(CHANNEL_AVAILABILITY_ALERTS) != null) return
@@ -119,13 +135,27 @@ object PartnerNotifications {
         )
     }
 
+    /** Plan Step 9 (§4/§8.9): created at startup, create-only. DEFAULT is the plan's own
+     *  level for a best-effort nudge — the server sends it at NORMAL priority too. */
+    fun ensureCheckinRemindersChannel(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        if (manager.getNotificationChannel(CHANNEL_CHECKIN_REMINDERS) != null) return
+        manager.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_CHECKIN_REMINDERS,
+                context.getString(R.string.partner_channel_checkin_name),
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+    }
+
     /** The explicitly user-triggered test notification: proof of display, which no provider
      *  acceptance receipt can give (plan Step 6). Goes through the same post gate and channel
      *  as a real partner alert, so a pass here means the next real alert will show. */
     fun notifyTestAlert(context: Context) {
         post(
             context,
-            CHANNEL_PARTNER_ALERTS,
+            CHANNEL_ACCOUNTABILITY_EVENTS,
             context.getString(R.string.partner_channel_activity_name),
             NotificationManager.IMPORTANCE_HIGH,
             NOTIF_PARTNER_TEST,
@@ -191,7 +221,7 @@ object PartnerNotifications {
         val richBody = rich.second
         post(
             context,
-            CHANNEL_PARTNER_ALERTS,
+            CHANNEL_ACCOUNTABILITY_EVENTS,
             context.getString(R.string.partner_channel_activity_name),
             NotificationManager.IMPORTANCE_HIGH,
             idFor(NOTIF_PARTNER_EVENT, pairId),
@@ -263,7 +293,7 @@ object PartnerNotifications {
         }
         post(
             context,
-            CHANNEL_PARTNER_ALERTS,
+            CHANNEL_ACCOUNTABILITY_EVENTS,
             context.getString(R.string.partner_channel_activity_name),
             NotificationManager.IMPORTANCE_HIGH,
             idFor(NOTIF_PARTNERSHIP_ENDED, pairId),

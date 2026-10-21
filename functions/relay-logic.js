@@ -122,7 +122,9 @@ function createRelayHandler(deps) {
       return;
     }
 
-    const wakeData = { messageId, type: 'domain-event' }; // AD-11: generic wake signal only
+    // AD-11/§8.12: generic, versioned wake signal only. The relay handler is kept in sync
+    // with `wakeData()` in dispatch-logic.js (the sweep's copy) by the payload suite.
+    const wakeData = { v: '1', type: 'SYNC_AVAILABLE', messageId };
     await Promise.all(installations.map((inst) => deps.dispatch(recipientUid, messageId, inst, wakeData)));
   };
 }

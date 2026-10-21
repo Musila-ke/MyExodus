@@ -20,6 +20,7 @@
 //                 a burst of first notices opens the fleet circuit breaker and holds dispatch
 //                 until an operator releases it at a controlled rate.
 
+const crypto = require('node:crypto');
 const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestore');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { logger } = require('firebase-functions');
@@ -27,10 +28,13 @@ const { logger } = require('firebase-functions');
 require('./fcm-transport'); // registers the 'fcm' transport (token classification reuse)
 const { isTokenInvalid } = require('./dispatch');
 const { selectInstallations } = require('./relay-logic');
+const { deferWhileIndexBuilds } = require('./index-build-guard');
 const {
   normalizeConfig,
   noticeDocId,
   deadlineDecision,
+  lateReminderDecision,
+  LATE_AFTER_MS,
   consentingPartner,
   suppressionReason,
   circuitBreakerTripped,
@@ -57,10 +61,31 @@ const MAX_LEASE_RECOVERY_PER_RUN = 50;
 // No relationship id, uid, install id, event category, or precise time.
 const ANDROID_PACKAGE = 'com.example.myexodus';
 const CHANNEL_AVAILABILITY = 'availability_alerts_v1';
+const CHANNEL_CHECKIN = 'checkin_reminders_v1';
 const PUSH_TITLE = 'Partner check-in';
 const PUSH_BODY_SILENT = 'A paired device has not checked in recently.';
 const PUSH_BODY_RECOVERED = 'A paired device has checked in again.';
 const PUSH_TTL_MS = 60 * 60 * 1000;
+
+// The monitored device's own LATE nudge (§4 "send at most one generic check-in reminder").
+// Fixed generic copy, no partner/relationship text; NORMAL priority because the plan calls it
+// a best-effort nudge, not a wake-up guarantee — the user-visible time-sensitive notice is
+// the partner's six-hour alert, which stays HIGH. The TTL covers the LATE window itself
+// (45–90 minutes): a reminder delivered after the device has been silent for longer is no
+// longer the state it describes, and the partner path owns that threshold.
+const CHECKIN_TITLE = 'Check in with MyExodus';
+const CHECKIN_BODY = 'Your device has not checked in recently. Open the app to stay connected.';
+const CHECKIN_TTL_MS = 45 * 60 * 1000;
+const CHECKIN_COLLAPSE_KEY = 'checkin';
+
+/** Collapse key for one relationship's availability/recovery notices. Per-device scoped, so
+ *  relation identity is all that distinguishes two pairs; hashed because a raw relationship
+ *  id must never appear in provider metadata (§8.12). Latest notice for the pair wins, which
+ *  is exactly the desired behavior when a recovery supersedes a queued silence notice. */
+function availabilityCollapseKey(relationshipId) {
+  const digest = crypto.createHash('sha256').update(String(relationshipId)).digest('hex');
+  return `avail-${digest.slice(0, 16)}`;
+}
 
 function errorCodeOf(error) {
   const code = error && typeof error.code === 'string' ? error.code : '';
@@ -69,10 +94,13 @@ function errorCodeOf(error) {
 
 /**
  * The latest ENDED ingestion outage that could have consumed this install's deadline:
- * `end >= last_received` (the silence overlaps it) and `start <= last_received + 6h` (the
- * deadline did not already fire before the outage began). Returns the outage end time or null.
+ * `end >= last_received` (the silence overlaps it) and `start <= last_received + windowMs`
+ * (the deadline did not already fire before the outage began). Returns the outage end time or
+ * null. The window matters: the LATE reminder only compensates an outage that began inside
+ * its own 45-minute interval — an outage starting after the LATE deadline cannot have hidden
+ * that transition and must not postpone it further.
  */
-async function outageEndFor(tx, db, lastReceivedAtMs) {
+async function outageEndFor(tx, db, lastReceivedAtMs, windowMs = PARTNER_PUSH_AFTER_MS) {
   const snap = await tx.get(
     db.collection('dms_ingestion_outages')
       .where('ended_at_ms', '>=', lastReceivedAtMs)
@@ -84,7 +112,7 @@ async function outageEndFor(tx, db, lastReceivedAtMs) {
     const start = Number(data.started_at_ms) || 0;
     const end = Number(data.ended_at_ms) || 0;
     if (end <= 0 || start <= 0) continue;
-    if (start <= lastReceivedAtMs + PARTNER_PUSH_AFTER_MS && end >= lastReceivedAtMs) return end;
+    if (start <= lastReceivedAtMs + windowMs && end >= lastReceivedAtMs) return end;
   }
   return null;
 }
@@ -182,6 +210,71 @@ async function processDueRow(db, dueDoc, nowMs) {
   });
 }
 
+/**
+ * §4/§8.9 LATE reminder for one due state row. Two phases by necessity — the CAS claim is a
+ * transaction, the provider call is not — and the mark is committed BEFORE the send: the
+ * contract is at-most-once (a best-effort nudge), so a crash between the two loses one
+ * reminder rather than risking a second. No outbox row: this notice has one recipient (the
+ * install itself), no relationship/consent fan-out, and therefore none of the outbox's
+ * dispatch-time revalidation needs. The installation row is re-read immediately before the
+ * send, and a stale/cleared/opted-out row is skipped.
+ */
+async function processLateRow(db, dueDoc, nowMs, sendCheckin) {
+  const expected = dueDoc.data();
+  const claim = await db.runTransaction(async (tx) => {
+    const fresh = await tx.get(dueDoc.ref);
+    if (!fresh.exists) return { status: 'stale', reason: 'REMOVED' };
+    const state = fresh.data();
+    const outageEndMs = await outageEndFor(
+      tx, db, Number(state.last_received_at_ms) || 0, LATE_AFTER_MS,
+    );
+    const decision = lateReminderDecision({
+      state,
+      expectedGeneration: expected.liveness_generation,
+      expectedLastReceivedAtMs: expected.last_received_at_ms,
+      nowMs,
+      outageEndMs,
+    });
+    if (decision.action === 'STALE') return { status: 'stale', reason: decision.reason };
+    if (decision.action === 'DEFER') {
+      tx.update(dueDoc.ref, {
+        late_deadline_at: Timestamp.fromMillis(decision.nextLateDeadlineAtMs),
+        late_reminder_rebased_at_ms: nowMs,
+        updated_at: Timestamp.fromMillis(nowMs),
+      });
+      return { status: 'deferred' };
+    }
+    tx.update(dueDoc.ref, {
+      late_reminder_generation: decision.generation,
+      late_reminder_at_ms: nowMs,
+      late_deadline_at: FieldValue.delete(),
+      updated_at: Timestamp.fromMillis(nowMs),
+    });
+    return { status: 'remind', uid: state.uid, installId: state.install_id };
+  });
+  if (claim.status !== 'remind') return claim;
+
+  const snap = await db.doc(`users/${claim.uid}/push_installations/${claim.installId}`).get();
+  const installation = snap.exists ? { id: snap.id, ...snap.data() } : null;
+  const undeliverable = !installation ||
+    installation.provider !== 'fcm' ||
+    installation.stale === true ||
+    installation.pushEligible === false ||
+    !installation.token;
+  if (undeliverable) return { status: 'reminded', skipped: true };
+
+  try {
+    await sendCheckin({ installation, nowMs });
+    return { status: 'reminded', sent: true };
+  } catch (error) {
+    if (isTokenInvalid('fcm', error)) {
+      await markInstallationStale(db, claim.uid, claim.installId);
+      return { status: 'reminded', tokenCleared: true };
+    }
+    return { status: 'reminded', sendFailed: errorCodeOf(error) };
+  }
+}
+
 async function listRecipientInstallations(db, recipientUid, nowMs) {
   const snap = await db.collection(`users/${recipientUid}/push_installations`).get();
   return selectInstallations(
@@ -247,9 +340,16 @@ async function finalizeNotice(db, rowRef, attempts, patch) {
   });
 }
 
+/** §7 Step 9: remove the provider-invalid token; keep the tombstone. The row says "this
+ *  token cannot be sent to", never "the app is uninstalled" — the client re-registers a
+ *  fresh token on its next sync pass (`PushInstallationRegistrar` full-replace write). */
 async function markInstallationStale(db, recipientUid, installationId) {
   await db.doc(`users/${recipientUid}/push_installations/${installationId}`)
-    .set({ stale: true, staleAt: FieldValue.serverTimestamp() }, { merge: true });
+    .set({
+      stale: true,
+      staleAt: FieldValue.serverTimestamp(),
+      token: FieldValue.delete(),
+    }, { merge: true });
 }
 
 /**
@@ -269,8 +369,30 @@ function buildDmsMessage(row, tokens) {
     android: {
       priority: 'high',
       ttl: PUSH_TTL_MS,
+      collapseKey: availabilityCollapseKey(row.relationship_id),
       restrictedPackageName: ANDROID_PACKAGE,
       notification: { channelId: CHANNEL_AVAILABILITY },
+    },
+  };
+}
+
+/**
+ * §4/§8.9: the LATE reminder to the monitored device. Fixed generic copy, no relationship
+ * identity, normal priority, and its own channel so a user can silence self-reminders
+ * without silencing partner accountability events (or vice versa). Collapses by device: only
+ * the newest reminder for this install is worth showing.
+ */
+function buildCheckinMessage(installation) {
+  return {
+    token: installation.token,
+    notification: { title: CHECKIN_TITLE, body: CHECKIN_BODY },
+    data: { v: '1', type: 'CHECKIN_REMINDER' },
+    android: {
+      priority: 'normal',
+      ttl: CHECKIN_TTL_MS,
+      collapseKey: CHECKIN_COLLAPSE_KEY,
+      restrictedPackageName: ANDROID_PACKAGE,
+      notification: { channelId: CHANNEL_CHECKIN },
     },
   };
 }
@@ -282,7 +404,7 @@ function buildDmsMessage(row, tokens) {
  */
 async function sendDmsPush({ row, installs, nowMs }) {
   const tokens = installs.map((install) => install.token);
-  if (tokens.length === 0) return { delivered: 0, invalidInstallations: [] };
+  if (tokens.length === 0) return { providerAccepted: 0, invalidInstallations: [] };
   const { getMessaging } = require('firebase-admin/messaging');
   const result = await getMessaging().sendEachForMulticast(buildDmsMessage(row, tokens));
   const invalidInstallations = [];
@@ -291,7 +413,15 @@ async function sendDmsPush({ row, installs, nowMs }) {
       invalidInstallations.push(installs[index].id);
     }
   });
-  return { delivered: result.successCount, invalidInstallations };
+  // `successCount` is provider ACCEPTANCE, not a delivery or display receipt (§8.12). The
+  // field name is part of the contract: nothing downstream may present it as "delivered".
+  return { providerAccepted: result.successCount, invalidInstallations };
+}
+
+/** Default provider call for the LATE self-reminder (one installation, one attempt). */
+async function sendCheckinPush({ installation }) {
+  const { getMessaging } = require('firebase-admin/messaging');
+  await getMessaging().send(buildCheckinMessage(installation));
 }
 
 /** Rows stuck in DISPATCHING past their lease (a crashed invocation) return to PENDING. */
@@ -357,7 +487,7 @@ async function dispatchOutbox({ db, nowMs, config, sendPush }) {
       const finished = await finalizeNotice(db, doc.ref, claim.attempts, {
         status: NOTICE_SENT,
         dispatched_at_ms: nowMs,
-        provider_accepted: outcome.delivered,
+        provider_accepted: outcome.providerAccepted,
         updated_at_ms: nowMs,
       });
       if (finished) sent += 1;
@@ -387,7 +517,13 @@ async function dispatchOutbox({ db, nowMs, config, sendPush }) {
  * Handler seam. `sendPush` is injected by the emulator suite; production uses the FCM call.
  * One invocation = one bounded transition batch + one bounded dispatch batch. Never a scan.
  */
-function createDmsWorkerHandler({ db, now = () => Date.now(), sendPush = sendDmsPush, log = logger }) {
+function createDmsWorkerHandler({
+  db,
+  now = () => Date.now(),
+  sendPush = sendDmsPush,
+  sendCheckin = sendCheckinPush,
+  log = logger,
+}) {
   return async function dmsWorkerHandler() {
     const nowMs = now();
     const configSnap = await db.doc(DMS_CONFIG_DOC).get();
@@ -425,6 +561,24 @@ function createDmsWorkerHandler({ db, now = () => Date.now(), sendPush = sendDms
       }
     }
 
+    // §4 LATE reminder: a separate bounded due query over the earlier threshold. This is not
+    // partner fan-out — it goes to the monitored device — so it is not gated by the fleet
+    // breaker below; a correlated fleet-wide LATE spike is still visible in `lateReminded`.
+    const lateDue = await db.collection('dms_install_state')
+      .where('late_deadline_at', '<=', Timestamp.fromMillis(nowMs))
+      .orderBy('late_deadline_at')
+      .limit(config.dueBatch)
+      .get();
+    let lateReminded = 0;
+    let lateDeferred = 0;
+    let lateStale = 0;
+    for (const doc of lateDue.docs) {
+      const outcome = await processLateRow(db, doc, nowMs, sendCheckin);
+      if (outcome.status === 'reminded') lateReminded += 1;
+      else if (outcome.status === 'deferred') lateDeferred += 1;
+      else lateStale += 1;
+    }
+
     let breakerOpened = false;
     if (circuitBreakerTripped(notified, config.lateBurstThreshold)) {
       breakerOpened = true;
@@ -458,6 +612,10 @@ function createDmsWorkerHandler({ db, now = () => Date.now(), sendPush = sendDms
       deferred,
       stale,
       outboxCreated,
+      lateDue: lateDue.size,
+      lateReminded,
+      lateDeferred,
+      lateStale,
       requeued,
       dispatchHeld,
       ...dispatched,
@@ -468,6 +626,10 @@ function createDmsWorkerHandler({ db, now = () => Date.now(), sendPush = sendDms
       deferred,
       stale,
       outboxCreated,
+      lateDue: lateDue.size,
+      lateReminded,
+      lateDeferred,
+      lateStale,
       requeued,
       dispatchHeld,
       breakerOpened,
@@ -488,13 +650,16 @@ exports.dmsDeadlineWorker = onSchedule(
   },
   // Lazy `getFirestore()`: the module is required by test processes before any app exists,
   // and the default app is initialized after require in the emulator suites.
-  (event) => createDmsWorkerHandler({ db: getFirestore() })(event),
+  deferWhileIndexBuilds((event) => createDmsWorkerHandler({ db: getFirestore() })(event)),
 );
 
 exports._createDmsWorkerHandler = createDmsWorkerHandler;
 exports._processDueRow = processDueRow;
+exports._processLateRow = processLateRow;
 exports._claimNotice = claimNotice;
 exports._dispatchOutbox = dispatchOutbox;
 exports._requeueExpiredClaims = requeueExpiredClaims;
 exports._outageEndFor = outageEndFor;
 exports._buildDmsMessage = buildDmsMessage;
+exports._buildCheckinMessage = buildCheckinMessage;
+exports._sendCheckinPush = sendCheckinPush;

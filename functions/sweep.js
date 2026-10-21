@@ -14,6 +14,7 @@ const { attemptDispatch, markPushInstallationGone } = require('./dispatch-record
 require('./fcm-transport'); // registers the 'fcm' transport (AD-04)
 const { MAX_ATTEMPTS } = require('./relay-logic');
 const { createSweepPass } = require('./dispatch-logic');
+const { deferWhileIndexBuilds } = require('./index-build-guard');
 
 const REGION = 'us-central1';
 const db = getFirestore();
@@ -51,5 +52,5 @@ exports.retryDispatchSweep = onSchedule(
     maxInstances: 1, // singleton sweep; overlapping runs would dispatch the same records twice
     timeoutSeconds: 120,
   },
-  runSweep,
+  deferWhileIndexBuilds(runSweep),
 );

@@ -132,12 +132,16 @@ class MyExodusApp : Application(), Configuration.Provider {
         // SOS §8.14: the partner_nudges_v3 channel exists from startup — the §8.12 pushEligible
         // snapshot reads its presence/importance, so it cannot wait for the first nudge.
         PartnerNotifications.ensurePartnerNudgesChannel(this)
-        // Plan Step 6: the partner_activity channel exists before the first event, so the
-        // notification-health reading can tell "muted by the user" from "not created yet".
-        PartnerNotifications.ensurePartnerAlertsChannel(this)
+        // Plan Step 6/Step 9: the accountability-events channel exists before the first event,
+        // so the notification-health reading can tell "muted by the user" from "not created
+        // yet". The old `partner_alerts` id is retired in the same call.
+        PartnerNotifications.ensureAccountabilityEventsChannel(this)
         // Plan Step 8 (§8.12): the server's six-hour availability notice channel exists before
         // the worker's first dispatch — its id is the worker's `channelId`.
         PartnerNotifications.ensureAvailabilityAlertsChannel(this)
+        // Plan Step 9 (§4/§8.9): the check-in reminder channel exists before the worker's
+        // first LATE nudge — the server names it as the message's `channelId`.
+        PartnerNotifications.ensureCheckinRemindersChannel(this)
         startupTrace.lap("channels")
         // Decision 12 opt-out: FirebaseInitProvider ran before this call, so this is what the
         // stored preference overrides from the first moment of each process.

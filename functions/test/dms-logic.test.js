@@ -28,6 +28,7 @@ const {
   consentEnabled,
   consentingPartner,
   deadlineDecision,
+  lateReminderDecision,
   suppressionReason,
   circuitBreakerTripped,
   dispatchBackoffMs,
@@ -398,4 +399,80 @@ test('operator gate fails closed and outage intervals are validated', () => {
   assert.strictEqual(isValidOutageInterval(0, null), false);
   assert.strictEqual(isValidOutageInterval(1.5, null), false);
   assert.strictEqual(isValidOutageInterval(NOW, NOW + 0.5), false);
+});
+
+// ---------------------------------------------------------------------------
+// LATE check-in reminder (§4 / §8.9)
+
+test('lateReminderDecision: one reminder per generation, due at receipt + 45m', () => {
+  const state = { last_received_at_ms: NOW - 60 * MINUTE, liveness_generation: 3 };
+
+  assert.deepStrictEqual(
+    lateReminderDecision({ state, nowMs: NOW - 15 * MINUTE }),
+    { action: 'REMIND', generation: 3 },
+  );
+  assert.deepStrictEqual(
+    lateReminderDecision({ state, nowMs: NOW - 15 * MINUTE - 1 }),
+    { action: 'DEFER', nextLateDeadlineAtMs: NOW - 15 * MINUTE },
+  );
+  assert.deepStrictEqual(
+    lateReminderDecision({
+      state: { ...state, late_reminder_generation: 3 },
+      nowMs: NOW,
+    }),
+    { action: 'STALE', reason: 'ALREADY_REMINDED' },
+  );
+  assert.deepStrictEqual(
+    lateReminderDecision({
+      state: { ...state, late_reminder_generation: 2 },
+      nowMs: NOW,
+    }),
+    { action: 'REMIND', generation: 3 },
+    'a newer generation earns its own reminder',
+  );
+});
+
+test('lateReminderDecision: CAS and no-data inputs are stale, never a nudge', () => {
+  const state = { last_received_at_ms: NOW - 60 * MINUTE, liveness_generation: 3 };
+
+  assert.deepStrictEqual(
+    lateReminderDecision({ state: null, nowMs: NOW }),
+    { action: 'STALE', reason: 'NO_STATE' },
+  );
+  assert.deepStrictEqual(
+    lateReminderDecision({ state: { liveness_generation: 1 }, nowMs: NOW }),
+    { action: 'STALE', reason: 'NO_RECEIPT' },
+  );
+  assert.deepStrictEqual(
+    lateReminderDecision({ state, expectedGeneration: 2, nowMs: NOW }),
+    { action: 'STALE', reason: 'GENERATION_MOVED' },
+  );
+  assert.deepStrictEqual(
+    lateReminderDecision({ state, expectedLastReceivedAtMs: NOW - 5 * MINUTE, nowMs: NOW }),
+    { action: 'STALE', reason: 'RECEIPT_MOVED' },
+  );
+});
+
+test('lateReminderDecision: an ingestion outage rebases from max(receipt, outage end)', () => {
+  const state = { last_received_at_ms: NOW - 60 * MINUTE, liveness_generation: 1 };
+
+  // The outage swallowed most of the window: due 45m after it ended, not immediately.
+  assert.deepStrictEqual(
+    lateReminderDecision({ state, nowMs: NOW, outageEndMs: NOW - 10 * MINUTE }),
+    { action: 'DEFER', nextLateDeadlineAtMs: NOW + 35 * MINUTE },
+  );
+  assert.deepStrictEqual(
+    lateReminderDecision({
+      state,
+      nowMs: NOW + 35 * MINUTE,
+      outageEndMs: NOW - 10 * MINUTE,
+    }),
+    { action: 'REMIND', generation: 1 },
+  );
+  // An outage that did not overlap the 45-minute window (the caller only passes a candidate
+  // whose start is inside it) leaves the original deadline in force.
+  assert.deepStrictEqual(
+    lateReminderDecision({ state, nowMs: NOW, outageEndMs: null }),
+    { action: 'REMIND', generation: 1 },
+  );
 });

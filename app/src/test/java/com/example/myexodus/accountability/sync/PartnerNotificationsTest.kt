@@ -24,8 +24,10 @@ import org.robolectric.annotation.Config
 
 /**
  * Plan §12 line 523 (notification-permission-denied path: banner appears, no crash when a
- * notification is attempted while denied) and §8 Step 16's channel spec: `partner_alerts`
- * HIGH, `approval_requests` HIGH, `sync_status` LOW + debug-only. The banner itself is a
+ * notification is attempted while denied) and the channel spec: Step 9's immutable
+ * `partner_accountability_events_v1` HIGH (old `partner_alerts` retired), Step 8's
+ * `availability_alerts_v1` HIGH, Step 9's `checkin_reminders_v1` DEFAULT, Step 16's
+ * `approval_requests` HIGH, `sync_status` LOW + debug-only. The banner itself is a
  * composition; the device leg covers it — this pins the posting gate and channel shape.
  * Owner ruling 2026-09-29: every post names the partner it concerns and is keyed per pair
  * (§19.5), while the lockscreen public copy stays generic (FR-13) — all pinned here.
@@ -50,7 +52,7 @@ class PartnerNotificationsTest {
             context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_STREAK_UPDATED),
         )
         assertTrue(manager.activeNotifications.isEmpty())
-        assertNull(manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_ALERTS))
+        assertNull(manager.getNotificationChannel(PartnerNotifications.CHANNEL_ACCOUNTABILITY_EVENTS))
     }
 
     @Test
@@ -61,7 +63,7 @@ class PartnerNotificationsTest {
         )
         assertEquals(
             NotificationManager.IMPORTANCE_HIGH,
-            manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_ALERTS)!!.importance,
+            manager.getNotificationChannel(PartnerNotifications.CHANNEL_ACCOUNTABILITY_EVENTS)!!.importance,
         )
         assertEquals(1, manager.activeNotifications.size)
     }
@@ -77,7 +79,7 @@ class PartnerNotificationsTest {
         val posted = manager.activeNotifications.single()
         assertEquals(PartnerNotifications.NOTIF_PARTNER_TEST, posted.id)
         assertEquals(PartnerNotifications.TEST_NOTIFICATION_TAG, posted.tag)
-        assertEquals(PartnerNotifications.CHANNEL_PARTNER_ALERTS, posted.notification.channelId)
+        assertEquals(PartnerNotifications.CHANNEL_ACCOUNTABILITY_EVENTS, posted.notification.channelId)
     }
 
     @Test
@@ -261,6 +263,41 @@ class PartnerNotificationsTest {
             context.getString(R.string.partner_channel_nudges_name),
             channel.name.toString(),
         )
+    }
+
+    /** Plan Step 9: the accountability-events channel is created at startup (not lazily on the
+     *  first post), HIGH, and the retired `partner_alerts` id is deleted in the same call so
+     *  system settings never lists two partner-activity channels. */
+    @Test
+    fun ensureAccountabilityEventsChannel_isHigh_andRetiresTheLegacyId() {
+        manager.createNotificationChannel(
+            NotificationChannel(
+                PartnerNotifications.CHANNEL_PARTNER_ALERTS_LEGACY, "legacy",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+
+        PartnerNotifications.ensureAccountabilityEventsChannel(context)
+
+        assertEquals(
+            NotificationManager.IMPORTANCE_HIGH,
+            manager.getNotificationChannel(PartnerNotifications.CHANNEL_ACCOUNTABILITY_EVENTS)!!.importance,
+        )
+        assertNull(manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_ALERTS_LEGACY))
+        assertEquals(
+            context.getString(R.string.partner_channel_activity_name),
+            manager.getNotificationChannel(PartnerNotifications.CHANNEL_ACCOUNTABILITY_EVENTS)!!.name.toString(),
+        )
+    }
+
+    /** Plan Step 9 (§4/§8.9): the monitored device's own reminder channel is DEFAULT — a
+     *  best-effort nudge, created before the first server dispatch. */
+    @Test
+    fun ensureCheckinRemindersChannel_isDefaultImportance() {
+        PartnerNotifications.ensureCheckinRemindersChannel(context)
+        val channel = manager.getNotificationChannel(PartnerNotifications.CHANNEL_CHECKIN_REMINDERS)!!
+        assertEquals(NotificationManager.IMPORTANCE_DEFAULT, channel.importance)
+        assertEquals(context.getString(R.string.partner_channel_checkin_name), channel.name.toString())
     }
 
     /** The `_v3` id migration's other half: a dented pre-v3 channel cannot be raised in

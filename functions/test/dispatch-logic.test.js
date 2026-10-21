@@ -48,7 +48,7 @@ function attemptHarness() {
 }
 
 const inst = (id) => ({ id, provider: 'fcm', token: `tok-${id}` });
-const WAKE = { messageId: 'm1', type: 'domain-event' };
+const WAKE = { v: '1', type: 'SYNC_AVAILABLE', messageId: 'm1' };
 
 test('duplicate trigger for one messageId sends exactly one push and reaches DISPATCHED once', async () => {
   const h = attemptHarness();
@@ -134,7 +134,7 @@ test('sweep retries only the failed installation and counts gone rows terminal',
   assert.deepStrictEqual(h.marks, ['gone']);
   assert.strictEqual(h.attempts.length, 1);
   assert.strictEqual(h.attempts[0].installation.id, 'live');
-  assert.deepStrictEqual(h.attempts[0].wake, { messageId: 'm1', type: 'domain-event' }); // AD-11
+  assert.deepStrictEqual(h.attempts[0].wake, { v: '1', type: 'SYNC_AVAILABLE', messageId: 'm1' }); // AD-11/§8.12
   assert.deepStrictEqual(h.logs, [{ scanned: 2, redispatched: 1, terminal: 1 }]);
 });
 

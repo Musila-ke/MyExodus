@@ -32,7 +32,9 @@ const { DMS_PARTNER_PUSH_MS, MIN_ACCEPT_INTERVAL_MS } = require('../heartbeat-lo
 const {
   _createDmsWorkerHandler,
   _processDueRow,
+  _processLateRow,
   _buildDmsMessage,
+  _buildCheckinMessage,
 } = require('../dms-processor');
 const {
   NOTICE_AVAILABILITY,
@@ -150,15 +152,27 @@ function pushRecorder({ failTimes = 0, invalidInstallations = [] } = {}) {
     if (sends.length <= failTimes) {
       throw Object.assign(new Error('provider down'), { code: 'unavailable' });
     }
-    return { delivered: args.installs.length, invalidInstallations };
+    return { providerAccepted: args.installs.length, invalidInstallations };
   };
   return { sends, sendPush };
 }
 
-const workerWith = (sendPush) => _createDmsWorkerHandler({
+function checkinRecorder({ failTimes = 0, code = 'unavailable' } = {}) {
+  const sends = [];
+  const sendCheckin = async (args) => {
+    sends.push(args);
+    if (sends.length <= failTimes) {
+      throw Object.assign(new Error('provider down'), { code });
+    }
+  };
+  return { sends, sendCheckin };
+}
+
+const workerWith = (sendPush, sendCheckin = async () => {}) => _createDmsWorkerHandler({
   db,
   now: () => clockMs,
   sendPush,
+  sendCheckin,
   log: silentLog,
 });
 
@@ -647,7 +661,7 @@ test('dispatch: an abandoned DISPATCHING claim is requeued after its lease and r
   assert.strictEqual((await outboxRef(INSTALL, 1).get()).data().status, NOTICE_SENT);
 });
 
-test('dispatch: invalid provider tokens mark the install stale, not the monitor', async () => {
+test('dispatch: invalid provider tokens remove the token and tombstone the install, not the monitor', async () => {
   await seedPairing();
   await register(WATCH, WATCH_INSTALL);
   await seedState({ lastReceivedAtMs: NOW - 7 * HOUR });
@@ -657,9 +671,151 @@ test('dispatch: invalid provider tokens mark the install stale, not the monitor'
   const install = (await db.doc(`users/${WATCH}/push_installations/${WATCH_INSTALL}`).get()).data();
   assert.strictEqual(install.stale, true);
   assert.ok(install.staleAt instanceof Timestamp);
+  // §7 Step 9: the provider-invalid token is REMOVED, not retained. The tombstone is not
+  // evidence of uninstall — a fresh registration rewrites token + clears stale.
+  assert.strictEqual(install.token, undefined, 'invalid token must be removed');
   assert.strictEqual((await outboxRef(INSTALL, 1).get()).data().status, NOTICE_SENT);
   // The monitored user's own rows are untouched.
   assert.strictEqual((await stateRef().get()).data().notice_state, 'NOTIFIED');
+});
+
+// ---------------------------------------------------------------------------
+// LATE check-in reminder (§4 / §8.9)
+
+test('late reminder: one generic nudge to the monitored install per liveness generation', async () => {
+  await register(MON, INSTALL);
+  const reply = await heartbeatHandler()({ auth: { uid: MON }, data: { installId: INSTALL, counter: 1 } });
+  assert.strictEqual(reply.accepted, true);
+  assert.strictEqual(
+    (await stateRef().get()).data().late_deadline_at.toMillis(),
+    NOW + 45 * MINUTE,
+    'the reminder window starts at the server receipt time',
+  );
+
+  const checkins = checkinRecorder();
+  const worker = workerWith(pushRecorder().sendPush, checkins.sendCheckin);
+
+  clockMs = NOW + 45 * MINUTE - 1;
+  assert.strictEqual((await worker()).lateReminded, 0);
+
+  clockMs = NOW + 45 * MINUTE;
+  const first = await worker();
+  assert.strictEqual(first.lateReminded, 1);
+  assert.strictEqual(checkins.sends.length, 1);
+  assert.strictEqual(checkins.sends[0].installation.id, INSTALL);
+  assert.strictEqual(checkins.sends[0].installation.token, `token-${INSTALL}`);
+  const state = (await stateRef().get()).data();
+  assert.strictEqual(state.late_reminder_generation, 1);
+  assert.strictEqual(state.late_deadline_at, undefined);
+
+  // Same generation, hours later: never a second nudge.
+  clockMs += HOUR;
+  assert.strictEqual((await worker()).lateReminded, 0);
+  assert.strictEqual(checkins.sends.length, 1);
+
+  // A fresh accepted beat opens a new generation and a new 45-minute window.
+  clockMs += MIN_ACCEPT_INTERVAL_MS + 1;
+  const beatAt = clockMs;
+  const secondBeat = await heartbeatHandler()({ auth: { uid: MON }, data: { installId: INSTALL, counter: 2 } });
+  assert.strictEqual(secondBeat.accepted, true);
+  assert.strictEqual((await stateRef().get()).data().late_reminder_generation, 1, 'carried, not reset');
+  clockMs = beatAt + 45 * MINUTE;
+  assert.strictEqual((await worker()).lateReminded, 1);
+  assert.strictEqual(checkins.sends.length, 2);
+  assert.strictEqual((await stateRef().get()).data().late_reminder_generation, 2);
+});
+
+test('late reminder: stale claims are CAS no-ops (generation moved, already reminded)', async () => {
+  await seedState({
+    lastReceivedAtMs: NOW - 60 * MINUTE,
+    extra: { late_deadline_at: Timestamp.fromMillis(NOW - 15 * MINUTE) },
+  });
+  const dueSnapshot = await stateRef().get();
+  await stateRef().update({ liveness_generation: 2, last_received_at_ms: NOW - 5 * MINUTE });
+  assert.deepStrictEqual(
+    await _processLateRow(db, { ref: stateRef(), data: () => dueSnapshot.data() }, NOW, async () => {}),
+    { status: 'stale', reason: 'GENERATION_MOVED' },
+  );
+
+  await seedState({
+    lastReceivedAtMs: NOW - 60 * MINUTE,
+    generation: 2,
+    extra: {
+      late_deadline_at: Timestamp.fromMillis(NOW - 15 * MINUTE),
+      late_reminder_generation: 2,
+    },
+  });
+  const remindedSnapshot = await stateRef().get();
+  assert.deepStrictEqual(
+    await _processLateRow(db, { ref: stateRef(), data: () => remindedSnapshot.data() }, NOW, async () => {}),
+    { status: 'stale', reason: 'ALREADY_REMINDED' },
+  );
+});
+
+test('late reminder: an outage inside the window rebases; an outage after it does not', async () => {
+  await register(MON, INSTALL);
+  await seedState({
+    lastReceivedAtMs: NOW - 60 * MINUTE,
+    extra: { late_deadline_at: Timestamp.fromMillis(NOW - 15 * MINUTE) },
+  });
+  await db.doc('dms_ingestion_outages/out-in-window').set({
+    started_at_ms: NOW - 50 * MINUTE,
+    ended_at_ms: NOW - 10 * MINUTE,
+  });
+  const checkins = checkinRecorder();
+  const worker = workerWith(pushRecorder().sendPush, checkins.sendCheckin);
+
+  const rebased = await worker();
+  assert.strictEqual(rebased.lateReminded, 0);
+  assert.strictEqual(rebased.lateDeferred, 1);
+  assert.strictEqual(
+    (await stateRef().get()).data().late_deadline_at.toMillis(),
+    NOW - 10 * MINUTE + 45 * MINUTE,
+    'base = max(last_received, outage_end), then + 45m',
+  );
+
+  clockMs = NOW + 35 * MINUTE;
+  assert.strictEqual((await worker()).lateReminded, 1);
+  assert.strictEqual(checkins.sends.length, 1);
+
+  // An outage that began AFTER the LATE deadline cannot have hidden that transition.
+  await seedState({
+    uid: MON,
+    installId: 'install-mon-2',
+    lastReceivedAtMs: NOW - 7 * HOUR,
+    extra: { late_deadline_at: Timestamp.fromMillis(NOW - 6 * HOUR - 15 * MINUTE) },
+  });
+  await register(MON, 'install-mon-2');
+  await db.doc('dms_ingestion_outages/out-after-window').set({
+    started_at_ms: NOW - 3 * HOUR,
+    ended_at_ms: NOW - 1 * HOUR,
+  });
+  clockMs = NOW + 45 * MINUTE;
+  const later = await worker();
+  assert.strictEqual(later.lateReminded, 1);
+  assert.deepStrictEqual(checkins.sends.map((s) => s.installation.id), [INSTALL, 'install-mon-2']);
+});
+
+test('late reminder: an UNREGISTERED token is removed and the nudge is never retried', async () => {
+  await register(MON, INSTALL);
+  await seedState({
+    lastReceivedAtMs: NOW - 60 * MINUTE,
+    extra: { late_deadline_at: Timestamp.fromMillis(NOW - 15 * MINUTE) },
+  });
+  const checkins = checkinRecorder({
+    failTimes: 1,
+    code: 'messaging/registration-token-not-registered',
+  });
+
+  const result = await workerWith(pushRecorder().sendPush, checkins.sendCheckin)();
+  assert.strictEqual(result.lateReminded, 1);
+  const install = (await db.doc(`users/${MON}/push_installations/${INSTALL}`).get()).data();
+  assert.strictEqual(install.stale, true);
+  assert.strictEqual(install.token, undefined);
+
+  clockMs += HOUR;
+  await workerWith(pushRecorder().sendPush, checkins.sendCheckin)();
+  assert.strictEqual(checkins.sends.length, 1, 'at-most-once: no retry after a provider failure');
 });
 
 // ---------------------------------------------------------------------------
@@ -889,21 +1045,57 @@ test('worker: a disabled deployment performs no reads that could transition stat
 });
 
 test('payload: the wire message is fixed copy plus the generic sync key — no relationship identity', () => {
-  const availability = _buildDmsMessage({ notice_type: NOTICE_AVAILABILITY }, ['tok-a']);
+  const availability = _buildDmsMessage(
+    { notice_type: NOTICE_AVAILABILITY, relationship_id: PAIR_ID }, ['tok-a'],
+  );
   assert.strictEqual(availability.notification.title, 'Partner check-in');
   assert.strictEqual(availability.notification.body, 'A paired device has not checked in recently.');
   assert.deepStrictEqual(availability.data, { v: '1', type: 'SYNC_AVAILABLE' });
+  assert.deepStrictEqual(Object.keys(availability.data).sort(), ['type', 'v'], 'no extra data keys');
   assert.deepStrictEqual(availability.android.notification, { channelId: 'availability_alerts_v1' });
   assert.strictEqual(availability.android.priority, 'high');
   assert.strictEqual(availability.android.restrictedPackageName, 'com.example.myexodus');
   assert.strictEqual(availability.android.ttl, 60 * 60 * 1000);
+  assert.match(availability.android.collapseKey, /^avail-[0-9a-f]{16}$/);
   assert.deepStrictEqual(availability.tokens, ['tok-a']);
 
-  const recovery = _buildDmsMessage({ notice_type: NOTICE_RECOVERY }, ['tok-b']);
+  const recovery = _buildDmsMessage(
+    { notice_type: NOTICE_RECOVERY, relationship_id: PAIR_ID }, ['tok-b'],
+  );
   assert.strictEqual(recovery.notification.body, 'A paired device has checked in again.');
+  assert.strictEqual(
+    recovery.android.collapseKey,
+    availability.android.collapseKey,
+    'a recovery supersedes the queued silence notice for the same relationship',
+  );
 
-  const wire = JSON.stringify(availability) + JSON.stringify(recovery);
-  for (const secret of [MON, WATCH, INSTALL, WATCH_INSTALL, PAIR_ID]) {
+  const otherPair = _buildDmsMessage(
+    { notice_type: NOTICE_AVAILABILITY, relationship_id: `${MON}_${THIRD}` }, ['tok-c'],
+  );
+  assert.notStrictEqual(otherPair.android.collapseKey, availability.android.collapseKey);
+
+  const wire = JSON.stringify(availability) + JSON.stringify(recovery) + JSON.stringify(otherPair);
+  for (const secret of [MON, WATCH, THIRD, INSTALL, WATCH_INSTALL, PAIR_ID]) {
     assert.ok(!wire.includes(secret), `wire payload leaks ${secret}`);
+  }
+});
+
+test('payload: the LATE reminder is fixed generic copy on its own DEFAULT channel, normal priority', () => {
+  const message = _buildCheckinMessage({ token: 'tok-mon' });
+  assert.strictEqual(message.token, 'tok-mon');
+  assert.strictEqual(message.notification.title, 'Check in with MyExodus');
+  assert.strictEqual(
+    message.notification.body,
+    'Your device has not checked in recently. Open the app to stay connected.',
+  );
+  assert.deepStrictEqual(message.data, { v: '1', type: 'CHECKIN_REMINDER' });
+  assert.strictEqual(message.android.priority, 'normal', 'a nudge is not a wake-up guarantee');
+  assert.strictEqual(message.android.ttl, 45 * 60 * 1000);
+  assert.strictEqual(message.android.collapseKey, 'checkin');
+  assert.strictEqual(message.android.restrictedPackageName, 'com.example.myexodus');
+  assert.deepStrictEqual(message.android.notification, { channelId: 'checkin_reminders_v1' });
+  const wire = JSON.stringify(message);
+  for (const secret of [MON, WATCH, INSTALL, PAIR_ID]) {
+    assert.ok(!wire.includes(secret), `reminder payload leaks ${secret}`);
   }
 });

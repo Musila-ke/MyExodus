@@ -1,7 +1,10 @@
 package com.example.myexodus.ui.home
 
 import android.content.Intent
+import android.os.SystemClock
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -76,6 +79,9 @@ import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.settings.HomeSettings
+import com.example.myexodus.settings.accessibilitySettingsIntent
+import com.example.myexodus.settings.overlaySettingsIntent
+import com.example.myexodus.settings.usageAccessSettingsIntent
 import com.example.myexodus.streaks.HabitState
 import com.example.myexodus.ui.AppMark
 import com.example.myexodus.ui.RuleRowState
@@ -88,6 +94,7 @@ import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.rememberWindowWidth
 import com.example.myexodus.ui.ruleRowState
 import com.example.myexodus.ui.rules.RULES_CARD_MAX_HEIGHT
+import com.example.myexodus.ui.rules.hasLiveWebsiteRule
 import com.example.myexodus.ui.scheduleSummary
 import com.example.myexodus.ui.streaks.FreeSinceLine
 import com.example.myexodus.ui.streaks.HabitLabelRow
@@ -96,6 +103,7 @@ import com.example.myexodus.ui.streaks.daysFree
 import com.example.myexodus.ui.streaks.daysUntil
 import com.example.myexodus.ui.streaks.nextMilestone
 import com.example.myexodus.ui.streaks.splashMilestones
+import com.example.myexodus.vpn.VpnLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.emptyFlow
@@ -208,6 +216,65 @@ fun HomeScreen(
         }
     }
 
+    // Owner correction 2026-10-21: "Limited" without a cause made the user tap through to
+    // Settings to learn what was down. The explainer waits out the accessibility-rebind window
+    // after a process start (XOS measures 20–40 s) so a transient rebind never flashes a card;
+    // a genuinely down service gets the same cause + Re-enable grammar as the other rows.
+    var pollingOnlyPersistent by remember { mutableStateOf(false) }
+    LaunchedEffect(authority, degradation) {
+        val pollingOnly =
+            authority == ProtectionAuthority.DEGRADED_POLLING_ONLY && degradation == null
+        val waitMs = POLLING_ONLY_EXPLAINER_DELAY_MS -
+            (SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime())
+        pollingOnlyPersistent = pollingOnly && waitMs <= 0
+        if (pollingOnly && waitMs > 0) {
+            delay(waitMs)
+            pollingOnlyPersistent = true
+        }
+    }
+
+    // Owner correction 2026-10-21: accessibility is not the only blocking-essential grant.
+    // Usage access, display-over-apps and the website tunnel are re-read with the 30 s tick,
+    // so a grant revoked (or restored) in system settings lands on this screen by itself.
+    var readiness by remember { mutableStateOf<BlockingReadiness?>(null) }
+    LaunchedEffect(nowMillis, rules) {
+        readiness = withContext(Dispatchers.IO) {
+            readBlockingReadiness(labelContext, hasLiveWebsiteRule(rules.orEmpty(), nowMillis))
+        }
+    }
+    // The consent dialog must be launched for result: a plain start makes Android's dialog
+    // report a null caller and finish without rendering (device-found 2026-10-17, RulesScreen).
+    val vpnConsentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        VpnLifecycle.ensure(labelContext.applicationContext, hasRules = true)
+        scope.launch {
+            readiness = withContext(Dispatchers.IO) {
+                readBlockingReadiness(labelContext, hasLiveWebsiteRule(rules.orEmpty(), nowMillis))
+            }
+        }
+    }
+    val requestWebsiteTunnel: () -> Unit = {
+        VpnLifecycle.consentIntent(labelContext)?.let(vpnConsentLauncher::launch)
+            ?: VpnLifecycle.ensure(labelContext.applicationContext, hasRules = true)
+    }
+    // LIMITED can now mean any of four gaps; the chip opens the gap that is actually down.
+    // Polling-only names accessibility as its defining gap; otherwise the missing grant is
+    // checked in consequence order, with accessibility last as the remaining cause.
+    val limitedFix: () -> Unit = when {
+        authority == ProtectionAuthority.DEGRADED_POLLING_ONLY -> {
+            { labelContext.startActivity(accessibilitySettingsIntent()) }
+        }
+        readiness?.usageAccess == false -> {
+            { labelContext.startActivity(usageAccessSettingsIntent()) }
+        }
+        readiness?.overlayGranted == false -> {
+            { labelContext.startActivity(overlaySettingsIntent(labelContext)) }
+        }
+        readiness?.websiteConsentMissing == true -> requestWebsiteTunnel
+        else -> { { labelContext.startActivity(accessibilitySettingsIntent()) } }
+    }
+
     val streakDays = habit?.let { daysFree(it.currentStreakElapsedMs) }
     val nextUp = habit?.let { nextMilestone(it) }
     val splashDays = habit?.let { splashMilestones(it) }?.map { it.milestoneDay }.orEmpty()
@@ -241,6 +308,8 @@ fun HomeScreen(
                 authority = authority,
                 nowMillis = nowMillis,
                 onOpenSettings = onOpenSettings,
+                onLimitedFix = limitedFix,
+                readiness = readiness,
             )
         }
         // Owner directive 2026-10-21: the attention alerts are one calm group, not three
@@ -249,9 +318,13 @@ fun HomeScreen(
         item(key = "attention") {
             AttentionSection(
                 degradation = degradation,
+                authority = authority,
+                pollingOnlyPersistent = pollingOnlyPersistent,
+                readiness = readiness,
                 checkInsAtRisk = checkInsAtRisk,
                 partnerNotificationsRequestable = partnerNotificationsRequestable,
                 outage = outage,
+                onFixWebsite = requestWebsiteTunnel,
                 onReenable = onReenable,
                 onOpenSettings = onOpenSettings,
                 onFixPartnerNotifications = onFixPartnerNotifications,
@@ -383,19 +456,30 @@ fun HomeScreen(
 
 private enum class ChipState { PROTECTING, LIMITED, OFF }
 
+/** Longest observed accessibility rebind after a process start (XOS measures 20–40 s); the
+ *  Limited explainer waits this long before treating polling-only as worth surfacing. */
+private const val POLLING_ONLY_EXPLAINER_DELAY_MS = 60_000L
+
 @Composable
 private fun StatusHeader(
     serviceEnabled: Boolean,
     degradation: ProtectionDegradation?,
     authority: ProtectionAuthority?,
+    readiness: BlockingReadiness?,
     nowMillis: Long,
     onOpenSettings: () -> Unit,
+    /** Owner correction 2026-10-21: a limited pill must lead to the grant that is actually
+     *  down, not the Settings index and not a fixed permission. */
+    onLimitedFix: () -> Unit,
 ) {
     // One signal authority with the banner below (finding #13): whenever a degradation banner
     // is showing, the chip must not claim "Protecting". Everything below the pre-first-refresh
-    // window (authority == null) reads the same tri-state the monitor publishes.
+    // window (authority == null) reads the same tri-state the monitor publishes. FULL only
+    // means the detection path; a missing blocking-essential grant still reads LIMITED
+    // (owner correction 2026-10-21).
     val chip = when {
         degradation != null -> ChipState.OFF
+        limitedBeyondAuthority(authority, readiness) -> ChipState.LIMITED
         authority == ProtectionAuthority.FULL -> ChipState.PROTECTING
         authority == ProtectionAuthority.DEGRADED_POLLING_ONLY -> ChipState.LIMITED
         authority == ProtectionAuthority.DEGRADED_NO_DETECTION -> ChipState.OFF
@@ -444,9 +528,12 @@ private fun StatusHeader(
                 color = style.container,
                 contentColor = style.content,
                 shape = CircleShape,
-                // The chip is the entry point to the fix: every degraded state has its own row
-                // and remedy on Settings.
-                modifier = Modifier.clickable(role = Role.Button, onClick = onOpenSettings),
+                // The chip is the entry point to the fix. LIMITED opens the one grant that
+                // is verified down; the other degraded states can have several causes and
+                // land on Settings, whose Protection row carries each mechanism's own remedy.
+                modifier = Modifier.clickable(role = Role.Button) {
+                    if (chip == ChipState.LIMITED) onLimitedFix() else onOpenSettings()
+                },
             ) {
                 Row(
                     Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -980,9 +1067,13 @@ private data class AttentionItem(
 @Composable
 private fun AttentionSection(
     degradation: ProtectionDegradation?,
+    authority: ProtectionAuthority?,
+    pollingOnlyPersistent: Boolean,
+    readiness: BlockingReadiness?,
     checkInsAtRisk: Boolean,
     partnerNotificationsRequestable: Boolean,
     outage: AccountingOutage?,
+    onFixWebsite: () -> Unit,
     onReenable: () -> Unit,
     onOpenSettings: () -> Unit,
     onFixPartnerNotifications: () -> Unit,
@@ -1028,6 +1119,53 @@ private fun AttentionSection(
                     },
                 )
             }
+        }
+        if (explainPollingOnly(authority, degradation, pollingOnlyPersistent)) {
+            add(
+                AttentionItem(
+                    icon = Icons.Outlined.Shield,
+                    title = stringResource(R.string.protection_limited_title),
+                    body = stringResource(R.string.protection_limited_card_text),
+                    actionLabel = stringResource(R.string.protection_stopped_action),
+                    onAction = { context.startActivity(accessibilitySettingsIntent()) },
+                ),
+            )
+        }
+        // Owner correction 2026-10-21: accessibility is one blocking-essential grant, not the
+        // only one. Each missing grant gets its own cause + direct fix; on a healthy install
+        // these add nothing.
+        if (showOverlayFix(authority, readiness)) {
+            add(
+                AttentionItem(
+                    icon = Icons.Outlined.Block,
+                    title = stringResource(R.string.protection_overlay_off_title),
+                    body = stringResource(R.string.protection_overlay_off_text),
+                    actionLabel = stringResource(R.string.protection_limited_action),
+                    onAction = { context.startActivity(overlaySettingsIntent(context)) },
+                ),
+            )
+        }
+        if (showUsageFix(authority, readiness)) {
+            add(
+                AttentionItem(
+                    icon = Icons.Outlined.Visibility,
+                    title = stringResource(R.string.protection_usage_off_title),
+                    body = stringResource(R.string.protection_usage_off_text),
+                    actionLabel = stringResource(R.string.protection_limited_action),
+                    onAction = { context.startActivity(usageAccessSettingsIntent()) },
+                ),
+            )
+        }
+        if (readiness?.websiteConsentMissing == true) {
+            add(
+                AttentionItem(
+                    icon = Icons.Filled.Language,
+                    title = stringResource(R.string.protection_website_off_title),
+                    body = stringResource(R.string.protection_website_off_text),
+                    actionLabel = stringResource(R.string.protection_limited_action),
+                    onAction = onFixWebsite,
+                ),
+            )
         }
         if (checkInsAtRisk) {
             add(
@@ -1106,6 +1244,19 @@ private fun AttentionSection(
         }
     }
 }
+
+/**
+ * Whether the Limited chip gets its cause-and-fix row. Polling-only is a supported running
+ * state (ProtectionStatusMonitor explains why it raises no alert), and the accessibility
+ * rebind after a process start is brief — so the row waits until the state has outlived that
+ * window. Any visible degradation outranks it: that state has its own row and reads OFF.
+ */
+internal fun explainPollingOnly(
+    authority: ProtectionAuthority?,
+    degradation: ProtectionDegradation?,
+    persistent: Boolean,
+): Boolean = persistent && degradation == null &&
+    authority == ProtectionAuthority.DEGRADED_POLLING_ONLY
 
 @Composable
 private fun AttentionRow(item: AttentionItem) {
