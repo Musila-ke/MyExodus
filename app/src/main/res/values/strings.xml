@@ -693,6 +693,24 @@
     <string name="partner_summary_no_events">Nothing shared yet. You\'ll see their streak here once they log something.</string>
     <string name="partner_summary_partial">Some history is missing, so these numbers may be behind.</string>
     <string name="partner_summary_pinned_label">Their message to you</string>
+    <!-- §7 Step 7 / §8.13 device monitoring: their app's own encrypted status report. Kept
+         apart from sync and chain status — a live mailbox never proves their monitor runs,
+         and a stale report reads Unknown rather than keeping an old Active. -->
+    <string name="partner_monitoring_title">Monitoring</string>
+    <string name="partner_monitoring_state_active">Active</string>
+    <string name="partner_monitoring_state_limited">Limited</string>
+    <string name="partner_monitoring_state_off">Off</string>
+    <string name="partner_monitoring_state_unknown">Unknown</string>
+    <string name="partner_monitoring_body_active">Their phone is checking apps and websites now.</string>
+    <string name="partner_monitoring_body_limited">Some checks are off on their phone, so it may miss things.</string>
+    <string name="partner_monitoring_body_off">Their phone isn’t checking apps or websites right now.</string>
+    <string name="partner_monitoring_body_unknown">Their phone hasn’t sent a current status, so this can’t be confirmed.</string>
+    <string name="partner_monitoring_report_fresh">Updated %1$s</string>
+    <string name="partner_monitoring_report_stale">Last report %1$s — too old to rely on.</string>
+    <string name="partner_monitoring_delayed">Some of their updates may be delayed.</string>
+    <!-- §4.7 App Standby: a diagnostic, never a permission request and never a claim that a
+         setting is required or guarantees anything. -->
+    <string name="partner_standby_notice">Android is limiting background work for MyExodus, so partner updates may arrive late. You can review this app’s battery settings if it keeps happening.</string>
     <!-- Req 15 composer: suggestions are deliberately short and non-clinical — the user can
          always write their own, and the same 280-char bound the wire enforces applies here. -->
     <string name="partner_compose_title">Send encouragement</string>
@@ -769,7 +787,7 @@
     <string name="settings_sharing_intro">Nothing is shared until you choose it. You pick, streak by streak and partner by partner, who sees what. Changes apply right away, and anything switched off is never sent — not even a streak’s name.</string>
     <string name="settings_sharing_streaks_header">Streaks</string>
     <string name="settings_sharing_other_header">Other information</string>
-    <string name="settings_sharing_other_title">Blocked apps &amp; recovery</string>
+    <string name="settings_sharing_other_title">Blocked apps, recovery &amp; device</string>
     <string name="settings_sharing_choose_partner">Which partner sees this?</string>
     <string name="settings_sharing_with_partner">Sharing with %1$s</string>
     <string name="settings_sharing_shared_with_one">Shared with %1$s</string>
@@ -787,6 +805,8 @@
     <string name="settings_sharing_checkins_body">Your partner hears when you try a blocked app and when you use an override.</string>
     <string name="settings_sharing_recovery_title">Recovery &amp; coaching</string>
     <string name="settings_sharing_recovery_body">Your partner hears when you finish a recovery session or update your coaching plan.</string>
+    <string name="settings_sharing_availability_title">Device availability</string>
+    <string name="settings_sharing_availability_body">Your partner sees whether blocking is switched on and working on this device, and whether it checked in recently. Never your apps or usage.</string>
     <string name="settings_sharing_empty">No streaks yet. Set one up under Streaks, then choose here what your partner can see.</string>
     <string name="settings_sharing_failed">Couldn’t save that change. MyExodus can’t reach its local database right now. Your data is safe — try again in a moment.</string>
     <string name="settings_sharing_unavailable">Couldn’t read your sharing settings. MyExodus can’t reach its local database right now. Your data is safe — try again in a moment.</string>

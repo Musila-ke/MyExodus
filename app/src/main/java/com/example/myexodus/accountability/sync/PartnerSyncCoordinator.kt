@@ -7,11 +7,17 @@ import com.example.myexodus.accountability.EventCreator
 import com.example.myexodus.accountability.crypto.AccountabilitySigner
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
+import com.example.myexodus.accountability.serialization.AccountabilityEventCategory
+import com.example.myexodus.accountability.serialization.AccountabilityEventKind
+import com.example.myexodus.accountability.serialization.AccountabilityEventWire
 import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.MonitoringState
+import com.example.myexodus.accountability.serialization.OutboxAgeBucket
 import com.example.myexodus.accountability.serialization.PlanBody
 import com.example.myexodus.accountability.serialization.PlanTaskBody
 import com.example.myexodus.accountability.serialization.PlanWire
+import com.example.myexodus.accountability.state.ChainStateStore
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.dao.PartnerActivityDao
@@ -20,6 +26,7 @@ import com.example.myexodus.data.db.entity.HabitProgress
 import com.example.myexodus.data.db.entity.PairProfileSharing
 import com.example.myexodus.data.db.entity.PairStreakSharing
 import com.example.myexodus.data.db.entity.PartnerActivityOutbox
+import com.example.myexodus.data.db.entity.PartnerEventJournal
 import com.example.myexodus.data.db.entity.PartnerPlan
 import com.example.myexodus.data.db.entity.PartnerPlanTask
 import com.example.myexodus.data.db.entity.decodeMilestoneDays
@@ -51,6 +58,9 @@ class PartnerSyncCoordinator(
     private val enrollmentDao: EnrollmentDao,
     private val storeFactory: AppRulesStoreFactory,
     private val creator: EventCreator,
+    /** Step 7: the per-pair chain link for journaled monitoring snapshots — a journal row has
+     *  already been delivered to this pair once the chain holds its event id. */
+    private val chain: ChainStateStore,
     private val signer: AccountabilitySigner,
     private val resolveUids: suspend (pairId: String) -> Pair<String, String>?,
     private val drainOutbox: suspend (pairId: String, authorUid: String, partnerUid: String) -> MailboxOutboxDrainer.DrainResult,
@@ -72,6 +82,10 @@ class PartnerSyncCoordinator(
     private val checkRejections: suspend (pairId: String, partnerUid: String) -> Int = { _, _ -> 0 },
     /** OPD #30: drop reachability flags for pairings this device no longer holds. */
     private val pruneReachability: (activePairIds: Set<String>) -> Unit = {},
+    /** Step 7 WorkManager fallback (§4.7): the pass is the 15-minute cadence, so the heartbeat
+     *  rides every paired run. It runs only while paired — no relationship, nothing to report —
+     *  and the client enforces its own 15-minute window. */
+    private val checkIn: suspend () -> Unit = {},
 ) {
 
     data class SyncReport(
@@ -122,6 +136,8 @@ class PartnerSyncCoordinator(
             // own tail (ack poll, confirmation) still ran above and must reach the UI.
             return SyncReport(unpairAdvanced = unpairAdvanced)
         }
+        runCatching { checkIn() }
+            .onFailure { Log.w(TAG, "heartbeat check-in failed", it) }
         var report = SyncReport(enrolled = true, unpairAdvanced = unpairAdvanced)
         var resolved = 0
         for (enrollment in enrollments) {
@@ -157,7 +173,7 @@ class PartnerSyncCoordinator(
             .getOrNull()
         if (rotated != null) Log.i(TAG, "session key rotated to epoch $rotated")
 
-        val linked = reconcileEvents(enrollment.pairId, enrollment.createdAtEpochMillis)
+        val linked = reconcileEvents(enrollment.pairId, enrollment.createdAtEpochMillis, enrollment.mySenderKeyId)
 
         // Step 11 before the drain: a request created now is delivered by this same pass.
         val repairs = runCatching { repairPass(enrollment.pairId) }
@@ -227,8 +243,13 @@ class PartnerSyncCoordinator(
      *  rows are filtered in SQL by [PartnerActivityDao.pendingForPair] against the same
      *  matrix; the payload of each delivered row is then re-anchored and scrubbed per this
      *  pair (see [payloadFor]) — the pair's projection must only ever reflect what this pair
-     *  consented to see. */
-    private suspend fun reconcileEvents(pairId: String, sinceMs: Long): Int {
+     *  consented to see.
+     *
+     *  Step 7 adds the fifth queue: journaled `MONITORING_STATUS` rows (plan §8.9), consumed
+     *  only while this pair shares availability and floored at that switch's enable watermark.
+     *  The chain itself is the link ([ChainStateStore.hasEvent]), so there is no link write —
+     *  a crash between append and here is healed as a Duplicate on the next pass. */
+    private suspend fun reconcileEvents(pairId: String, sinceMs: Long, senderKeyId: String): Int {
         val store = storeFactory.open() ?: return 0
         val sharingDao = store.pairSharingDao()
         val streakConsent = sharingDao.streakForPair(pairId)
@@ -306,6 +327,23 @@ class PartnerSyncCoordinator(
                 }
                 Emit.Skip -> Unit
                 Emit.Stop -> return linked
+            }
+        }
+        if (profileConsent?.shareAvailability == true) {
+            val since = maxOf(sinceMs, profileConsent.availabilityEnabledSinceMs)
+            val journal = store.partnerEventJournalDao()
+            val nowMs = System.currentTimeMillis()
+            for (row in journal.dueForDelivery(since, nowMs, RECONCILE_BATCH)) {
+                val category = AccountabilityEventCategory.fromWire(row.category) ?: continue
+                if (category.kind != AccountabilityEventKind.MONITORING_STATUS) continue
+                when (val emit = emitMonitoring(pairId, senderKeyId, row, category)) {
+                    // The chain row itself is the per-pair link (a snapshot carries no local
+                    // row to write back): Duplicate means "this pair already holds the event",
+                    // so it owes nothing further.
+                    is Emit.Created -> linked++
+                    Emit.Duplicate, Emit.Skip -> Unit
+                    Emit.Stop -> return linked
+                }
             }
         }
         return linked
@@ -446,9 +484,16 @@ class PartnerSyncCoordinator(
         val store = storeFactory.open() ?: return
         val dao = store.partnerActivityDao()
         val sharingDao = store.pairSharingDao()
-        val cutoff = System.currentTimeMillis() - ACTIVITY_RETENTION_MS
+        val nowMs = System.currentTimeMillis()
+        val cutoff = nowMs - ACTIVITY_RETENTION_MS
         repeat(SWEEP_BATCH_LIMIT) {
             if (dao.deleteJournalOlderThan(cutoff, RECONCILE_BATCH) == 0) return@repeat
+        }
+        // Step 7 journal + received snapshots expire on their own §8.7 clocks: a snapshot that
+        // old has been superseded by any newer event (monitoring rows carry no history that
+        // matters), and a received snapshot for a pair this device no longer holds is noise.
+        repeat(SWEEP_BATCH_LIMIT) {
+            if (store.partnerEventJournalDao().deleteExpired(nowMs) < RECONCILE_BATCH) return@repeat
         }
         val orphans = (dao.projectedPairIds() + dao.linkedPairIds() + sharingDao.consentPairIds())
             .distinct()
@@ -460,6 +505,64 @@ class PartnerSyncCoordinator(
             sharingDao.deleteStreakFor(orphans)
             sharingDao.deleteProfileFor(orphans)
             store.partnerPlanDao().deleteForPairs(orphans)
+            store.partnerMonitoringSnapshotDao().deleteFor(orphans)
+        }
+    }
+
+    /**
+     * Step 7 sender half: one journaled monitoring row → one E2EE `MONITORING_STATUS` envelope
+     * for this pair. The allocated sequence is both the event's own `relationship_seq` and its
+     * `latest_relationship_seq` (the chain head at build time), and it exists only inside the
+     * ciphertext. A journal row that no longer parses against the contract is skipped — the
+     * entity's constructor already rejects those, so this is belt-and-braces for a store
+     * written by an older schema.
+     */
+    private suspend fun emitMonitoring(
+        pairId: String,
+        senderKeyId: String,
+        row: PartnerEventJournal,
+        category: AccountabilityEventCategory,
+    ): Emit {
+        if (chain.hasEvent(pairId, senderKeyId, row.eventId)) return Emit.Duplicate
+        val state = row.monitoringState?.let(MonitoringState::fromWire) ?: return Emit.Skip
+        val bucket = row.outboxAgeBucket?.let(OutboxAgeBucket::fromWire) ?: return Emit.Skip
+        val signature = try {
+            signer.beginSign()
+        } catch (e: Exception) {
+            if (signer.isUserNotAuthenticated(e)) return Emit.Stop
+            Log.w(TAG, "signing init failed", e)
+            return Emit.Skip
+        }
+        return try {
+            when (
+                val result = creator.createBody(
+                    pairId = pairId,
+                    bodyFor = { sequence ->
+                        AccountabilityEventWire.encode(
+                            AccountabilityEventWire.monitoring(
+                                eventId = row.eventId,
+                                sequence = sequence,
+                                category = category,
+                                occurredAtMillis = row.occurredAtMinute * 60_000L,
+                                state = state,
+                                outboxAge = bucket,
+                                latestSequence = sequence,
+                            ),
+                        )
+                    },
+                    signature = signature,
+                    eventId = row.eventId,
+                )
+            ) {
+                is EventCreator.CreateResult.Created -> Emit.Created(result.sequence)
+                is EventCreator.CreateResult.Duplicate -> Emit.Duplicate
+                is EventCreator.CreateResult.Failed -> {
+                    Log.w(TAG, "monitoring event creation failed for ${row.eventId}: ${result.reason}")
+                    Emit.Skip
+                }
+            }
+        } catch (e: UserNotAuthenticatedException) {
+            Emit.Stop
         }
     }
 

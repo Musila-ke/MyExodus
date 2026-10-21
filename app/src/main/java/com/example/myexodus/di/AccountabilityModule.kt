@@ -1,8 +1,11 @@
 package com.example.myexodus.di
 
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import androidx.room3.Room
 import com.example.myexodus.accountability.BilateralDeletion
@@ -45,6 +48,12 @@ import com.example.myexodus.accountability.sync.PartnerLiveSync
 import com.example.myexodus.accountability.sync.displayNameOf
 import com.example.myexodus.accountability.activity.PartnerActivityJournal
 import com.example.myexodus.accountability.activity.PartnerActivityReceiver
+import com.example.myexodus.accountability.monitoring.MonitoringSnapshotReceiver
+import com.example.myexodus.accountability.monitoring.MonitoringSnapshotRecorder
+import com.example.myexodus.accountability.monitoring.PartnerHeartbeatClient
+import com.example.myexodus.accountability.monitoring.StandbyBucket
+import com.example.myexodus.accountability.monitoring.parseHeartbeatReply
+import com.example.myexodus.blocking.EnforcementForegroundService
 import com.example.myexodus.accountability.plan.PartnerPlanReceiver
 import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.serialization.PlanWire
@@ -708,6 +717,11 @@ object AccountabilityModule {
                 storeFactory.open()?.partnerActivityDao()
                     ?.latestSentMessageText(pairId, EventPayload.TYPE_MOTIVATIONAL_MESSAGE)
             },
+            // §7 Step 7: the recipient-local snapshot the receive half wrote — a SQLCipher
+            // read, never a server round-trip (the server cannot read this body).
+            monitoring = { pairId ->
+                storeFactory.open()?.partnerMonitoringSnapshotDao()?.byPair(pairId)
+            },
             decoderFor = { enrollment ->
                 val cek = cekDerivation.deriveCek(
                     enrollment.pairId,
@@ -749,7 +763,9 @@ object AccountabilityModule {
         enrollmentDao: EnrollmentDao,
         storeFactory: AppRulesStoreFactory,
         creator: EventCreator,
+        chain: ChainStateStore,
         signer: AccountabilitySigner,
+        heartbeat: PartnerHeartbeatClient,
         drainer: MailboxOutboxDrainer,
         receiver: FirestoreMailboxReceiver,
         resolver: PairUidResolver,
@@ -763,6 +779,7 @@ object AccountabilityModule {
         enrollmentDao = enrollmentDao,
         storeFactory = storeFactory,
         creator = creator,
+        chain = chain,
         signer = signer,
         resolveUids = resolver::resolve,
         drainOutbox = drainer::drain,
@@ -775,7 +792,64 @@ object AccountabilityModule {
         },
         checkRejections = { pairId, partnerUid -> rejectionChecker.check(partnerUid, pairId) },
         pruneReachability = reachability::prune,
+        checkIn = { heartbeat.checkIn() },
     )
+
+    /**
+     * Step 7 sender half: the FGS piggyback and the WorkManager fallback share this one
+     * client. The liveness source is the FGS's own confirmation stamp — a check-in run while
+     * the service is absent reports UNAVAILABLE, never `ACTIVE` (§8.13). `force` is reserved
+     * for the check-ins the plan names; the cadence gate lives inside the client.
+     */
+    @Provides @Singleton
+    fun providePartnerHeartbeatClient(
+        @ApplicationContext context: Context,
+        storeFactory: AppRulesStoreFactory,
+        resolver: PairUidResolver,
+        functions: FirebaseFunctions,
+    ): PartnerHeartbeatClient = PartnerHeartbeatClient(
+        storeFactory = storeFactory,
+        uid = { resolver.ensureUid() },
+        installId = { PushInstallationRegistrar.installationIdOf() },
+        send = { installId, counter ->
+            AppCheckInstaller.install(context)
+            runCatching {
+                parseHeartbeatReply(
+                    functions.getHttpsCallable("submitHeartbeat")
+                        .call(mapOf("installId" to installId, "counter" to counter))
+                        .await()
+                        .data,
+                )
+            }.onFailure { Log.w(TAG, "submitHeartbeat call failed", it) }
+                .getOrNull()
+        },
+        standbyBucket = {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+                null
+            } else {
+                runCatching {
+                    StandbyBucket.fromPlatform(
+                        context.getSystemService(UsageStatsManager::class.java).appStandbyBucket,
+                    )
+                }.getOrNull()
+            }
+        },
+    )
+
+    @Provides @Singleton
+    fun provideMonitoringSnapshotRecorder(
+        storeFactory: AppRulesStoreFactory,
+        db: AccountabilityDatabase,
+    ): MonitoringSnapshotRecorder = MonitoringSnapshotRecorder(
+        storeFactory = storeFactory,
+        outbox = db,
+        liveness = { EnforcementForegroundService.livenessSnapshot(SystemClock.elapsedRealtime()) },
+    )
+
+    @Provides @Singleton
+    fun provideMonitoringSnapshotReceiver(
+        storeFactory: AppRulesStoreFactory,
+    ): MonitoringSnapshotReceiver = MonitoringSnapshotReceiver(storeFactory)
 
     /**
      * §7 item 10 receive pipeline: dedup (AD-10b), verify-then-decrypt, chain commit with the
@@ -812,6 +886,7 @@ object AccountabilityModule {
         deletion: BilateralDeletion,
         activityReceiver: PartnerActivityReceiver,
         planReceiver: PartnerPlanReceiver,
+        monitoringReceiver: MonitoringSnapshotReceiver,
         enrollmentDao: EnrollmentDao,
     ): MailboxMessageHandler {
         val processedDao = db.processedEventDao()
@@ -878,6 +953,11 @@ object AccountabilityModule {
                     // Non-activity types classify to NotActivity inside and are left untouched.
                     else -> activityReceiver.applyAppended(pairId, payload, sequence)
                 }
+            },
+            // Step 7 receive half: a monitoring snapshot is recipient-local state, not an
+            // alert — it never reaches the notification path.
+            onAccountabilityEvent = { pairId, senderKeyId, event, _ ->
+                monitoringReceiver.onEvent(pairId, senderKeyId, event)
             },
         )
     }

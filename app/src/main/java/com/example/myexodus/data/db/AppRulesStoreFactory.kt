@@ -883,6 +883,78 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * v18 → v19 (partner-accountability Step 7): this device's heartbeat counter
+         * ([DeviceLiveness]), the check-in/standby diagnostics singleton
+         * ([PartnerMonitoringCheckin]), and the recipient-local decrypted monitoring snapshot
+         * ([PartnerMonitoringSnapshot]). All three carry pairing state, so they stay in the
+         * SQLCipher store; DDL is the exported v19 schema verbatim.
+         */
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS device_liveness (" +
+                        "install_id TEXT NOT NULL, uid TEXT NOT NULL, counter INTEGER NOT NULL, " +
+                        "last_sent_at_ms INTEGER NOT NULL, last_accepted_counter INTEGER NOT NULL, " +
+                        "last_accepted_at_ms INTEGER NOT NULL, PRIMARY KEY(install_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_monitoring_checkin (" +
+                        "id INTEGER NOT NULL, last_state TEXT, " +
+                        "last_recorded_at_ms INTEGER NOT NULL, last_standby_bucket TEXT, " +
+                        "standby_checked_at_ms INTEGER NOT NULL, PRIMARY KEY(id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_monitoring_snapshot (" +
+                        "pair_id TEXT NOT NULL, monitoring_state TEXT NOT NULL, " +
+                        "outbox_age_bucket TEXT NOT NULL, snapshot_install_generation TEXT NOT NULL, " +
+                        "latest_relationship_seq INTEGER NOT NULL, " +
+                        "snapshot_event_sequence INTEGER NOT NULL, " +
+                        "occurred_at_minute INTEGER NOT NULL, received_at_ms INTEGER NOT NULL, " +
+                        "PRIMARY KEY(pair_id))",
+                ).use { it.step() }
+                // Device availability is a new consent category: off until the user enables it.
+                connection.prepare(
+                    "ALTER TABLE pair_profile_sharing ADD COLUMN share_availability INTEGER NOT NULL DEFAULT 0",
+                ).use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE pair_profile_sharing ADD COLUMN availability_enabled_since_ms INTEGER NOT NULL DEFAULT 0",
+                ).use { it.step() }
+            }
+        }
+
+        /**
+         * v19 rollback: a v18 build has no heartbeat/snapshot surfaces, so those rows go. The
+         * new consent columns are removed by a table rebuild (not DROP COLUMN — SQLite 3.35+
+         * only, and the store must stay openable on every driver it runs under); every
+         * pre-existing consent choice survives the rebuild. The liveness agent is device-local
+         * — a re-upgrade starts a fresh counter namespace.
+         */
+        val MIGRATION_19_18 = object : Migration(19, 18) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("DROP TABLE IF EXISTS partner_monitoring_snapshot").use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS partner_monitoring_checkin").use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS device_liveness").use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS pair_profile_sharing_old (" +
+                        "pair_id TEXT NOT NULL, share_checkins INTEGER NOT NULL, " +
+                        "share_recovery INTEGER NOT NULL, " +
+                        "checkins_enabled_since_ms INTEGER NOT NULL, " +
+                        "recovery_enabled_since_ms INTEGER NOT NULL, PRIMARY KEY(pair_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO pair_profile_sharing_old (pair_id, share_checkins, share_recovery, " +
+                        "checkins_enabled_since_ms, recovery_enabled_since_ms) " +
+                        "SELECT pair_id, share_checkins, share_recovery, " +
+                        "checkins_enabled_since_ms, recovery_enabled_since_ms FROM pair_profile_sharing",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS pair_profile_sharing").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE pair_profile_sharing_old RENAME TO pair_profile_sharing",
+                ).use { it.step() }
+            }
+        }
+
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override suspend fun migrate(connection: SQLiteConnection) {
                 // Recovery resource UI (plan v3 W7): the urge/recovery session log and the
@@ -1096,9 +1168,9 @@ class AppRulesStoreFactory(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
             MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
-            MIGRATION_16_17, MIGRATION_17_18,
+            MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
             MIGRATION_10_9, MIGRATION_12_11, MIGRATION_13_12, MIGRATION_14_13, MIGRATION_15_14,
-            MIGRATION_16_15, MIGRATION_17_16, MIGRATION_18_17,
+            MIGRATION_16_15, MIGRATION_17_16, MIGRATION_18_17, MIGRATION_19_18,
         )
     }
 }

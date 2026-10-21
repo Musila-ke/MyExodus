@@ -66,15 +66,29 @@ class EventCreator(
         signature: Signature,
         messageId: String? = null,
         eventId: String? = null,
+    ): CreateResult = createBody(pairId, { encodePayload(payload) }, signature, messageId, eventId)
+
+    /**
+     * [bodyFor] receives the sequence allocated inside the critical section and returns the
+     * plaintext body. The Step 7 monitoring snapshot needs exactly that — its signed body
+     * carries its own `relationship_seq` and the latest committed one, which is this very
+     * allocation — and the caller cannot know it before the mutex.
+     */
+    suspend fun createBody(
+        pairId: String,
+        bodyFor: (sequence: Long) -> ByteArray,
+        signature: Signature,
+        messageId: String? = null,
+        eventId: String? = null,
     ): CreateResult {
         // sequence read + append must be one critical section: concurrent creates would
         // compute the same sequence and fork the chain.
-        return createMutex.withLock { createLocked(pairId, payload, signature, messageId, eventId) }
+        return createMutex.withLock { createLocked(pairId, bodyFor, signature, messageId, eventId) }
     }
 
     private suspend fun createLocked(
         pairId: String,
-        payload: EventPayload,
+        bodyFor: (sequence: Long) -> ByteArray,
         signature: Signature,
         pinnedMessageId: String?,
         eventId: String?,
@@ -106,7 +120,7 @@ class EventCreator(
             sequence = sequence,
             previousEventHash = previousHash,
             nonce = eventCipher.nonce(sessionKey, sequence),
-            ciphertext = eventCipher.encrypt(sessionKey, sequence, encodePayload(payload)),
+            ciphertext = eventCipher.encrypt(sessionKey, sequence, bodyFor(sequence)),
             createdAtEpochMillis = nowMillis,
             keyEpoch = keyEpoch,
         )

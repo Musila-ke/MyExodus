@@ -6,9 +6,10 @@ import androidx.room3.PrimaryKey
 
 /**
  * Per-pair consent for the profile-wide categories (schema v16, ADR #135): blocked-app
- * check-ins (the attempt queue) and recovery practice (the session queue plus coaching rows).
- * Same semantics as [PairStreakSharing]: absence = nothing shared, and the `*_enabled_since_ms`
- * watermarks stop an enable from delivering the while-off backlog.
+ * check-ins (the attempt queue), recovery practice (the session queue plus coaching rows),
+ * and — since v19 (Step 7) — device availability (the monitoring snapshot). Same semantics as
+ * [PairStreakSharing]: absence = nothing shared, and the `*_enabled_since_ms` watermarks stop
+ * an enable from delivering the while-off backlog.
  */
 @Entity(tableName = "pair_profile_sharing")
 data class PairProfileSharing(
@@ -17,4 +18,9 @@ data class PairProfileSharing(
     @ColumnInfo(name = "share_recovery") val shareRecovery: Boolean = false,
     @ColumnInfo(name = "checkins_enabled_since_ms") val checkinsEnabledSinceMs: Long = 0,
     @ColumnInfo(name = "recovery_enabled_since_ms") val recoveryEnabledSinceMs: Long = 0,
+    // Defaults keep Room's schema validation in step with the v19 ADD COLUMN migration.
+    @ColumnInfo(name = "share_availability", defaultValue = "0")
+    val shareAvailability: Boolean = false,
+    @ColumnInfo(name = "availability_enabled_since_ms", defaultValue = "0")
+    val availabilityEnabledSinceMs: Long = 0,
 )

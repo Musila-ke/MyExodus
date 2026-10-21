@@ -10,6 +10,8 @@ import com.example.myexodus.data.db.dao.MilestoneEventDao
 import com.example.myexodus.data.db.dao.PairSharingDao
 import com.example.myexodus.data.db.dao.PartnerActivityDao
 import com.example.myexodus.data.db.dao.PartnerEventJournalDao
+import com.example.myexodus.data.db.dao.PartnerLivenessDao
+import com.example.myexodus.data.db.dao.PartnerMonitoringSnapshotDao
 import com.example.myexodus.data.db.dao.PartnerPlanDao
 import com.example.myexodus.data.db.dao.PolicyVersionDao
 import com.example.myexodus.data.db.dao.RecoveryPolicyDao
@@ -24,6 +26,7 @@ import com.example.myexodus.data.db.entity.AttemptLog
 import com.example.myexodus.data.db.entity.AttemptMirrorLink
 import com.example.myexodus.data.db.entity.CoachingStep
 import com.example.myexodus.data.db.entity.DailyUsageTracker
+import com.example.myexodus.data.db.entity.DeviceLiveness
 import com.example.myexodus.data.db.entity.HabitProgress
 import com.example.myexodus.data.db.entity.MilestoneEvent
 import com.example.myexodus.data.db.entity.PairProfileSharing
@@ -32,6 +35,8 @@ import com.example.myexodus.data.db.entity.PartnerActivityLink
 import com.example.myexodus.data.db.entity.PartnerActivityOutbox
 import com.example.myexodus.data.db.entity.PartnerActivityProjection
 import com.example.myexodus.data.db.entity.PartnerEventJournal
+import com.example.myexodus.data.db.entity.PartnerMonitoringCheckin
+import com.example.myexodus.data.db.entity.PartnerMonitoringSnapshot
 import com.example.myexodus.data.db.entity.PartnerPlan
 import com.example.myexodus.data.db.entity.PartnerPlanTask
 import com.example.myexodus.data.db.entity.PolicyVersion
@@ -82,8 +87,11 @@ import com.example.myexodus.domainusage.RuleUsageDao
         PartnerPlan::class,
         PartnerPlanTask::class,
         PartnerEventJournal::class,
+        DeviceLiveness::class,
+        PartnerMonitoringCheckin::class,
+        PartnerMonitoringSnapshot::class,
     ],
-    version = 18,
+    version = 19,
     exportSchema = true,
 )
 abstract class AppRulesStore : RoomDatabase() {
@@ -104,6 +112,8 @@ abstract class AppRulesStore : RoomDatabase() {
     abstract fun usageLedgerDao(): UsageLedgerDao
     abstract fun partnerActivityDao(): PartnerActivityDao
     abstract fun partnerEventJournalDao(): PartnerEventJournalDao
+    abstract fun partnerLivenessDao(): PartnerLivenessDao
+    abstract fun partnerMonitoringSnapshotDao(): PartnerMonitoringSnapshotDao
     abstract fun pairSharingDao(): PairSharingDao
     abstract fun partnerPlanDao(): PartnerPlanDao
 }

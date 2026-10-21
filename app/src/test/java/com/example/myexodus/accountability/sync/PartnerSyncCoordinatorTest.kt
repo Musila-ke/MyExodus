@@ -11,7 +11,12 @@ import com.example.myexodus.accountability.crypto.EventCipher
 import com.example.myexodus.accountability.crypto.IdentityEpochStore
 import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
+import com.example.myexodus.accountability.serialization.AccountabilityEventCategory
+import com.example.myexodus.accountability.serialization.AccountabilityEventKind
+import com.example.myexodus.accountability.serialization.AccountabilityEventWire
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.MonitoringState
+import com.example.myexodus.accountability.serialization.OutboxAgeBucket
 import com.example.myexodus.accountability.serialization.decodePayload
 import com.example.myexodus.accountability.serialization.decodeSigned
 import com.example.myexodus.accountability.serialization.eventHash
@@ -31,6 +36,7 @@ import com.example.myexodus.data.db.entity.HabitProgress
 import com.example.myexodus.data.db.entity.PairProfileSharing
 import com.example.myexodus.data.db.entity.PairStreakSharing
 import com.example.myexodus.data.db.entity.PartnerActivityOutbox
+import com.example.myexodus.data.db.entity.PartnerEventJournal
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.data.db.entity.UserProfile
 import java.security.KeyPair
@@ -669,6 +675,132 @@ class PartnerSyncCoordinatorTest {
         assertEquals(setOf<String>(), reachabilityPrunes.single())
     }
 
+    // ---- Step 7: the monitoring-snapshot queue (§8.9 / §7 Step 7) ----
+
+    /**
+     * The journal row is already the durable record; this queue only wraps it per pair. The
+     * allocator's sequence is both `relationship_seq` and `latest_relationship_seq`, and it
+     * exists only inside the ciphertext — never in plaintext metadata.
+     */
+    @Test
+    fun monitoringJournal_consented_becomesOneChainedMonitoringEvent() = runTest {
+        enroll()
+        seedConsent(shareAvailability = true)
+        val eventId = insertMonitoringRow()
+
+        val report = coordinator.syncOnce()
+
+        assertEquals("the linked count includes the monitoring event", 1, report.eventsLinked)
+        val signed = decodeSigned(store.chainFor(pairId).single().envelope)
+        val body = AccountabilityEventWire.decodeOrNull(
+            cipher.decrypt(cek, signed.unsigned.sequence, signed.unsigned.ciphertext),
+        )!!
+        assertEquals(eventId, body.eventId)
+        assertEquals(AccountabilityEventKind.MONITORING_STATUS, body.kind)
+        assertEquals(AccountabilityEventCategory.DEVICE_STATUS_CHANGED, body.category)
+        assertEquals(MonitoringState.ACTIVE, body.monitoringState)
+        assertEquals(OutboxAgeBucket.UNDER_1H, body.outboxAgeBucket)
+        assertEquals(
+            "the snapshot's latest sequence is the chain head it was built on",
+            body.relationshipSequence,
+            body.latestRelationshipSequence,
+        )
+    }
+
+    @Test
+    fun monitoringJournal_withoutAvailabilityConsent_isNeverDelivered() = runTest {
+        enroll()
+        seedConsent(shareCheckins = true)
+        insertMonitoringRow()
+
+        coordinator.syncOnce()
+
+        assertTrue(store.chainFor(pairId).isEmpty())
+        assertEquals(
+            "the durable row stays for a later consent",
+            1,
+            factory.open()!!.partnerEventJournalDao()
+                .dueForDelivery(0, System.currentTimeMillis(), 10).size,
+        )
+    }
+
+    @Test
+    fun monitoringJournal_beforeTheEnableWatermark_isNotReplayed() = runTest {
+        enroll()
+        val enabledAt = System.currentTimeMillis()
+        seedConsent(shareAvailability = true, availabilityEnabledSinceMs = enabledAt)
+        insertMonitoringRow(createdAtMs = enabledAt - 60_000)
+
+        coordinator.syncOnce()
+
+        assertTrue("enable never delivers the while-off backlog", store.chainFor(pairId).isEmpty())
+    }
+
+    @Test
+    fun monitoringJournal_nonMonitoringCategory_isSkipped() = runTest {
+        enroll()
+        seedConsent(shareAvailability = true)
+        // The journal accepts accountability categories too (Step 4); only MONITORING_STATUS
+        // rows are this queue's business.
+        insertMonitoringRow(category = AccountabilityEventCategory.BLOCKED_APP_ATTEMPT)
+
+        coordinator.syncOnce()
+
+        assertTrue(store.chainFor(pairId).isEmpty())
+    }
+
+    @Test
+    fun monitoringJournal_secondPass_doesNotDuplicate() = runTest {
+        enroll()
+        seedConsent(shareAvailability = true)
+        insertMonitoringRow()
+        assertEquals(1, coordinator.syncOnce().eventsLinked)
+
+        val second = coordinator.syncOnce()
+
+        assertEquals(0, second.eventsLinked)
+        assertEquals("one row, one event — the chain row is the link", 1, store.chainFor(pairId).size)
+    }
+
+    /** §8.2 fan-out: one journaled snapshot becomes one envelope per consented relationship. */
+    @Test
+    fun monitoringJournal_fansOutToEveryConsentedPair() = runTest {
+        val secondPair = "pair-second"
+        val secondPartnerAgreement = ecKeyPair()
+        val secondCek = cekDerivation.deriveCek(secondPair, myAgreement.private, secondPartnerAgreement.public)
+        enroll()
+        enroll(secondPair, partnerSigningKey = ecKeyPair().public, partnerAgreementKey = secondPartnerAgreement.public)
+        uids[secondPair] = "me" to "partner-two"
+        seedConsent(pairId, shareAvailability = true)
+        seedConsent(secondPair, shareAvailability = true)
+        val eventId = insertMonitoringRow()
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(2, report.eventsLinked)
+        for ((pId, cekForPair) in listOf(pairId to cek, secondPair to secondCek)) {
+            val signed = decodeSigned(store.chainFor(pId).single().envelope)
+            val body = AccountabilityEventWire.decodeOrNull(
+                cipher.decrypt(cekForPair, signed.unsigned.sequence, signed.unsigned.ciphertext),
+            )!!
+            assertEquals("the same wire event, per pair", eventId, body.eventId)
+        }
+    }
+
+    @Test
+    fun checkIn_ridesPairedPassesOnly() = runTest {
+        var checkIns = 0
+        coordinator = coordinator(warmSigner(), checkIn = { checkIns++ })
+
+        coordinator.syncOnce()
+        assertEquals("nothing to report while unpaired", 0, checkIns)
+
+        enroll()
+        coordinator.syncOnce()
+        coordinator.syncOnce()
+        assertEquals("one check-in per paired pass (the client enforces the window)", 2, checkIns)
+    }
+
     // ---- helpers ----
 
     /** v16 (ADR #135): nothing reconciles for a pair without its own consent rows — seeding
@@ -681,6 +813,8 @@ class PartnerSyncCoordinatorTest {
         shareMilestones: Boolean = false,
         shareCheckins: Boolean = false,
         shareRecovery: Boolean = false,
+        shareAvailability: Boolean = false,
+        availabilityEnabledSinceMs: Long = 0,
     ) {
         val store = factory.open()!!
         if (store.userProfileDao().getById(TEST_PROFILE_ID) == null) {
@@ -733,7 +867,7 @@ class PartnerSyncCoordinatorTest {
                 ),
             )
         }
-        if (shareCheckins || shareRecovery) {
+        if (shareCheckins || shareRecovery || shareAvailability) {
             store.pairSharingDao().upsertProfile(
                 PairProfileSharing(
                     pairId = pairId,
@@ -741,6 +875,8 @@ class PartnerSyncCoordinatorTest {
                     shareRecovery = shareRecovery,
                     checkinsEnabledSinceMs = 0,
                     recoveryEnabledSinceMs = 0,
+                    shareAvailability = shareAvailability,
+                    availabilityEnabledSinceMs = availabilityEnabledSinceMs,
                 ),
             )
         }
@@ -777,12 +913,36 @@ class PartnerSyncCoordinatorTest {
         ),
     )
 
+    /** One Step 4 journal row; monitoring fields are only attached to monitoring categories
+     *  (the entity's constructor enforces the same split). */
+    private suspend fun insertMonitoringRow(
+        eventId: String = AccountabilityEventWire.newEventId(),
+        createdAtMs: Long = System.currentTimeMillis(),
+        category: AccountabilityEventCategory = AccountabilityEventCategory.DEVICE_STATUS_CHANGED,
+        state: MonitoringState = MonitoringState.ACTIVE,
+        bucket: OutboxAgeBucket = OutboxAgeBucket.UNDER_1H,
+    ): String {
+        val monitoring = category.kind == AccountabilityEventKind.MONITORING_STATUS
+        factory.open()!!.partnerEventJournalDao().insert(
+            PartnerEventJournal.forEvent(
+                eventId = eventId,
+                category = category,
+                occurredAtMinute = AccountabilityEventWire.minuteOf(createdAtMs),
+                createdAtMs = createdAtMs,
+                monitoringState = if (monitoring) state else null,
+                outboxAgeBucket = if (monitoring) bucket else null,
+            ),
+        )
+        return eventId
+    }
+
     private fun coordinator(
         signer: AccountabilitySigner,
         drain: MailboxOutboxDrainer.DrainResult = MailboxOutboxDrainer.DrainResult.Sent(2),
         pullResult: FirestoreMailboxReceiver.PullResult = FirestoreMailboxReceiver.PullResult(appended = 3),
         resumeUnpairs: suspend () -> Boolean = { false },
         drainThrowsFor: String? = null,
+        checkIn: suspend () -> Unit = {},
     ) = PartnerSyncCoordinator(
         enrollmentDao = db.enrollmentDao(),
         storeFactory = factory,
@@ -796,6 +956,7 @@ class PartnerSyncCoordinatorTest {
             agreementPrivateKey = { myAgreement.private },
             sessionKeyManager = SessionKeyManager(store),
         ),
+        chain = store,
         signer = signer,
         resolveUids = { pId -> uids[pId] },
         drainOutbox = { pId, authorUid, partnerUid ->
@@ -817,6 +978,7 @@ class PartnerSyncCoordinatorTest {
         repairPass = { repairCalls++; 2 },
         pruneReachability = { reachabilityPrunes += it },
         resumeUnpairs = resumeUnpairs,
+        checkIn = checkIn,
     )
 
     private fun enroll(

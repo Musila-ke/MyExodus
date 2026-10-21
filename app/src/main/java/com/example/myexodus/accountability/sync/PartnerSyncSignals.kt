@@ -1,5 +1,6 @@
 package com.example.myexodus.accountability.sync
 
+import com.example.myexodus.accountability.monitoring.StandbyBucket
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 
@@ -29,6 +30,14 @@ object PartnerSyncSignals {
      *  drop-when-nobody-collects contract as [pulledEvents] (a missed tick is healed by the
      *  pass a later transition — or the cadence — triggers). */
     val activityEmitted = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    /** §4.7 App Standby explanation: emitted at most once per constrained transition in this
+     *  process (the client enforces that), shown once as a non-intrusive snackbar. Never a
+     *  permission request — the copy names where to look, it never claims a setting is required. */
+    val standbyNotice = MutableSharedFlow<StandbyBucket>(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )

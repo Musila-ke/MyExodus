@@ -3,6 +3,9 @@ package com.example.myexodus.ui.partner
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.enrollment.targetEnrollment
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.MonitoringState
+import com.example.myexodus.accountability.serialization.OutboxAgeBucket
+import com.example.myexodus.data.db.entity.PartnerMonitoringSnapshot
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.sync.displayNameOf
 import com.example.myexodus.accountability.state.ChainEvent
@@ -48,6 +51,9 @@ class PartnerDashboardSource(
     /** Owner ask 2026-10-01: the writer's own last composed message to this pair, read back
      *  from the local journal — the Activity subpage shows the sender what they sent. */
     private val latestSentMessage: suspend (pairId: String) -> String? = { null },
+    /** §7 Step 7: the partner's most recent recipient-local monitoring snapshot (E2EE, read
+     *  from SQLCipher). Null = nothing received yet — no claim is made. */
+    private val monitoring: suspend (pairId: String) -> PartnerMonitoringSnapshot? = { null },
 ) {
 
     /**
@@ -140,6 +146,26 @@ class PartnerDashboardSource(
             }.getOrDefault(false),
             pairingUnreachable = runCatching { pairingDeniedAt(enrollment.pairId) }
                 .getOrNull() != null,
+            monitoring = runCatching { monitoring(enrollment.pairId) }.getOrNull()?.let { row ->
+                val stale = nowMillis - row.receivedAtMs > MONITORING_STALE_MILLIS
+                PartnerMonitoringUi(
+                    // §8.13: a stale report answers nothing — it reads UNKNOWN, never a
+                    // confident ACTIVE carried forward from before the silence.
+                    state = if (stale) {
+                        MonitoringState.UNKNOWN
+                    } else {
+                        MonitoringState.fromWire(row.monitoringState) ?: MonitoringState.UNKNOWN
+                    },
+                    stale = stale,
+                    lastReportAtEpochMillis = row.receivedAtMs,
+                    updatesDelayed = when (OutboxAgeBucket.fromWire(row.outboxAgeBucket)) {
+                        OutboxAgeBucket.SIX_TO_TWENTY_FOUR_HOURS,
+                        OutboxAgeBucket.OVER_TWENTY_FOUR_HOURS,
+                        -> true
+                        else -> false
+                    },
+                )
+            },
         )
     }
 
@@ -161,9 +187,13 @@ class PartnerDashboardSource(
         runCatching { enrollments() }.getOrNull().orEmpty()
             .targetEnrollment(selectedPairId)?.let { displayNameOf(it) }
 
-    private companion object {
+    internal companion object {
         const val WEEK_MILLIS = 7 * 24 * 60 * 60 * 1000L
         const val REJECTION_WINDOW_MILLIS = 24 * 60 * 60 * 1000L
+
+        /** Two recorder cycles (the sender journals hourly): inside this the report speaks for
+         *  the present; past it the state is UNKNOWN (§8.13's stale-snapshot rule). */
+        const val MONITORING_STALE_MILLIS = 2 * 60 * 60 * 1000L
     }
 }
 
@@ -212,6 +242,8 @@ sealed interface PartnerDashboardUi {
          *  so this is not an ending — it is a connection that cannot be restored locally, and
          *  the screen names the cause (an identity change, an eviction) instead of the network. */
         val pairingUnreachable: Boolean = false,
+        /** §7 Step 7: the partner's device-monitoring report; null = nothing received yet. */
+        val monitoring: PartnerMonitoringUi? = null,
     ) : PartnerDashboardUi
 
     /**
@@ -231,6 +263,21 @@ sealed interface PartnerDashboardUi {
         val canDismiss: Boolean,
     ) : PartnerDashboardUi
 }
+
+/**
+ * §7 Step 7 / §8.13: the partner's device-monitoring half of the dashboard, decrypted from the
+ * last E2EE snapshot. This is deliberately separate from sync freshness and from the chain
+ * verdict — a live mailbox is not proof their monitoring runs, and a healthy chain is not
+ * either. [stale] means the report is too old to answer for the present; the state then
+ * reads UNKNOWN regardless of what the old row said.
+ */
+data class PartnerMonitoringUi(
+    val state: MonitoringState,
+    val stale: Boolean,
+    val lastReportAtEpochMillis: Long,
+    /** Their outbox has aged past six hours — their own updates may be arriving late. */
+    val updatesDelayed: Boolean,
+)
 
 /** One row of the §19.5 switcher: an active pairing the owner can bring to the dashboard. */
 data class PartnerUserUi(

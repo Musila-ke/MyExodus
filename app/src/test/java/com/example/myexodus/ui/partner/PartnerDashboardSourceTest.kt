@@ -2,11 +2,13 @@ package com.example.myexodus.ui.partner
 
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainEvent
 import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.accountability.state.UnpairPhase
 import com.example.myexodus.accountability.state.UnpairState
+import com.example.myexodus.data.db.entity.PartnerMonitoringSnapshot
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -109,6 +111,8 @@ class PartnerDashboardSourceTest {
         rejectionsThrow: Boolean = false,
         /** OPD #30(b): the recorded first-denial timestamp for this pairing; null = reachable. */
         pairingDeniedAt: (String) -> Long? = { null },
+        /** Step 7: the partner's latest decrypted monitoring snapshot, if any arrived. */
+        monitoring: (String) -> PartnerMonitoringSnapshot? = { null },
     ): RecordingSource {
         val sinceArgs = mutableListOf<Long>()
         val sincePairIds = mutableListOf<String>()
@@ -146,6 +150,7 @@ class PartnerDashboardSourceTest {
                     rejectionsByPair[pairId] ?: rejectionsSince
                 }
             },
+            monitoring = { pairId -> monitoring(pairId) },
         )
         return RecordingSource(source, sinceArgs, sincePairIds, headPairIds, approvalPairIds, rejectionPairIds)
     }
@@ -466,6 +471,62 @@ class PartnerDashboardSourceTest {
         assertEquals(listOf("pair-old"), recording.approvalPairIds)
         assertTrue(paired.approvals.isEmpty())
         assertFalse(paired.rateLimitedRecently)
+    }
+
+    // --- Step 7: the partner's monitoring read-out (§8.13) -----------------------------------
+
+    private fun snapshot(
+        state: String = "ACTIVE",
+        bucket: String = "UNDER_1H",
+        receivedAt: Long = now - 60_000L,
+    ) = PartnerMonitoringSnapshot(
+        pairId = "pair-1",
+        monitoringState = state,
+        outboxAgeBucket = bucket,
+        snapshotInstallGeneration = "gen-a",
+        latestRelationshipSeq = 3,
+        snapshotEventSequence = 2,
+        occurredAtMinute = 1,
+        receivedAtMs = receivedAt,
+    )
+
+    @Test
+    fun monitoringSnapshot_isMapped_andAStaleOneReadsUnknown() = runTest {
+        val fresh = source(monitoring = { snapshot() }).source.load(now) as PartnerDashboardUi.Paired
+        assertEquals(MonitoringState.ACTIVE, fresh.monitoring!!.state)
+        assertFalse(fresh.monitoring!!.stale)
+        assertEquals(now - 60_000L, fresh.monitoring!!.lastReportAtEpochMillis)
+        assertFalse(fresh.monitoring!!.updatesDelayed)
+
+        val stale = source(
+            monitoring = {
+                snapshot(receivedAt = now - PartnerDashboardSource.MONITORING_STALE_MILLIS - 1)
+            },
+        ).source.load(now) as PartnerDashboardUi.Paired
+        assertEquals(
+            "a stale snapshot is never carried forward as ACTIVE",
+            MonitoringState.UNKNOWN,
+            stale.monitoring!!.state,
+        )
+        assertTrue(stale.monitoring!!.stale)
+
+        assertNull(
+            "no snapshot ever received hides the card",
+            (source().source.load(now) as PartnerDashboardUi.Paired).monitoring,
+        )
+    }
+
+    @Test
+    fun updatesDelayed_isClaimedOnlyForTheOldBuckets() = runTest {
+        suspend fun ui(bucket: String) =
+            (source(monitoring = { snapshot(bucket = bucket) }).source.load(now)
+                as PartnerDashboardUi.Paired).monitoring!!
+
+        assertFalse(ui("UNDER_1H").updatesDelayed)
+        assertFalse(ui("ONE_TO_SIX_HOURS").updatesDelayed)
+        assertTrue(ui("SIX_TO_TWENTY_FOUR_HOURS").updatesDelayed)
+        assertTrue(ui("OVER_TWENTY_FOUR_HOURS").updatesDelayed)
+        assertFalse("an unparseable bucket is not evidence of delay", ui("NOT_A_BUCKET").updatesDelayed)
     }
 
     // --- Reach-out dialog naming (owner mandate 2026-10-04, Q4) ------------------------------

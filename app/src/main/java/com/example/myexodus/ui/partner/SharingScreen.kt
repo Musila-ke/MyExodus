@@ -16,6 +16,7 @@ import androidx.compose.material.icons.outlined.LocalFireDepartment
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.SelfImprovement
+import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -126,7 +127,9 @@ fun SharingScreen(
         scope.launch {
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
-                    habitRepository.setPairProfileSharing(pairId, flags.shareCheckIns, flags.shareRecovery)
+                    habitRepository.setPairProfileSharing(
+                        pairId, flags.shareCheckIns, flags.shareRecovery, flags.shareAvailability,
+                    )
                 }.getOrDefault(false)
             }
             if (!ok) {
@@ -304,7 +307,7 @@ fun SharingScreen(
                             subtitle = overviewSummary(
                                 partners.filter {
                                     val flags = current.profile[it.first] ?: ProfileSharingFlags.None
-                                    flags.shareCheckIns || flags.shareRecovery
+                                    flags.shareCheckIns || flags.shareRecovery || flags.shareAvailability
                                 }.map { it.second },
                             ),
                             onClick = {
@@ -396,6 +399,15 @@ private fun ItemDetail(
                         enabled = !saving,
                         onCheckedChange = { onProfileChange(profileFlags.copy(shareRecovery = it)) },
                     )
+                    RowDivider()
+                    ToggleRow(
+                        icon = Icons.Outlined.VerifiedUser,
+                        title = stringResource(R.string.settings_sharing_availability_title),
+                        subtitle = stringResource(R.string.settings_sharing_availability_body),
+                        checked = profileFlags.shareAvailability,
+                        enabled = !saving,
+                        onCheckedChange = { onProfileChange(profileFlags.copy(shareAvailability = it)) },
+                    )
                 }
             }
         }
@@ -418,12 +430,13 @@ private fun streakSummaryForPair(flags: StreakSharingFlags): String {
 
 @Composable
 private fun profileSummaryForPair(flags: ProfileSharingFlags): String {
-    if (!flags.shareCheckIns && !flags.shareRecovery) {
+    if (!flags.shareCheckIns && !flags.shareRecovery && !flags.shareAvailability) {
         return stringResource(R.string.settings_sharing_summary_off)
     }
     val parts = buildList {
         if (flags.shareCheckIns) add(stringResource(R.string.settings_sharing_checkins_title))
         if (flags.shareRecovery) add(stringResource(R.string.settings_sharing_recovery_title))
+        if (flags.shareAvailability) add(stringResource(R.string.settings_sharing_availability_title))
     }
     return parts.joinToString(", ")
 }

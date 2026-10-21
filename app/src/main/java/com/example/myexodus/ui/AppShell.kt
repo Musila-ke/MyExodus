@@ -76,6 +76,7 @@ import com.example.myexodus.accountability.sos.NudgeEnvelope
 import com.example.myexodus.accountability.sos.NudgeRepository
 import com.example.myexodus.accountability.sync.MessageSendOutcome
 import com.example.myexodus.accountability.sync.PartnerAlertHealth
+import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.domainusage.DomainUsageEngine
 import com.example.myexodus.domainusage.PublicSuffixList
@@ -257,6 +258,14 @@ fun AppShell(
     LaunchedEffect(sosState) {
         val message = sosStateMessage(context, sosState) ?: return@LaunchedEffect
         snackbarHostState.showSnackbar(message)
+    }
+    // §4.7 App Standby explanation (plan §7 Step 7): at most one non-intrusive notice per
+    // constrained transition — the client enforces that. It names where to look and never
+    // claims a setting is required or that Unrestricted guarantees delivery.
+    LaunchedEffect(Unit) {
+        PartnerSyncSignals.standbyNotice.collect {
+            snackbarHostState.showSnackbar(context.getString(R.string.partner_standby_notice))
+        }
     }
 
     // SOS §8.16 (Step 9): "attach the listener during Home lifecycle" — the §6.9 query runs

@@ -2,6 +2,8 @@ package com.example.myexodus.accountability.sync
 
 import com.example.myexodus.accountability.crypto.AccountabilitySigner
 import com.example.myexodus.accountability.crypto.EventCipher
+import com.example.myexodus.accountability.serialization.AccountabilityEvent
+import com.example.myexodus.accountability.serialization.AccountabilityEventWire
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.SignedEnvelope
 import com.example.myexodus.accountability.serialization.decodePayload
@@ -35,10 +37,23 @@ class MailboxEventProcessor(
         /** Malformed CBOR, undecryptable ciphertext, or malformed plaintext. */
         data object Corrupt : EnvelopeResult
 
-        /** Fully verified + decrypted; the payload drives control handling (§10 deletion,
-         *  Step 11 sync requests) and [payloadType] the notification decision. */
-        data class Valid(val signed: SignedEnvelope, val payload: EventPayload) : EnvelopeResult {
-            val payloadType: String get() = payload.type
+        /** Fully verified + decrypted. Exactly one body shape is set: the legacy [payload]
+         *  (control handling: §10 deletion, Step 11 sync requests) or the Step 3 closed
+         *  contract [accountability] (the new-namespace body; its keys are disjoint from the
+         *  legacy `ty`/`tx`, so the two-step decode is unambiguous). [payloadType] names
+         *  whichever arrived — the category wire name for contract bodies. */
+        data class Valid(
+            val signed: SignedEnvelope,
+            val payload: EventPayload? = null,
+            val accountability: AccountabilityEvent? = null,
+        ) : EnvelopeResult {
+            init {
+                require((payload == null) != (accountability == null)) {
+                    "a valid envelope carries exactly one body shape"
+                }
+            }
+
+            val payloadType: String get() = payload?.type ?: checkNotNull(accountability).category.wire
         }
     }
 
@@ -69,10 +84,13 @@ class MailboxEventProcessor(
         } catch (e: Exception) {
             return EnvelopeResult.Corrupt
         }
-        return try {
-            EnvelopeResult.Valid(signed, decodePayload(plaintext))
-        } catch (e: Exception) {
-            EnvelopeResult.Corrupt
+        // Two-step decode (Step 3 contract): the legacy payload requires `ty`, the contract
+        // body rejects it as an unknown key — neither decoder can accept the other's bytes.
+        runCatching { decodePayload(plaintext) }.getOrNull()?.let {
+            return EnvelopeResult.Valid(signed, payload = it)
         }
+        val contract = AccountabilityEventWire.decodeOrNull(plaintext)
+            ?: return EnvelopeResult.Corrupt
+        return EnvelopeResult.Valid(signed, accountability = contract)
     }
 }

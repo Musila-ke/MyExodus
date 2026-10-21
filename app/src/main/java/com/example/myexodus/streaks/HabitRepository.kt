@@ -80,10 +80,12 @@ data class HabitSharingItem(
     val perPair: Map<String, StreakSharingFlags>,
 )
 
-/** One pair's profile-wide categories (blocked-app check-ins, recovery practice). */
+/** One pair's profile-wide categories (blocked-app check-ins, recovery practice, and — since
+ *  v19 — device availability, i.e. whether the monitoring snapshot is shared). */
 data class ProfileSharingFlags(
     val shareCheckIns: Boolean,
     val shareRecovery: Boolean,
+    val shareAvailability: Boolean = false,
 ) {
     companion object {
         val None = ProfileSharingFlags(shareCheckIns = false, shareRecovery = false)
@@ -362,7 +364,9 @@ class HabitRepository(
             )
         }
         val profileFlags = db.pairSharingDao().profileAll()
-            .associate { it.pairId to ProfileSharingFlags(it.shareCheckins, it.shareRecovery) }
+            .associate {
+                it.pairId to ProfileSharingFlags(it.shareCheckins, it.shareRecovery, it.shareAvailability)
+            }
         return SharingMatrix(habits = habits, profile = profileFlags)
     }
 
@@ -373,7 +377,9 @@ class HabitRepository(
     suspend fun sharesNothingWith(pairId: String): Boolean? =
         sharingMatrix()?.let { matrix ->
             matrix.habits.none { it.perPair[pairId]?.shareStreak == true } &&
-                matrix.profile[pairId]?.let { it.shareCheckIns || it.shareRecovery } != true
+                matrix.profile[pairId]?.let {
+                    it.shareCheckIns || it.shareRecovery || it.shareAvailability
+                } != true
         }
 
     /**
@@ -426,6 +432,7 @@ class HabitRepository(
         pairId: String,
         shareCheckIns: Boolean,
         shareRecovery: Boolean,
+        shareAvailability: Boolean = false,
     ): Boolean {
         val db = storeFactory.open() ?: return false
         val now = readings().tWallMillis
@@ -439,6 +446,8 @@ class HabitRepository(
                         shareRecovery = shareRecovery,
                         checkinsEnabledSinceMs = watermark(before?.checkinsEnabledSinceMs, before?.shareCheckins, shareCheckIns, now),
                         recoveryEnabledSinceMs = watermark(before?.recoveryEnabledSinceMs, before?.shareRecovery, shareRecovery, now),
+                        shareAvailability = shareAvailability,
+                        availabilityEnabledSinceMs = watermark(before?.availabilityEnabledSinceMs, before?.shareAvailability, shareAvailability, now),
                     ),
                 )
             }

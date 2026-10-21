@@ -1,6 +1,7 @@
 package com.example.myexodus.accountability.sync
 
 import android.util.Log
+import com.example.myexodus.accountability.serialization.AccountabilityEvent
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.SignedEnvelope
 import com.example.myexodus.accountability.state.ChainStateStore
@@ -28,6 +29,8 @@ import java.util.Base64
  *     11); a verification failure while that partner has a repair in flight is the AD-08
  *     tamper signal ([flagTamperIfRepairing]) rather than ordinary noise — replays are
  *     byte-identical re-sends, so an active repair is the only available discriminator.
+ *  8. an appended Step 3 contract body (new-namespace CBOR) goes to [onAccountabilityEvent]
+ *     instead of the legacy append/notify hooks — monitoring snapshots are state, not alerts.
  *
  * `deletion_request` is the one exception to step 5's append-then-ack order (§8 Step 13 /
  * AD-13b): its dedicated path verifies, shreds, and only then acks — appending and marking
@@ -67,6 +70,12 @@ class MailboxMessageHandler(
     /** Fired only on [Kind.APPENDED] — the feature flows that need the decoded payload plus
      *  the mailbox document's server timestamp (Step 13 approvals anchor expiry on it, AD-16). */
     private val onAppended: suspend (pairId: String, senderKeyId: String, sequence: Long, payload: EventPayload, serverTsEpochMillis: Long?) -> Unit = { _, _, _, _, _ -> },
+    /** Fired only on [Kind.APPENDED] for a Step 3 contract body (the new-namespace events:
+     *  monitoring snapshots today, accountability events as their senders land). The
+     *  composition layer classifies the category; the handler only guarantees the body is
+     *  verified, decrypted, and already chained. These bodies never fire [onAppended] or
+     *  [notify] — a monitoring snapshot must not buzz the tray. */
+    private val onAccountabilityEvent: suspend (pairId: String, senderKeyId: String, event: AccountabilityEvent, serverTsEpochMillis: Long?) -> Unit = { _, _, _, _ -> },
     private val now: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -175,7 +184,7 @@ class MailboxMessageHandler(
             }
 
             is MailboxEventProcessor.EnvelopeResult.Valid -> {
-                if (outcome.payloadType == EventPayload.TYPE_DELETION_REQUEST) {
+                if (outcome.payload?.type == EventPayload.TYPE_DELETION_REQUEST) {
                     val shredded = runCatching { onDeletionRequest(pairId, messageId, doc.timestampEpochMillis) }
                         .onFailure { Log.w(TAG, "deletion shred failed messageId=$messageId pairId=$pairId", it) }
                         .getOrDefault(false)
@@ -197,20 +206,34 @@ class MailboxMessageHandler(
                         .onFailure { Log.w(TAG, "ack failed messageId=$messageId", it) }
                 }
                 if (kind == Kind.APPENDED) {
-                    runCatching {
-                        onAppended(
-                            pairId,
-                            outcome.signed.unsigned.senderKeyId,
-                            outcome.signed.unsigned.sequence,
-                            outcome.payload,
-                            doc.timestampEpochMillis,
-                        )
-                    }.onFailure { Log.w(TAG, "append hook failed messageId=$messageId", it) }
-                    if (outcome.payloadType == EventPayload.TYPE_SYNC_REQUEST) {
-                        answerRepairRequest(pairId, messageId, outcome.payload)
+                    val accountability = outcome.accountability
+                    val payload = outcome.payload
+                    if (accountability != null) {
+                        runCatching {
+                            onAccountabilityEvent(
+                                pairId,
+                                outcome.signed.unsigned.senderKeyId,
+                                accountability,
+                                doc.timestampEpochMillis,
+                            )
+                        }.onFailure { Log.w(TAG, "accountability hook failed messageId=$messageId", it) }
                     } else {
-                        runCatching { notify(pairId, outcome.payload) }
-                            .onFailure { Log.w(TAG, "notify failed messageId=$messageId", it) }
+                        checkNotNull(payload)
+                        runCatching {
+                            onAppended(
+                                pairId,
+                                outcome.signed.unsigned.senderKeyId,
+                                outcome.signed.unsigned.sequence,
+                                payload,
+                                doc.timestampEpochMillis,
+                            )
+                        }.onFailure { Log.w(TAG, "append hook failed messageId=$messageId", it) }
+                        if (payload.type == EventPayload.TYPE_SYNC_REQUEST) {
+                            answerRepairRequest(pairId, messageId, payload)
+                        } else {
+                            runCatching { notify(pairId, payload) }
+                                .onFailure { Log.w(TAG, "notify failed messageId=$messageId", it) }
+                        }
                     }
                 }
                 Result(kind, outcome.payloadType)

@@ -9,7 +9,8 @@
   "scripts": {
     "test": "node --test",
     "test:sos": "firebase emulators:exec --only firestore --project demo-myexodus-sos \"node --test emulator-test/partner-sos.emulator.js emulator-test/partner-sos-push.emulator.js emulator-test/partner-sos-scheduler.emulator.js\"",
-    "test:rules": "firebase emulators:exec --config ../firebase.json --only firestore --project demo-myexodus-step2 \"node --test emulator-test/firestore-rules.emulator.js\""
+    "test:rules": "firebase emulators:exec --config ../firebase.json --only firestore --project demo-myexodus-step2 \"node --test emulator-test/firestore-rules.emulator.js\"",
+    "test:heartbeat": "firebase emulators:exec --only firestore --project demo-myexodus-heartbeat \"node --test emulator-test/heartbeat.emulator.js\""
   },
   "dependencies": {
     "firebase-admin": "14.4.0",

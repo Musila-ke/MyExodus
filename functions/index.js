@@ -296,3 +296,9 @@ const {
 } = require('./partner-sos-scheduler');
 exports.resumePendingNudges = createResumePendingNudgesSchedule({ db, pushNudge: sosPushNudge });
 exports._createResumePendingNudgesHandler = createResumePendingNudgesHandler;
+
+// Plan §7 Step 7 / §8.10: device-availability heartbeat. `_createSubmitHeartbeatHandler` is
+// the emulator suite's seam (injected db + clock).
+const { createSubmitHeartbeat, createSubmitHeartbeatHandler } = require('./heartbeat');
+exports.submitHeartbeat = createSubmitHeartbeat({ db });
+exports._createSubmitHeartbeatHandler = createSubmitHeartbeatHandler;

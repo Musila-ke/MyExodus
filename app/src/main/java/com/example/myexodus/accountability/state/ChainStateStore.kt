@@ -98,6 +98,13 @@ class ChainStateStore(
     suspend fun storedEvent(pairId: String, senderKeyId: String, sequence: Long): ChainEvent? =
         db.chainEventDao().getBySequence(pairId, senderKeyId, sequence)
 
+    /** §8.9 (sender_install_id, relationship_id, event_id) uniqueness, read side: has this
+     *  wire event already entered THIS sender's log for this pair? The reconcile queues use it
+     *  as their "already delivered to this pair" check — the chain row itself is the link
+     *  (no separate table that could disagree with it). */
+    suspend fun hasEvent(pairId: String, senderKeyId: String, eventId: String): Boolean =
+        db.chainEventDao().getByEventId(pairId, senderKeyId, eventId) != null
+
     /** This sender's own chain head: the last local event's sequence + hash (single-row read). */
     suspend fun localHead(pairId: String, senderKeyId: String): ChainHead? =
         db.chainHeadDao().get(pairId, senderKeyId)

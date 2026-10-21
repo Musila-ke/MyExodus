@@ -19,6 +19,9 @@ import android.view.Display
 import androidx.core.content.ContextCompat
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.registerSystemReceiver
+import com.example.myexodus.accountability.monitoring.MonitoringLiveness
+import com.example.myexodus.accountability.monitoring.MonitoringSnapshotRecorder
+import com.example.myexodus.accountability.monitoring.PartnerHeartbeatClient
 import com.example.myexodus.blocking.usage.EnforcementAction
 import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.blocking.usage.GapRecoveryRequest
@@ -111,6 +114,10 @@ class EnforcementForegroundService : Service() {
     @Inject lateinit var storeFactory: AppRulesStoreFactory
     @Inject lateinit var profiler: LatencyProfiler
     @Inject lateinit var crashReporting: CrashReporting
+    // §7 Step 7: the truthful monitoring snapshot and the liveness beat only exist while this
+    // service does — it is the one component that can attest the device is actually watching.
+    @Inject lateinit var snapshotRecorder: MonitoringSnapshotRecorder
+    @Inject lateinit var heartbeat: PartnerHeartbeatClient
 
     /** Path B's session machine + overlay host (§8 Step 5). Service-scoped like Path A's
      *  per-bind pair: a lost overlay/window state must not outlive the service instance. */
@@ -137,6 +144,11 @@ class EnforcementForegroundService : Service() {
      *  fired audit is idempotent (its overlap check), so a plain field suffices. */
     private var lastTickSawReenableRequired = false
 
+    /** §7 Step 7: the authority last reported to the partner layer by this service instance.
+     *  Its change at a status refresh is the plan's "material state change" forced check-in;
+     *  null until the first [start] so the start path owns that first beat. */
+    @Volatile private var lastReportedAuthority: ProtectionAuthority? = null
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var pollingJob: Job? = null
     private var periodicAuditJob: Job? = null
@@ -159,6 +171,10 @@ class EnforcementForegroundService : Service() {
         // here too), paired with the destroy event when the stop is graceful — starts without
         // a stop are the kill-rate signal, stop events carry the uptime.
         serviceStartedElapsedRealtimeMs = SystemClock.elapsedRealtime()
+        // Alive, but no authority computed yet: [livenessSnapshot] reads Unverifiable until
+        // [start]'s refresh stamps one — never ACTIVE from a guess (§8.13).
+        livenessRunning = true
+        lastAuthorityConfirmedElapsedMs = 0L
         crashReporting.nonFatal(
             "path_b_service_start",
             cause = "service_create",
@@ -222,6 +238,19 @@ class EnforcementForegroundService : Service() {
         // §8 Step 6: publish the current authority + status at service start (covers the
         // master switch being turned on/off and any permission change while stopped).
         statusMonitor.refresh()
+        // §7 Step 7: a service start is one of the plan's forced check-ins — the snapshot
+        // states what this device now observes, the beat proves the install is alive. Both
+        // are best-effort and off the start path; neither ever keeps the service alive.
+        // Forced only when this instance has not reported yet or authority actually moved:
+        // every onStartCommand lands here, and a repeated start must not out-pace the
+        // 15-minute window the beat contract guarantees.
+        val material = noteLiveness()
+        scope.launch {
+            runCatching { snapshotRecorder.record(force = material) }
+                .onFailure { Log.w(TAG, "monitoring snapshot record failed", it) }
+            runCatching { heartbeat.checkIn(force = material) }
+                .onFailure { Log.w(TAG, "heartbeat check-in failed", it) }
+        }
         publisher.loadFastPath()
         scope.launch { publisher.loadFromDb() }
         pollingJob?.cancel()
@@ -704,6 +733,18 @@ class EnforcementForegroundService : Service() {
             // authority from accessibility/usage-access/overlay state and publishes the one
             // visible degradation (replacing the FGS's old per-mechanism alert branches).
             statusMonitor.refresh()
+            // §7 Step 7 "material state change": the partner hears about an authority move
+            // now, not at the next scheduled pass. The debounce row also flips here, so a
+            // consenting pair's snapshot is written even when the change is into a worse state.
+            if (noteLiveness()) {
+                Log.i(TAG, "authority changed — forcing monitoring snapshot + heartbeat")
+                scope.launch {
+                    runCatching { snapshotRecorder.record(force = true) }
+                        .onFailure { Log.w(TAG, "monitoring snapshot record failed", it) }
+                    runCatching { heartbeat.checkIn(force = true) }
+                        .onFailure { Log.w(TAG, "heartbeat check-in failed", it) }
+                }
+            }
         }
         if (tickNumber % HEARTBEAT_TICKS == 0L) {
             Log.i(
@@ -711,6 +752,16 @@ class EnforcementForegroundService : Service() {
                 "tick $tickNumber: usage=$usageOk authority=${statusMonitor.authority.value} " +
                     "degradation=${status.degradation}",
             )
+            // §7 Step 7 piggyback (plan §4.7): the beat and the hourly snapshot ride this
+            // live service instead of an alarm. Both clients enforce their own windows
+            // (15 min / 1 h), so a call here is usually a cheap skip — and neither ever
+            // starts or keeps the service alive; the WorkManager fallback covers absence.
+            scope.launch {
+                runCatching { heartbeat.checkIn() }
+                    .onFailure { Log.w(TAG, "heartbeat check-in failed", it) }
+                runCatching { snapshotRecorder.record() }
+                    .onFailure { Log.w(TAG, "monitoring snapshot record failed", it) }
+            }
             // Ledger gap diagnostics (§8.7) ride the same 30 s cadence: off the tick thread, so
             // the heartbeat's database work can never eat into the tick's hard bound. The
             // outage notification is synced right after — it is the same pass's outcome.
@@ -726,6 +777,21 @@ class EnforcementForegroundService : Service() {
             }
         }
         return lastQueryEndMillis
+    }
+
+    /**
+     * §7 Step 7: stamps "authority observed now" for [livenessSnapshot] and answers whether it
+     * moved since this instance's last stamp. The first stamp of an instance counts as material
+     * — a fresh process has proven nothing to the partner yet.
+     */
+    private fun noteLiveness(): Boolean {
+        val authority = statusMonitor.authority.value
+        val changed = lastReportedAuthority != authority
+        lastReportedAuthority = authority
+        lastConfirmedAuthority = authority
+        lastAuthorityConfirmedElapsedMs = SystemClock.elapsedRealtime()
+        livenessRunning = true
+        return changed
     }
 
     private fun usageStats(): UsageStatsManager = getSystemService(UsageStatsManager::class.java)
@@ -931,6 +997,11 @@ class EnforcementForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        // §7 Step 7: no service, no claim. The next snapshot (a later process, the worker
+        // fallback) honestly reports UNAVAILABLE until this process observes again.
+        livenessRunning = false
+        lastAuthorityConfirmedElapsedMs = 0L
+        lastReportedAuthority = null
         pollingJob?.cancel()
         scope.cancel()
         tickExecutor.shutdownNow()
@@ -1042,6 +1113,32 @@ class EnforcementForegroundService : Service() {
             platformForegroundObservedAtElapsedMs = nowElapsedMs
         }
 
+        /** §7 Step 7 liveness stamp: true while a service instance exists in this process. */
+        @Volatile
+        private var livenessRunning = false
+
+        @Volatile
+        private var lastAuthorityConfirmedElapsedMs = 0L
+
+        @Volatile
+        private var lastConfirmedAuthority: ProtectionAuthority =
+            ProtectionAuthority.DEGRADED_NO_DETECTION
+
+        /** How old an authority stamp may be and still count as "observing now": two status
+         *  cycles (30 s each) plus margin — a live service always refreshes inside it, a
+         *  wedged or suspended one does not. */
+        const val LIVENESS_FRESH_MS = 90_000L
+
+        /**
+         * §7 Step 7 / §8.13 line 470: what this device may truthfully claim about its own
+         * monitoring at [nowElapsedMs]. Alive is not the same as observing — an instance that
+         * exists but has not refreshed its authority inside the window reports Unverifiable
+         * (UNKNOWN on the wire), never ACTIVE from a guess.
+         */
+        fun livenessSnapshot(nowElapsedMs: Long): MonitoringLiveness = resolveLiveness(
+            livenessRunning, lastAuthorityConfirmedElapsedMs, lastConfirmedAuthority, nowElapsedMs,
+        )
+
         /** Package the blocker is currently covering; null when none. Cleared in
          *  BlockerActivity.onDestroy; the poll suppresses a relaunch only within
          *  [BLOCK_LAUNCH_GRACE_MS] of the attempt (review finding #46). */
@@ -1094,4 +1191,21 @@ class EnforcementForegroundService : Service() {
             context.stopService(Intent(context, EnforcementForegroundService::class.java))
         }
     }
+}
+
+/**
+ * Pure branch of [EnforcementForegroundService.Companion.livenessSnapshot]: separated so the
+ * freshness boundary is unit-testable without a live service instance. Alive is not the same
+ * as observing — a stamp exactly one window old is already Unverifiable.
+ */
+internal fun resolveLiveness(
+    running: Boolean,
+    lastConfirmedElapsedMs: Long,
+    authority: ProtectionAuthority,
+    nowElapsedMs: Long,
+): MonitoringLiveness = when {
+    !running -> MonitoringLiveness.ServiceAbsent
+    nowElapsedMs - lastConfirmedElapsedMs in 0 until EnforcementForegroundService.LIVENESS_FRESH_MS ->
+        MonitoringLiveness.Confirmed(authority)
+    else -> MonitoringLiveness.Unverifiable
 }

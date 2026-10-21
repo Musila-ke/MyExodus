@@ -3,8 +3,10 @@ package com.example.myexodus.accountability.sync
 import android.content.Context
 import android.util.Log
 import androidx.hilt.work.HiltWorker
+import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -66,13 +68,20 @@ suspend fun runPartnerSyncPass(
     return report
 }
 
-/** §14 housekeeping enqueue (MyExodusApp, post-unlock process start): KEEP, so the first
- *  enqueue on the device pins the cadence and every later process start leaves it alone. */
+/** §14 housekeeping enqueue (MyExodusApp, post-unlock process start). UPDATE, not KEEP: the
+ *  Step 7 heartbeat fallback adds a connected-network constraint and update-period jitter, and
+ *  KEEP would leave devices already holding the old unconstrained request on the old shape
+ *  forever. The work name and cadence are unchanged, so this is a specification refresh, not
+ *  a second schedule. */
 fun enqueuePartnerSync(context: Context) {
-    val request = PeriodicWorkRequestBuilder<PartnerSyncWorker>(15, TimeUnit.MINUTES).build()
+    val request = PeriodicWorkRequestBuilder<PartnerSyncWorker>(15, TimeUnit.MINUTES)
+        .setConstraints(
+            Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
+        )
+        .build()
     WorkManager.getInstance(context).enqueueUniquePeriodicWork(
         PARTNER_SYNC_WORK_NAME,
-        ExistingPeriodicWorkPolicy.KEEP,
+        ExistingPeriodicWorkPolicy.UPDATE,
         request,
     )
 }

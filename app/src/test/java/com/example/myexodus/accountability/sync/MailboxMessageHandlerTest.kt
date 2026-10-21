@@ -1,7 +1,12 @@
 package com.example.myexodus.accountability.sync
 
 import android.app.Application
+import com.example.myexodus.accountability.serialization.AccountabilityEvent
+import com.example.myexodus.accountability.serialization.AccountabilityEventCategory
+import com.example.myexodus.accountability.serialization.AccountabilityEventWire
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.MonitoringState
+import com.example.myexodus.accountability.serialization.OutboxAgeBucket
 import com.example.myexodus.accountability.serialization.SignedEnvelope
 import com.example.myexodus.accountability.serialization.UnsignedEnvelope
 import com.example.myexodus.accountability.state.ChainStateStore
@@ -45,6 +50,14 @@ class MailboxMessageHandlerTest {
         val serverTsEpochMillis: Long?,
     )
 
+    /** One `onAccountabilityEvent` invocation — the Step 3 contract-body branch. */
+    private data class ContractHook(
+        val pairId: String,
+        val senderKeyId: String,
+        val event: AccountabilityEvent,
+        val serverTsEpochMillis: Long?,
+    )
+
     private class Fake {
         var alreadyProcessed = false
         var outcome: MailboxEventProcessor.EnvelopeResult =
@@ -66,6 +79,8 @@ class MailboxMessageHandlerTest {
         val deletionRequests = mutableListOf<Triple<String, String, Long?>>()
         val appendedHooks = mutableListOf<AppendedHook>()
         var tamperChecks = 0
+        var contractHookError: Exception? = null
+        val contractHooks = mutableListOf<ContractHook>()
 
         val handler = MailboxMessageHandler(
             processed = { processedChecks += it; alreadyProcessed },
@@ -94,6 +109,10 @@ class MailboxMessageHandlerTest {
             onAppended = { pairId, senderKeyId, sequence, payload, serverTs ->
                 onAppendedError?.let { throw it }
                 appendedHooks += AppendedHook(pairId, senderKeyId, sequence, payload, serverTs)
+            },
+            onAccountabilityEvent = { pairId, senderKeyId, event, serverTs ->
+                contractHookError?.let { throw it }
+                contractHooks += ContractHook(pairId, senderKeyId, event, serverTs)
             },
             now = { 42L },
         )
@@ -478,6 +497,75 @@ class MailboxMessageHandlerTest {
 
         assertEquals(MailboxMessageHandler.Kind.BAD_SIGNATURE, on(fake, doc()).kind)
         assertEquals(1, fake.tamperChecks)
+    }
+
+    // --- Step 7: the contract-body branch (§8.9) ---
+
+    private fun monitoringEvent() = AccountabilityEventWire.monitoring(
+        eventId = AccountabilityEventWire.newEventId(),
+        sequence = 3,
+        category = AccountabilityEventCategory.DEVICE_STATUS_CHANGED,
+        occurredAtMillis = 1_700_000_000_000L,
+        state = MonitoringState.DEGRADED,
+        outboxAge = OutboxAgeBucket.SIX_TO_TWENTY_FOUR_HOURS,
+        latestSequence = 3,
+    )
+
+    /** A contract body is recipient-local state, not an alert: ack + hook, and the generic
+     *  notification path is never reached (the monitoring receiver owns the rest). */
+    @Test
+    fun contractBody_isAcked_andRoutedToTheAccountabilityHook_neverNotified() {
+        val event = monitoringEvent()
+        val fake = Fake().apply {
+            outcome = MailboxEventProcessor.EnvelopeResult.Valid(Fake.envelope(), accountability = event)
+        }
+
+        val result = on(fake, doc())
+
+        assertEquals(MailboxMessageHandler.Kind.APPENDED, result.kind)
+        assertEquals(AccountabilityEventCategory.DEVICE_STATUS_CHANGED.wire, result.payloadType)
+        assertEquals(listOf("uid-me" to "m1"), fake.acks)
+        assertEquals(emptyList<Pair<String, String>>(), fake.notified)
+        assertEquals(
+            listOf(
+                ContractHook(
+                    pairId = "pair-1",
+                    senderKeyId = "partner-sender",
+                    event = event,
+                    serverTsEpochMillis = 1_700_000_000_000L,
+                ),
+            ),
+            fake.contractHooks,
+        )
+    }
+
+    @Test
+    fun contractBody_duplicate_isAcked_butTheHookDoesNotFire() {
+        val fake = Fake().apply {
+            outcome = MailboxEventProcessor.EnvelopeResult.Valid(Fake.envelope(), accountability = monitoringEvent())
+            appendResult = ChainStateStore.AppendResult.Duplicate
+        }
+
+        val result = on(fake, doc())
+
+        assertEquals(MailboxMessageHandler.Kind.DUPLICATE, result.kind)
+        assertEquals(listOf("uid-me" to "m1"), fake.acks)
+        assertEquals("a replay changes no local state", emptyList<ContractHook>(), fake.contractHooks)
+        assertEquals(emptyList<Pair<String, String>>(), fake.notified)
+    }
+
+    @Test
+    fun contractHookFailure_neverEscapes() {
+        val fake = Fake().apply {
+            outcome = MailboxEventProcessor.EnvelopeResult.Valid(Fake.envelope(), accountability = monitoringEvent())
+            contractHookError = IllegalStateException("db gone")
+        }
+
+        val result = on(fake, doc())
+
+        assertEquals(MailboxMessageHandler.Kind.APPENDED, result.kind)
+        assertEquals("the ack preceded the hook", listOf("uid-me" to "m1"), fake.acks)
+        assertEquals(emptyList<Pair<String, String>>(), fake.notified)
     }
 
     private companion object {

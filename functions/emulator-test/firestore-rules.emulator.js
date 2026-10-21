@@ -7,6 +7,7 @@
 // Run: npm run test:rules (functions/)
 
 const { test, before, after, beforeEach } = require('node:test');
+const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -187,4 +188,38 @@ test('the pairing document itself is not client-writable', async () => {
   await assertFails(
     setDoc(doc(alice, 'pairings/pair-alice-bob'), { members: ['alice'], status: 'active' }),
   );
+});
+
+test('dms_install_state is invisible and unwritable to every client, even its owner', async () => {
+  const { deleteDoc, updateDoc } = require('firebase/firestore');
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'dms_install_state/alice_fid-1'), {
+      uid: 'alice_body',
+      install_id: 'fid-1',
+      last_counter: 7,
+      liveness_generation: 3,
+    });
+  });
+
+  // The only reader/writer is the Admin SDK: submitHeartbeat writes it, the DMS deadline
+  // processor reads it. A client reading its own row would leak a precise server timestamp
+  // that §8.10 deliberately never exposes.
+  await assertFails(getDoc(doc(alice, 'dms_install_state/alice_fid-1')));
+  await assertFails(getDocs(collection(alice, 'dms_install_state')));
+  await assertFails(
+    setDoc(doc(alice, 'dms_install_state/alice_fid-1'), { last_counter: 99, liveness_generation: 99 }),
+  );
+  await assertFails(
+    updateDoc(doc(alice, 'dms_install_state/alice_fid-1'), { last_counter: 99 }),
+  );
+  await assertFails(deleteDoc(doc(alice, 'dms_install_state/alice_fid-1')));
+  await assertFails(
+    setDoc(doc(anonymous, 'dms_install_state/alice_fid-1'), { last_counter: 99 }),
+  );
+
+  // And the owner's own tampering attempt changed nothing.
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const row = await getDoc(doc(ctx.firestore(), 'dms_install_state/alice_fid-1'));
+    assert.strictEqual(row.data().last_counter, 7);
+  });
 });

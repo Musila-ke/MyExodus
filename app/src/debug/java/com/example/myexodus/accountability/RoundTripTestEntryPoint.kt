@@ -8,10 +8,15 @@ import com.example.myexodus.accountability.crypto.IdentityEpochStore
 import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.PairingFlow
+import com.example.myexodus.accountability.monitoring.MonitoringSnapshotRecorder
+import com.example.myexodus.accountability.monitoring.PartnerHeartbeatClient
 import com.example.myexodus.accountability.sos.NudgeInboxRepository
 import com.example.myexodus.accountability.state.AccountabilityDatabase
 import com.example.myexodus.accountability.state.ChainStateStore
+import com.example.myexodus.accountability.sync.PairUidResolver
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
+import com.example.myexodus.accountability.sync.PushInstallationRegistrar
+import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.ui.partner.PartnerDashboardSource
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -53,4 +58,17 @@ interface RoundTripTestEntryPoint {
 
     /** SOS §12.3: the DI-wired recipient inbox the Home surface's nudge card renders from. */
     fun nudgeInboxRepository(): NudgeInboxRepository
+
+    /** §7 Step 7: the exact heartbeat client + install registrar the FGS and sync worker use. */
+    fun partnerHeartbeatClient(): PartnerHeartbeatClient
+    fun pushInstallationRegistrar(): PushInstallationRegistrar
+
+    /** §7 Step 7 sender half: the exact recorder the FGS runs, for the device consent leg. */
+    fun monitoringSnapshotRecorder(): MonitoringSnapshotRecorder
+
+    /** The production uid resolver — the device leg picks a pair whose server pairing exists. */
+    fun pairUidResolver(): PairUidResolver
+
+    /** Reads the persisted counter/standby row the device proofs assert against. */
+    fun appRulesStoreFactory(): AppRulesStoreFactory
 }

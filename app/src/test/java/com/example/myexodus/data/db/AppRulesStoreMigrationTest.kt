@@ -479,6 +479,117 @@ class AppRulesStoreMigrationTest {
     }
 
     /**
+     * Partner-accountability Step 7 (v18→v19) and its rollback: the heartbeat counter, the
+     * check-in diagnostics singleton, and the received-snapshot table appear with their full
+     * row shapes; the v18 rollback drops exactly those three tables and leaves everything else
+     * intact. The snapshot replay guard is a DAO transaction and is covered by
+     * `PartnerMonitoringSnapshotDaoTest` against a Room-created v19 file.
+     */
+    @Test
+    fun migration18to19AndBack_createsHeartbeatAndSnapshotTables() {
+        val scratchPath = context.getDatabasePath("heartbeat-snapshot-test.db").absolutePath
+        AndroidSQLiteDriver().open(scratchPath).use { conn ->
+            conn.prepare("CREATE TABLE sentinel_table (id INTEGER NOT NULL PRIMARY KEY)").use { it.step() }
+            conn.prepare("INSERT INTO sentinel_table (id) VALUES (11)").use { it.step() }
+            // The v18 consent table the migration extends — pre-existing choices must survive.
+            conn.prepare(
+                "CREATE TABLE pair_profile_sharing (" +
+                    "pair_id TEXT NOT NULL, share_checkins INTEGER NOT NULL, " +
+                    "share_recovery INTEGER NOT NULL, checkins_enabled_since_ms INTEGER NOT NULL, " +
+                    "recovery_enabled_since_ms INTEGER NOT NULL, PRIMARY KEY(pair_id))",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO pair_profile_sharing VALUES ('pair-1', 1, 1, 300, 400)",
+            ).use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_18_19.migrate(conn) }
+
+            conn.prepare(
+                "SELECT share_checkins, checkins_enabled_since_ms, share_availability, " +
+                    "availability_enabled_since_ms FROM pair_profile_sharing WHERE pair_id = 'pair-1'",
+            ).use { stmt ->
+                assertTrue(stmt.step())
+                assertEquals("the pre-existing consent flag survives", 1L, stmt.getLong(0))
+                assertEquals("the pre-existing watermark survives", 300L, stmt.getLong(1))
+                assertEquals("availability is off until the user enables it", 0L, stmt.getLong(2))
+                assertEquals("the availability watermark starts at zero", 0L, stmt.getLong(3))
+            }
+
+            assertTrue(
+                "the liveness counter table exists after the forward migration",
+                "counter" in columnNames(conn, "device_liveness"),
+            )
+            assertTrue(
+                "the check-in diagnostics table exists",
+                "last_standby_bucket" in columnNames(conn, "partner_monitoring_checkin"),
+            )
+            assertTrue(
+                "the received-snapshot table exists",
+                "snapshot_install_generation" in columnNames(conn, "partner_monitoring_snapshot"),
+            )
+            conn.prepare(
+                "INSERT INTO device_liveness (install_id, uid, counter, last_sent_at_ms, " +
+                    "last_accepted_counter, last_accepted_at_ms) VALUES ('install-1', 'uid-1', 5, 100, 4, 90)",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO partner_monitoring_checkin (id, last_state, last_recorded_at_ms, " +
+                    "last_standby_bucket, standby_checked_at_ms) VALUES (0, 'ACTIVE', 120, 'RARE', 120)",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO partner_monitoring_snapshot (pair_id, monitoring_state, outbox_age_bucket, " +
+                    "snapshot_install_generation, latest_relationship_seq, snapshot_event_sequence, " +
+                    "occurred_at_minute, received_at_ms) VALUES " +
+                    "('pair-1', 'ACTIVE', 'UNDER_1H', 'gen-a', 9, 5, 42, 1000)",
+            ).use { it.step() }
+            conn.prepare(
+                "SELECT counter FROM device_liveness WHERE install_id = 'install-1'",
+            ).use { stmt ->
+                assertTrue(stmt.step())
+                assertEquals("the liveness row reads back", 5L, stmt.getLong(0))
+            }
+            conn.prepare(
+                "SELECT monitoring_state FROM partner_monitoring_snapshot WHERE pair_id = 'pair-1'",
+            ).use { stmt ->
+                assertTrue(stmt.step())
+                assertEquals("the snapshot row reads back", "ACTIVE", stmt.getText(0))
+            }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_19_18.migrate(conn) }
+
+            assertTrue(
+                "the rollback drops the snapshot table outright",
+                columnNames(conn, "partner_monitoring_snapshot").isEmpty(),
+            )
+            assertTrue(
+                "the rollback drops the check-in table",
+                columnNames(conn, "partner_monitoring_checkin").isEmpty(),
+            )
+            assertTrue(
+                "the rollback drops the liveness table",
+                columnNames(conn, "device_liveness").isEmpty(),
+            )
+            assertTrue(
+                "the rollback removes the availability consent columns",
+                "share_availability" !in columnNames(conn, "pair_profile_sharing") &&
+                    "availability_enabled_since_ms" !in columnNames(conn, "pair_profile_sharing"),
+            )
+            conn.prepare(
+                "SELECT share_checkins, checkins_enabled_since_ms FROM pair_profile_sharing " +
+                    "WHERE pair_id = 'pair-1'",
+            ).use { stmt ->
+                assertTrue(stmt.step())
+                assertEquals("the consent choice survives the rollback rebuild", 1L, stmt.getLong(0))
+                assertEquals("the watermark survives the rollback rebuild", 300L, stmt.getLong(1))
+            }
+            assertTrue(
+                "nothing else is touched on rollback",
+                "id" in columnNames(conn, "sentinel_table"),
+            )
+        }
+        context.deleteDatabase("heartbeat-snapshot-test.db")
+    }
+
+    /**
      * The v16 consent matrix (ADR #135), direct invocation: 15→16 drops the legacy consent
      * columns outright (recreate-table, no seed — "nothing until you choose" for every
      * install) and adds the per-(pair, item) tables plus the journal's consent key; 16→15

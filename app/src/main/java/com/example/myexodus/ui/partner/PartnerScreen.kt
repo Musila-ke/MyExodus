@@ -81,7 +81,9 @@ import com.example.myexodus.ui.AppMark
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.LinkRow
 import com.example.myexodus.ui.NavTile
+import com.example.myexodus.ui.PillTone
 import com.example.myexodus.ui.StatusPill
+import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.recovery.outcomeLabel
 import com.example.myexodus.ui.recovery.techniqueTitle
@@ -696,6 +698,9 @@ fun PartnerScreen(
                 // §7 Step 11 delta: the partner's shared aggregate, directly under who they are
                 // — the tab's own question ("how are they doing?") answered before navigation.
                 PartnerSummaryCard(current.activity, current.chainStatus)
+                // §7 Step 7 / §8.13: their device's own monitoring report, kept separate from
+                // the sync and chain cards — a live mailbox never proves their monitor runs.
+                current.monitoring?.let { PartnerMonitoringCard(it) }
                 // Owner ask 2026-10-04: a pair with every switch off looks identical to an
                 // active one, and the partner silently receives nothing. Said once, with the
                 // one route to fixing it.
@@ -984,6 +989,72 @@ fun PartnerScreen(
  *    because "no events for three days" and "we haven't synced for three days" are different
  *    facts (§8.11: never use one as the other).
  */
+/**
+ * §7 Step 7 / §8.13: the partner's device-monitoring state, decrypted from their last E2EE
+ * snapshot. Three separate signals stay separate — this card is the monitoring half; sync
+ * freshness and the chain verdict have their own cards, and none of them renders as a
+ * combined "healthy" badge. A report older than the recorder's cadence can never keep reading
+ * ACTIVE: it becomes UNKNOWN ([PartnerMonitoringUi.stale]).
+ */
+@Composable
+private fun PartnerMonitoringCard(monitoring: PartnerMonitoringUi) {
+    PartnerSurface(spacing = 6.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                stringResource(R.string.partner_monitoring_title),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            StatusPill(
+                text = stringResource(
+                    when (monitoring.state) {
+                        MonitoringState.ACTIVE -> R.string.partner_monitoring_state_active
+                        MonitoringState.DEGRADED -> R.string.partner_monitoring_state_limited
+                        MonitoringState.UNAVAILABLE -> R.string.partner_monitoring_state_off
+                        MonitoringState.UNKNOWN -> R.string.partner_monitoring_state_unknown
+                    },
+                ),
+                tone = when (monitoring.state) {
+                    MonitoringState.ACTIVE -> PillTone.POSITIVE
+                    MonitoringState.UNAVAILABLE -> PillTone.NEGATIVE
+                    else -> PillTone.QUIET
+                },
+            )
+        }
+        Text(
+            stringResource(
+                when (monitoring.state) {
+                    MonitoringState.ACTIVE -> R.string.partner_monitoring_body_active
+                    MonitoringState.DEGRADED -> R.string.partner_monitoring_body_limited
+                    MonitoringState.UNAVAILABLE -> R.string.partner_monitoring_body_off
+                    MonitoringState.UNKNOWN -> R.string.partner_monitoring_body_unknown
+                },
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            stringResource(
+                if (monitoring.stale) {
+                    R.string.partner_monitoring_report_stale
+                } else {
+                    R.string.partner_monitoring_report_fresh
+                },
+                relativeTimeText(System.currentTimeMillis(), monitoring.lastReportAtEpochMillis),
+            ),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (monitoring.updatesDelayed) {
+            Text(
+                stringResource(R.string.partner_monitoring_delayed),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 @Composable
 private fun PartnerSummaryCard(activity: PartnerActivityUi?, chainStatus: PartnerChainStatus) {
     PartnerSurface(spacing = 12.dp) {

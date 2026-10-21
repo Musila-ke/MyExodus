@@ -184,7 +184,7 @@ class MailboxEventProcessorTest {
         )
         val valid = result as MailboxEventProcessor.EnvelopeResult.Valid
         assertEquals(3, valid.signed.unsigned.keyEpoch)
-        assertEquals("rotated", valid.payload.text)
+        assertEquals("rotated", valid.payload!!.text)
         // Exactly the declared epoch is probed — never a trial decryption across epochs.
         assertEquals(listOf(3), asked)
     }
