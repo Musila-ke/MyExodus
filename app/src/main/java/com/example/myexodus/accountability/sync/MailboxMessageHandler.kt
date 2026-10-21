@@ -130,7 +130,16 @@ class MailboxMessageHandler(
         messageId: String,
         load: suspend () -> MailboxDocument?,
     ): Result {
-        if (processed(messageId)) return Result(Kind.ALREADY_PROCESSED)
+        if (processed(messageId)) {
+            // AD-18b completion, not a second delivery: the chain commit and the ack are not
+            // atomic (the ack is a server write), so a process death between them leaves a
+            // message marked processed but never acked. The re-delivery lands here, and the
+            // create-only ack is idempotent — an existing ack is denied by the rules and
+            // reads as done (the same reading the ack writer uses).
+            runCatching { ack(recipientUid, messageId) }
+                .onFailure { Log.w(TAG, "ack retry failed messageId=$messageId", it) }
+            return Result(Kind.ALREADY_PROCESSED)
+        }
 
         val doc = load() ?: return Result(Kind.MISSING)
         // §19.5: one mailbox backs every pair this device holds, so a document for another

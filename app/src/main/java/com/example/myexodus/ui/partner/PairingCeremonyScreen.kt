@@ -75,6 +75,7 @@ import com.example.myexodus.accountability.enrollment.PairingCode
 import com.example.myexodus.accountability.enrollment.PairingFlow
 import com.example.myexodus.accountability.enrollment.PairingToken
 import com.example.myexodus.accountability.enrollment.PartnerLabel
+import com.example.myexodus.accountability.sync.PartnerAlertHealth
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.rememberWindowWidth
@@ -132,6 +133,10 @@ fun PairingCeremonyScreen(
     notificationsEnabled: Boolean,
     notificationsRequestable: Boolean,
     onFixNotifications: () -> Unit,
+    /** Plan Step 6: the onboarding check is not only the API-33 permission — a muted
+     *  partner-activity channel or a missing push provider also breaks alerts. */
+    alertHealth: PartnerAlertHealth.State = PartnerAlertHealth.State.OK,
+    onSendTestAlert: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -445,6 +450,8 @@ fun PairingCeremonyScreen(
                 notificationsEnabled = notificationsEnabled,
                 notificationsRequestable = notificationsRequestable,
                 onFixNotifications = onFixNotifications,
+                alertHealth = alertHealth,
+                onSendTestAlert = onSendTestAlert,
                 onDone = onExit,
             )
 
@@ -834,6 +841,8 @@ private fun PairedTerminal(
     notificationsRequestable: Boolean,
     onFixNotifications: () -> Unit,
     onDone: () -> Unit,
+    alertHealth: PartnerAlertHealth.State = PartnerAlertHealth.State.OK,
+    onSendTestAlert: () -> Unit = {},
 ) {
     Surface(
         color = MaterialTheme.colorScheme.tertiaryContainer,
@@ -886,6 +895,40 @@ private fun PairedTerminal(
                             else R.string.partner_notifications_open_settings,
                         ),
                     )
+                }
+            } else if (alertHealth == PartnerAlertHealth.State.NOTIFICATIONS_OFF) {
+                // API < 33 with app notifications disabled: there is no dialog to raise.
+                Text(
+                    stringResource(R.string.partner_notifications_off_body),
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                )
+                OutlinedButton(onClick = onFixNotifications, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.partner_notifications_open_settings))
+                }
+            } else if (alertHealth == PartnerAlertHealth.State.CHANNEL_OFF) {
+                Text(
+                    stringResource(R.string.partner_alerts_channel_off_body),
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                )
+                OutlinedButton(onClick = onFixNotifications, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.partner_alerts_channel_off_action))
+                }
+            } else if (alertHealth == PartnerAlertHealth.State.PROVIDER_UNSUPPORTED) {
+                Text(
+                    stringResource(R.string.partner_alerts_provider_body),
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                )
+                OutlinedButton(onClick = onSendTestAlert, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.partner_alerts_test_action))
+                }
+            } else {
+                // Plan Step 6: an explicitly user-triggered test alert, at the one moment the
+                // user has just been told pairing worked.
+                OutlinedButton(onClick = onSendTestAlert, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.partner_alerts_test_action))
                 }
             }
         }

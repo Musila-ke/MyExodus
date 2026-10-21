@@ -75,6 +75,7 @@ import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.sos.NudgeEnvelope
 import com.example.myexodus.accountability.sos.NudgeRepository
 import com.example.myexodus.accountability.sync.MessageSendOutcome
+import com.example.myexodus.accountability.sync.PartnerAlertHealth
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.domainusage.DomainUsageEngine
 import com.example.myexodus.domainusage.PublicSuffixList
@@ -166,7 +167,11 @@ fun AppShell(
     ceremonyDeps: PairingCeremonyDeps,
     partnerNotificationsEnabled: Boolean,
     partnerNotificationsRequestable: Boolean,
+    /** Plan Step 6: permission + channel + push-provider health, in one actionable reading. */
+    partnerAlertHealth: PartnerAlertHealth.State,
     onFixNotifications: () -> Unit,
+    /** Plan Step 6: user-triggered proof that partner alerts display on this device. */
+    onSendTestAlert: () -> Unit,
     onPartnerCheckNow: suspend () -> Boolean,
     onRespondToApproval: suspend (requestEventId: String, approve: Boolean) -> Boolean = { _, _ -> false },
     onUnpair: suspend (pairId: String) -> UnpairOutcome = { UnpairOutcome.FAILED },
@@ -420,6 +425,8 @@ fun AppShell(
                         ceremony = ceremonyDeps,
                         notificationsEnabled = partnerNotificationsEnabled,
                         notificationsRequestable = partnerNotificationsRequestable,
+                        alertHealth = partnerAlertHealth,
+                        onSendTestAlert = onSendTestAlert,
                         onFixNotifications = onFixNotifications,
                         onCheckNow = onPartnerCheckNow,
                         onRespondToApproval = onRespondToApproval,

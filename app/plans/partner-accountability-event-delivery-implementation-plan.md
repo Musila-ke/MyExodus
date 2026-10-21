@@ -980,6 +980,60 @@ Commands (run 2026-10-21): `npm test` → 104/104 pass; `npm run test:rules` →
 
 ### Honest limits
 
-- Rejected messages are stored before the trigger rejects them (rules cannot decode the payload). The authorization hole that allowed foreign-mailbox fills was closed at the storage boundary in Step 2 (ADR #194); the remaining cost is a bounded junk row that cleanup removes. The rules fix is **still undeployed** (owner action).
+- Rejected messages are stored before the trigger rejects them (rules cannot decode the payload). The authorization hole that allowed foreign-mailbox fills was closed at the storage boundary in Step 2 (ADR #194); the remaining cost is a bounded junk row that cleanup removes. The rules fix is **still undeployed** (owner action). *Revision 2026-10-21 (Appendix S6): deployed — production ruleset `42262fca-6962-4cf0-ac54-24fbf4a43a9e`, source verified.*
 - A crash between mailbox acceptance and the first dispatch-record write means no push for that message; the recipient still fetches it on app start/resume — that is Step 6's delivery path, stated rather than papered over.
 - Nothing in this gate changes or deploys server code, so production behavior is exactly today's until Steps 6–9 land.
+
+## Appendix S6 — Step 6 partner synchronization + notification health (executed 2026-10-21)
+
+**Verdict: PASS** — the receive pipeline already satisfied the synchronization half and was hardened at one crash window; the notification half was built (health model, onboarding surfaces, user-triggered test alert) and proven on both devices. One required item is **explicitly deferred**: the DMS availability reminder (see Interpretation 2), because the `outage_generation` identity and the DMS availability notice it refers to are created by Steps 7/8.
+
+### Requirement mapping
+
+| Step 6 required work | Implementation | Evidence |
+|---|---|---|
+| Fetch pending ciphertext after push | `PartnerMessagingService.onMessageReceived` → unique one-time `PartnerSyncWorker` carrying the wake message id; `onNewToken` and `onDeletedMessages` ring the same pass, so a dropped push or rotated token reconciles from the mailbox, not the push channel | `PartnerSyncCoordinatorTest`; scenario harness runs the production coordinator; push service code review |
+| Fetch on app start/resume | `MainActivity.refreshPartnerPushRegistration` (foreground, permission-result, settings-return) plus the live mailbox snapshot listener under `repeatOnLifecycle(STARTED)`; `MyExodusApp` activity-tick collector kicks a pass after a shared transition | code review; scenario harness |
+| Fetch through existing scheduled sync | periodic 15-minute `PartnerSyncWorker` (`PeriodicWorkRequestBuilder`, unique name `partner-sync`), one-time wakes use a distinct name (`partner-sync-wake`) so KEEP cannot suppress them | code review |
+| Decrypt, validate, sequence-check, deduplicate, persist, then acknowledge | `MailboxMessageHandler`: processed-events dedupe before any fetch (AD-10b) → pair gate → own-sender skip → verify-then-decrypt → `ChainStateStore.append` (`Appended`/`Duplicate`/`Gap`/`Fork`/`Rejected`) → ack only on the consumed outcomes (`APPENDED`, `DUPLICATE`, `GAP`) → notify only on `APPENDED` | `MailboxMessageHandlerTest` 22 tests |
+| Acknowledge only after persistence (crash window) | On `ALREADY_PROCESSED`, the handler retries the idempotent create-only ack before returning, so a death between chain commit and ack is healed by re-delivery without re-applying the event; a failed retry is swallowed and left to the next delivery | `alreadyProcessed_shortCircuitsBeforeLoad_butCompletesTheAck`, `alreadyProcessed_ackRetryFailure_isSwallowed`; scenario Stage 4 |
+| Onboarding: permission (API 33+), channel enablement/importance, provider registration, user-triggered test notification | `PartnerAlertHealth` reads `NotificationAccess.canPost` (permission/app-level), the `partner_alerts` channel's importance (absent = not muted), and Google Play services availability; surfaced in `PairingCeremonyScreen.PairedTerminal` and the Partner tab. `PartnerNotifications.notifyTestAlert` posts on the real `partner_alerts` channel under its own id/tag. Provider **registration** is checked/re-run by every sync pass (`PushInstallationRegistrar`), not shown as an onboarding banner — registration failure is transient and the mailbox pull still delivers (Interpretation 1) | `PartnerAlertHealthTest` 4; `PartnerNotificationsTest.testAlert_ridesThePartnerAlertsChannel_withoutReplacingARealAlert`; `PushInstallationRegistrarTest`; device legs |
+| In-app banner when notifications disabled or provider unsupported | `PartnerScreen.AlertHealthBanner` for `NOTIFICATIONS_OFF` / `CHANNEL_OFF` / `PROVIDER_UNSUPPORTED`, refreshed on permission result and `ON_RESUME`; fixes route to the permission dialog (API 33+, not yet asked), app notification settings, or `ACTION_CHANNEL_NOTIFICATION_SETTINGS` with package + channel extras. The provider case has no action — no switch fixes it | device legs (below) |
+| One generic DMS availability reminder per `(install_id, relationship_id, outage_generation)` after six hours; no per-event reminder | **Deferred to Step 8** (Interpretation 2). Step 6 creates no reminder of any kind: notifications fan out per appended event only, coalesced by the fixed per-pair id + `onlyAlertOnce` | code review |
+| Provider acceptance is not display | No code path treats an FCM receipt as delivered; the mailbox pull is the delivery path; the test alert is posted locally as proof of the display path; `onDeletedMessages` reconciles what push dropped | code review; device test-alert leg |
+| Startup channel agreement | `MyExodusApp` calls `ensurePartnerAlertsChannel`, create-only: an existing channel (and its user-chosen importance) is never rewritten | code review; X6532 channel-restore leg |
+
+### Validation evidence (Step 6 list)
+
+| Required validation | Evidence | Result |
+|---|---|---|
+| Duplicate envelopes | Scenario Stage 1: same signed bytes under two message ids → head advances once, both copies acked; `MailboxMessageHandlerTest.duplicateAndGap_areAcked_butNeverNotify` | green |
+| Out-of-order envelopes + sequence gaps | Scenario Stage 2: seq3 arrives first → `REPAIR_PENDING`, `gapSequences = [3]`, acked; seq2 arrives → head 3, gap cleared, `REPAIR_NONE` in one pass; `PartnerRoundTripInstrumentedTest` gap-repair run | green |
+| Offline partner | Design: mailbox is the source of truth; next pass (push/foreground/periodic) delivers whatever a network drop missed; outbox retry/backoff proven in Step 4. Not re-run as a dedicated airplane-mode device leg in this step | design + Step 4 tests |
+| Invalid auth | Rules suite 17/17 (unauthenticated denial incl.); live unauthenticated Firestore probe against production returned HTTP 403 `PERMISSION_DENIED` | green |
+| Disabled notification permission | X6532: `pm revoke POST_NOTIFICATIONS` → `NOTIFICATIONS_OFF` banner; grant → banner clears. `PartnerAlertHealthTest.permissionDenied_outranksEveryOtherCause` | green |
+| Disabled channel | X6532: channel importance set to NONE → `CHANNEL_OFF` banner; deep link opens the channel; re-enable → banner clears and importance is 4 again (the app did not re-create/demote it) | green |
+| Provider unregistered | `PushInstallationRegistrarTest.register_withoutFid_skipsTheWrite`, `register_withoutToken_skipsTheWrite`, `register_carriesAPushIneligibleSnapshotWithoutGatingTheWrite`; registration re-runs on every wake/foreground through the sync pass | green |
+| Non-GMS device | API-37 AVD with Google Play services disabled: app loads fully, `PROVIDER_UNSUPPORTED` banner shows, provider registration is refused ("push installation not (re)registered this run"), test alert still posts | green |
+| Decryption failure | Scenario Stage 3: valid signature over a well-formed envelope with invalid ciphertext → verification passes, decryption fails, not committed, not acked; the same sequence number then accepts the real event | green |
+| Process death between persist and acknowledgement | Scenario Stage 4: `ProcessedEvent` seeded for an unacked message → re-delivery writes the missing ack and the head does not move. Honest limit: seeded state, not a real mid-pass kill (Step 11 matrix) | green (seeded) |
+
+### Device evidence (2026-10-21)
+
+- **X6532 (physical):** OK state → test alert observed in the tray and in `dumpsys notification` as id 2006, tag `partner_alerts_test`, channel `partner_alerts`, importance 4, with the correct title/body copy. Permission-off and channel-off banners each shown and cleared by the real fix path; the channel came back at importance 4 without the app rewriting it.
+- **API-37 AVD:** unpaired Partner tab shows the test-alert row; test alert posts; with Google Play services disabled the `PROVIDER_UNSUPPORTED` banner renders and the push registrar refuses registration while the rest of the app works.
+- **Scenario harness (X6532, production relay + rules):** `PartnerSyncScenariosInstrumentedTest` `OK (1 test)` in 62 s with `RESULT duplicate=PASS`, `outOfOrder=PASS`, `decryptFailure=PASS`, `ackCompletion=PASS`, `scenarios=PASS`. `PartnerRoundTripInstrumentedTest` `OK` (63 s). Virtual partner paired through the production ceremony; every assertion reads chain head, gap state, or server ack documents rather than handler return values.
+- **Deploy:** the ADR #194 rules fix is **now deployed** (owner authorization). Release `cloud.firestore` resolves to ruleset `42262fca-6962-4cf0-ac54-24fbf4a43a9e`, and its fetched source contains the recipient-membership check in the mailbox create gate — the owner-action limit recorded in Appendix S5 is closed.
+- **Full JVM suite:** `./gradlew testDebugUnitTest` → **1,890 tests, 0 failures** (includes the new `PartnerAlertHealthTest` 4 and the ack-completion pins).
+
+### Interpretations recorded (ADR #199)
+
+1. **Provider registration is a sync-pass check, not a banner state.** A missing token or FID is transient (offline, rotation, first-run timing) and the mailbox pull delivers every event regardless; only a device that cannot run the provider at all is a persistent, user-actionable condition. The onboarding check still *happens* — `PushInstallationRegistrar` runs on every pass and records a truthful `pushEligible` snapshot — it just does not pretend a transient failure is a device defect.
+2. **DMS availability reminder deferred to Step 8.** The six-hour rule needs `outage_generation` and the DMS availability notice itself, both created by Steps 7/8. Implementing it now would invent the generation identity and the notice it refers to; Step 6 ships no reminder and no per-event reminder, which the rule forbids anyway.
+
+### Honest limits
+
+- `PROVIDER_UNSUPPORTED` is proven by disabling Google Play services on the emulator, not on a true non-GMS device.
+- The ceremony's `PairedTerminal` health branches compile and mirror the Partner-tab branches but were not device-exercised — that would require unpairing the live X6532 pair. The same three states are device-proven on the unpaired Partner tab.
+- The process-death validation seeds the exact post-commit/pre-ack state rather than killing the process mid-pass; a true SIGKILL fault injection belongs to the Step 11 device matrix and is not claimed here.
+- "Provider acceptance is not display" is enforced by construction (no receipt is read as delivery), but an OEM that drops a notification after a successful local post cannot be detected in-app — Android exposes no per-notification read receipt.

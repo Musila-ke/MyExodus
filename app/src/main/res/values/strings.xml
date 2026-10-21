@@ -742,6 +742,15 @@
     <string name="partner_notifications_off_body">MyExodus can’t tell you when new partner activity arrives. Allow notifications to get these alerts.</string>
     <string name="partner_notifications_enable">Allow notifications</string>
     <string name="partner_notifications_open_settings">Open notification settings</string>
+    <string name="partner_alerts_channel_off_title">Partner alerts are turned off</string>
+    <string name="partner_alerts_channel_off_body">The partner activity channel is off, so new partner activity won’t alert you. Turn the channel back on in system settings.</string>
+    <string name="partner_alerts_channel_off_action">Open channel settings</string>
+    <string name="partner_alerts_provider_title">Push alerts aren’t supported here</string>
+    <string name="partner_alerts_provider_body">This device can’t receive partner pushes. New partner activity still arrives when you open MyExodus or check for updates.</string>
+    <string name="partner_alerts_test_action">Send a test alert</string>
+    <string name="partner_alerts_test_body">Check that partner alerts actually reach you on this device.</string>
+    <string name="partner_test_alert_title">Partner alerts are working</string>
+    <string name="partner_test_alert_text">This is a test alert. Real partner activity will arrive the same way.</string>
     <string name="partner_channel_activity_name">MyExodus partner activity</string>
     <string name="partner_channel_requests_name">MyExodus partner requests</string>
     <string name="partner_channel_sync_status_name">MyExodus sync status</string>

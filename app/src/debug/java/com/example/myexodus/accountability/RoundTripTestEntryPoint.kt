@@ -9,6 +9,7 @@ import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.PairingFlow
 import com.example.myexodus.accountability.sos.NudgeInboxRepository
+import com.example.myexodus.accountability.state.AccountabilityDatabase
 import com.example.myexodus.accountability.state.ChainStateStore
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
 import com.example.myexodus.ui.partner.PartnerDashboardSource
@@ -33,6 +34,10 @@ interface RoundTripTestEntryPoint {
     fun cekDerivation(): CekDerivation
     fun identityEpochStore(): IdentityEpochStore
     fun partnerSyncCoordinator(): PartnerSyncCoordinator
+
+    /** Step 6 crash-window scenario: seed the processed-events gate exactly as a process death
+     *  between the chain commit and the ack leaves it. */
+    fun accountabilityDatabase(): AccountabilityDatabase
 
     /** The Step 12 dashboard read model — the exact DI-wired source the Partner tab renders. */
     fun partnerDashboardSource(): PartnerDashboardSource

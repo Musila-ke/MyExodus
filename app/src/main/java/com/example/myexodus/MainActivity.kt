@@ -8,6 +8,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -77,6 +78,8 @@ import com.example.myexodus.accountability.state.AccountabilityDatabase
 import com.example.myexodus.accountability.sync.MessageSendOutcome
 import com.example.myexodus.accountability.sync.PairUidResolver
 import com.example.myexodus.accountability.sync.messageSendOutcome
+import com.example.myexodus.accountability.sync.PartnerAlertHealth
+import com.example.myexodus.accountability.sync.PartnerNotifications
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
 import com.example.myexodus.accountability.sync.PartnerLiveSync
 import com.example.myexodus.accountability.sync.PartnerNudgePush
@@ -404,6 +407,11 @@ class MainActivity : FragmentActivity() {
                 var notificationsEnabled by remember {
                     mutableStateOf(NotificationAccess.canPost(this@MainActivity))
                 }
+                // Plan Step 6: permission + the partner-activity channel + push-provider
+                // support, re-read on the same boundaries as the permission itself.
+                var alertHealth by remember {
+                    mutableStateOf(PartnerAlertHealth.of(this@MainActivity))
+                }
                 // §8 Step 16 flow: rationale (the banner body) → request → denied → settings.
                 // Whether the request can still raise the system dialog is session-scoped state
                 // (the setup wizard's identical pattern): once asked, the action becomes the
@@ -414,6 +422,7 @@ class MainActivity : FragmentActivity() {
                 ) { _ ->
                     notificationsRequested = true
                     notificationsEnabled = NotificationAccess.canPost(this@MainActivity)
+                    alertHealth = PartnerAlertHealth.of(this@MainActivity)
                     // §8.12 permission-result trigger: the grant flips pushEligible on the
                     // installation document — re-register immediately, don't wait for resume.
                     refreshPartnerPushRegistration()
@@ -430,6 +439,7 @@ class MainActivity : FragmentActivity() {
                         if (event == Lifecycle.Event.ON_RESUME) {
                             refreshProtectionChecks()
                             notificationsEnabled = NotificationAccess.canPost(this@MainActivity)
+                            alertHealth = PartnerAlertHealth.of(this@MainActivity)
                         }
                     }
                     lifecycle.addObserver(observer)
@@ -564,13 +574,27 @@ class MainActivity : FragmentActivity() {
                         ceremonyDeps = ceremonyDeps,
                         partnerNotificationsEnabled = notificationsEnabled,
                         partnerNotificationsRequestable = canRequestNotifications,
+                        partnerAlertHealth = alertHealth,
                         onFixNotifications = {
-                            if (canRequestNotifications) {
-                                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                            } else {
-                                startActivity(notificationSettingsIntent(this@MainActivity))
+                            when (alertHealth) {
+                                // The channel has its own switch; app-level settings would
+                                // bury it one screen deeper.
+                                PartnerAlertHealth.State.CHANNEL_OFF -> startActivity(
+                                    Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                                        .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                                        .putExtra(
+                                            Settings.EXTRA_CHANNEL_ID,
+                                            PartnerNotifications.CHANNEL_PARTNER_ALERTS,
+                                        ),
+                                )
+                                else -> if (canRequestNotifications) {
+                                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                } else {
+                                    startActivity(notificationSettingsIntent(this@MainActivity))
+                                }
                             }
                         },
+                        onSendTestAlert = { PartnerNotifications.notifyTestAlert(this@MainActivity) },
                         onPartnerCheckNow = {
                             isOnline() && runCatching {
                                 runPartnerSyncPass(

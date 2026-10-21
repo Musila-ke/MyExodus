@@ -66,6 +66,20 @@ class PartnerNotificationsTest {
         assertEquals(1, manager.activeNotifications.size)
     }
 
+    /** Plan Step 6: the test alert must prove the same display path as a real alert (the
+     *  partner-activity channel, HIGH) while its own tag keeps it from replacing one. */
+    @Test
+    fun testAlert_ridesThePartnerAlertsChannel_withoutReplacingARealAlert() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyTestAlert(context)
+
+        val posted = manager.activeNotifications.single()
+        assertEquals(PartnerNotifications.NOTIF_PARTNER_TEST, posted.id)
+        assertEquals(PartnerNotifications.TEST_NOTIFICATION_TAG, posted.tag)
+        assertEquals(PartnerNotifications.CHANNEL_PARTNER_ALERTS, posted.notification.channelId)
+    }
+
     @Test
     fun granted_approvalRequestsChannelIsHighImportance() {
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)

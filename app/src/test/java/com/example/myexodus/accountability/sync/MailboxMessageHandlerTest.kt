@@ -129,7 +129,7 @@ class MailboxMessageHandlerTest {
         runBlocking { handle(fake, doc, messageId) }
 
     @Test
-    fun alreadyProcessed_shortCircuitsBeforeLoad() {
+    fun alreadyProcessed_shortCircuitsBeforeLoad_butCompletesTheAck() {
         val fake = Fake().apply { alreadyProcessed = true }
 
         val result = on(fake, doc())
@@ -137,8 +137,24 @@ class MailboxMessageHandlerTest {
         assertEquals(MailboxMessageHandler.Kind.ALREADY_PROCESSED, result.kind)
         assertEquals("AD-10b: the dedup check precedes the fetch", emptyList<String>(), fake.loads)
         assertEquals(emptyList<Triple<String, String, Long>>(), fake.appended)
-        assertEquals(emptyList<Pair<String, String>>(), fake.acks)
+        // Plan Step 6: the chain commit and the ack are not atomic, so a process death between
+        // them strands an unacked message. The re-delivery completes the create-only ack
+        // (idempotent: an existing ack reads as done) instead of skipping it with the dedup.
+        assertEquals(listOf("uid-me" to "m1"), fake.acks)
         assertEquals(emptyList<Pair<String, String>>(), fake.notified)
+    }
+
+    @Test
+    fun alreadyProcessed_ackRetryFailure_isSwallowed() {
+        val fake = Fake().apply {
+            alreadyProcessed = true
+            ackError = IllegalStateException("offline")
+        }
+
+        val result = on(fake, doc())
+
+        assertEquals(MailboxMessageHandler.Kind.ALREADY_PROCESSED, result.kind)
+        assertEquals(emptyList<String>(), fake.loads)
     }
 
     @Test

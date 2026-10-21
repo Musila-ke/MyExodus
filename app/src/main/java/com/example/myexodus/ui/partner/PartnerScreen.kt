@@ -74,6 +74,7 @@ import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.UnpairPhase
 import com.example.myexodus.accountability.state.UnpairState
 import com.example.myexodus.accountability.sync.MessageSendOutcome
+import com.example.myexodus.accountability.sync.PartnerAlertHealth
 import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.ui.AppMark
@@ -222,6 +223,11 @@ fun PartnerScreen(
     /** §8 Step 16: true while the system dialog can still be raised (33+, not yet asked);
      *  false means the only fix path left is the settings screen. */
     notificationsRequestable: Boolean = false,
+    /** Plan Step 6: what actually blocks a partner alert on this device — permission, the
+     *  partner-activity channel's own switch, or a missing push provider. */
+    alertHealth: PartnerAlertHealth.State = PartnerAlertHealth.State.OK,
+    /** Plan Step 6: the explicitly user-triggered test alert (proof of display). */
+    onSendTestAlert: () -> Unit = {},
     onRespondToApproval: suspend (requestEventId: String, approve: Boolean) -> Boolean = { _, _ -> false },
     /** Step 14: biometric-gated unpair initiation. CANCELLED (refused prompt) leaves the pair
      *  intact — the local shred is unconditional once the request is acted on, so a refused
@@ -398,6 +404,8 @@ fun PartnerScreen(
             notificationsEnabled = notificationsEnabled,
             notificationsRequestable = notificationsRequestable,
             onFixNotifications = onFixNotifications,
+            alertHealth = alertHealth,
+            onSendTestAlert = onSendTestAlert,
             onExit = {
                 view = null
                 scope.launch(Dispatchers.IO) { reload() }
@@ -484,35 +492,40 @@ fun PartnerScreen(
             // §9 row: permission denied is a persistent state, never a silent one (acceptance
             // 2026 line 631). §8 Step 16: while the dialog can still be raised the action
             // requests it; once denied the fix path is the system settings screen, not an
-            // in-app nag.
-            if (!notificationsEnabled) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                    shape = MaterialTheme.shapes.medium,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            stringResource(R.string.partner_notifications_off_title),
-                            style = MaterialTheme.typography.titleSmall,
-                        )
-                        Text(
-                            stringResource(R.string.partner_notifications_off_body),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        TextButton(onClick = onFixNotifications) {
-                            Text(
-                                stringResource(
-                                    if (notificationsRequestable) {
-                                        R.string.partner_notifications_enable
-                                    } else {
-                                        R.string.partner_notifications_open_settings
-                                    },
-                                ),
-                            )
-                        }
-                    }
+            // in-app nag. Plan Step 6 widens this to the two failures a permission check
+            // cannot see: the partner-activity channel muted on its own, and no push provider.
+            when (alertHealth) {
+                PartnerAlertHealth.State.OK -> TestAlertRow(onSendTestAlert)
+
+                PartnerAlertHealth.State.NOTIFICATIONS_OFF -> AlertHealthBanner(
+                    title = stringResource(R.string.partner_notifications_off_title),
+                    body = stringResource(R.string.partner_notifications_off_body),
+                    action = stringResource(
+                        if (notificationsRequestable) {
+                            R.string.partner_notifications_enable
+                        } else {
+                            R.string.partner_notifications_open_settings
+                        },
+                    ),
+                    onAction = onFixNotifications,
+                )
+
+                PartnerAlertHealth.State.CHANNEL_OFF -> AlertHealthBanner(
+                    title = stringResource(R.string.partner_alerts_channel_off_title),
+                    body = stringResource(R.string.partner_alerts_channel_off_body),
+                    action = stringResource(R.string.partner_alerts_channel_off_action),
+                    onAction = onFixNotifications,
+                )
+
+                // A local test still proves the display path, so the test action stays.
+                PartnerAlertHealth.State.PROVIDER_UNSUPPORTED -> {
+                    AlertHealthBanner(
+                        title = stringResource(R.string.partner_alerts_provider_title),
+                        body = stringResource(R.string.partner_alerts_provider_body),
+                        action = null,
+                        onAction = {},
+                    )
+                    TestAlertRow(onSendTestAlert)
                 }
             }
         }
@@ -2194,3 +2207,38 @@ private const val TAG = "MyExodusPartnerTab"
 /** Hub-tile datum for plans (ADR #193): [todo] null = nothing on this phone is waiting to be
  *  checked off (no incoming plans), so the tile shows its description instead of a zero. */
 private data class PlanHubStatus(val hasPlans: Boolean, val todo: Int?)
+
+/** Plan Step 6 partner-alert banner. Same Surface grammar as every persistent in-app state
+ *  (§9 row / acceptance line 631); [action] is null only for the unsupported-provider case,
+ *  where no in-app or settings switch can fix the device. */
+@Composable
+private fun AlertHealthBanner(
+    title: String,
+    body: String,
+    action: String?,
+    onAction: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(body, style = MaterialTheme.typography.bodySmall)
+            if (action != null) {
+                TextButton(onClick = onAction) { Text(action) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TestAlertRow(onSendTestAlert: () -> Unit) {
+    LinkRow(
+        title = stringResource(R.string.partner_alerts_test_action),
+        body = stringResource(R.string.partner_alerts_test_body),
+        onClick = onSendTestAlert,
+    )
+}
