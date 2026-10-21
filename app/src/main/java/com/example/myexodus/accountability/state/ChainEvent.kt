@@ -10,12 +10,18 @@ import androidx.room3.PrimaryKey
     tableName = "events",
     indices = [
         Index(value = ["pair_id", "sender_key_id", "sequence"], unique = true),
+        // Plan §7 Step 4 / §8.9: one event may enter a relationship's chain only once. Null on
+        // rows that predate the wire contract and on GAP_MARKER rows built from chain evidence;
+        // SQLite treats NULLs as distinct, so those rows are exempt by construction.
+        Index(value = ["pair_id", "sender_key_id", "event_id"], unique = true),
     ],
 )
 data class ChainEvent(
     @PrimaryKey(autoGenerate = true) @ColumnInfo(name = "id") val id: Long = 0,
     @ColumnInfo(name = "pair_id") val pairId: String,
     @ColumnInfo(name = "sender_key_id") val senderKeyId: String,
+    /** The Step 3 wire event UUID this chain event carries (nullable for pre-contract rows). */
+    @ColumnInfo(name = "event_id") val eventId: String? = null,
     @ColumnInfo(name = "epoch") val epoch: Int,
     @ColumnInfo(name = "sequence") val sequence: Long,
     @ColumnInfo(name = "previous_event_hash") val previousEventHash: ByteArray?,

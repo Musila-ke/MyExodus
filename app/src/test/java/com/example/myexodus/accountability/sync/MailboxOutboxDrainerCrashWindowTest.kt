@@ -48,7 +48,7 @@ class MailboxOutboxDrainerCrashWindowTest {
         var writeError: ((String) -> Exception?)? = null
 
         val drainer = MailboxOutboxDrainer(
-            pendingRows = { _, limit -> pending.take(limit) },
+            pendingRows = { _, _, limit -> pending.take(limit) },
             markSent = { id ->
                 markSentError?.let { throw it }
                 if (!skipMarkFor.contains(id)) {
@@ -56,10 +56,11 @@ class MailboxOutboxDrainerCrashWindowTest {
                     pending.removeAll { it.messageId == id }
                 }
             },
-            recordAttempt = { id, at ->
+            recordAttempt = { id, at, _, _ ->
                 attemptError?.let { throw it }
                 attempts += id to at
             },
+            expireDue = { 0 },
             write = { _, id, _ ->
                 writeError?.invoke(id)?.let { throw it }
                 if (!mailbox.add(id)) {

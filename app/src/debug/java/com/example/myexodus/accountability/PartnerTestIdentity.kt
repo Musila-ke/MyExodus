@@ -214,9 +214,12 @@ class PartnerTestIdentity(
 
     /** Production drainer wired to B's own DB + the secondary app — the replay leg's transport. */
     fun outboxDrainer(): MailboxOutboxDrainer = MailboxOutboxDrainer(
-        pendingRows = { pairId, limit -> db.outboxDao().pendingForDrain(pairId, limit) },
+        pendingRows = { pairId, now, limit -> db.outboxDao().pendingForDrain(pairId, now, limit) },
         markSent = { messageId -> db.outboxDao().markSent(messageId) },
-        recordAttempt = { messageId, at -> db.outboxDao().recordAttempt(messageId, at) },
+        recordAttempt = { messageId, at, nextAt, code ->
+            db.outboxDao().recordAttempt(messageId, at, nextAt, code)
+        },
+        expireDue = { now -> db.outboxDao().expireDue(now) },
         write = { partnerUid, messageId, data ->
             firestore.collection(MAILBOXES).document(partnerUid).collection(MESSAGES)
                 .document(messageId).set(data).await()

@@ -55,16 +55,21 @@ class EventCreator(
 
     /** [messageId] pins the outbox/mailbox id the caller already journaled (the Step 14 unpair
      *  protocol writes its journal row before the event exists, so the ack address is stable
-     *  across a crash); null mints a fresh id. */
+     *  across a crash); null mints a fresh id.
+     *
+     *  [eventId] is the Step 3 wire-contract UUID for accountability events — the caller
+     *  journaled it before this call, so a crash between journal and append reconciles by the
+     *  same id. Null for pre-contract payload types (SOS, attempt logs). */
     suspend fun create(
         pairId: String,
         payload: EventPayload,
         signature: Signature,
         messageId: String? = null,
+        eventId: String? = null,
     ): CreateResult {
         // sequence read + append must be one critical section: concurrent creates would
         // compute the same sequence and fork the chain.
-        return createMutex.withLock { createLocked(pairId, payload, signature, messageId) }
+        return createMutex.withLock { createLocked(pairId, payload, signature, messageId, eventId) }
     }
 
     private suspend fun createLocked(
@@ -72,6 +77,7 @@ class EventCreator(
         payload: EventPayload,
         signature: Signature,
         pinnedMessageId: String?,
+        eventId: String?,
     ): CreateResult {
         val enrollment = enrollmentDao.getByPairId(pairId)
             ?: return CreateResult.Failed("not enrolled")
@@ -108,7 +114,7 @@ class EventCreator(
         val envelope = SignedEnvelope(unsigned, signer.finishSign(signature))
 
         val messageId = pinnedMessageId ?: UUID.randomUUID().toString()
-        return when (store.appendLocal(pairId, envelope, messageId)) {
+        return when (store.appendLocal(pairId, envelope, messageId, eventId)) {
             is ChainStateStore.AppendResult.Appended -> CreateResult.Created(sequence, messageId)
             is ChainStateStore.AppendResult.Duplicate -> CreateResult.Duplicate
             is ChainStateStore.AppendResult.Gap -> CreateResult.Failed("chain gap")

@@ -19,6 +19,13 @@ interface ChainEventDao {
     @Query("SELECT * FROM events WHERE pair_id = :pairId AND sender_key_id = :senderKeyId AND sequence = :sequence")
     suspend fun getBySequence(pairId: String, senderKeyId: String, sequence: Long): ChainEvent?
 
+    /** §8.9 uniqueness probe: has this wire event already entered this relationship's chain? */
+    @Query(
+        "SELECT * FROM events WHERE pair_id = :pairId AND sender_key_id = :senderKeyId " +
+            "AND event_id = :eventId",
+    )
+    suspend fun getByEventId(pairId: String, senderKeyId: String, eventId: String): ChainEvent?
+
     /** Transactional outbox: unsent local events, oldest first (§7.3). */
     @Query(
         "SELECT * FROM events WHERE pair_id = :pairId AND direction = 'SENT' " +

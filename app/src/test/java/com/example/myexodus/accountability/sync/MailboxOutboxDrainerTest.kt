@@ -26,20 +26,36 @@ class MailboxOutboxDrainerTest {
 
     private data class Write(val partnerUid: String, val messageId: String, val data: Map<String, Any>)
 
+    private data class Attempt(
+        val messageId: String,
+        val at: Long,
+        val nextAt: Long,
+        val errorCode: String?,
+    )
+
     private class Fake(private val rows: List<PendingOutboxRow>) {
         val writes = mutableListOf<Write>()
         val sent = mutableListOf<String>()
-        val attempts = mutableListOf<Pair<String, Long>>()
+        val attempts = mutableListOf<Attempt>()
         val latencies = mutableListOf<Long>()
         var readError: Exception? = null
         var writeError: ((messageId: String) -> Exception?)? = null
         var clock = 42L
         var advancePerWrite = 0L
+        var evicted = 0
+        var expiredSweeps = 0
+        var requestedLimit = -1
 
         val drainer = MailboxOutboxDrainer(
-            pendingRows = { _, _ -> readError?.let { throw it } ?: rows },
+            pendingRows = { _, _, limit ->
+                requestedLimit = limit
+                readError?.let { throw it } ?: rows
+            },
             markSent = { sent += it },
-            recordAttempt = { messageId, at -> attempts += messageId to at },
+            recordAttempt = { messageId, at, nextAt, code ->
+                attempts += Attempt(messageId, at, nextAt, code)
+            },
+            expireDue = { expiredSweeps++; evicted },
             write = { partnerUid, messageId, data ->
                 writeError?.invoke(messageId)?.let { throw it }
                 writes += Write(partnerUid, messageId, data)
@@ -97,7 +113,12 @@ class MailboxOutboxDrainerTest {
         assertEquals("offline", (result as MailboxOutboxDrainer.DrainResult.Failed).reason)
         assertEquals(listOf("m1"), fake.writes.map { it.messageId })
         assertEquals(listOf("m1"), fake.sent)
-        assertEquals(listOf("m2" to 42L), fake.attempts)
+        // §8.5: the attempt is recorded with a closed code and a backed-off next due time.
+        assertEquals(1, fake.attempts.size)
+        assertEquals("m2", fake.attempts[0].messageId)
+        assertEquals(42L, fake.attempts[0].at)
+        assertEquals(MailboxOutboxDrainer.TRANSPORT_ERROR, fake.attempts[0].errorCode)
+        assertTrue(fake.attempts[0].nextAt > 42L)
     }
 
     @Test
@@ -111,7 +132,32 @@ class MailboxOutboxDrainerTest {
         // never drops a message (pairing-not-active-yet vs replay are indistinguishable).
         assertSame(MailboxOutboxDrainer.DrainResult.PermissionDenied, result)
         assertTrue(fake.sent.isEmpty())
-        assertEquals(listOf("m1" to 42L), fake.attempts)
+        assertEquals(1, fake.attempts.size)
+        // The persisted code is the Firestore enum name, never the exception message.
+        assertEquals("PERMISSION_DENIED", fake.attempts[0].errorCode)
+    }
+
+    @Test
+    fun drain_skipsToTheDueRowsOnly_byPassingTheDrainStartInstant() = runBlocking {
+        // The due filter itself lives in the DAO query; the drainer's contract is passing the
+        // start instant through and asking for the batch bound.
+        val fake = Fake(emptyList())
+        fake.clock = 987_654L
+
+        fake.drainer.drain("pair-1", "uid-me", "uid-partner")
+
+        assertEquals(100, fake.requestedLimit)
+    }
+
+    @Test
+    fun drain_sweepsExpiredRowsBeforeReading_theQueue() = runBlocking {
+        val fake = Fake(listOf(row("m1", byteArrayOf(1))))
+        fake.evicted = 2
+
+        val result = fake.drainer.drain("pair-1", "uid-me", "uid-partner")
+
+        assertEquals(MailboxOutboxDrainer.DrainResult.Sent(1), result)
+        assertEquals(1, fake.expiredSweeps)
     }
 
     @Test

@@ -429,6 +429,56 @@ class AppRulesStoreMigrationTest {
     }
 
     /**
+     * Partner-accountability Step 4 (v17→v18) and its rollback: the journal-first minimized
+     * body table appears with its two support indexes, both row shapes (monitoring and block)
+     * are readable, and the v17 rollback drops exactly that one table.
+     */
+    @Test
+    fun migration17to18AndBack_createsAndDropsTheEventJournal_preservingEveryOtherTable() {
+        val scratchPath = context.getDatabasePath("event-journal-test.db").absolutePath
+        AndroidSQLiteDriver().open(scratchPath).use { conn ->
+            conn.prepare("CREATE TABLE sentinel_table (id INTEGER NOT NULL PRIMARY KEY)").use { it.step() }
+            conn.prepare("INSERT INTO sentinel_table (id) VALUES (7)").use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_17_18.migrate(conn) }
+
+            assertTrue(
+                "the journal table exists after the forward migration",
+                "category" in columnNames(conn, "partner_event_journal"),
+            )
+            conn.prepare(
+                "INSERT INTO partner_event_journal (event_id, category, occurred_at_minute, " +
+                    "monitoring_state, outbox_age_bucket, schema_version, created_at_ms, expires_at_ms) " +
+                    "VALUES ('11111111-1111-4111-8111-111111111111', 'DEVICE_STATUS_CHANGED', 42, " +
+                    "'ACTIVE', 'UNDER_1H', 1, 100, 200)",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO partner_event_journal (event_id, category, occurred_at_minute, " +
+                    "schema_version, created_at_ms, expires_at_ms) VALUES " +
+                    "('22222222-2222-4222-8222-222222222222', 'BLOCKED_APP_ATTEMPT', 43, 1, 101, 201)",
+            ).use { it.step() }
+            conn.prepare(
+                "SELECT count(*) FROM partner_event_journal WHERE expires_at_ms > 150",
+            ).use { stmt ->
+                assertTrue(stmt.step())
+                assertEquals("both journal rows are readable", 2L, stmt.getLong(0))
+            }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_18_17.migrate(conn) }
+
+            assertTrue(
+                "the rollback drops the journal table outright",
+                columnNames(conn, "partner_event_journal").isEmpty(),
+            )
+            assertTrue(
+                "nothing else is touched on rollback",
+                "id" in columnNames(conn, "sentinel_table"),
+            )
+        }
+        context.deleteDatabase("event-journal-test.db")
+    }
+
+    /**
      * The v16 consent matrix (ADR #135), direct invocation: 15→16 drops the legacy consent
      * columns outright (recreate-table, no seed — "nothing until you choose" for every
      * install) and adds the per-(pair, item) tables plus the journal's consent key; 16→15

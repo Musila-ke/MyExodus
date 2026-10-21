@@ -849,6 +849,40 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * v17 → v18 (partner-accountability Step 4): the journal-first minimized event body.
+         * Lives in SQLCipher rather than the plain-FBE accountability DB because the body is
+         * plaintext until the envelope exists (plan Appendix S1.7). `events.event_id` in the
+         * accountability DB is the link — no second identity column, no link table to drift.
+         */
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_event_journal (" +
+                        "event_id TEXT NOT NULL, category TEXT NOT NULL, " +
+                        "occurred_at_minute INTEGER NOT NULL, monitoring_state TEXT, " +
+                        "outbox_age_bucket TEXT, schema_version INTEGER NOT NULL, " +
+                        "created_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL, " +
+                        "PRIMARY KEY(event_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_event_journal_created_at_ms " +
+                        "ON partner_event_journal (created_at_ms)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_event_journal_expires_at_ms " +
+                        "ON partner_event_journal (expires_at_ms)",
+                ).use { it.step() }
+            }
+        }
+
+        /** v18 rollback: a v17 build has no accountability event transport, so the journal goes. */
+        val MIGRATION_18_17 = object : Migration(18, 17) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("DROP TABLE IF EXISTS partner_event_journal").use { it.step() }
+            }
+        }
+
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override suspend fun migrate(connection: SQLiteConnection) {
                 // Recovery resource UI (plan v3 W7): the urge/recovery session log and the
@@ -1062,9 +1096,9 @@ class AppRulesStoreFactory(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
             MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
-            MIGRATION_16_17,
+            MIGRATION_16_17, MIGRATION_17_18,
             MIGRATION_10_9, MIGRATION_12_11, MIGRATION_13_12, MIGRATION_14_13, MIGRATION_15_14,
-            MIGRATION_16_15, MIGRATION_17_16,
+            MIGRATION_16_15, MIGRATION_17_16, MIGRATION_18_17,
         )
     }
 }

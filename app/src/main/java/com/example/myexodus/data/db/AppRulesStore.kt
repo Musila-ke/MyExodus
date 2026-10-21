@@ -9,6 +9,7 @@ import com.example.myexodus.data.db.dao.HabitProgressDao
 import com.example.myexodus.data.db.dao.MilestoneEventDao
 import com.example.myexodus.data.db.dao.PairSharingDao
 import com.example.myexodus.data.db.dao.PartnerActivityDao
+import com.example.myexodus.data.db.dao.PartnerEventJournalDao
 import com.example.myexodus.data.db.dao.PartnerPlanDao
 import com.example.myexodus.data.db.dao.PolicyVersionDao
 import com.example.myexodus.data.db.dao.RecoveryPolicyDao
@@ -30,6 +31,7 @@ import com.example.myexodus.data.db.entity.PairStreakSharing
 import com.example.myexodus.data.db.entity.PartnerActivityLink
 import com.example.myexodus.data.db.entity.PartnerActivityOutbox
 import com.example.myexodus.data.db.entity.PartnerActivityProjection
+import com.example.myexodus.data.db.entity.PartnerEventJournal
 import com.example.myexodus.data.db.entity.PartnerPlan
 import com.example.myexodus.data.db.entity.PartnerPlanTask
 import com.example.myexodus.data.db.entity.PolicyVersion
@@ -79,8 +81,9 @@ import com.example.myexodus.domainusage.RuleUsageDao
         PairProfileSharing::class,
         PartnerPlan::class,
         PartnerPlanTask::class,
+        PartnerEventJournal::class,
     ],
-    version = 17,
+    version = 18,
     exportSchema = true,
 )
 abstract class AppRulesStore : RoomDatabase() {
@@ -100,6 +103,7 @@ abstract class AppRulesStore : RoomDatabase() {
     abstract fun ruleUsageDao(): RuleUsageDao
     abstract fun usageLedgerDao(): UsageLedgerDao
     abstract fun partnerActivityDao(): PartnerActivityDao
+    abstract fun partnerEventJournalDao(): PartnerEventJournalDao
     abstract fun pairSharingDao(): PairSharingDao
     abstract fun partnerPlanDao(): PartnerPlanDao
 }

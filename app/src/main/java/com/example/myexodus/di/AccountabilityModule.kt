@@ -373,9 +373,14 @@ object AccountabilityModule {
     ): MailboxOutboxDrainer {
         val dao = db.outboxDao()
         return MailboxOutboxDrainer(
-            pendingRows = dao::pendingForDrain,
+            pendingRows = { pairId, nowEpochMillis, limit ->
+                dao.pendingForDrain(pairId, nowEpochMillis, limit)
+            },
             markSent = dao::markSent,
-            recordAttempt = dao::recordAttempt,
+            recordAttempt = { messageId, atEpochMillis, nextAttemptAtEpochMillis, errorCode ->
+                dao.recordAttempt(messageId, atEpochMillis, nextAttemptAtEpochMillis, errorCode)
+            },
+            expireDue = dao::expireDue,
             write = { partnerUid, messageId, data ->
                 FirestoreSchema.mailboxMessageDocument(firestore, partnerUid, messageId)
                     .set(data).await()

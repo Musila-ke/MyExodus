@@ -275,7 +275,7 @@ class ChainStateStoreTest {
         store.appendLocal(pairId, e1)
         store.appendLocal(pairId, e2)
 
-        val rows = db.outboxDao().pendingForDrain(pairId, 10)
+        val rows = db.outboxDao().pendingForDrain(pairId, 0, 10)
         val events = db.chainEventDao().chainFor(pairId)
         assertEquals(db.outboxDao().pendingFor(pairId, 10).map { it.messageId }, rows.map { it.messageId })
         assertArrayEquals(events[0].envelope, rows[0].envelopeBytes)
@@ -284,9 +284,9 @@ class ChainStateStoreTest {
         assertEquals(events[1].epoch, rows[1].epoch)
 
         db.outboxDao().markSent(rows[0].messageId)
-        val remaining = db.outboxDao().pendingForDrain(pairId, 10)
+        val remaining = db.outboxDao().pendingForDrain(pairId, 0, 10)
         assertEquals(listOf(rows[1].messageId), remaining.map { it.messageId })
-        assertEquals(1, db.outboxDao().pendingForDrain(pairId, 1).size)
+        assertEquals(1, db.outboxDao().pendingForDrain(pairId, 0, 1).size)
     }
 
     @Test
@@ -295,6 +295,92 @@ class ChainStateStoreTest {
         store.appendLocal(pairId, e1)
         assertEquals(ChainStateStore.AppendResult.Duplicate, store.appendLocal(pairId, e1))
         assertEquals(1, db.outboxDao().pendingFor(pairId, 10).size)
+    }
+
+    // --- Plan §8.9 / Step 4: the wire event id is the journal link, unique per chain. ---
+
+    @Test
+    fun appendLocal_storesTheWireEventId_andADifferentEnvelopeClaimingItIsRejected() = runTest {
+        val e1 = envelope(1)
+        assertEquals(
+            ChainStateStore.AppendResult.Appended,
+            store.appendLocal(pairId, e1, eventId = "evt-001"),
+        )
+        assertEquals("evt-001", db.chainEventDao().getByEventId(pairId, sender, "evt-001")?.eventId)
+
+        // Byte-identical re-append under the same wire id is the ordinary replay.
+        assertEquals(
+            ChainStateStore.AppendResult.Duplicate,
+            store.appendLocal(pairId, e1, eventId = "evt-001"),
+        )
+        // A different envelope claiming the same wire id never enters the chain — and does
+        // not fork it: the conflict is over an id, not a chain position.
+        assertEquals(
+            ChainStateStore.AppendResult.Rejected,
+            store.appendLocal(pairId, chained(2, e1, seed = 7), eventId = "evt-001"),
+        )
+        assertEquals(1, db.chainEventDao().chainFor(pairId).size)
+        assertEquals(1L, head()?.lastSequence)
+        assertFalse(head()!!.forked)
+    }
+
+    @Test
+    fun receiveRemote_storesTheWireEventId_andDeduplicatesByIt() = runTest {
+        val e1 = envelope(1)
+        assertEquals(
+            ChainStateStore.AppendResult.Appended,
+            store.receiveRemote(pairId, e1, messageId = "m1", atEpochMillis = NOW, eventId = "evt-001"),
+        )
+        assertEquals("evt-001", db.chainEventDao().getByEventId(pairId, sender, "evt-001")?.eventId)
+
+        // A re-delivery under a fresh mailbox doc id is still the same wire event.
+        assertEquals(
+            ChainStateStore.AppendResult.Duplicate,
+            store.receiveRemote(pairId, e1, messageId = "m2", atEpochMillis = NOW, eventId = "evt-001"),
+        )
+        assertEquals(1, db.chainEventDao().chainFor(pairId).size)
+    }
+
+    // --- Plan §8.7 retention: the pending window is anchored on event creation. ---
+
+    @Test
+    fun localAppend_stampsTheRetentionWindow_fromEventCreationTime() = runTest {
+        store.appendLocal(pairId, envelope(1))
+        val messageId = db.outboxDao().pendingForDrain(pairId, NOW, 10).single().messageId
+
+        assertEquals(0, db.outboxDao().expireDue(NOW + Outbox.RETENTION_MILLIS - 1))
+        assertEquals(
+            "the window closes exactly 30 days after the signed creation time",
+            1,
+            db.outboxDao().expireDue(NOW + Outbox.RETENTION_MILLIS),
+        )
+
+        val expired = db.outboxDao().snapshotOf(messageId)!!
+        assertEquals(Outbox.STATUS_EXPIRED, expired.status)
+        assertEquals("ciphertext cleared, the state is kept", 0, expired.envelopeBytes.size)
+        assertTrue(db.outboxDao().pendingForDrain(pairId, NOW + Outbox.RETENTION_MILLIS, 10).isEmpty())
+    }
+
+    @Test
+    fun localAppend_whenTheOutboxInsertFails_rollsBackTheChainRow() = runTest {
+        // AD-06b: the chain row and its outbox row commit or fail together. Pin the outbox
+        // primary key to an id already in use so the insert aborts inside the transaction.
+        db.outboxDao().insert(
+            Outbox(
+                messageId = "pinned",
+                eventId = 999,
+                envelopeBytes = byteArrayOf(9),
+                status = Outbox.STATUS_SENT,
+                createdAtEpochMillis = NOW,
+                expiresAtEpochMillis = NOW + Outbox.RETENTION_MILLIS,
+            ),
+        )
+
+        val failure = runCatching { store.appendLocal(pairId, envelope(1), messageId = "pinned") }
+
+        assertTrue("the append must not report success when its outbox row cannot land", failure.isFailure)
+        assertTrue(db.chainEventDao().chainFor(pairId).isEmpty())
+        assertNull(head())
     }
 
     @Test
@@ -590,7 +676,7 @@ class ChainStateStoreTest {
         db.close()
         db = Room.databaseBuilder(context, AccountabilityDatabase::class.java, dbName).build()
 
-        assertEquals(1, db.outboxDao().pendingForDrain(pairId, 10).size)
+        assertEquals(1, db.outboxDao().pendingForDrain(pairId, 0, 10).size)
     }
 
     @Test

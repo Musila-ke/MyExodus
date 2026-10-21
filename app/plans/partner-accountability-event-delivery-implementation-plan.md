@@ -876,3 +876,66 @@ The model has exactly one `String` field (`event_id`, UUID-format-checked) — a
 ### Tests (`AccountabilityEventContractTest`, 13)
 
 Every category round-trips; floored minutes; deterministic, ≤512-byte encoding; 12 prohibited field names rejected; non-UUID event ids rejected in both the builder and decoder; unknown version/kind/category/enum declined; wrong types declined; kind/category mismatch declined; required/forbidden field sets per kind; out-of-range sequences and gap ranges declined; malformed bytes never throw; delivery states match §8.4 exactly.
+
+## Appendix S4 — Step 4 durable outbox + sequence contract (executed 2026-10-21)
+
+**Delivered:** `AccountabilityDatabase` v13 (`events.event_id`, outbox retry/retention columns, `MIGRATION_12_13` + rollback `MIGRATION_13_12`), `AppRulesStore` v18 (`partner_event_journal` + rollback `MIGRATION_18_17`), `OutboxBackoff`, drain-side due/expiry sweep, and the wire-event-id idempotency seam in `ChainStateStore`/`EventCreator`. Full JVM suite 1,884 tests / 0 failures; device migration proven on the X6532 the same day (below).
+
+### §8.9 field mapping (and where the logical schema is split)
+
+| §8.9 logical field | Implemented as | Notes |
+|---|---|---|
+| `partner_event_outbox` table | **split**: `events` (chain row) + `outbox` (delivery row), joined `outbox.event_id → events.id` | Appendix S1.7: no third database, no duplicate row for the same event. |
+| `event_id` | `events.event_id` (TEXT, unique per pair+sender; NULL exempt) | Step 3 wire UUID. `outbox.event_id` is the internal row reference; the wire id stays on `events` so chain and delivery cannot disagree. |
+| `sender_install_id` | `events.sender_key_id` / `chain_heads.sender_key_id` | SHA-256 of the install's signing public key (`EnrollmentTranscript.senderKeyId`), regenerated on re-enrollment/clear-data. |
+| `relationship_id` | `pair_id` | One row per authorized pair. |
+| `relationship_seq` | `events.sequence` | Allocated inside the same `withWriteTransaction` that writes the head and the outbox row. |
+| `schema_version` | inside the signed envelope bytes (Step 3 body, `v=1`) | Not a queryable column; no Step 4/6 consumer needs to route by version before decryption. |
+| minimized body / envelope | `partner_event_journal` (plaintext, SQLCipher) and `outbox.envelope_bytes` (prepared ciphertext) | Detector transaction writes the journal; reconcile turns it into exactly one envelope. |
+| `delivery_state` | `outbox.status` | TEXT, admits all seven §8.4 states; Step 4 reaches `PENDING`/`SENT`/`EXPIRED`; the other four get writers in Steps 5/6/10. |
+| `idempotency_key` | `outbox.message_id` (UUID minted once at creation, = mailbox doc id) **plus** the unique event index | Retries reuse the stored bytes and id; create-only mailbox documents turn a replay into `ALREADY_EXISTS` → marked SENT. |
+| `attempt_count` / `next_attempt_at` / `last_error_code` | outbox columns | `OutboxBackoff` = exponential 30–60 s first retry, ×2 per attempt, capped at 6 h, deterministic per-message jitter. Error codes are closed (`FirebaseFirestoreException.Code` names, `TRANSPORT`); never exception text. |
+| `created_at` / `expires_at` | outbox columns | `expires_at = createdAt + 30 days`, stamped in the same transaction as the append (§8.7); migration backfills pre-existing rows. |
+| unique `(sender_install_id, relationship_id, event_id)` | `index_events_pair_id_sender_key_id_event_id` (unique) | |
+| unique `(sender_install_id, relationship_id, relationship_seq)` | `index_events_pair_id_sender_key_id_sequence` (unique, pre-existing) | |
+| pending-work index | `index_outbox_status_next_attempt_at` | Drain filters `status = PENDING`, `next_attempt_at <= now`, unexpired, ordered by chain sequence. |
+| `relationship_sequence` table | `chain_heads.last_sequence` | Already transactional; no second counter to drift. |
+
+### Retention and eviction (§8.7)
+
+`OutboxDao.expireDue` runs before every drain: a `PENDING` row past its window becomes `EXPIRED` (state recorded, row kept) and ciphertext is cleared from both `PENDING` and `SENT` rows past the window (the relay's own copy dies on the same 30-day cap, so the local bytes can no longer deliver or repair anything). Rows with `expires_at = 0` predate Step 4 and are left to the migration backfill.
+
+### Backup exclusion
+
+`android:allowBackup="false"` plus `backup_rules.xml`/`data_extraction_rules.xml` excluding `database`, `sharedpref`, `rules_snapshot.json`, and `datastore` — no counter, chain, outbox, or crypto state can enter a cloud backup, which satisfies "exclude unless the secure transfer design explicitly supports restoration" without imposing a restore path.
+
+### Validation evidence (Step 4 list)
+
+| Required validation | Evidence | Result |
+|---|---|---|
+| Migration / rollback | `AccountabilityDatabaseMigrationTest.migration12to13_addsEventIdAndOutboxRetryColumns_preservingQueuedWork` (seeded v12 rows keep bytes/status/attempts; new columns present) and `migration13to12_restoresTheV12Shape_preservingEveryRow` (table rebuild copies every row, drops only the new columns) | green |
+| Concurrent sequence allocation | `ChainStateStoreTest.concurrentAppends_forTheSameSequence_exactlyOneWins_noDuplicateSequence` (pre-existing, re-run) | green |
+| Transaction rollback | `ChainStateStoreTest.localAppend_whenTheOutboxInsertFails_rollsBackTheChainRow` (the append reports failure and no chain row/head survives) | green |
+| Process death before/after encryption | `localAppend_whenTheOutboxInsertFails_rollsBackTheChainRow` (death before commit → nothing durable) + `outboxRow_survivesAReopen_pendingForTheNextDrain_theCrashConsistencyStandIn` (death after commit → the stored bytes are what retries transmit). Real SIGKILL fault injection is deferred to the Step 11 device matrix; this is an honest stand-in, not a claim of a kill test. | green (stand-in) |
+| Same-envelope retry | `MailboxOutboxDrainerTest.drain_writesTheExactStoredBytes_inChainOrder_underMessageId` (byte-identical payload under the same doc id) | green |
+| Outbox eviction | `ChainStateStoreTest.localAppend_stampsTheRetentionWindow_fromEventCreationTime` (EXPIRED at the boundary, ciphertext cleared, no longer drained) + `MailboxOutboxDrainerTest.drain_sweepsExpiredRowsBeforeReading_theQueue` | green |
+| Clear-data / re-enrollment | New install identity = new `sender_key_id`, so sequence allocation starts a fresh namespace while old rows stay scoped to the old key (`twoSendersOnOnePair_buildIndependentChains_aForkOnOneBlocksOnlyOne`); pair deletion clears its outbox (`deletePairData_clearsTheOutboxWithTheChain`) | green |
+
+Also covered: wire-event idempotency on both paths (`appendLocal_storesTheWireEventId_andADifferentEnvelopeClaimingItIsRejected`, `receiveRemote_storesTheWireEventId_andDeduplicatesByIt`), and the journal contract (`PartnerEventJournalDaoTest`, 4 tests — round-trip both shapes, pairing cut-off + expiry + order + batch limit, boundary-strict sweep, entity contract guards).
+
+### Device migration proof (X6532, 2026-10-21)
+
+`install -r` over the pre-Step-4 build (no uninstall), force-stop, relaunch. Pre → post:
+
+- `myexodus_accountability.db` `PRAGMA user_version` **12 → 13**;
+- row counts identical: events 0, outbox 0, chain_heads 0, enrollments 1, processed_events 17, approval_requests 0, unpair_state 1, identity_epoch 1;
+- new outbox columns `next_attempt_at`/`expires_at`/`last_error_code` present with defaults; both `events` unique indexes present; no `.corrupt` files;
+- `myexodus_rules.db` (4.1 MB, v17 → v18) opened with its WAL intact; Home still shows "1 day / Best streak 5 / Blocks 6 / Times blocked 107" and Rules still lists Netflix 4h + the four website rules.
+
+Honest limit: the device outbox held 0 rows, so the migration's live-row backfill (`UPDATE outbox SET expires_at = created_at + retention WHERE expires_at = 0`) is proven by the seeded JVM migration test, not by a row on that device.
+
+### Interpretation notes (recorded, not silently applied)
+
+1. **Split schema** — the plan's §8.9 `partner_event_outbox` is realized across `events` + `outbox` per S1.7, not as a new parallel table (ADR #197).
+2. **`schema_version`** travels inside the prepared envelope rather than as a column; adding a duplicate column would create two sources of truth for one value.
+3. **`message_id` as idempotency key** — §8.9 names a "scoped idempotency_key"; the scope is enforced by the `(pair, sender, event_id)` unique index plus create-only mailbox storage, while the key itself is the mailbox document id every retry reuses.

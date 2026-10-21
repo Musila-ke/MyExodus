@@ -13,6 +13,8 @@ data class PendingOutboxRow(
     @ColumnInfo(name = "envelope_bytes") val envelopeBytes: ByteArray,
     @ColumnInfo(name = "sender_key_id") val senderKeyId: String,
     @ColumnInfo(name = "epoch") val epoch: Int,
+    /** §8.5 backoff basis: how many attempts this row has already had. */
+    @ColumnInfo(name = "attempt_count") val attemptCount: Int = 0,
 )
 
 /** One outbox row plus the event metadata its mailbox document carries — the Step 13 unpair
@@ -42,14 +44,25 @@ interface OutboxDao {
     )
     suspend fun pendingFor(pairId: String, limit: Int): List<Outbox>
 
-    /** Step 9 drain projection: the stored bytes plus the event metadata the mailbox document
-     *  carries (`senderId` = chain-scoping key id, `keyEpoch`). */
+    /**
+     * Step 9 drain projection: the stored bytes plus the event metadata the mailbox document
+     * carries (`senderId` = chain-scoping key id, `keyEpoch`). Step 4 adds the due filter
+     * (§8.5 backoff): only rows whose `next_attempt_at` has passed, and never a row past its
+     * retention window even if the expiry stamp itself did not land.
+     */
     @Query(
-        "SELECT o.message_id, o.envelope_bytes, e.sender_key_id, e.epoch " +
+        "SELECT o.message_id, o.envelope_bytes, e.sender_key_id, e.epoch, o.attempt_count " +
             "FROM outbox o INNER JOIN events e ON e.id = o.event_id " +
-            "WHERE e.pair_id = :pairId AND o.status = 'PENDING' ORDER BY e.sequence ASC LIMIT :limit",
+            "WHERE e.pair_id = :pairId AND o.status = 'PENDING' " +
+            "AND o.next_attempt_at <= :nowEpochMillis " +
+            "AND (o.expires_at = 0 OR o.expires_at > :nowEpochMillis) " +
+            "ORDER BY e.sequence ASC LIMIT :limit",
     )
-    suspend fun pendingForDrain(pairId: String, limit: Int): List<PendingOutboxRow>
+    suspend fun pendingForDrain(
+        pairId: String,
+        nowEpochMillis: Long,
+        limit: Int,
+    ): List<PendingOutboxRow>
 
     @Query("UPDATE outbox SET status = 'SENT' WHERE message_id = :messageId")
     suspend fun markSent(messageId: String)
@@ -63,8 +76,33 @@ interface OutboxDao {
     )
     suspend fun snapshotOf(messageId: String): OutboxRowSnapshot?
 
-    @Query("UPDATE outbox SET attempt_count = attempt_count + 1, last_attempt_at = :atEpochMillis WHERE message_id = :messageId")
-    suspend fun recordAttempt(messageId: String, atEpochMillis: Long)
+    /** §8.5: persists the retry metadata a later launch needs to resume with backoff. */
+    @Query(
+        "UPDATE outbox SET attempt_count = attempt_count + 1, last_attempt_at = :atEpochMillis, " +
+            "next_attempt_at = :nextAttemptAtEpochMillis, last_error_code = :errorCode " +
+            "WHERE message_id = :messageId",
+    )
+    suspend fun recordAttempt(
+        messageId: String,
+        atEpochMillis: Long,
+        nextAttemptAtEpochMillis: Long,
+        errorCode: String?,
+    )
+
+    /**
+     * §8.7 retention/eviction. A PENDING row past its window becomes EXPIRED — the delivery
+     * state is recorded, never a silent delete. The ciphertext bytes are cleared in both
+     * PENDING and SENT rows once the window passes: the relay's own copy dies on the same
+     * 30-day cap, so the local bytes can no longer deliver or repair anything. Rows with
+     * `expires_at = 0` predate Step 4 and are left alone (migration 12→13 backfills them).
+     */
+    @Query(
+        "UPDATE outbox SET " +
+            "status = CASE WHEN status = 'PENDING' THEN 'EXPIRED' ELSE status END, " +
+            "envelope_bytes = CASE WHEN length(envelope_bytes) > 0 THEN x'' ELSE envelope_bytes END " +
+            "WHERE expires_at > 0 AND expires_at <= :nowEpochMillis",
+    )
+    suspend fun expireDue(nowEpochMillis: Long): Int
 
     /**
      * Step 18: sent rows whose mailbox document still owes a relay-marker read-back — never

@@ -4,11 +4,13 @@ import android.app.Application
 import android.content.Context
 import java.io.RandomAccessFile
 import androidx.room3.Room
+import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.driver.AndroidSQLiteDriver
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -39,6 +41,14 @@ class AccountabilityDatabaseMigrationTest {
     @After
     fun tearDown() {
         context.deleteDatabase(AccountabilityDatabase.DB_NAME)
+    }
+
+    private fun columnNames(conn: SQLiteConnection, table: String): Set<String> {
+        val names = mutableSetOf<String>()
+        conn.prepare("PRAGMA table_info(`$table`)").use { s ->
+            while (s.step()) names += s.getText(1)
+        }
+        return names
     }
 
     /**
@@ -125,6 +135,7 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
             AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
             AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
+            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
         ).build()
         runBlocking {
             // Fresh identity_epoch table: no rows yet, fully usable.
@@ -178,6 +189,7 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
             AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
             AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
+            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
         ).build()
         runBlocking {
             // The ADD COLUMN default backfills the pre-existing head row.
@@ -199,7 +211,7 @@ class AccountabilityDatabaseMigrationTest {
             assertEquals("m1", pending.messageId)
             assertNull(pending.destinationUid)
             db.outboxDao().markSent("m1")
-            db.outboxDao().recordAttempt("m1", 7)
+            db.outboxDao().recordAttempt("m1", 7, 67, null)
             assertTrue(db.outboxDao().pendingFor("pair-a", 10).isEmpty())
             // processed_events table is live.
             db.processedEventDao().insert(ProcessedEvent("m1", 8))
@@ -250,6 +262,7 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
             AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
             AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
+            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
         ).build()
         runBlocking {
             val head = db.chainHeadDao().get("pair-a", "k1")
@@ -302,6 +315,7 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
             AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
             AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
+            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
         ).build()
         runBlocking {
             val enrollment = db.enrollmentDao().getByPairId("pair-a")!!
@@ -366,6 +380,7 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
             AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
             AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
+            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
         ).build()
         runBlocking {
             val enrollment = db.enrollmentDao().getByPairId("pair-a")!!
@@ -432,6 +447,7 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
             AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
             AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
+            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
         ).build()
         runBlocking {
             val head = db.chainHeadDao().get("pair-a", "k1")!!
@@ -487,6 +503,7 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_9_10,
             AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
             AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
+            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
         ).build()
         runBlocking {
             // The migrated row survives byte-for-byte and is due exactly one read-back.
@@ -554,6 +571,7 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_9_10,
             AccountabilityDatabase.MIGRATION_10_11,
             AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
+            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
         ).build()
         runBlocking {
             val enrollment = checkNotNull(db.enrollmentDao().getByPairId("pair-a"))
@@ -626,6 +644,7 @@ class AccountabilityDatabaseMigrationTest {
             AccountabilityDatabase.MIGRATION_9_10,
             AccountabilityDatabase.MIGRATION_10_11,
             AccountabilityDatabase.MIGRATION_11_12,
+            AccountabilityDatabase.MIGRATION_12_13,
         ).build()
         runBlocking {
             val enrollment = checkNotNull(db.enrollmentDao().getByPairId("pair-a"))
@@ -654,6 +673,202 @@ class AccountabilityDatabaseMigrationTest {
             assertEquals(1, db.outboxDao().rejectionCountSince("pair-a", sinceEpochMillis = 0))
         }
         db.close()
+    }
+
+    /**
+     * Partner-accountability Step 4 (v12→v13): `events.event_id` + the unique
+     * `(pair_id, sender_key_id, event_id)` index, and the §8.5/§8.7 outbox columns. A
+     * pre-existing PENDING outbox row keeps its bytes and gets a retention window anchored to
+     * its creation (the exact window the new write path would have stamped); the relay-check
+     * columns survive untouched; a pre-v13 event reads back with a null wire id.
+     */
+    @Test
+    fun migration12to13_addsEventIdAndOutboxRetryColumns_preservingQueuedWork() {
+        val dbPath = context.getDatabasePath(AccountabilityDatabase.DB_NAME).absolutePath
+        val createdAt = 100L
+
+        AndroidSQLiteDriver().open(dbPath).use { conn ->
+            V12_DDL.forEach { ddl ->
+                conn.prepare(ddl).use { it.step() }
+            }
+            conn.prepare(
+                "INSERT INTO events (pair_id, sender_key_id, epoch, sequence, previous_event_hash, " +
+                    "event_hash, envelope, direction, created_at, sync_state) " +
+                    "VALUES ('pair-a', 'k1', 0, 1, NULL, x'01', x'02', 'SENT', 1, 'PENDING')",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO outbox (message_id, event_id, destination_uid, envelope_bytes, status, " +
+                    "created_at, last_attempt_at, attempt_count, relay_checked_at, relay_rejection) " +
+                    "VALUES ('m-pending', 1, 'uid-b', x'03', 'PENDING', $createdAt, NULL, 0, NULL, NULL)",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO outbox (message_id, event_id, destination_uid, envelope_bytes, status, " +
+                    "created_at, last_attempt_at, attempt_count, relay_checked_at, relay_rejection) " +
+                    "VALUES ('m-sent', 1, 'uid-b', x'04', 'SENT', 1, 2, 1, 7, 'RATE_LIMITED')",
+            ).use { it.step() }
+            conn.prepare("PRAGMA user_version = 12").use { it.step() }
+        }
+
+        val db = Room.databaseBuilder(
+            context,
+            AccountabilityDatabase::class.java,
+            AccountabilityDatabase.DB_NAME,
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
+        runBlocking {
+            // Pre-v13 chain rows survive with a null wire id (they predate the contract).
+            val chain = db.chainEventDao().chainFor("pair-a").single()
+            assertNull(chain.eventId)
+
+            // The pre-v13 pending row is due (next_attempt_at defaulted to 0) and retention is
+            // anchored to its own creation time.
+            val due = db.outboxDao().pendingForDrain("pair-a", nowEpochMillis = 0, limit = 10).single()
+            assertEquals("m-pending", due.messageId)
+            assertArrayEquals(byteArrayOf(3), due.envelopeBytes)
+            assertEquals(0, due.attemptCount)
+            assertTrue(
+                "the backfilled window expires at created_at + 30d",
+                db.outboxDao().pendingForDrain("pair-a", createdAt + Outbox.RETENTION_MILLIS, 10).isEmpty(),
+            )
+
+            // The relay-check stamp on the pre-existing SENT row survived 12→13 untouched.
+            assertEquals(1, db.outboxDao().rejectionCountSince("pair-a", sinceEpochMillis = 0))
+
+            // §8.7 eviction records the state and clears the ciphertext — never a silent delete.
+            // Both rows are past their window by now (the SENT row was created at t=1), and the
+            // SENT bytes die on the same 30-day cap as the relay's own copy.
+            assertEquals(2, db.outboxDao().expireDue(createdAt + Outbox.RETENTION_MILLIS))
+            val expired = checkNotNull(db.outboxDao().snapshotOf("m-pending"))
+            assertEquals(Outbox.STATUS_EXPIRED, expired.status)
+            assertTrue(expired.envelopeBytes.isEmpty())
+            assertTrue(db.outboxDao().pendingForDrain("pair-a", Long.MAX_VALUE, 10).isEmpty())
+
+            // The Step 3 wire id is now a live column and unique per relationship + sender
+            // install: the second insert of the same id is refused by the index, and the
+            // first row is untouched.
+            val wireId = java.util.UUID.randomUUID().toString()
+            db.chainEventDao().insert(
+                ChainEvent(
+                    pairId = "pair-a",
+                    senderKeyId = "k1",
+                    eventId = wireId,
+                    epoch = 0,
+                    sequence = 2,
+                    previousEventHash = byteArrayOf(1),
+                    eventHash = byteArrayOf(2),
+                    envelope = byteArrayOf(3),
+                    direction = ChainEvent.DIRECTION_SENT,
+                    createdAtEpochMillis = 2,
+                    syncState = ChainEvent.SYNC_STATE_PENDING,
+                ),
+            )
+            assertEquals(wireId, db.chainEventDao().getByEventId("pair-a", "k1", wireId)?.eventId)
+            val duplicate = runCatching {
+                db.chainEventDao().insert(
+                    ChainEvent(
+                        pairId = "pair-a",
+                        senderKeyId = "k1",
+                        eventId = wireId,
+                        epoch = 0,
+                        sequence = 3,
+                        previousEventHash = byteArrayOf(2),
+                        eventHash = byteArrayOf(4),
+                        envelope = byteArrayOf(5),
+                        direction = ChainEvent.DIRECTION_SENT,
+                        createdAtEpochMillis = 3,
+                        syncState = ChainEvent.SYNC_STATE_PENDING,
+                    ),
+                )
+            }
+            assertTrue("the unique event-id index refuses a second row", duplicate.isFailure)
+            assertEquals(2, db.chainEventDao().chainFor("pair-a").size)
+            // NULL ids stay distinct under the unique index (gap markers / pre-contract rows).
+            assertNull(db.chainEventDao().getByEventId("pair-a", "k1", "not-a-row"))
+        }
+        db.close()
+    }
+
+    /**
+     * D-33 rollback (v12→v13→v12): the down step restores the exact v12 shape — the v13 index
+     * and columns gone — while every chain row and queued envelope survives with its bytes and
+     * ids intact. A downgrade is a schema step, never a data loss.
+     */
+    @Test
+    fun migration13to12_restoresTheV12Shape_preservingEveryRow() {
+        val dbPath = context.getDatabasePath(AccountabilityDatabase.DB_NAME).absolutePath
+
+        AndroidSQLiteDriver().open(dbPath).use { conn ->
+            V12_DDL.forEach { ddl -> conn.prepare(ddl).use { it.step() } }
+            conn.prepare(
+                "INSERT INTO chain_heads (pair_id, sender_key_id, last_sequence, last_event_hash, forked) " +
+                    "VALUES ('pair-a', 'k1', 2, x'02', 0)",
+            ).use { it.step() }
+            conn.prepare("PRAGMA user_version = 12").use { it.step() }
+        }
+
+        // Forward through Room's real upgrade path, then write v13-only state.
+        val db = Room.databaseBuilder(
+            context,
+            AccountabilityDatabase::class.java,
+            AccountabilityDatabase.DB_NAME,
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
+        val wireId = java.util.UUID.randomUUID().toString()
+        runBlocking {
+            db.chainEventDao().insert(
+                ChainEvent(
+                    pairId = "pair-a",
+                    senderKeyId = "k1",
+                    eventId = wireId,
+                    epoch = 0,
+                    sequence = 1,
+                    previousEventHash = null,
+                    eventHash = byteArrayOf(1),
+                    envelope = byteArrayOf(2, 3),
+                    direction = ChainEvent.DIRECTION_SENT,
+                    createdAtEpochMillis = 5,
+                    syncState = ChainEvent.SYNC_STATE_PENDING,
+                ),
+            )
+            val eventId = db.chainEventDao().chainFor("pair-a").single().id
+            db.outboxDao().insert(
+                Outbox(
+                    messageId = "m1",
+                    eventId = eventId,
+                    destinationUid = "uid-b",
+                    envelopeBytes = byteArrayOf(2, 3),
+                    status = Outbox.STATUS_PENDING,
+                    createdAtEpochMillis = 5,
+                ),
+            )
+            db.outboxDao().recordAttempt("m1", 6, 66, "TRANSPORT")
+        }
+        db.close()
+
+        AndroidSQLiteDriver().open(dbPath).use { conn ->
+            runBlocking { AccountabilityDatabase.MIGRATION_13_12.migrate(conn) }
+
+            val eventColumns = columnNames(conn, "events")
+            assertFalse("v13's wire id is gone", "event_id" in eventColumns)
+            assertTrue("every v12 column survives", "sync_state" in eventColumns)
+            val outboxColumns = columnNames(conn, "outbox")
+            assertFalse("next_attempt_at" in outboxColumns)
+            assertFalse("expires_at" in outboxColumns)
+            assertFalse("last_error_code" in outboxColumns)
+
+            conn.prepare("SELECT COUNT(*) FROM events").use { s ->
+                s.step()
+                assertEquals("the chain row survives", 1, s.getLong(0))
+            }
+            conn.prepare(
+                "SELECT message_id, event_id, envelope_bytes, status, attempt_count FROM outbox",
+            ).use { s ->
+                s.step()
+                assertEquals("m1", s.getText(0))
+                assertEquals(1L, s.getLong(1))
+                assertArrayEquals(byteArrayOf(2, 3), s.getBlob(2))
+                assertEquals(Outbox.STATUS_PENDING, s.getText(3))
+                assertEquals("the v12 counter survives, v13 retry state does not", 1L, s.getLong(4))
+            }
+        }
     }
 
     /**
@@ -880,6 +1095,22 @@ class AccountabilityDatabaseMigrationTest {
                 "mailbox_watermark_ts INTEGER, " +
                 "pairing_epoch INTEGER NOT NULL DEFAULT 0, " +
                 "partner_label TEXT)",
+        )
+
+        /** v12 baseline: v11 + MIGRATION_11_12's per-pair agreement alias (ADR #106); every
+         *  other table is unchanged in 11→12. */
+        private val V12_DDL = V11_DDL.filterNot { it.contains("enrollments") } + listOf(
+            "CREATE TABLE IF NOT EXISTS enrollments (" +
+                "pair_id TEXT NOT NULL PRIMARY KEY, " +
+                "my_sender_key_id TEXT NOT NULL, " +
+                "partner_signing_key_id TEXT NOT NULL, " +
+                "partner_signing_pubkey BLOB NOT NULL, " +
+                "partner_agreement_pubkey BLOB NOT NULL, " +
+                "created_at INTEGER NOT NULL, " +
+                "mailbox_watermark_ts INTEGER, " +
+                "pairing_epoch INTEGER NOT NULL DEFAULT 0, " +
+                "partner_label TEXT, " +
+                "my_agreement_key_alias TEXT)",
         )
     }
 }

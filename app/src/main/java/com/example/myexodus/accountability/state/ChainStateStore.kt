@@ -42,13 +42,19 @@ class ChainStateStore(
     }
 
     /** [messageId] lets a caller that must later address this message's mailbox document
-     *  (the Step 13 unpair journal) pin the id instead of receiving a store-internal UUID. */
+     *  (the Step 13 unpair journal) pin the id instead of receiving a store-internal UUID.
+     *  [eventId] is the Step 3 wire event id this envelope carries; it becomes the durable
+     *  link to the sender's [com.example.myexodus.data.db.entity.PartnerEventJournal] row
+     *  and is unique per (relationship, sender install). */
     suspend fun appendLocal(
         pairId: String,
         envelope: SignedEnvelope,
         messageId: String? = null,
+        eventId: String? = null,
     ): AppendResult =
-        db.withWriteTransaction { appendOutcome(pairId, envelope, ChainEvent.DIRECTION_SENT, messageId) }
+        db.withWriteTransaction {
+            appendOutcome(pairId, envelope, ChainEvent.DIRECTION_SENT, messageId, eventId)
+        }
 
     /**
      * Remote append with AD-10b dedup: [messageId] (when given) is the mailbox message's
@@ -61,11 +67,12 @@ class ChainStateStore(
         envelope: SignedEnvelope,
         messageId: String? = null,
         atEpochMillis: Long = 0L,
+        eventId: String? = null,
     ): AppendResult = db.withWriteTransaction {
         if (messageId != null && db.processedEventDao().contains(messageId)) {
             return@withWriteTransaction AppendResult.Duplicate
         }
-        val result = appendOutcome(pairId, envelope, ChainEvent.DIRECTION_RECEIVED)
+        val result = appendOutcome(pairId, envelope, ChainEvent.DIRECTION_RECEIVED, eventId = eventId)
         if (messageId != null && result in PROCESSED_OUTCOMES) {
             db.processedEventDao().insert(ProcessedEvent(messageId, atEpochMillis))
         }
@@ -185,6 +192,9 @@ class ChainStateStore(
         limit: Int = REPLAY_BATCH_LIMIT,
     ): Int = db.withWriteTransaction {
         val events = db.chainEventDao().sentEventsAfter(pairId, senderKeyId, afterSequence, limit)
+        // A replay is a brand-new mailbox document, so its retention window starts now —
+        // anchoring expiry to the original creation time would expire old repairs on arrival.
+        val now = System.currentTimeMillis()
         for (event in events) {
             db.outboxDao().insert(
                 Outbox(
@@ -192,7 +202,8 @@ class ChainStateStore(
                     eventId = event.id,
                     envelopeBytes = event.envelope,
                     status = Outbox.STATUS_PENDING,
-                    createdAtEpochMillis = event.createdAtEpochMillis,
+                    createdAtEpochMillis = now,
+                    expiresAtEpochMillis = now + Outbox.RETENTION_MILLIS,
                 ),
             )
         }
@@ -234,18 +245,32 @@ class ChainStateStore(
         envelope: SignedEnvelope,
         direction: String,
         messageId: String? = null,
+        eventId: String? = null,
     ): AppendResult {
         val unsigned = envelope.unsigned
         val sender = unsigned.senderKeyId
         val hash = eventHash(unsigned)
+        // §8.9 (sender_install_id, relationship_id, event_id) uniqueness: an event that has
+        // already entered this chain is idempotent when identical, and a different envelope
+        // claiming the same event id is refused outright (never a fork — the chain itself is
+        // not in conflict). The unique index is the multi-process backstop.
+        if (eventId != null) {
+            val stored = db.chainEventDao().getByEventId(pairId, sender, eventId)
+            if (stored != null) {
+                return if (stored.eventHash.contentEquals(hash)) AppendResult.Duplicate else AppendResult.Rejected
+            }
+        }
         val head = db.chainHeadDao().get(pairId, sender)
 
         if (head == null) {
             return when {
-                unsigned.sequence != 1L -> insertGapOrConflict(pairId, envelope, direction, hash, unsigned.sequence, null)
+                unsigned.sequence != 1L -> insertGapOrConflict(
+                    pairId, envelope, direction, hash, unsigned.sequence, null, eventId,
+                )
+
                 unsigned.previousEventHash != null -> AppendResult.Rejected
                 else -> {
-                    insertRow(pairId, envelope, direction, hash, ChainEvent.SYNC_STATE_PENDING, messageId)
+                    insertRow(pairId, envelope, direction, hash, ChainEvent.SYNC_STATE_PENDING, messageId, eventId)
                     db.chainHeadDao().insert(
                         ChainHead(
                             pairId = pairId,
@@ -277,7 +302,7 @@ class ChainStateStore(
                 when {
                     stored == null ->
                         if (unsigned.previousEventHash.contentEquals(head.lastEventHash)) {
-                            appendAndAdvance(pairId, envelope, direction, hash, head, messageId)
+                            appendAndAdvance(pairId, envelope, direction, hash, head, messageId, eventId)
                         } else {
                             flagFork(head)
                         }
@@ -291,7 +316,9 @@ class ChainStateStore(
                 }
             }
 
-            unsigned.sequence > head.lastSequence + 1 -> insertGapOrConflict(pairId, envelope, direction, hash, unsigned.sequence, head)
+            unsigned.sequence > head.lastSequence + 1 -> insertGapOrConflict(
+                pairId, envelope, direction, hash, unsigned.sequence, head, eventId,
+            )
 
             else -> if (sameAsStored(pairId, sender, unsigned.sequence, hash)) {
                 AppendResult.Duplicate
@@ -308,8 +335,9 @@ class ChainStateStore(
         hash: ByteArray,
         head: ChainHead,
         messageId: String? = null,
+        eventId: String? = null,
     ): AppendResult {
-        insertRow(pairId, envelope, direction, hash, ChainEvent.SYNC_STATE_PENDING, messageId)
+        insertRow(pairId, envelope, direction, hash, ChainEvent.SYNC_STATE_PENDING, messageId, eventId)
         val advanced = head.withEpochOf(envelope.unsigned).copy(lastSequence = head.lastSequence + 1, lastEventHash = hash)
         return cascadeFrom(pairId, head.senderKeyId, advanced)
     }
@@ -407,11 +435,12 @@ class ChainStateStore(
         hash: ByteArray,
         sequence: Long,
         head: ChainHead?,
+        eventId: String? = null,
     ): AppendResult {
         val stored = db.chainEventDao().getBySequence(pairId, envelope.unsigned.senderKeyId, sequence)
         return when {
             stored == null -> {
-                insertRow(pairId, envelope, direction, hash, ChainEvent.SYNC_STATE_PENDING_GAP)
+                insertRow(pairId, envelope, direction, hash, ChainEvent.SYNC_STATE_PENDING_GAP, null, eventId)
                 // AD-08 stage 1: a buffered orphan starts the repair path — same transaction,
                 // so no pass can observe a gap without its REPAIR_PENDING marker. A headless
                 // namespace cannot be marked: AD-08b requests need an attested head to anchor
@@ -439,11 +468,13 @@ class ChainStateStore(
         hash: ByteArray,
         syncState: String,
         messageId: String? = null,
+        wireEventId: String? = null,
     ) {
         val u = envelope.unsigned
         val row = ChainEvent(
             pairId = pairId,
             senderKeyId = u.senderKeyId,
+            eventId = wireEventId,
             epoch = u.epoch,
             sequence = u.sequence,
             previousEventHash = u.previousEventHash,
@@ -453,7 +484,7 @@ class ChainStateStore(
             createdAtEpochMillis = u.createdAtEpochMillis,
             syncState = syncState,
         )
-        val eventId = db.chainEventDao().insert(row)
+        val rowId = db.chainEventDao().insert(row)
         // AD-06b: local events get their outbox row in this same transaction — messageId is
         // generated once here (or caller-pinned) and the stored bytes are the ones every
         // retry transmits.
@@ -461,10 +492,13 @@ class ChainStateStore(
             db.outboxDao().insert(
                 Outbox(
                     messageId = messageId ?: UUID.randomUUID().toString(),
-                    eventId = eventId,
+                    eventId = rowId,
                     envelopeBytes = row.envelope,
                     status = Outbox.STATUS_PENDING,
                     createdAtEpochMillis = u.createdAtEpochMillis,
+                    // §8.7: retention starts at creation, so a row is never retried past the
+                    // relay's own 30-day ciphertext cap.
+                    expiresAtEpochMillis = u.createdAtEpochMillis + Outbox.RETENTION_MILLIS,
                 ),
             )
         }

@@ -25,7 +25,7 @@ import com.example.myexodus.accountability.enrollment.EnrollmentRecord
         ProcessedEvent::class,
         UnpairState::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = false,
 )
 abstract class AccountabilityDatabase : RoomDatabase() {
@@ -217,7 +217,102 @@ abstract class AccountabilityDatabase : RoomDatabase() {
         }
 
         /**
-         * Every migration, oldest schema to current — the one list every builder registers.
+         * v13 adds the partner-accountability Step 4 delivery columns: `events.event_id` (the
+         * Step 3 wire UUID, unique per relationship + sender install; NULL on pre-contract and
+         * gap-marker rows, and SQLite treats NULLs as distinct so the unique index exempts
+         * them), plus the §8.5/§8.7 outbox retry and retention columns. Pre-existing PENDING
+         * rows get a retention window anchored to their creation, exactly what a row created
+         * under the new rule would have had.
+         */
+        internal val MIGRATION_12_13 = object : Migration(12, 13) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("ALTER TABLE events ADD COLUMN event_id TEXT").use { it.step() }
+                connection.prepare(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_events_pair_id_sender_key_id_event_id " +
+                        "ON events (pair_id, sender_key_id, event_id)",
+                ).use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE outbox ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0",
+                ).use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE outbox ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0",
+                ).use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE outbox ADD COLUMN last_error_code TEXT",
+                ).use { it.step() }
+                connection.prepare(
+                    "UPDATE outbox SET expires_at = created_at + ${Outbox.RETENTION_MILLIS} " +
+                        "WHERE expires_at = 0",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_outbox_status_next_attempt_at " +
+                        "ON outbox (status, next_attempt_at)",
+                ).use { it.step() }
+            }
+        }
+
+        /**
+         * v13 rollback (D-33): a v12 build has no wire event id and no retry/retention state.
+         * `DROP COLUMN` needs SQLite 3.35 (API 34), so both tables are rebuilt from the exact
+         * v12 DDL and every row is copied — a downgrade is a schema step, never a data loss.
+         */
+        internal val MIGRATION_13_12 = object : Migration(13, 12) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE `events_new` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`pair_id` TEXT NOT NULL, " +
+                        "`sender_key_id` TEXT NOT NULL, " +
+                        "`epoch` INTEGER NOT NULL, " +
+                        "`sequence` INTEGER NOT NULL, " +
+                        "`previous_event_hash` BLOB, " +
+                        "`event_hash` BLOB NOT NULL, " +
+                        "`envelope` BLOB NOT NULL, " +
+                        "`direction` TEXT NOT NULL, " +
+                        "`created_at` INTEGER NOT NULL, " +
+                        "`sync_state` TEXT NOT NULL)",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO `events_new` (id, pair_id, sender_key_id, epoch, sequence, " +
+                        "previous_event_hash, event_hash, envelope, direction, created_at, sync_state) " +
+                        "SELECT id, pair_id, sender_key_id, epoch, sequence, previous_event_hash, " +
+                        "event_hash, envelope, direction, created_at, sync_state FROM `events`",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE `events`").use { it.step() }
+                connection.prepare("ALTER TABLE `events_new` RENAME TO `events`").use { it.step() }
+                connection.prepare(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_events_pair_id_sender_key_id_sequence` " +
+                        "ON `events` (`pair_id`, `sender_key_id`, `sequence`)",
+                ).use { it.step() }
+
+                connection.prepare(
+                    "CREATE TABLE `outbox_new` (" +
+                        "`message_id` TEXT NOT NULL, " +
+                        "`event_id` INTEGER NOT NULL, " +
+                        "`destination_uid` TEXT, " +
+                        "`envelope_bytes` BLOB NOT NULL, " +
+                        "`status` TEXT NOT NULL, " +
+                        "`created_at` INTEGER NOT NULL, " +
+                        "`last_attempt_at` INTEGER, " +
+                        "`attempt_count` INTEGER NOT NULL, " +
+                        "`relay_checked_at` INTEGER, " +
+                        "`relay_rejection` TEXT, " +
+                        "PRIMARY KEY(`message_id`))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO `outbox_new` (message_id, event_id, destination_uid, envelope_bytes, " +
+                        "status, created_at, last_attempt_at, attempt_count, relay_checked_at, relay_rejection) " +
+                        "SELECT message_id, event_id, destination_uid, envelope_bytes, status, " +
+                        "created_at, last_attempt_at, attempt_count, relay_checked_at, relay_rejection FROM `outbox`",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE `outbox`").use { it.step() }
+                connection.prepare("ALTER TABLE `outbox_new` RENAME TO `outbox`").use { it.step() }
+            }
+        }
+
+        /**
+         * Every migration, oldest schema to current, plus the one downgrade step (D-33) that
+         * Room selects by `(from, to)` — the one list every builder registers.
          * Hand-maintained copies have silently diverged twice (7→8, ADR #50; 9→10, ADR #58),
          * each time leaving an installed device unable to open its DB after the upgrade.
          * `AccountabilityDatabaseMigrationTest` asserts this list covers every version step.
@@ -225,7 +320,7 @@ abstract class AccountabilityDatabase : RoomDatabase() {
         internal val ALL_MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-            MIGRATION_11_12,
+            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_12,
         )
 
         @Volatile private var instance: AccountabilityDatabase? = null

@@ -3,8 +3,12 @@ package com.example.myexodus.accountability.enrollment
 import android.app.Application
 import android.content.Context
 import androidx.room3.ColumnInfo
+import androidx.room3.Dao
 import androidx.room3.Database
 import androidx.room3.Entity
+import androidx.room3.Index
+import androidx.room3.Insert
+import androidx.room3.PrimaryKey
 import androidx.room3.Room
 import androidx.room3.RoomDatabase
 import androidx.test.core.app.ApplicationProvider
@@ -64,6 +68,7 @@ class EnrollmentDaoTest {
             AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
             AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
             AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
+            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
         ).build()
 
     @Test
@@ -102,7 +107,7 @@ class EnrollmentDaoTest {
     fun migration_1To2_preservesV1SchemaAndAddsEnrollments() = runTest {
         val v1 = Room.databaseBuilder(context, V1Database::class.java, dbName).build()
         v1.chainEventDao().insert(
-            ChainEvent(
+            ChainEventV1(
                 pairId = "pair-1",
                 senderKeyId = "s",
                 epoch = 0,
@@ -124,9 +129,38 @@ class EnrollmentDaoTest {
 }
 
 /** The v1 schema exactly as Room generated it when only the chain tables existed. */
-@Database(entities = [ChainEvent::class, ChainHeadV1::class], version = 1, exportSchema = false)
+@Database(entities = [ChainEventV1::class, ChainHeadV1::class], version = 1, exportSchema = false)
 abstract class V1Database : RoomDatabase() {
-    abstract fun chainEventDao(): ChainEventDao
+    abstract fun chainEventDao(): ChainEventV1Dao
+}
+
+/**
+ * The v1 `events` shape — no `event_id` (added by MIGRATION_12_13). The live [ChainEvent]
+ * entity cannot stand in here: its generated DDL already carries the column, so the seed file
+ * would be v13-shaped and the migration's ADD COLUMN would fail as a duplicate.
+ */
+@Entity(
+    tableName = "events",
+    indices = [Index(value = ["pair_id", "sender_key_id", "sequence"], unique = true)],
+)
+data class ChainEventV1(
+    @PrimaryKey(autoGenerate = true) @ColumnInfo(name = "id") val id: Long = 0,
+    @ColumnInfo(name = "pair_id") val pairId: String,
+    @ColumnInfo(name = "sender_key_id") val senderKeyId: String,
+    @ColumnInfo(name = "epoch") val epoch: Int,
+    @ColumnInfo(name = "sequence") val sequence: Long,
+    @ColumnInfo(name = "previous_event_hash") val previousEventHash: ByteArray?,
+    @ColumnInfo(name = "event_hash") val eventHash: ByteArray,
+    @ColumnInfo(name = "envelope") val envelope: ByteArray,
+    @ColumnInfo(name = "direction") val direction: String,
+    @ColumnInfo(name = "created_at") val createdAtEpochMillis: Long,
+    @ColumnInfo(name = "sync_state") val syncState: String,
+)
+
+@Dao
+interface ChainEventV1Dao {
+    @Insert
+    suspend fun insert(row: ChainEventV1)
 }
 
 /**
