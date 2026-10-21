@@ -71,6 +71,7 @@ import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.PairingCeremonyTelemetry
 import com.example.myexodus.accountability.enrollment.PairingFlow
 import com.example.myexodus.accountability.enrollment.PartnerLabel
+import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.state.AccountabilityDatabase
 import com.example.myexodus.accountability.sync.MessageSendOutcome
@@ -267,6 +268,8 @@ class MainActivity : FragmentActivity() {
     // Recovery-resource feature (v3 W1/W2/W7): the plan items shown during a technique, the
     // session log, and the haptic-pacing preference.
     @Inject lateinit var recoveryPlanRepository: RecoveryPlanRepository
+    /** ADR #193: partner plans — the shared checklist the Partner hub reaches. */
+    @Inject lateinit var partnerPlanRepository: PartnerPlanRepository
     @Inject lateinit var recoverySessions: RecoverySessionRepository
     @Inject lateinit var recoveryPrefs: RecoveryPrefs
     // Owner mandate 2026-10-04: the Settings sharing pane's per-streak consent reads/writes.
@@ -632,6 +635,7 @@ class MainActivity : FragmentActivity() {
                         onHabitConsumed = { requestedHabit = null },
                         planRepository = recoveryPlanRepository,
                         habitRepository = habitRepository,
+                        partnerPlanRepository = partnerPlanRepository,
                         sessions = recoverySessions,
                         prefs = recoveryPrefs,
                         recoveryEntry = requestedRecoveryEntry,

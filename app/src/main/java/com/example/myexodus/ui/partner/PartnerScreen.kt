@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.outlined.SelfImprovement
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Timeline
 import androidx.compose.material.icons.outlined.VerifiedUser
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -66,6 +68,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.myexodus.R
+import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.UnpairPhase
@@ -75,6 +78,7 @@ import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.ui.AppMark
 import com.example.myexodus.ui.BackRow
+import com.example.myexodus.ui.LinkRow
 import com.example.myexodus.ui.NavTile
 import com.example.myexodus.ui.StatusPill
 import com.example.myexodus.ui.WindowWidth
@@ -85,6 +89,7 @@ import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.rememberWindowWidth
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -104,6 +109,10 @@ enum class UnpairOutcome { UNPAIRED, CANCELLED, FAILED }
  */
 private const val VIEW_REQUESTS = "requests"
 private const val VIEW_ACTIVITY = "activity"
+/** Owner ask 2026-10-21: partner sharing moved out of Settings and onto this tab — the
+ *  consent surface belongs beside the partners it names. */
+private const val VIEW_SHARING = "sharing"
+private const val VIEW_PLANS = "plans"
 private const val VIEW_PAIRING = "pairing"
 
 /** §19.4 item 4: the ceremony's two entry modes, as `view` values alongside the subpages. */
@@ -204,6 +213,8 @@ fun PartnerScreen(
     source: PartnerDashboardSource,
     /** Owner ask 2026-10-04: the sharing-matrix read behind the "nothing shared yet" card. */
     habitRepository: HabitRepository,
+    /** ADR #193: partner plans — the shared checklist surface reached from the hub. */
+    planRepository: PartnerPlanRepository,
     notificationsEnabled: Boolean,
     onFixNotifications: () -> Unit,
     onCheckNow: suspend () -> Boolean,
@@ -235,9 +246,6 @@ fun PartnerScreen(
      *  = saved, leaves on the retry cadence; [MessageSendOutcome.FAILED] = nothing written. */
     onSendMessage: suspend (pairId: String, text: String) -> MessageSendOutcome =
         { _, _ -> MessageSendOutcome.FAILED },
-    /** Owner ask 2026-10-04: the "nothing shared yet" card's one action — the shell opens
-     *  Settings straight on the sharing pane. */
-    onOpenSharing: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -264,6 +272,10 @@ fun PartnerScreen(
     // Owner ask 2026-10-04: true = paired but nothing is being shared with the active partner.
     // Null = not paired, or the store refused a read — no honest claim, so no card.
     var sharesNothing by remember { mutableStateOf<Boolean?>(null) }
+    // ADR #193: the hub tile's live datum; null = no honest count (store refused, or still
+    // loading), which renders as the tile's description rather than a fabricated zero.
+    var planHub by remember { mutableStateOf<PlanHubStatus?>(null) }
+    var planHubRefresh by remember { mutableStateOf(0) }
 
     // Finding #57: roster switches start overlapping reloads (every roster row fires one), and
     // IO-pool completions can arrive out of order. Only the newest reload may publish, or a
@@ -358,7 +370,10 @@ fun PartnerScreen(
     // read, so without this tick an arrival waits for a resume — the exact "nothing moves
     // until I press something" annoyance the ruling retires.
     LaunchedEffect(Unit) {
-        PartnerSyncSignals.pulledEvents.collect { reload() }
+        PartnerSyncSignals.pulledEvents.collect {
+            reload()
+            planHubRefresh++
+        }
     }
 
     // The partner's events arrive via background syncs; re-read on every resume so the tab
@@ -402,6 +417,51 @@ fun PartnerScreen(
 
     val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
     val paired = state as? PartnerDashboardUi.Paired
+    // ADR #193: the Plans tile's datum. Read on the hub only — the subpage reads its own rows,
+    // and a count behind an open subpage is never seen.
+    LaunchedEffect(paired?.pairId, view, planHubRefresh) {
+        if (view != null) return@LaunchedEffect
+        planHub = withContext(Dispatchers.IO) {
+            runCatching {
+                val plans = planRepository.plans() ?: return@runCatching null
+                if (plans.isEmpty()) {
+                    PlanHubStatus(hasPlans = false, todo = null)
+                } else {
+                    val incoming = plans.filter { !it.authored && it.pairId != null }
+                    val ids = incoming.mapTo(HashSet()) { it.planId }
+                    PlanHubStatus(
+                        hasPlans = true,
+                        todo = if (incoming.isEmpty()) {
+                            null
+                        } else {
+                            planRepository.allTasks().count { it.planId in ids && !it.done }
+                        },
+                    )
+                }
+            }.getOrNull()
+        }
+    }
+    // ADR #193: the plans surface owns the whole screen, the same shape as SharingScreen.
+    if (view == VIEW_PLANS && paired != null) {
+        PartnerPlansScreen(
+            planRepository = planRepository,
+            loadPartnerNames = { source.partnerDisplayNames() },
+            onBack = { view = null },
+            modifier = modifier,
+        )
+        return
+    }
+    // The consent surface owns the whole screen (its own BackRow walks overview → partner →
+    // switches). Rendering it inside this screen's scroller would nest two vertical scrolls.
+    if (view == VIEW_SHARING && paired != null) {
+        SharingScreen(
+            habitRepository = habitRepository,
+            loadPartnerNames = { source.partnerDisplayNames() },
+            onBack = { view = null },
+            modifier = modifier,
+        )
+        return
+    }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -570,53 +630,70 @@ fun PartnerScreen(
                         onRename = { renaming = it },
                     )
                 }
+                // Owner ask 2026-10-21 ("everything is screaming for my attention"): every
+                // time-boxed card now shares one labelled group, so the hub reads as identity,
+                // then "Needs you", then the partner's state — instead of six equal-weight
+                // blocks competing. An empty group renders nothing, not a heading.
+                val needsYou = current.pairingUnreachable ||
+                    current.chainStatus != PartnerChainStatus.HEALTHY ||
+                    pending.isNotEmpty() ||
+                    checkFailed ||
+                    syncNeedsAttention(current)
+                if (needsYou) {
+                    Text(
+                        stringResource(R.string.partner_needs_you),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    // OPD #30: the pairing's document denies this device, so nothing has synced
+                    // and nothing can until a new pairing exists. Verdict first — a pairing that
+                    // cannot sync makes the summary below a stale claim.
+                    if (current.pairingUnreachable) {
+                        PairingGoneCard(
+                            titleRes = R.string.partner_unreachable_title,
+                            bodyRes = R.string.partner_unreachable_body,
+                            onRePair = ceremonyEntry,
+                        )
+                    }
+                    ChainStatusCard(current.chainStatus)
+                    if (pending.isNotEmpty()) {
+                        ApprovalRequestCard(
+                            requests = pending,
+                            chainStatus = current.chainStatus,
+                            respondingTo = respondingTo,
+                            respondFailed = respondFailed,
+                            onRespond = ::respondTo,
+                        )
+                    }
+                    // AD-05 staleness is never hidden: the sync card's full detail lives on the
+                    // Pairing page, but it returns to the hub whenever it has something the user
+                    // may have to act on. A healthy sync stays quiet here.
+                    if (checkFailed || syncNeedsAttention(current)) {
+                        SyncCard(
+                            state = current,
+                            checking = checking,
+                            checkFailed = checkFailed,
+                            checkOk = checkOk,
+                            onCheckNow = runCheckNow,
+                            tone = CardTone.NOTICE,
+                            prominentAction = false,
+                        )
+                    }
+                }
+                // §7 Step 11 delta: the partner's shared aggregate, directly under who they are
+                // — the tab's own question ("how are they doing?") answered before navigation.
+                PartnerSummaryCard(current.activity, current.chainStatus)
                 // Owner ask 2026-10-04: a pair with every switch off looks identical to an
                 // active one, and the partner silently receives nothing. Said once, with the
                 // one route to fixing it.
                 if (sharesNothing == true) {
                     NothingSharedCard(
                         partnerName = current.partnerLabel ?: shortKeyId(current.partnerKeyId),
-                        onOpenSharing = onOpenSharing,
+                        onOpenSharing = { view = VIEW_SHARING },
                     )
                 }
-                // OPD #30: the pairing's document denies this device, so nothing has synced and
-                // nothing can until a new pairing exists. Verdict before content — a pairing
-                // that cannot sync makes every number below it a stale claim.
-                if (current.pairingUnreachable) {
-                    PairingGoneCard(
-                        titleRes = R.string.partner_unreachable_title,
-                        bodyRes = R.string.partner_unreachable_body,
-                        onRePair = ceremonyEntry,
-                    )
-                }
-                // §7 Step 11 delta: the partner's shared aggregate, directly under who they are
-                // — the tab's own question ("how are they doing?") answered before the
-                // mechanism cards. Absent until something has actually arrived.
-                PartnerSummaryCard(current.activity, current.chainStatus)
-                ChainStatusCard(current.chainStatus)
-                if (pending.isNotEmpty()) {
-                    ApprovalRequestCard(
-                        requests = pending,
-                        chainStatus = current.chainStatus,
-                        respondingTo = respondingTo,
-                        respondFailed = respondFailed,
-                        onRespond = ::respondTo,
-                    )
-                }
-                // AD-05 staleness is never hidden: the sync card's full detail lives on the
-                // Pairing page, but it returns to the hub whenever it has something the user may
-                // have to act on. A healthy sync stays quiet here.
-                if (checkFailed || syncNeedsAttention(current)) {
-                    SyncCard(
-                        state = current,
-                        checking = checking,
-                        checkFailed = checkFailed,
-                        checkOk = checkOk,
-                        onCheckNow = runCheckNow,
-                        tone = CardTone.NOTICE,
-                        prominentAction = false,
-                    )
-                }
+                // Owner ask 2026-10-21: four destinations in a 2×2 grid. The old 3-up row put
+                // ~88dp under each label; a fourth tile would have ellipsized every status line.
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     NavTile(
                         icon = Icons.Outlined.Inbox,
@@ -639,6 +716,19 @@ fun PartnerScreen(
                         onClick = { view = VIEW_ACTIVITY },
                         modifier = Modifier.weight(1f),
                     )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    NavTile(
+                        icon = Icons.Outlined.Visibility,
+                        label = stringResource(R.string.partner_tile_sharing),
+                        status = if (sharesNothing == true) {
+                            stringResource(R.string.partner_tile_sharing_none)
+                        } else {
+                            null
+                        },
+                        onClick = { view = VIEW_SHARING },
+                        modifier = Modifier.weight(1f),
+                    )
                     NavTile(
                         icon = Icons.Outlined.Handshake,
                         label = stringResource(R.string.partner_tile_pairing),
@@ -657,6 +747,21 @@ fun PartnerScreen(
                         modifier = Modifier.weight(1f),
                     )
                 }
+                // ADR #193: a lone destination reaches its page through the row grammar
+                // LinkRow documents — a fifth tile would leave a hole in the 2×2 grid.
+                LinkRow(
+                    title = stringResource(R.string.partner_tile_plans),
+                    body = when (val hub = planHub) {
+                        null -> stringResource(R.string.partner_plans_intro)
+                        else -> when {
+                            !hub.hasPlans -> stringResource(R.string.partner_tile_plans_none)
+                            hub.todo == null -> stringResource(R.string.partner_plans_intro)
+                            hub.todo == 0 -> stringResource(R.string.partner_tile_plans_all_done)
+                            else -> stringResource(R.string.partner_tile_plans_todo, hub.todo)
+                        }
+                    },
+                    onClick = { view = VIEW_PLANS },
+                )
             }
         }
     }
@@ -698,7 +803,13 @@ fun PartnerScreen(
             onDismissRequest = { switching = false },
             title = { Text(stringResource(R.string.partner_switch_title)) },
             text = {
-                Column {
+                // Owner ask 2026-10-21: a long roster must scroll inside the dialog instead of
+                // pushing its buttons off-screen.
+                Column(
+                    Modifier
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
                     users.forEach { user ->
                         PartnerUserRow(
                             user = user,
@@ -1815,7 +1926,10 @@ private fun PairingView(
  */
 @Composable
 private fun AddUserCard(onAddUser: (CeremonyMode) -> Unit) {
-    PartnerSurface(spacing = 8.dp) {
+    // Owner ask 2026-10-21: two stacked full-width buttons made the optional "another person"
+    // path the loudest thing on the Pairing page. Navigation rows match the hub's other
+    // destinations and say what each one does.
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             stringResource(R.string.partner_pair_add_user_title),
             style = MaterialTheme.typography.titleMedium,
@@ -1825,12 +1939,16 @@ private fun AddUserCard(onAddUser: (CeremonyMode) -> Unit) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Button(onClick = { onAddUser(CeremonyMode.INVITE) }, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.partner_pair_invite_cta))
-        }
-        OutlinedButton(onClick = { onAddUser(CeremonyMode.JOIN) }, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.partner_pair_join_cta))
-        }
+        LinkRow(
+            title = stringResource(R.string.partner_pair_invite_cta),
+            body = stringResource(R.string.partner_pair_invite_body),
+            onClick = { onAddUser(CeremonyMode.INVITE) },
+        )
+        LinkRow(
+            title = stringResource(R.string.partner_pair_join_cta),
+            body = stringResource(R.string.partner_pair_join_body),
+            onClick = { onAddUser(CeremonyMode.JOIN) },
+        )
     }
 }
 
@@ -1854,25 +1972,35 @@ private fun PartnerUsersCard(
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(bottom = 4.dp),
         )
-        users.forEach { user ->
-            PartnerUserRow(
-                user = user,
-                selected = user.pairId == selectedPairId,
-                onSelect = { onSelect(user.pairId) },
-                trailing = {
-                    IconButton(onClick = { onRename(user) }) {
-                        Icon(
-                            Icons.Outlined.Edit,
-                            contentDescription = stringResource(
-                                R.string.partner_users_rename_action,
-                                user.label ?: shortKeyId(user.keyId),
-                            ),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                },
-            )
+        // Owner ask 2026-10-21: the roster is a fixed-height scroller — a household with many
+        // supported people must not turn the hub into an endless list. Bounded so the nested
+        // scroll is legal inside the hub's own scroller.
+        Column(
+            Modifier
+                .heightIn(max = 264.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            users.forEachIndexed { index, user ->
+                if (index > 0) HorizontalDivider()
+                PartnerUserRow(
+                    user = user,
+                    selected = user.pairId == selectedPairId,
+                    onSelect = { onSelect(user.pairId) },
+                    trailing = {
+                        IconButton(onClick = { onRename(user) }) {
+                            Icon(
+                                Icons.Outlined.Edit,
+                                contentDescription = stringResource(
+                                    R.string.partner_users_rename_action,
+                                    user.label ?: shortKeyId(user.keyId),
+                                ),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    },
+                )
+            }
         }
     }
 }
@@ -2062,3 +2190,7 @@ private fun pairedOnText(epochMillis: Long): String =
         .format(DateTimeFormatter.ofPattern("MMM d, yyyy"))
 
 private const val TAG = "MyExodusPartnerTab"
+
+/** Hub-tile datum for plans (ADR #193): [todo] null = nothing on this phone is waiting to be
+ *  checked off (no incoming plans), so the tile shows its description instead of a zero. */
+private data class PlanHubStatus(val hasPlans: Boolean, val todo: Int?)

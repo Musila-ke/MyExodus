@@ -9,6 +9,9 @@ import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.PlanBody
+import com.example.myexodus.accountability.serialization.PlanTaskBody
+import com.example.myexodus.accountability.serialization.PlanWire
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.dao.PartnerActivityDao
@@ -17,6 +20,8 @@ import com.example.myexodus.data.db.entity.HabitProgress
 import com.example.myexodus.data.db.entity.PairProfileSharing
 import com.example.myexodus.data.db.entity.PairStreakSharing
 import com.example.myexodus.data.db.entity.PartnerActivityOutbox
+import com.example.myexodus.data.db.entity.PartnerPlan
+import com.example.myexodus.data.db.entity.PartnerPlanTask
 import com.example.myexodus.data.db.entity.decodeMilestoneDays
 import com.example.myexodus.recovery.RecoveryMirror
 import com.example.myexodus.streaks.StreakTimer
@@ -236,7 +241,7 @@ class PartnerSyncCoordinator(
             for (attempt in attempts.pendingEventCreation(pairId, since, RECONCILE_BATCH)) {
                 when (val emit = emitActivity(pairId, "attempt ${attempt.id}", eventText(attempt))) {
                     is Emit.Created -> { attempts.linkEvent(attempt.id, pairId, emit.sequence); linked++ }
-                    Emit.Skip -> Unit
+                    Emit.Duplicate, Emit.Skip -> Unit
                     Emit.Stop -> return linked
                 }
             }
@@ -247,7 +252,7 @@ class PartnerSyncCoordinator(
             for (session in sessions.pendingMirror(pairId, since, RECONCILE_BATCH)) {
                 when (val emit = emitActivity(pairId, "session ${session.id}", RecoveryMirror.text(session.technique, session.state))) {
                     is Emit.Created -> { sessions.linkEvent(session.id, pairId, emit.sequence); linked++ }
-                    Emit.Skip -> Unit
+                    Emit.Duplicate, Emit.Skip -> Unit
                     Emit.Stop -> return linked
                 }
             }
@@ -271,12 +276,78 @@ class PartnerSyncCoordinator(
             }
             when (val emit = emitPayload(pairId, "activity ${row.eventId}", payload)) {
                 is Emit.Created -> { activity.linkEvent(row.eventId, pairId, emit.sequence); linked++ }
+                Emit.Duplicate, Emit.Skip -> Unit
+                Emit.Stop -> return linked
+            }
+        }
+        // Plans (ADR #193): the plan rows ARE the outbox. A pending flag marks "this pair owes
+        // a snapshot"; the payload is built here from the current revision, so an edit made
+        // while a previous revision was waiting coalesces into the newest one. Duplicate means
+        // the identical event is already chained (a crash-after-append retry) — delivered, so
+        // the flag clears too.
+        val plans = store.partnerPlanDao()
+        for (plan in plans.pendingPublishForPair(pairId, RECONCILE_BATCH)) {
+            val payload = publishedPlanPayload(plan, plans.tasks(plan.planId))
+            when (val emit = emitPayload(pairId, "plan ${plan.planId}", payload)) {
+                is Emit.Created, Emit.Duplicate -> {
+                    plans.clearPublishPending(plan.planId, plan.revision, plan.updatedAtMs)
+                    linked++
+                }
+                Emit.Skip -> Unit
+                Emit.Stop -> return linked
+            }
+        }
+        for (plan in plans.pendingProgressForPair(pairId, RECONCILE_BATCH)) {
+            val payload = planProgressPayload(plan, plans.tasks(plan.planId))
+            when (val emit = emitPayload(pairId, "plan progress ${plan.planId}", payload)) {
+                is Emit.Created, Emit.Duplicate -> {
+                    plans.clearProgressPending(plan.planId, plan.revision)
+                    linked++
+                }
                 Emit.Skip -> Unit
                 Emit.Stop -> return linked
             }
         }
         return linked
     }
+
+    /** The author's whole plan at its current revision; task ids stay stable across edits so
+     *  the recipient's checks survive. */
+    private fun publishedPlanPayload(
+        plan: PartnerPlan,
+        tasks: List<PartnerPlanTask>,
+    ): EventPayload = EventPayload(
+        type = PlanWire.TYPE_PLAN_PUBLISHED,
+        text = "",
+        protocolVersion = PlanWire.PLAN_PROTOCOL_VERSION,
+        schemaVersion = PlanWire.PLAN_SCHEMA_VERSION,
+        plan = PlanBody(
+            planId = plan.planId,
+            title = plan.title,
+            revision = plan.revision,
+            updatedAtMs = plan.updatedAtMs,
+            tasks = tasks.map { PlanTaskBody(it.taskId, it.taskOrder, it.text) },
+        ),
+    )
+
+    /** The recipient's checked set at the revision it was seen. The task list is not repeated:
+     *  progress is only applied to a copy the author still holds at this exact revision. */
+    private fun planProgressPayload(
+        plan: PartnerPlan,
+        tasks: List<PartnerPlanTask>,
+    ): EventPayload = EventPayload(
+        type = PlanWire.TYPE_PLAN_PROGRESS,
+        text = "",
+        protocolVersion = PlanWire.PLAN_PROTOCOL_VERSION,
+        schemaVersion = PlanWire.PLAN_SCHEMA_VERSION,
+        plan = PlanBody(
+            planId = plan.planId,
+            title = plan.title,
+            revision = plan.revision,
+            updatedAtMs = System.currentTimeMillis(),
+            doneTaskIds = tasks.filter { it.done }.map { it.taskId },
+        ),
+    )
 
     /** One row's aggregate as THIS pair may see it (v16, ADR #135).
      *
@@ -388,6 +459,7 @@ class PartnerSyncCoordinator(
             dao.deleteProjectionsFor(orphans)
             sharingDao.deleteStreakFor(orphans)
             sharingDao.deleteProfileFor(orphans)
+            store.partnerPlanDao().deleteForPairs(orphans)
         }
     }
 
@@ -409,8 +481,8 @@ class PartnerSyncCoordinator(
             when (val result = creator.create(pairId, payload, signature)) {
                 is EventCreator.CreateResult.Created -> Emit.Created(result.sequence)
                 is EventCreator.CreateResult.Duplicate -> {
-                    Log.w(TAG, "event duplicate for $label — left unlinked")
-                    Emit.Skip
+                    Log.w(TAG, "event duplicate for $label")
+                    Emit.Duplicate
                 }
                 is EventCreator.CreateResult.Failed -> {
                     Log.w(TAG, "event creation failed for $label: ${result.reason}")
@@ -424,6 +496,9 @@ class PartnerSyncCoordinator(
 
     private sealed interface Emit {
         data class Created(val sequence: Long) : Emit
+
+        /** Identical event already chained (retry after a crash between append and link). */
+        data object Duplicate : Emit
         data object Skip : Emit
         data object Stop : Emit
     }

@@ -13,8 +13,10 @@ import java.io.File
  * Enforced mechanically rather than by review because the defect is invisible to sighted
  * testing: the screen looks and behaves correctly the whole time.
  *
- * `onClick = null` is the exception: it makes a control presentational (the row above it owns
- * the tap and carries the label), so those are not counted.
+ * A null handler is the exception: it makes a control presentational (the row above it owns
+ * the tap and carries the label), so those are not counted. `RadioButton` spells that handler
+ * `onClick`; `Checkbox`/`Switch` spell it `onCheckedChange` — both mean the control itself
+ * exposes no action of its own.
  */
 class NamedSwitchTest {
 
@@ -53,7 +55,10 @@ class NamedSwitchTest {
                     while (at >= 0) {
                         val line = text.take(at).count { it == '\n' } + 1
                         val call = callSite(text, at + control.lastIndex)
-                        if (!call.contains("contentDescription") && !call.contains("onClick = null")) {
+                        if (!call.contains("contentDescription") &&
+                            !call.contains("onClick = null") &&
+                            !call.contains("onCheckedChange = null")
+                        ) {
                             found += "${file.name}:$line (${control.dropLast(1)})"
                         }
                         at = text.indexOf(control, at + control.length)

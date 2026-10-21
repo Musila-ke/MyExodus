@@ -13,6 +13,13 @@ interface MilestoneEventDao {
     @Query("SELECT * FROM milestone_events WHERE streak_id = :streakId ORDER BY milestone_day")
     suspend fun getForStreak(streakId: String): List<MilestoneEvent>
 
+    /** Every milestone row of every streak the habit ever had — habit deletion. */
+    @Query(
+        "DELETE FROM milestone_events WHERE streak_id IN " +
+            "(SELECT streak_id FROM recovery_streak WHERE habit_id = :habitId)",
+    )
+    suspend fun deleteForHabit(habitId: String)
+
     @Query(
         "SELECT * FROM milestone_events WHERE streak_id = :streakId AND milestone_day = :milestoneDay",
     )

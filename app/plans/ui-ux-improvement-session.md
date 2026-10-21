@@ -812,3 +812,39 @@ shared `LinkRow` (it was a copy without the chevron); request-row dividers. **Ow
 device (live):** the Requests subpage keeps no `PartnerContextBar` — "requests doesnt need viewing
 section ie viewing mama switch" — Activity/Pairing keep theirs (narrows ADR #121). Evidence and
 honest limits in ADR #124; V1 doc has the matching section.
+
+## 2026-10-21 — Partner plans become a real shared surface (owner redo of the coaching-plan ask)
+
+Owner verdict on the shipped coaching plan: "incredibly wrong." Root cause of the mismatch: the
+shipped surface was the reference's local recovery editor, and the owner's actual ask was a
+sponsor-authored checklist that reaches the other phone. Both now exist, kept separate on purpose
+(ADR #193).
+
+Decisions landed this pass:
+- **Partner tab → Plans** (a `LinkRow` under the 2×2 tile grid, not a fifth tile — the grid is a
+  2×2 by construction). Full-screen pane with three groups: "From your partner", "You shared",
+  "Just for me". Rows name the counterpart; incoming unchecked counts surface on the hub row, and
+  the row never claims "no plans" before a successful empty read (store refusal → no subtitle).
+- **Editor**: create a plan for a chosen partner (by name) or "Just me — stays on this phone";
+  title + checklist lines; ≤ 40 lines, ≤ 80-char title, ≤ 200 chars per line, enforced at input;
+  blank lines dropped, blank title refused; a failed save keeps the draft; revision bumped on
+  edit with task ids preserved so the recipient's checks survive a reword.
+- **Recipient copy is checkable; the author's copy of a shared plan is display-only.** Checking is
+  the progress signal, and it is also the consent act. A self plan is checkable by its owner (this
+  was a bug in the first cut — the guard refused every authored plan).
+- **Notifications**: creation and every edit alert the recipient (`onlyAlertOnce=false`); progress
+  is silent by design.
+- **Navigation**: editor → detail → list → hub, each with its own back handler; the hub stays the
+  single entry point and the tab's scroll stays clean.
+- **Settings loses the duplicate "Coaching plan" row** (it opened the same Recovery editor through
+  a second entry point; that pane was itself a Finding #29 privacy surface). One entry point:
+  Recovery → Coaching plan.
+- **Research prompt for the next feature** (partner accountability for permission revocation,
+  primary-vs-consented analytics, per-rule partner assignment, block invitations, redaction,
+  uninstall alerts, partner analytics dashboards) stored verbatim in
+  `Obsidian/MyExodus/Research Prompts.md` with the "plan may miss" checklist; the owner will drop
+  the resulting plan into `app/plans/` and execution starts from it.
+
+Verification so far: JVM 22 tests green (`PlanWireCodecTest` 6, `PartnerPlanRepositoryTest` 7,
+`PartnerPlanReceiverTest` 9); v16↔v17 migration legs added to the instrumented suite. Device pass
+pending (Task #8).

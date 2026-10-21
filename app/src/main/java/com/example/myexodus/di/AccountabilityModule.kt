@@ -45,6 +45,9 @@ import com.example.myexodus.accountability.sync.PartnerLiveSync
 import com.example.myexodus.accountability.sync.displayNameOf
 import com.example.myexodus.accountability.activity.PartnerActivityJournal
 import com.example.myexodus.accountability.activity.PartnerActivityReceiver
+import com.example.myexodus.accountability.plan.PartnerPlanReceiver
+import com.example.myexodus.accountability.plan.PartnerPlanRepository
+import com.example.myexodus.accountability.serialization.PlanWire
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
 import com.example.myexodus.accountability.sync.PartnerSyncTelemetry
 import com.example.myexodus.accountability.sync.PushInstallationRegistrar
@@ -781,6 +784,17 @@ object AccountabilityModule {
         storeFactory: AppRulesStoreFactory,
     ): PartnerActivityReceiver = PartnerActivityReceiver(storeFactory)
 
+    /** Partner plans (ADR #193): the receive half of `plan_published` / `plan_progress`. */
+    @Provides @Singleton
+    fun providePartnerPlanReceiver(
+        storeFactory: AppRulesStoreFactory,
+    ): PartnerPlanReceiver = PartnerPlanReceiver(storeFactory)
+
+    @Provides @Singleton
+    fun providePartnerPlanRepository(
+        storeFactory: AppRulesStoreFactory,
+    ): PartnerPlanRepository = PartnerPlanRepository(storeFactory)
+
     @Provides @Singleton
     fun provideMailboxMessageHandler(
         @ApplicationContext context: Context,
@@ -792,6 +806,7 @@ object AccountabilityModule {
         approval: ApprovalFlow,
         deletion: BilateralDeletion,
         activityReceiver: PartnerActivityReceiver,
+        planReceiver: PartnerPlanReceiver,
         enrollmentDao: EnrollmentDao,
     ): MailboxMessageHandler {
         val processedDao = db.processedEventDao()
@@ -813,8 +828,12 @@ object AccountabilityModule {
             // the decoded payload rides along — a motivational message's own text, or a
             // wire-v2 relapse/milestone's streak name + time (owner mandate 2026-10-04).
             notify = { pairId, payload ->
+                // Plan progress is bookkeeping the author's checklist repaints from — a
+                // notification per checked line would be pure noise. Plan publishing DOES
+                // notify (the recipient must learn the plan exists), handled below.
                 if (payload.type != EventPayload.TYPE_APPROVAL_REQUEST &&
-                    payload.type != EventPayload.TYPE_APPROVAL_RESPONSE
+                    payload.type != EventPayload.TYPE_APPROVAL_RESPONSE &&
+                    payload.type != PlanWire.TYPE_PLAN_PROGRESS
                 ) {
                     enrollmentDao.getByPairId(pairId)?.let { enrollment ->
                         PartnerNotifications.notifyPartnerEvent(
@@ -849,6 +868,8 @@ object AccountabilityModule {
                         approval.onRequestAppended(pairId, senderKeyId, sequence, payload, serverTs)
                     EventPayload.TYPE_APPROVAL_RESPONSE ->
                         approval.applyResponse(pairId, payload, serverTs)
+                    PlanWire.TYPE_PLAN_PUBLISHED, PlanWire.TYPE_PLAN_PROGRESS ->
+                        planReceiver.applyAppended(pairId, payload)
                     // Non-activity types classify to NotActivity inside and are left untouched.
                     else -> activityReceiver.applyAppended(pairId, payload, sequence)
                 }

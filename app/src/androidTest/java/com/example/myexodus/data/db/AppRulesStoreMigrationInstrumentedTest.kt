@@ -853,6 +853,89 @@ class AppRulesStoreMigrationInstrumentedTest {
         assertPreExistingDataSurvives(down, "after the v16 downgrade")
     }
 
+    /**
+     * v16 → v17 (ADR #193): partner-authored plans. Room validates the created file against
+     * 17.json (the strongest drift check for the hand-written DDL), both tables start empty, a
+     * plan + its line round-trip, the line table declares the CASCADE FK the DAO relies on, and
+     * every pre-existing row survives.
+     */
+    @Test
+    fun migrate16To17_createsThePlanTables_andLeavesExistingDataIntact() = runTest {
+        val v16 = helper.createDatabase(16)
+        seedProfileAndHabitV16(v16)
+        seedCoachingStep(v16)
+
+        val v17 = helper.runMigrationsAndValidate(17, listOf(AppRulesStoreFactory.MIGRATION_16_17))
+
+        assertEquals("the plan head starts empty", 0L, count(v17, "partner_plan"))
+        assertEquals("the checklist starts empty", 0L, count(v17, "partner_plan_task"))
+        exec(
+            v17,
+            "INSERT INTO partner_plan (plan_id, pair_id, authored, title, revision, " +
+                "updated_at_ms, pending_publish, pending_progress) " +
+                "VALUES ('p-1', 'pair-1', 1, 'Week 1', 1, 100, 1, 0)",
+        )
+        exec(
+            v17,
+            "INSERT INTO partner_plan_task (plan_id, task_id, task_order, text, done, done_at_ms) " +
+                "VALUES ('p-1', 't-1', 0, 'Read', 1, 200)",
+        )
+        v17.prepare(
+            "SELECT task_order, done, done_at_ms FROM partner_plan_task " +
+                "WHERE plan_id = 'p-1' AND task_id = 't-1'",
+        ).use { stmt ->
+            assertTrue(stmt.step())
+            assertEquals(0L, stmt.getLong(0))
+            assertEquals(1L, stmt.getLong(1))
+            assertEquals(200L, stmt.getLong(2))
+        }
+        v17.prepare("PRAGMA foreign_key_list(partner_plan_task)").use { stmt ->
+            assertTrue("the line table must declare its FK", stmt.step())
+            assertEquals("partner_plan", stmt.getText(2))
+            assertEquals("CASCADE", stmt.getText(6))
+        }
+        assertPreExistingDataSurvives(v17, "after the v17 upgrade")
+    }
+
+    /**
+     * The v17 rollback: a v16 build reinstalled over a briefly-v17 database must open, with only
+     * the plan tables gone. The re-upgrade rebuilds them empty, as every rollback cycle does.
+     */
+    @Test
+    fun migrate17To16_dropsOnlyThePlanTables_andTheReUpgradeRebuildsThemEmpty() = runTest {
+        val v16 = helper.createDatabase(16)
+        seedProfileAndHabitV16(v16)
+        seedCoachingStep(v16)
+
+        val v17 = helper.runMigrationsAndValidate(17, listOf(AppRulesStoreFactory.MIGRATION_16_17))
+        exec(
+            v17,
+            "INSERT INTO partner_plan (plan_id, pair_id, authored, title, revision, " +
+                "updated_at_ms, pending_publish, pending_progress) " +
+                "VALUES ('p-1', 'pair-1', 1, 'Week 1', 1, 100, 1, 0)",
+        )
+        exec(
+            v17,
+            "INSERT INTO partner_plan_task (plan_id, task_id, task_order, text, done, done_at_ms) " +
+                "VALUES ('p-1', 't-1', 0, 'Read', 1, 200)",
+        )
+
+        val down = helper.runMigrationsAndValidate(16, listOf(AppRulesStoreFactory.MIGRATION_17_16))
+
+        listOf("partner_plan", "partner_plan_task").forEach { table ->
+            assertTrue(
+                "the downgrade must drop $table",
+                runCatching { count(down, table) }.isFailure,
+            )
+        }
+        assertPreExistingDataSurvives(down, "after the v17 downgrade")
+
+        val up = helper.runMigrationsAndValidate(17, listOf(AppRulesStoreFactory.MIGRATION_16_17))
+        assertEquals("the re-upgrade rebuilds the head empty", 0L, count(up, "partner_plan"))
+        assertEquals(0L, count(up, "partner_plan_task"))
+        assertPreExistingDataSurvives(up, "after the second upgrade")
+    }
+
     @Test
     fun migrate10To9_dropsOnlyTheUsageTable_leavingAValidV9Database() = runTest {
         val v10 = helper.createDatabase(10)
@@ -1010,6 +1093,26 @@ class AppRulesStoreMigrationInstrumentedTest {
             conn,
             "INSERT INTO coaching_step (step_id, profile_id, step_order, action_text, " +
                 "associated_trigger_window) VALUES ('c-1', 'profile-1', 1, 'Call my brother', '')",
+        )
+    }
+
+    /** The v16 column set (ADR #135): the legacy per-habit/per-profile sharing flags are gone. */
+    private fun seedProfileAndHabitV16(conn: SQLiteConnection) {
+        exec(
+            conn,
+            "INSERT INTO user_profile (user_id, name, email, phone_number, date_of_birth, " +
+                "has_accessibility_permission, has_usage_stats_permission, has_vpn_permission, " +
+                "has_notification_permission, has_device_admin_permission, device_public_key, " +
+                "recovery_escrow_key, is_active) VALUES " +
+                "('profile-1', 'Legacy User', 'u@example.com', NULL, 0, 0, 0, 0, 0, 0, NULL, NULL, 1)",
+        )
+        exec(
+            conn,
+            "INSERT INTO habit_progress (progress_id, profile_id, target_identifier, " +
+                "current_clean_days_streak, total_relapses, access_attempts_count, " +
+                "habit_duration_years, onboarding_severity_level, last_relapse_timestamp, " +
+                "assigned_partnership_id) VALUES ('h-1', 'profile-1', 'Instagram', 3, 1, 5, 2, " +
+                "'MODERATE', NULL, NULL)",
         )
     }
 

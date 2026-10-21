@@ -45,9 +45,7 @@
     <string name="recovery_plan_window_label">Show this when</string>
     <string name="recovery_plan_window_any">Any time</string>
 
-    <!-- Settings section (W3/W4 entry points) -->
-    <string name="settings_recovery_plan_title">Coaching plan</string>
-    <string name="settings_recovery_plan_body">Your own steps, if-then plans, and values — shown on the Recovery tab and while a technique runs.</string>
+    <!-- Settings section (W4 entry point; the coaching plan itself lives on the Recovery tab) -->
     <string name="settings_recovery_windows_title">Risk windows</string>
     <string name="settings_recovery_windows_body">The times you\'re most likely to struggle. Inside a window, the lowest-effort techniques show first.</string>
 

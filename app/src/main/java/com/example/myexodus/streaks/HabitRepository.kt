@@ -158,6 +158,29 @@ class HabitRepository(
         }
     }
 
+    sealed interface RenameResult {
+        /** The new label was persisted; [state] is the refreshed displayed habit (null only
+         *  when no habit was displayed yet). */
+        data class Renamed(val state: HabitState?) : RenameResult
+
+        /** Blank after trimming, or longer than the partner wire's label bound. */
+        data object InvalidName : RenameResult
+
+        data object StoreUnavailable : RenameResult
+
+        data object NotFound : RenameResult
+    }
+
+    sealed interface DeleteResult {
+        /** [state] is the habit now displayed (the next in display order), or null when the
+         *  deleted habit was the last one — the screen then returns to setup. */
+        data class Deleted(val state: HabitState?) : DeleteResult
+
+        data object StoreUnavailable : DeleteResult
+
+        data object NotFound : DeleteResult
+    }
+
     sealed interface RelapseResult {
         data class RolledOver(val state: HabitState) : RelapseResult
 
@@ -448,6 +471,66 @@ class HabitRepository(
     }
 
     /**
+     * Renames a habit's label only. Trimmed and capped at the partner wire's label bound
+     * ([EventPayload.MAX_HABIT_LABEL_LENGTH]), so the hub, picker, notifications and partner
+     * events all name the habit with the same string. Publishes the refreshed state when the
+     * renamed habit is the displayed one; other habits' display choice is untouched.
+     */
+    suspend fun renameHabit(habitId: String, label: String): RenameResult {
+        val trimmed = label.trim()
+        if (trimmed.isEmpty() || trimmed.length > MAX_LABEL_LENGTH) {
+            return RenameResult.InvalidName
+        }
+        val db = storeFactory.open() ?: return RenameResult.StoreUnavailable
+        db.habitProgressDao().getById(habitId) ?: return RenameResult.NotFound
+        db.withWriteTransaction<Unit> {
+            db.habitProgressDao().rename(habitId, trimmed)
+        }
+        val displayed = evaluationMutex.withLock {
+            if (_state.value?.habitId == habitId) loadState(db, habitId)?.also(::publishState) else _state.value
+        }
+        return RenameResult.Renamed(displayed)
+    }
+
+    /**
+     * Deletes a habit and everything that belongs to it on this device: its streaks, milestone
+     * rows, and its per-pair sharing consent. Pending milestone alarms are cancelled before the
+     * rows disappear — [MilestoneScheduler.reconcile] cannot find a habit that is already gone.
+     * Delivered partner activity is not recalled (it is the partner's record); removing the
+     * consent rows simply stops future sharing. When the deleted habit was the displayed one,
+     * the next habit in display order takes its place, or the screen returns to setup.
+     */
+    suspend fun deleteHabit(habitId: String): DeleteResult {
+        val db = storeFactory.open() ?: return DeleteResult.StoreUnavailable
+        val habit = db.habitProgressDao().getById(habitId) ?: return DeleteResult.NotFound
+        val wasDisplayed = _state.value?.habitId == habitId
+        val next = evaluationMutex.withLock {
+            scheduler.cancelFor(habitId)
+            db.withWriteTransaction<Unit> {
+                // Milestones key on streak rows (subquery), so they go first.
+                db.milestoneEventDao().deleteForHabit(habitId)
+                db.recoveryStreakDao().deleteForHabit(habitId)
+                db.pairSharingDao().deleteStreakForHabit(habitId)
+                db.habitProgressDao().delete(habit)
+            }
+            if (!wasDisplayed) return@withLock _state.value
+            val profile = db.userProfileDao().getActive()
+            val fallback = profile?.let {
+                db.habitProgressDao().getSelected(it.userId)
+                    ?: db.habitProgressDao().getFirstForProfile(it.userId)
+            }
+            if (fallback == null) {
+                publishState(null)
+                null
+            } else {
+                evaluateLocked(db, fallback.progressId, forceDisplay = true)
+            }
+        }
+        next?.let { scheduler.reconcile(it.habitId) }
+        return DeleteResult.Deleted(next)
+    }
+
+    /**
      * §6 on-read evaluation under the mutex: advance [habitId]'s accumulator from live clocks
      * and persist anchor + record in one transaction. Triggered by app foreground/ViewModel/
      * alarm receivers (Step 4/5), never by recomposition. Ends with the §8 Step 4
@@ -723,6 +806,9 @@ class HabitRepository(
     companion object {
         /** §9 DB-level idempotency window for relapse writes (UI debounce is the first line). */
         const val IDEMPOTENCY_WINDOW_MS = 10_000L
+
+        /** Same bound the partner wire enforces, so a renamed label survives every surface. */
+        const val MAX_LABEL_LENGTH = EventPayload.MAX_HABIT_LABEL_LENGTH
 
         private const val MAX_EVALUATION_ATTEMPTS = 2
     }

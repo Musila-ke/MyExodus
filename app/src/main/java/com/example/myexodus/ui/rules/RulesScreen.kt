@@ -13,18 +13,23 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -36,6 +41,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,6 +50,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
@@ -57,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.R
 import com.example.myexodus.blocking.RulesRepository
+import com.example.myexodus.blocking.RulesetLimitException
 import com.example.myexodus.blocking.usage.PlatformUsageReader
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.data.db.AppRulesStore
@@ -79,8 +87,12 @@ import com.example.myexodus.ui.scheduleSummary
 import com.example.myexodus.vpn.DnsSinkholeVpnService
 import com.example.myexodus.vpn.VpnEngineState
 import com.example.myexodus.vpn.VpnLifecycle
+import java.time.ZoneId
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
@@ -110,10 +122,20 @@ fun RulesScreen(
 ) {
     val profile by store.userProfileDao().observeActive().collectAsStateWithLifecycle(initialValue = null)
     val profileId = profile?.userId
-    // null = not yet emitted: an empty list here would flash "No blocks yet" while loading.
-    val rules by remember(profileId) {
-        profileId?.let { store.restrictionRuleDao().observeByProfile(it) } ?: emptyFlow()
-    }.collectAsStateWithLifecycle(initialValue = null)
+    // Owner directive 2026-10-21: the list owns an explicit loading / loaded / failed state.
+    // A failed local read must render as a state with a retry, never as "no blocks" or a crash.
+    var loadRetry by remember { mutableIntStateOf(0) }
+    val loadState by remember(profileId, loadRetry) {
+        profileId?.let {
+            store.restrictionRuleDao().observeByProfile(it)
+                .map<List<RestrictionRule>, RulesLoad> { RulesLoad.Loaded(it) }
+                .catch { failure ->
+                    Log.e(TAG, "Rules load failed", failure)
+                    emit(RulesLoad.Failed)
+                }
+        } ?: flowOf(RulesLoad.Loading)
+    }.collectAsStateWithLifecycle(initialValue = RulesLoad.Loading)
+    val rules = (loadState as? RulesLoad.Loaded)?.rules
 
     var route by rememberSaveable { mutableStateOf(ROUTE_LIST) }
     var editRuleId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -172,6 +194,15 @@ fun RulesScreen(
 
     var confirmCleanup by remember { mutableStateOf(false) }
 
+    // Category presets (owner request 2026-10-21). The sheet is open while categoryId is
+    // non-null; a confirmed list is held in pendingPresetSites only while the engine-off
+    // prompt is up, so the same insert path runs whether protection is on or off.
+    var presetCategoryId by rememberSaveable { mutableStateOf<String?>(null) }
+    var presetSaving by remember { mutableStateOf(false) }
+    var presetError by remember { mutableStateOf<String?>(null) }
+    var pendingPresetSites by remember { mutableStateOf<List<String>?>(null) }
+    val deviceZone = remember { ZoneId.systemDefault().id }
+
     // S9.4 banner copy. The engine's own status is the source; an unknown future reason falls
     // back to the generic line rather than showing nothing.
     val engineStatus by domainUsageEngine.status.collectAsStateWithLifecycle()
@@ -215,7 +246,9 @@ fun RulesScreen(
     // "off", and its tap silently no-op'ed (stress-found 2026-10-15).
     // The editor watches the engine too (owner report 2026-10-17): a new website rule is inert
     // until the tunnel is on, so the same blocker drives the editor's warning and save prompt.
-    val engineWatched = hasLiveWebsite || (route == ROUTE_EDIT && editTargetType == "WEBSITE")
+    val engineWatched = hasLiveWebsite ||
+        (route == ROUTE_EDIT && editTargetType == "WEBSITE") ||
+        presetCategoryId != null
     val engineBlocker = if (engineWatched) {
         VpnLifecycle.websiteEngineBlocker(VpnLifecycle.consented(context), DnsSinkholeVpnService.state)
     } else {
@@ -246,10 +279,60 @@ fun RulesScreen(
         }
     }
 
+    val openAddWebsite: () -> Unit = {
+        presetCategoryId = null
+        presetError = null
+        editRuleId = null
+        editTarget = null
+        editTargetType = "WEBSITE"
+        route = ROUTE_EDIT
+    }
+
+    // One insert path for both prompt answers and the no-prompt case. Already-blocked hosts
+    // are filtered here as well as in the sheet: the sheet's snapshot can lag the list by one
+    // emission, and the table's unique (profile_id, blocked_package) index would reject a
+    // duplicate mid-batch, turning a retry into a partial failure.
+    fun blockPresetSites(sites: List<String>) {
+        val taken = rules.orEmpty().asSequence()
+            .filter { it.targetType == "WEBSITE" }
+            .map { targetKey(it.blockedPackage, "WEBSITE") }
+            .toSet()
+        val pending = sites.filterNot { targetKey(it, "WEBSITE") in taken }
+        if (pending.isEmpty()) {
+            presetCategoryId = null
+            return
+        }
+        presetSaving = true
+        presetError = null
+        scope.launch(Dispatchers.IO) {
+            var inserted = 0
+            val failure = runCatching {
+                val profileId = repository.ensureActiveProfile().userId
+                pending.forEach { host ->
+                    repository.insertRule(websitePresetRule(profileId, host, deviceZone))
+                    inserted++
+                }
+            }.exceptionOrNull()
+            presetSaving = false
+            if (failure == null) {
+                presetCategoryId = null
+            } else {
+                presetError = presetFailureMessage(failure, inserted, pending.size, context)
+            }
+        }
+    }
+
     when (route) {
         ROUTE_EDIT -> {
             val editing = editRuleId?.let { id -> rules?.firstOrNull { it.ruleId == id } }
-            if (editRuleId != null && editing == null) {
+            if (loadState == RulesLoad.Failed) {
+                // A failed read is not "the rule is gone" — say what really happened.
+                RulesLoadError(
+                    onRetry = { loadRetry++ },
+                    onBack = { route = ROUTE_LIST },
+                    modifier = modifier,
+                )
+            } else if (editRuleId != null && editing == null) {
                 // Config change / process death before the Flow re-emitted; a rule that was
                 // really deleted simply leaves the back action available.
                 EditorUnavailable(onBack = { route = ROUTE_LIST }, modifier = modifier)
@@ -266,19 +349,25 @@ fun RulesScreen(
                     websiteEngineBlocker = engineBlocker,
                     websiteLimitsMode = websiteLimitsMode,
                     onEnableWebsiteEngine = enableWebsiteEngine,
+                    onBrowsePresets = { categoryId ->
+                        presetError = null
+                        presetCategoryId = categoryId
+                    },
                     onDone = { route = ROUTE_LIST },
                     modifier = modifier,
                 )
             }
         }
 
-        else -> {
-            val loaded = rules
-            if (loaded == null) {
-                Box(modifier.fillMaxSize())
-            } else {
+        else -> when (val loaded = loadState) {
+            RulesLoad.Loading -> RulesLoading(modifier = modifier)
+            RulesLoad.Failed -> RulesLoadError(
+                onRetry = { loadRetry++ },
+                modifier = modifier,
+            )
+            is RulesLoad.Loaded -> {
                 RulesList(
-                    rules = loaded,
+                    rules = loaded.rules,
                     pendingPause = pendingPause,
                     nowMillis = nowMillis,
                     domainUsageEngine = domainUsageEngine,
@@ -293,12 +382,8 @@ fun RulesScreen(
                         editTargetType = "APP"
                         route = ROUTE_EDIT
                     },
-                    onAddWebsite = {
-                        editRuleId = null
-                        editTarget = null
-                        editTargetType = "WEBSITE"
-                        route = ROUTE_EDIT
-                    },
+                    onAddWebsite = openAddWebsite,
+                    onOpenPresets = { presetError = null; presetCategoryId = it },
                     onEdit = { rule ->
                         editRuleId = rule.ruleId
                         editTargetType = rule.targetType
@@ -364,6 +449,78 @@ fun RulesScreen(
                 TextButton(onClick = { confirmCleanup = false }) { Text(stringResource(R.string.rules_cancel)) }
             },
         )
+    }
+
+    presetCategoryId?.let { categoryId ->
+        WebsitePresetSheet(
+            initialCategoryId = categoryId,
+            existingRules = rules.orEmpty(),
+            saving = presetSaving,
+            error = presetError,
+            onDismiss = {
+                presetCategoryId = null
+                presetError = null
+            },
+            onConfirm = { sites ->
+                if (engineBlocker != null) {
+                    pendingPresetSites = sites
+                } else {
+                    blockPresetSites(sites)
+                }
+            },
+            onAddOwnSite = openAddWebsite,
+        )
+    }
+
+    // Same decision the editor asks before saving one website rule — asked once for the whole
+    // batch: turn protection on now, or block anyway and let the standing Rules row remind.
+    pendingPresetSites?.let { sites ->
+        AlertDialog(
+            onDismissRequest = { pendingPresetSites = null },
+            title = { Text(stringResource(R.string.rules_presets_engine_title)) },
+            text = { Text(stringResource(R.string.rules_presets_engine_body)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingPresetSites = null
+                    enableWebsiteEngine()
+                    blockPresetSites(sites)
+                }) { Text(stringResource(R.string.rules_presets_engine_turn_on)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pendingPresetSites = null
+                    blockPresetSites(sites)
+                }) { Text(stringResource(R.string.rules_presets_engine_anyway)) }
+            },
+        )
+    }
+}
+
+/** The Rules list's own load state (owner directive 2026-10-21). Loading and failure are
+ *  first-class renders, not a blank frame or a false "nothing blocked". */
+private sealed interface RulesLoad {
+    data object Loading : RulesLoad
+    data class Loaded(val rules: List<RestrictionRule>) : RulesLoad
+    data object Failed : RulesLoad
+}
+
+/** Failure copy for a preset batch: what happened, the repository's reason, what to do. A
+ *  partial batch says how many landed, because rows really were written. */
+private fun presetFailureMessage(
+    failure: Throwable,
+    inserted: Int,
+    total: Int,
+    context: android.content.Context,
+): String {
+    val reason = when (failure) {
+        is RulesetLimitException ->
+            failure.message ?: context.getString(R.string.error_limit_reached)
+        else -> context.getString(R.string.rules_presets_write_failed)
+    }
+    return if (inserted > 0) {
+        context.getString(R.string.rules_presets_partial, inserted, total, reason)
+    } else {
+        context.getString(R.string.rules_presets_error, reason)
     }
 }
 
@@ -448,6 +605,7 @@ private fun RulesList(
     onDismissError: () -> Unit,
     onAddApp: () -> Unit,
     onAddWebsite: () -> Unit,
+    onOpenPresets: (categoryId: String) -> Unit,
     onEdit: (RestrictionRule) -> Unit,
     onTogglePause: (RestrictionRule, Boolean) -> Unit,
     onCleanup: () -> Unit,
@@ -515,59 +673,354 @@ private fun RulesList(
                 )
             }
         }
-        if (rules.isEmpty()) {
-            item(key = "empty") {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    shape = MaterialTheme.shapes.medium,
-                    modifier = Modifier.fillMaxWidth(),
+        // Owner directive 2026-10-21: each section renders its own state — the Apps and
+        // Websites sections exist even when empty and say what they hold. Deactivated stays
+        // hidden when empty: it is a cleanup area derived from the other two, not a third
+        // destination, and a "nothing paused" card would only add weight.
+        val appRules = rules.filter { it.targetType == "APP" && it.isEnabled }
+        val websiteRules = rules.filter { it.targetType == "WEBSITE" && it.isEnabled }
+        val deactivated = rules.filter { !it.isEnabled }
+
+        sectionHeader(header = appsHeader, key = "apps")
+        item(key = "apps-body") {
+            if (appRules.isEmpty()) {
+                EmptySectionCard(
+                    icon = Icons.Filled.Apps,
+                    title = stringResource(R.string.rules_apps_empty_title),
+                    body = stringResource(R.string.rules_apps_empty_body),
+                    actionLabel = stringResource(R.string.rules_apps_empty_action),
+                    onAction = onAddApp,
+                )
+            } else {
+                RuleRowsCard(
+                    rules = appRules,
+                    pendingPause = pendingPause,
+                    nowMillis = nowMillis,
+                    domainUsageEngine = domainUsageEngine,
+                    onEdit = onEdit,
+                    onTogglePause = onTogglePause,
+                )
+            }
+        }
+
+        sectionHeader(
+            header = websitesHeader,
+            key = "websites",
+            // Once rows exist, the empty state's chips are gone — this is the always-there
+            // door back into the same reviewed lists.
+            trailing = if (websiteRules.isNotEmpty()) {
+                {
+                    TextButton(onClick = { onOpenPresets(WebsitePresets.categories.first().id) }) {
+                        Text(stringResource(R.string.rules_websites_categories))
+                    }
+                }
+            } else {
+                null
+            },
+        )
+        item(key = "websites-body") {
+            if (websiteRules.isEmpty()) {
+                WebsiteEmptySection(onOpenPresets = onOpenPresets, onAddWebsite = onAddWebsite)
+            } else {
+                RuleRowsCard(
+                    rules = websiteRules,
+                    pendingPause = pendingPause,
+                    nowMillis = nowMillis,
+                    domainUsageEngine = domainUsageEngine,
+                    onEdit = onEdit,
+                    onTogglePause = onTogglePause,
+                )
+            }
+        }
+
+        // #18: Deactivated (paused + duration-lapsed) rules leave the live sections — their
+        // switches tell non-enforcement there, beside a way to sweep them out.
+        ruleSection(
+            header = deactivatedHeader,
+            caption = deactivatedCaption,
+            rules = deactivated,
+            pendingPause = pendingPause,
+            nowMillis = nowMillis,
+            domainUsageEngine = domainUsageEngine,
+            onEdit = onEdit,
+            onTogglePause = onTogglePause,
+            footer = {
+                TextButton(onClick = onCleanup) {
+                    Text(cleanupLabel, color = MaterialTheme.colorScheme.error)
+                }
+            },
+        )
+    }
+}
+
+private fun LazyListScope.sectionHeader(
+    header: String,
+    key: String,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    item(key = "header-$key") {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                header,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            trailing?.invoke()
+        }
+    }
+}
+
+/**
+ * One section's data card. Lazy for the 2,000-rule cap, bounded because it is an item of the
+ * page LazyColumn (task #13 — an unbounded nested LazyColumn is measured at infinity).
+ */
+@Composable
+private fun RuleRowsCard(
+    rules: List<RestrictionRule>,
+    pendingPause: Map<String, Boolean>,
+    nowMillis: Long,
+    domainUsageEngine: DomainUsageEngine,
+    onEdit: (RestrictionRule) -> Unit,
+    onTogglePause: (RestrictionRule, Boolean) -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        LazyColumn(modifier = Modifier.heightIn(max = RULES_CARD_MAX_HEIGHT)) {
+            itemsIndexed(rules, key = { _, rule -> rule.ruleId }) { index, rule ->
+                if (index > 0) {
+                    HorizontalDivider(
+                        // Starts where the row text starts: row padding + mark + gap.
+                        modifier = Modifier.padding(start = 16.dp + APP_MARK_SIZE + 16.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                    )
+                }
+                RuleRow(
+                    rule = rule,
+                    enabled = pendingPause[rule.ruleId] ?: rule.isEnabled,
+                    awaitingWrite = pendingPause.containsKey(rule.ruleId),
+                    nowMillis = nowMillis,
+                    domainUsageEngine = domainUsageEngine,
+                    onEdit = { onEdit(rule) },
+                    onTogglePause = { enable -> onTogglePause(rule, enable) },
+                )
+            }
+        }
+    }
+}
+
+/** The grammar of every empty section: what this section holds, and the one action that
+ *  fills it. */
+@Composable
+private fun EmptySectionCard(
+    icon: ImageVector,
+    title: String,
+    body: String,
+    actionLabel: String,
+    onAction: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(stringResource(R.string.rules_empty_title), style = MaterialTheme.typography.titleMedium)
+                    Icon(
+                        icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        body,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            TextButton(onClick = onAction, modifier = Modifier.fillMaxWidth()) {
+                Text(actionLabel)
+            }
+        }
+    }
+}
+
+/** The website section's empty state is the preset entry point (owner request 2026-10-21):
+ *  categories first, so nobody has to visit a site to learn its address. */
+@Composable
+private fun WebsiteEmptySection(
+    onOpenPresets: (categoryId: String) -> Unit,
+    onAddWebsite: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Filled.Language,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        stringResource(R.string.rules_websites_empty_title),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        stringResource(R.string.rules_websites_empty_body),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            CategoryPresetChips(onOpenPresets = onOpenPresets)
+            TextButton(onClick = onAddWebsite, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.rules_websites_add_own))
+            }
+        }
+    }
+}
+
+/** Loading: the page's own shape as skeleton blocks (UX timing rule: unknown duration with
+ *  structure gets a skeleton, not a spinner), with the reading line as the honest caption. */
+@Composable
+private fun RulesLoading(modifier: Modifier = Modifier) {
+    val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = sidePadding, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text(stringResource(R.string.rules_title), style = MaterialTheme.typography.headlineSmall)
+        Text(
+            stringResource(R.string.rules_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            stringResource(R.string.rules_loading),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        SkeletonCard(lines = 3)
+        SkeletonCard(lines = 2)
+    }
+}
+
+@Composable
+private fun SkeletonCard(lines: Int) {
+    val bar = MaterialTheme.colorScheme.surfaceContainerHighest
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            repeat(lines) { index ->
+                Box(
+                    Modifier
+                        .fillMaxWidth(if (index == 0) 0.55f else 1f)
+                        .height(14.dp)
+                        .background(bar, RoundedCornerShape(6.dp)),
+                )
+            }
+        }
+    }
+}
+
+/** Failure: says what happened and why, and offers the one action that can fix it. The
+ *  optional back action exists for the editor route, where system back must still leave. */
+@Composable
+private fun RulesLoadError(
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
+) {
+    val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = sidePadding, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        if (onBack != null) {
+            BackRow(label = stringResource(R.string.rules_title), onBack = onBack)
+        } else {
+            Text(stringResource(R.string.rules_title), style = MaterialTheme.typography.headlineSmall)
+        }
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(MaterialTheme.colorScheme.errorContainer, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Outlined.ErrorOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
-                            stringResource(R.string.rules_empty_body),
+                            stringResource(R.string.rules_load_error_title),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            stringResource(R.string.rules_load_error_body),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
+                Button(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.rules_load_retry))
+                }
             }
-        } else {
-            // #18: Deactivated (paused + duration-lapsed) rules leave the live sections —
-            // their switches tell non-enforcement there, beside a way to sweep them out.
-            ruleSection(
-                header = appsHeader,
-                rules = rules.filter { it.targetType == "APP" && it.isEnabled },
-                pendingPause = pendingPause,
-                nowMillis = nowMillis,
-                domainUsageEngine = domainUsageEngine,
-                onEdit = onEdit,
-                onTogglePause = onTogglePause,
-            )
-            ruleSection(
-                header = websitesHeader,
-                rules = rules.filter { it.targetType == "WEBSITE" && it.isEnabled },
-                pendingPause = pendingPause,
-                nowMillis = nowMillis,
-                domainUsageEngine = domainUsageEngine,
-                onEdit = onEdit,
-                onTogglePause = onTogglePause,
-            )
-            ruleSection(
-                header = deactivatedHeader,
-                caption = deactivatedCaption,
-                rules = rules.filter { !it.isEnabled },
-                pendingPause = pendingPause,
-                nowMillis = nowMillis,
-                domainUsageEngine = domainUsageEngine,
-                onEdit = onEdit,
-                onTogglePause = onTogglePause,
-                footer = {
-                    TextButton(onClick = onCleanup) {
-                        Text(cleanupLabel, color = MaterialTheme.colorScheme.error)
-                    }
-                },
-            )
         }
     }
 }
@@ -609,34 +1062,14 @@ private fun LazyListScope.ruleSection(
         }
     }
     item(key = "card-$header") {
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            // Task #13: lazy body — only visible rows compose at the 4000-rule ceiling.
-            // Bounded height: this card is an item of the page LazyColumn.
-            LazyColumn(modifier = Modifier.heightIn(max = RULES_CARD_MAX_HEIGHT)) {
-                itemsIndexed(rules, key = { _, rule -> rule.ruleId }) { index, rule ->
-                    if (index > 0) {
-                        HorizontalDivider(
-                            // Starts where the row text starts: row padding + mark + gap.
-                            modifier = Modifier.padding(start = 16.dp + APP_MARK_SIZE + 16.dp),
-                            color = MaterialTheme.colorScheme.outlineVariant,
-                        )
-                    }
-                    RuleRow(
-                        rule = rule,
-                        enabled = pendingPause[rule.ruleId] ?: rule.isEnabled,
-                        awaitingWrite = pendingPause.containsKey(rule.ruleId),
-                        nowMillis = nowMillis,
-                        domainUsageEngine = domainUsageEngine,
-                        onEdit = { onEdit(rule) },
-                        onTogglePause = { enable -> onTogglePause(rule, enable) },
-                    )
-                }
-            }
-        }
+        RuleRowsCard(
+            rules = rules,
+            pendingPause = pendingPause,
+            nowMillis = nowMillis,
+            domainUsageEngine = domainUsageEngine,
+            onEdit = onEdit,
+            onTogglePause = onTogglePause,
+        )
     }
     footer?.let { content ->
         item(key = "footer-$header") { content() }

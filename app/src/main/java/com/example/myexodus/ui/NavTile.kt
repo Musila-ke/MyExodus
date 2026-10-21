@@ -11,6 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -31,6 +32,9 @@ fun NavTile(
     /** Optional live datum under the label. A tile that says what its page holds saves the tap
      *  it would otherwise spend discovering the page has nothing in it. */
     status: String? = null,
+    /** Crisis/escape tiles signpost themselves with the error role; everything else uses the
+     *  neutral ink so a dense hub keeps one emphasis order. */
+    iconTint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
 ) {
     Surface(
         onClick = onClick,
@@ -46,7 +50,7 @@ fun NavTile(
             Icon(
                 icon,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = iconTint,
             )
             Text(
                 label,

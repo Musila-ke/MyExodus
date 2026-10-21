@@ -28,7 +28,10 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.EmojiEvents
+import androidx.compose.material.icons.outlined.NotificationsOff
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
@@ -88,7 +91,7 @@ import com.example.myexodus.ui.rules.RULES_CARD_MAX_HEIGHT
 import com.example.myexodus.ui.scheduleSummary
 import com.example.myexodus.ui.streaks.FreeSinceLine
 import com.example.myexodus.ui.streaks.HabitLabelRow
-import com.example.myexodus.ui.streaks.MilestoneSplashCard
+import com.example.myexodus.ui.streaks.MilestoneReachedDialog
 import com.example.myexodus.ui.streaks.daysFree
 import com.example.myexodus.ui.streaks.daysUntil
 import com.example.myexodus.ui.streaks.nextMilestone
@@ -231,17 +234,6 @@ fun HomeScreen(
                 )
             }
         }
-        // §8 Step 5: the splash card renders at the top of Home (REQ-12's guaranteed
-        // delivery path, independent of notifications) — ONE combined card for every
-        // unacknowledged milestone (product-owner call 2026-09-14, resolving plan §16 OQ).
-        if (splashDays.isNotEmpty()) {
-            item(key = "splash") {
-                MilestoneSplashCard(
-                    milestoneDays = splashDays,
-                    onAcknowledge = { onAcknowledgeMilestone(splashDays) },
-                )
-            }
-        }
         item(key = "status") {
             StatusHeader(
                 serviceEnabled = serviceEnabled,
@@ -251,37 +243,26 @@ fun HomeScreen(
                 onOpenSettings = onOpenSettings,
             )
         }
-        // SOS §8.14 (V1 Req 35): the check-ins banner below speaks for the same root cause
-        // and the same fix as an NOTIFICATIONS_OFF degradation, so exactly one of the two
-        // renders (never two stacked).
-        degradation?.let { current ->
-            if (!(current == ProtectionDegradation.NOTIFICATIONS_OFF && checkInsAtRisk)) {
-                item(key = "degradation") { DegradationBanner(current, onReenable, onOpenSettings) }
-            }
-        }
-        if (checkInsAtRisk) {
-            item(key = "partner-checkins-off") {
-                PartnerCheckInsNotificationsBanner(
-                    requestable = partnerNotificationsRequestable,
-                    onFix = onFixPartnerNotifications,
-                )
-            }
-        }
-        // D1: the outage report sits beside the degradation banner — both are statements about
-        // protection, and the outage is the one the user can act on from here.
-        outage?.let { current ->
-            item(key = "outage") {
-                OutageBanner(
-                    outage = current,
-                    onFix = onFixOutage,
-                    onDismiss = {
-                        scope.launch {
-                            withContext(Dispatchers.IO) { outageSource.dismiss() }
-                            outage = null
-                        }
-                    },
-                )
-            }
+        // Owner directive 2026-10-21: the attention alerts are one calm group, not three
+        // stacked full-width banners. Each alert only appears when it has something to say,
+        // and the group disappears entirely for a healthy install.
+        item(key = "attention") {
+            AttentionSection(
+                degradation = degradation,
+                checkInsAtRisk = checkInsAtRisk,
+                partnerNotificationsRequestable = partnerNotificationsRequestable,
+                outage = outage,
+                onReenable = onReenable,
+                onOpenSettings = onOpenSettings,
+                onFixPartnerNotifications = onFixPartnerNotifications,
+                onFixOutage = onFixOutage,
+                onDismissOutage = {
+                    scope.launch {
+                        withContext(Dispatchers.IO) { outageSource.dismiss() }
+                        outage = null
+                    }
+                },
+            )
         }
         if (encryptionPending) {
             item(key = "encryption-pending") { EncryptionPendingNotice() }
@@ -383,6 +364,20 @@ fun HomeScreen(
                 }
             }
         }
+    }
+    // REQ-12's guaranteed delivery path, now a modal (owner directive 2026-10-21): the
+    // milestone takes the screen for one dismiss-and-continue beat instead of occupying a
+    // permanent slot above the day hero. Same acknowledgement write either way.
+    if (splashDays.isNotEmpty() && habit != null) {
+        MilestoneReachedDialog(
+            milestoneDays = splashDays,
+            achievedDays = habit.milestones
+                .filter { it.achievedAt != null }
+                .map { it.milestoneDay }
+                .toSet(),
+            habitLabel = habit.targetLabel,
+            onAcknowledge = { onAcknowledgeMilestone(splashDays) },
+        )
     }
 }
 
@@ -960,137 +955,215 @@ private fun EncryptionPendingNotice() {
  * for the same evidence — and [AccountingOutage.trackingResumed] renders the one-time
  * confirmation that the fired fix is in effect instead of the alert.
  */
+/** One row of the Home attention group. */
+private data class AttentionItem(
+    val icon: ImageVector,
+    val title: String,
+    val body: String,
+    val actionLabel: String? = null,
+    val onAction: (() -> Unit)? = null,
+    val dismissLabel: String? = null,
+    val onDismiss: (() -> Unit)? = null,
+    val resolved: Boolean = false,
+)
+
+/**
+ * Owner directive 2026-10-21: the protection alerts share one quiet surface and one visual
+ * grammar instead of stacking full-width banners, each with its own loud button. Rows stay
+ * ordered by consequence, every row keeps its own cause + action (the treatment findings
+ * #4/#13 locked in), and the section renders nothing at all on a healthy install — these
+ * alerts are occasional, not furniture.
+ *
+ * SOS §8.14: the partner check-ins row speaks for the same root cause and the same fix as a
+ * NOTIFICATIONS_OFF degradation, so exactly one of the two renders (never two stacked).
+ */
 @Composable
-private fun OutageBanner(outage: AccountingOutage, onFix: () -> Unit, onDismiss: () -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.tertiaryContainer,
-        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(
-            Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            if (outage.trackingResumed) {
+private fun AttentionSection(
+    degradation: ProtectionDegradation?,
+    checkInsAtRisk: Boolean,
+    partnerNotificationsRequestable: Boolean,
+    outage: AccountingOutage?,
+    onReenable: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onFixPartnerNotifications: () -> Unit,
+    onFixOutage: () -> Unit,
+    onDismissOutage: () -> Unit,
+) {
+    val context = LocalContext.current
+    val items = buildList {
+        degradation?.let { current ->
+            if (!(current == ProtectionDegradation.NOTIFICATIONS_OFF && checkInsAtRisk)) {
+                add(
+                    when (current) {
+                        // §8 Step 6: cause not named — with both paths down it is usually
+                        // more than one thing; Settings names each mechanism and its fix.
+                        ProtectionDegradation.DEGRADED_NO_DETECTION -> AttentionItem(
+                            icon = Icons.Outlined.Shield,
+                            title = stringResource(R.string.protection_paused_title),
+                            body = stringResource(R.string.protection_paused_card_text),
+                            actionLabel = stringResource(R.string.protection_paused_action),
+                            onAction = onOpenSettings,
+                        )
+                        // Name only the always-true loss (regression finding #1, 2026-09-16);
+                        // the stop's cause is never named.
+                        ProtectionDegradation.APP_STOPPED -> AttentionItem(
+                            icon = Icons.Outlined.Shield,
+                            title = stringResource(R.string.protection_stopped_title),
+                            body = stringResource(R.string.protection_stopped_text),
+                            actionLabel = stringResource(R.string.protection_stopped_action),
+                            onAction = onReenable,
+                        )
+                        ProtectionDegradation.NOTIFICATIONS_OFF -> AttentionItem(
+                            icon = Icons.Outlined.NotificationsOff,
+                            title = stringResource(R.string.protection_notif_off_banner_title),
+                            body = stringResource(R.string.protection_notif_off_banner_text),
+                            actionLabel = stringResource(R.string.protection_notif_off_banner_action),
+                            onAction = {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName),
+                                )
+                            },
+                        )
+                    },
+                )
+            }
+        }
+        if (checkInsAtRisk) {
+            add(
+                AttentionItem(
+                    icon = Icons.Outlined.NotificationsOff,
+                    title = stringResource(R.string.partner_notifications_off_title),
+                    body = stringResource(R.string.partner_notifications_checkins_body),
+                    actionLabel = stringResource(
+                        if (partnerNotificationsRequestable) {
+                            R.string.partner_notifications_enable
+                        } else {
+                            R.string.partner_notifications_open_settings
+                        },
+                    ),
+                    onAction = onFixPartnerNotifications,
+                ),
+            )
+        }
+        outage?.let { current ->
+            if (current.trackingResumed) {
                 // AD-13: the setting, not a cause — the app never claims what interrupted
                 // tracking, only that the user's fix is in effect and can run again.
-                Text(
-                    stringResource(R.string.home_outage_resolved_title),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Text(
-                    stringResource(R.string.home_outage_resolved_body),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Button(onClick = onDismiss) {
-                    Text(stringResource(R.string.outage_action_dismiss))
-                }
-            } else {
-                Text(
-                    stringResource(R.string.home_outage_title),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Text(
-                    pluralStringResource(
-                        R.plurals.home_outage_body,
-                        outage.summary.count,
-                        outage.summary.count,
-                        formatDuration(outage.summary.largestWindowMs),
+                add(
+                    AttentionItem(
+                        icon = Icons.Outlined.CheckCircle,
+                        title = stringResource(R.string.home_outage_resolved_title),
+                        body = stringResource(R.string.home_outage_resolved_body),
+                        dismissLabel = stringResource(R.string.outage_action_dismiss),
+                        onDismiss = onDismissOutage,
+                        resolved = true,
                     ),
-                    style = MaterialTheme.typography.bodyMedium,
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (outage.promptRoute != null) {
-                        Button(onClick = onFix) { Text(stringResource(R.string.outage_action_fix)) }
-                    }
-                    TextButton(onClick = onDismiss) {
-                        Text(stringResource(R.string.outage_action_dismiss))
-                    }
+            } else {
+                add(
+                    AttentionItem(
+                        icon = Icons.Outlined.Schedule,
+                        title = stringResource(R.string.home_outage_title),
+                        body = pluralStringResource(
+                            R.plurals.home_outage_body,
+                            current.summary.count,
+                            current.summary.count,
+                            formatDuration(current.summary.largestWindowMs),
+                        ),
+                        actionLabel = current.promptRoute
+                            ?.let { stringResource(R.string.outage_action_fix) },
+                        onAction = onFixOutage.takeIf { current.promptRoute != null },
+                        dismissLabel = stringResource(R.string.outage_action_dismiss),
+                        onDismiss = onDismissOutage,
+                    ),
+                )
+            }
+        }
+    }
+    if (items.isEmpty()) return
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column {
+            Text(
+                stringResource(R.string.home_attention_title),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 2.dp),
+            )
+            items.forEachIndexed { index, item ->
+                if (index > 0) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 20.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                    )
                 }
+                AttentionRow(item)
             }
         }
     }
 }
 
 @Composable
-private fun DegradationBanner(
-    degradation: ProtectionDegradation,
-    onReenable: () -> Unit,
-    onOpenSettings: () -> Unit,
-) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val (message, actionLabel, action) = when (degradation) {
-        // §8 Step 6: cause not named — with both paths down it is usually more than one
-        // thing; the Settings protection rows name each mechanism and carry its fix.
-        ProtectionDegradation.DEGRADED_NO_DETECTION -> Triple(
-            stringResource(R.string.protection_paused_card_text),
-            stringResource(R.string.protection_paused_action),
-            onOpenSettings,
-        )
-        // The old copy claimed blocking was off while Path A (a11y) is typically still
-        // live after a Task-Manager stop — can't claim that, and can't claim "everything
-        // is fine": the poll path (time limits + fallback detection) stays off until
-        // re-enable. Name only the always-true loss (regression finding #1, 2026-09-16);
-        // the stop's cause is never named (which shapes it counts — see the string).
-        ProtectionDegradation.APP_STOPPED -> Triple(
-            stringResource(R.string.protection_stopped_text),
-            stringResource(R.string.protection_stopped_action),
-            onReenable,
-        )
-        ProtectionDegradation.NOTIFICATIONS_OFF -> Triple(
-            stringResource(R.string.protection_notif_off_banner_text),
-            stringResource(R.string.protection_notif_off_banner_action),
-            {
-                context.startActivity(
-                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName),
-                )
+private fun AttentionRow(item: AttentionItem) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(
+            imageVector = item.icon,
+            contentDescription = null,
+            tint = if (item.resolved) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
             },
+            modifier = Modifier
+                .padding(top = 2.dp)
+                .size(22.dp),
         )
-    }
-    Surface(
-        color = MaterialTheme.colorScheme.errorContainer,
-        contentColor = MaterialTheme.colorScheme.onErrorContainer,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
         Column(
-            Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(message, style = MaterialTheme.typography.bodyMedium)
-            Button(onClick = action) { Text(actionLabel) }
-        }
-    }
-}
-
-/** SOS §8.14 (V1 Req 35): a pair is linked and notifications are off — the plan's copy with
- *  the working fix path (the system dialog while it can still be raised, else the app's
- *  notification settings). Same surface grammar as [DegradationBanner]. */
-@Composable
-private fun PartnerCheckInsNotificationsBanner(requestable: Boolean, onFix: () -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.errorContainer,
-        contentColor = MaterialTheme.colorScheme.onErrorContainer,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(
-            Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+            Text(item.title, style = MaterialTheme.typography.titleSmall)
             Text(
-                stringResource(R.string.partner_notifications_checkins_body),
-                style = MaterialTheme.typography.bodyMedium,
+                item.body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Button(onClick = onFix) {
-                Text(
-                    stringResource(
-                        if (requestable) R.string.partner_notifications_enable
-                        else R.string.partner_notifications_open_settings,
-                    ),
-                )
+            if (item.actionLabel != null || item.dismissLabel != null) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (item.actionLabel != null && item.onAction != null) {
+                        TextButton(
+                            onClick = item.onAction,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        ) {
+                            Text(item.actionLabel, style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+                    if (item.dismissLabel != null && item.onDismiss != null) {
+                        TextButton(
+                            onClick = item.onDismiss,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        ) {
+                            Text(
+                                item.dismissLabel,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
             }
         }
     }

@@ -2,8 +2,10 @@ package com.example.myexodus.ui.recovery
 
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,11 +16,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Air
+import androidx.compose.material.icons.outlined.Bookmark
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.DirectionsWalk
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.SelfImprovement
+import androidx.compose.material.icons.outlined.SupportAgent
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -38,9 +48,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -62,7 +74,6 @@ import com.example.myexodus.recovery.RecoveryResourceCatalog
 import com.example.myexodus.recovery.RecoverySessionRepository
 import com.example.myexodus.recovery.RecoveryTechnique
 import com.example.myexodus.ui.BackRow
-import com.example.myexodus.ui.LinkRow
 import com.example.myexodus.ui.NavTile
 import com.example.myexodus.ui.SecureSurface
 import com.example.myexodus.ui.StatusPill
@@ -438,23 +449,13 @@ private fun HomeView(
             )
         }
 
-        Column {
-            Text(
-                stringResource(R.string.recovery_suggested_title),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            if (inRiskWindow) {
-                Text(
-                    stringResource(R.string.recovery_risk_window_note),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        // One suggestion leads (v2 M1.3); the rest of the catalog is one tile away.
-        TechniqueCard(technique = suggested, onOpen = { onOpenTechnique(suggested) })
-
-        Button(onClick = { logging = true }, modifier = Modifier.fillMaxWidth()) {
+        // The one urgent action, above the reference material (owner directive 2026-10-21):
+        // full-width and impossible to miss, but not a second shout — the timer/status stays
+        // the visual anchor when a session is live.
+        Button(
+            onClick = { logging = true },
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+        ) {
             // Owner ruling 2026-10-17: the same glyph the widget's log-an-urge control draws,
             // so one icon means one action on both surfaces.
             Icon(
@@ -466,6 +467,25 @@ private fun HomeView(
             Text(stringResource(R.string.recovery_log_action))
         }
 
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                stringResource(R.string.recovery_suggested_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            if (inRiskWindow) {
+                Text(
+                    stringResource(R.string.recovery_risk_window_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // One suggestion leads (v2 M1.3); the rest of the catalog is one tile away.
+            TechniqueCard(technique = suggested, onOpen = { onOpenTechnique(suggested) })
+        }
+
+        // Icon + label subpages, four in a calm 2×2 grid. The crisis path keeps its one-tap
+        // presence (standing rule: emergency access is never gated) and signs itself with the
+        // error role while the three reference pages stay neutral.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             NavTile(
                 icon = Icons.Outlined.SelfImprovement,
@@ -479,20 +499,22 @@ private fun HomeView(
                 onClick = onOpenPlan,
                 modifier = Modifier.weight(1f),
             )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             NavTile(
                 icon = Icons.Outlined.History,
                 label = stringResource(R.string.recovery_history_title),
                 onClick = onOpenHistory,
                 modifier = Modifier.weight(1f),
             )
+            NavTile(
+                icon = Icons.Outlined.SupportAgent,
+                label = stringResource(R.string.recovery_crisis_link),
+                onClick = onOpenCrisis,
+                modifier = Modifier.weight(1f),
+                iconTint = MaterialTheme.colorScheme.error,
+            )
         }
-        // Was a hand-rolled copy of the LinkRow shape without its chevron — the one row on this
-        // page that navigated nowhere, visually. Third consumer, so it uses the shared row.
-        LinkRow(
-            title = stringResource(R.string.recovery_crisis_link),
-            body = stringResource(R.string.recovery_crisis_link_body),
-            onClick = onOpenCrisis,
-        )
     }
 
     if (logging) {
@@ -513,28 +535,63 @@ private fun TechniqueCard(technique: RecoveryTechnique, onOpen: () -> Unit) {
         shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            // The reference tile grammar (icon disc + title/body + trailing affordance): one
+            // recognizable glyph per technique, so the list scans by shape before it is read.
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    stringResource(techniqueTitle(technique.id)),
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f),
+                Icon(
+                    imageVector = techniqueIcon(technique.id),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp),
                 )
-                // The effort was a grey caption doing the same job as the title; as a pill it
-                // becomes the thing a scanning user actually sorts these by (the reference row
-                // geometry: content left, the one label that differs on the trailing edge).
-                StatusPill(stringResource(effortLabel(technique.effort.name)))
             }
-            Text(
-                stringResource(techniqueDescription(technique.id)),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        stringResource(techniqueTitle(technique.id)),
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    // The effort was a grey caption doing the same job as the title; as a pill it
+                    // becomes the thing a scanning user actually sorts these by (the reference row
+                    // geometry: content left, the one label that differs on the trailing edge).
+                    StatusPill(stringResource(effortLabel(technique.effort.name)))
+                }
+                Text(
+                    stringResource(techniqueDescription(technique.id)),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Icon(
+                imageVector = Icons.Outlined.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
+}
+
+private fun techniqueIcon(id: String): ImageVector = when (id) {
+    RecoveryResourceCatalog.URGE_SURFING -> Icons.Outlined.Air
+    RecoveryResourceCatalog.DELAY_TIMER -> Icons.Outlined.Timer
+    RecoveryResourceCatalog.SOBER -> Icons.Outlined.DirectionsWalk
+    else -> Icons.Outlined.Bookmark
 }
 
 /** All four techniques — the "choose another" path the hub's single suggestion promises. */
@@ -793,16 +850,35 @@ private fun IdleCard() {
         shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                stringResource(R.string.recovery_idle_title),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                stringResource(R.string.recovery_idle_body),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    stringResource(R.string.recovery_idle_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    stringResource(R.string.recovery_idle_body),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

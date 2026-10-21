@@ -68,4 +68,8 @@ interface HabitProgressDao {
 
     @Query("UPDATE habit_progress SET is_selected = 1 WHERE progress_id = :progressId")
     suspend fun markSelected(progressId: String)
+
+    /** Rename only the label; the streak, milestones and sharing rows stay untouched. */
+    @Query("UPDATE habit_progress SET target_identifier = :label WHERE progress_id = :progressId")
+    suspend fun rename(progressId: String, label: String): Int
 }

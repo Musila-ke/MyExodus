@@ -81,6 +81,10 @@
          effect. AD-13: it states the setting and the capability — never a cause. -->
     <string name="home_outage_resolved_title">Battery optimization is off for MyExodus</string>
     <string name="home_outage_resolved_body">Background tracking can run again. If another interruption is measured, you’ll see a report here.</string>
+    <!-- Owner directive 2026-10-21: the occasional protection alerts share one grouped
+         surface instead of stacking full-width banners. -->
+    <string name="home_attention_title">Needs attention</string>
+    <string name="protection_notif_off_banner_title">Notifications are off</string>
     <!-- D1's report carries both facts the record holds: how many interruptions, and the
          largest window. Callers pass (count, duration) in that order, so the duration is
          %2$s in EVERY item — the "one" item prints no count but must still skip %1$s
@@ -131,6 +135,17 @@
     <string name="home_streak_caption_loading">Reading your streak…</string>
     <string name="home_streak_caption_none">No habit tracked yet. A streak starts counting the day you set one up.</string>
     <string name="home_streak_caption_next">Next milestone: %1$d-day mark — %2$d days to go.</string>
+    <!-- Milestone celebration modal (owner directive 2026-10-21): the achievement takes the
+         screen once, then leaves the day hero unobstructed. -->
+    <string name="milestone_dialog_eyebrow">Milestone reached</string>
+    <string name="milestone_dialog_habit">Free from %1$s</string>
+    <string name="milestone_dialog_day_short">%1$d days</string>
+    <string name="milestone_dialog_continue">Continue</string>
+    <!-- Home quick-action dial (owner directive 2026-10-21): one FAB expands into the three
+         shortcuts instead of three separate floating buttons. -->
+    <string name="home_quick_actions_open">Open quick actions</string>
+    <string name="home_quick_actions_close">Close quick actions</string>
+    <string name="home_action_log_urge">Log an urge</string>
     <string name="home_streak_caption_complete">Milestone ladder complete — extraordinary.</string>
     <plurals name="home_streak_days_unit">
         <item quantity="one">day</item>
@@ -205,8 +220,48 @@
     <string name="rules_subtitle">Blocks enforced on this device</string>
     <string name="rules_apps_header">Apps</string>
     <string name="rules_websites_header">Websites</string>
-    <string name="rules_empty_title">No blocks yet</string>
-    <string name="rules_empty_body">Add an app or website to block. Blocks start working the moment they are saved — no restart needed.</string>
+    <!-- Owner request 2026-10-21: every section owns its own empty state instead of one page
+         card, and the website state leads with curated category lists — blocking a site must
+         never require visiting it first. -->
+    <string name="rules_apps_empty_title">No app blocks yet</string>
+    <string name="rules_apps_empty_body">Block an app to cap its daily time, or wall it off completely.</string>
+    <string name="rules_apps_empty_action">Add an app</string>
+    <string name="rules_websites_empty_title">No websites blocked yet</string>
+    <string name="rules_websites_empty_body">Pick a category to review a curated list and block it in one go — or add your own address.</string>
+    <string name="rules_websites_add_own">Add your own website</string>
+    <string name="rules_websites_categories">Categories</string>
+    <string name="rules_loading">Reading your blocks…</string>
+    <string name="rules_load_error_title">Couldn’t load your blocks</string>
+    <string name="rules_load_error_body">MyExodus can’t reach its local database right now. Nothing has changed. Try again in a moment.</string>
+    <string name="rules_load_retry">Try again</string>
+
+    <!-- Website category presets (owner request 2026-10-21) -->
+    <string name="rules_preset_social">Social media</string>
+    <string name="rules_preset_adult">Adult content</string>
+    <string name="rules_preset_betting">Betting</string>
+    <string name="rules_preset_video">Video &amp; streaming</string>
+    <string name="rules_preset_news">News</string>
+    <string name="rules_preset_shopping">Shopping</string>
+    <string name="rules_presets_sheet_title">Block by category</string>
+    <string name="rules_presets_sheet_body">Curated sites, chosen for you. Review the list — nothing is blocked until you tap Block.</string>
+    <string name="rules_presets_selected_count">%1$d of %2$d selected</string>
+    <string name="rules_presets_select_all">Select all</string>
+    <string name="rules_presets_clear">Clear</string>
+    <string name="rules_presets_all_blocked">Every site in this list is already blocked. Pick another category.</string>
+    <string name="rules_presets_add_own">Add your own website instead</string>
+    <string name="rules_presets_saving">Blocking…</string>
+    <plurals name="rules_presets_block_count">
+        <item quantity="one">Block %1$d site</item>
+        <item quantity="other">Block %1$d sites</item>
+    </plurals>
+    <string name="rules_presets_write_failed">MyExodus couldn’t write the change.</string>
+    <string name="rules_presets_error">Couldn’t block these websites. %1$s Try again.</string>
+    <string name="rules_presets_partial">Blocked %1$d of %2$d sites. %3$s Try again — sites that are already blocked won’t be added twice.</string>
+    <string name="rules_presets_engine_title">Protection is off</string>
+    <string name="rules_presets_engine_body">Website blocks need MyExodus’s VPN to be on. Turn it on now, or block these sites anyway — they start working when protection is on.</string>
+    <string name="rules_presets_engine_turn_on">Turn on protection</string>
+    <string name="rules_presets_engine_anyway">Block anyway</string>
+    <string name="editor_presets_hint">Don’t know the address? Start from a category.</string>
     <!-- A row's switch is a sibling of its label, not its child, so it names the target itself;
          otherwise every row announces the same words and none of them says which block (finding #25). -->
     <string name="rules_pause">Pause %1$s</string>
@@ -364,8 +419,8 @@
     <string name="recovery_override_confirm_text">The block ends for good — it won’t restart on its own. To block it again later you’d create a new rule under Rules. This override is logged on this device.</string>
     <string name="recovery_override_confirm_action">End the block</string>
     <string name="recovery_override_confirm_cancel">Keep waiting</string>
-    <string name="recovery_idle_title">No recovery session</string>
-    <string name="recovery_idle_body">A recovery session starts when a blocked app opens and you tap “Open MyExodus Recovery”. Wait out the timer and the block is lifted for that rule.</string>
+    <string name="recovery_idle_title">No active block</string>
+    <string name="recovery_idle_body">A blocked app starts a session from the block screen.</string>
 
     <!-- App picker -->
     <string name="picker_title">Choose an app</string>
@@ -529,7 +584,12 @@
          hub, and moves identity, sync detail, recent activity and unpair behind these three. -->
     <string name="partner_tile_requests">Requests</string>
     <string name="partner_tile_activity">Activity</string>
+    <string name="partner_tile_sharing">Sharing</string>
     <string name="partner_tile_pairing">Pairing</string>
+    <string name="partner_tile_sharing_none">Nothing shared</string>
+    <!-- Owner ask 2026-10-21: the hub groups everything time-boxed under one heading instead of
+         letting each card shout at the same weight. -->
+    <string name="partner_needs_you">Needs you</string>
     <!-- ADR #84: each tile carries the datum its subpage would otherwise cost a tap to show. -->
     <!-- Tiles are ~88dp of text at 360dp: "Nothing waiting" ellipsized on the device. -->
     <string name="partner_tile_requests_none">None waiting</string>
@@ -537,6 +597,52 @@
     <string name="partner_tile_activity_week">%1$d this week</string>
     <string name="partner_tile_never_synced">Never synced</string>
     <string name="partner_tile_synced">Synced %1$s</string>
+    <!-- Partner plans (owner ask 2026-10-21, ADR #193): a checklist one user writes and the
+         other checks off. The tile status counts tasks still to do on plans the partner sent. -->
+    <string name="partner_tile_plans">Plans</string>
+    <string name="partner_tile_plans_none">None yet</string>
+    <string name="partner_tile_plans_todo">%1$d to do</string>
+    <string name="partner_tile_plans_all_done">All done</string>
+    <string name="partner_plans_title">Plans</string>
+    <string name="partner_plans_intro">A plan is a short checklist. A partner can write one for you, and you can write your own.</string>
+    <string name="partner_plans_from_header">From your partner</string>
+    <string name="partner_plans_given_header">You shared</string>
+    <string name="partner_plans_mine_header">Just for me</string>
+    <string name="partner_plans_empty">No plans yet. Write one below, or wait for your partner to share one.</string>
+    <string name="partner_plans_unavailable">Couldn’t read your plans. Reopen this page to try again.</string>
+    <string name="partner_plans_new">New plan</string>
+    <string name="partner_plans_for_whom">Who is this plan for?</string>
+    <string name="partner_plans_for_self">Just me — stays on this phone</string>
+    <string name="partner_plans_cancel">Cancel</string>
+    <string name="partner_plans_progress">%1$d of %2$d done</string>
+    <string name="partner_plans_from">From %1$s</string>
+    <string name="partner_plans_with">With %1$s</string>
+    <string name="partner_plans_unknown_partner">your partner</string>
+    <string name="partner_plans_local">Only on this phone</string>
+    <string name="partner_plans_empty_checklist">No tasks yet.</string>
+    <string name="partner_plans_editor_new">New plan</string>
+    <string name="partner_plans_editor_edit">Edit plan</string>
+    <string name="partner_plans_title_field">Plan title</string>
+    <string name="partner_plans_title_hint">e.g. This week’s steps</string>
+    <string name="partner_plans_task_field">Task</string>
+    <string name="partner_plans_task_hint">e.g. Read chapter 3</string>
+    <string name="partner_plans_add_task">Add task</string>
+    <string name="partner_plans_remove_task">Remove task</string>
+    <string name="partner_plans_remove_task_desc">Remove %1$s</string>
+    <string name="partner_plans_save">Save plan</string>
+    <string name="partner_plans_saving">Saving…</string>
+    <string name="partner_plans_saved">Saved. It reaches your partner at the next sync.</string>
+    <string name="partner_plans_saved_local">Saved on this phone.</string>
+    <string name="partner_plans_save_failed">Couldn’t save the plan. Try again.</string>
+    <string name="partner_plans_need_title">Give the plan a title.</string>
+    <string name="partner_plans_need_task">Add at least one task.</string>
+    <string name="partner_plans_edit">Edit</string>
+    <string name="partner_plans_author_hint">Your partner checks these off; their progress shows here.</string>
+    <string name="partner_plans_recipient_hint">Checked items are shared back with %1$s.</string>
+    <string name="partner_plans_updated">Updated %1$s</string>
+    <!-- Partner-plan alert (ADR #193): only the unlocked copy names the plan. -->
+    <string name="partner_plan_title_named">%1$s shared a plan with you</string>
+    <string name="partner_plan_body_named">Plan: %1$s</string>
     <string name="partner_chain_verified_mark">Shared activity is verified</string>
     <string name="partner_requests_empty_title">Nothing waiting</string>
     <string name="partner_requests_empty_body">Approval asks appear here — the ones waiting on your decision, and the ones you\'ve sent.</string>
@@ -647,12 +753,10 @@
     <string name="partner_notifications_checkins_body">Notifications are off, so you’ll miss check-ins.</string>
     <string name="partner_ceremony_notifications_body">Turn on notifications so your partner’s check-ins reach you.</string>
 
-    <!-- Partner sharing pane (owner mandate 2026-10-04, v16/ADR #135): every decision is per
-         (item, partner) — three levels, middle one collapsed with a single partner. Nothing is
-         shared until a switch is on; master off hides the streak's name too; category switches
-         grey out under an off master. -->
-    <string name="settings_sharing_title">Partner sharing</string>
-    <string name="settings_sharing_row_body">Choose what each partner can see</string>
+    <!-- Partner sharing pane (owner mandate 2026-10-04, v16/ADR #135; moved from Settings to
+         the Partner tab 2026-10-21): every decision is per (item, partner) — three levels,
+         middle one collapsed with a single partner. Nothing is shared until a switch is on;
+         master off hides the streak's name too; category switches grey out under an off master. -->
     <string name="settings_sharing_intro">Nothing is shared until you choose it. You pick, streak by streak and partner by partner, who sees what. Changes apply right away, and anything switched off is never sent — not even a streak’s name.</string>
     <string name="settings_sharing_streaks_header">Streaks</string>
     <string name="settings_sharing_other_header">Other information</string>
@@ -790,7 +894,9 @@
     <!-- §19.5 multi-user: the roster grows by pairing again, and the picker names each
          supported user by their own self-chosen label. -->
     <string name="partner_pair_invite_cta">Invite a partner</string>
+    <string name="partner_pair_invite_body">Show a one-time code for them to enter.</string>
     <string name="partner_pair_join_cta">Join with a code</string>
+    <string name="partner_pair_join_body">Enter the one-time code they show you.</string>
     <string name="partner_pair_add_user_title">Support another person</string>
     <string name="partner_pair_add_user_body">This phone can stay paired with more than one person. Each pairing is separate — switching between them never mixes up whose activity you are looking at.</string>
     <string name="partner_users_title">People you support</string>
@@ -913,7 +1019,7 @@
          one higher under the never-0 display (ADR #128). Owner-flagged 2026-10-17. -->
     <string name="streaks_rung_day">%1$d days</string>
     <string name="streaks_relapse_title">Had a slip?</string>
-    <string name="streaks_relapse_body">Logging a relapse ends the current count and starts a new one at Day 1. Your best run stays on record — progress you\'ve made isn\'t erased.</string>
+    <string name="streaks_relapse_body">Ending this count starts a new one at Day 1. Your best run stays with you.</string>
     <string name="streaks_relapse_action">Log a relapse</string>
     <string name="streaks_relapse_in_flight">Logging…</string>
     <string name="streaks_relapse_confirm_title">Log a relapse?</string>
@@ -921,6 +1027,21 @@
     <string name="streaks_relapse_confirm_action">Log it</string>
     <string name="streaks_relapse_error_before_start">That relapse time is earlier than this streak\'s start. Check your device\'s date and time settings, then try again.</string>
     <string name="streaks_relapse_error_store">MyExodus can\'t reach its local database right now, so nothing was logged. Try again in a moment.</string>
+    <!-- Manage streak (owner directive 2026-10-21): rename/delete the displayed habit. -->
+    <string name="streaks_manage_title">Manage streak</string>
+    <string name="streaks_manage_name_label">Streak name</string>
+    <string name="streaks_manage_save">Save name</string>
+    <string name="streaks_manage_saving">Saving…</string>
+    <string name="streaks_manage_saved">Name saved.</string>
+    <string name="streaks_manage_error_name">Enter a name for this streak.</string>
+    <string name="streaks_manage_error_store">MyExodus can\'t reach its local database right now. Nothing was changed. Try again in a moment.</string>
+    <string name="streaks_manage_error_gone">This streak no longer exists. Go back to see your current streak.</string>
+    <string name="streaks_manage_delete_title">Delete this streak</string>
+    <string name="streaks_manage_delete_body">Removes its day history, milestones, and sharing from this device. This can\'t be undone.</string>
+    <string name="streaks_manage_delete_action">Delete streak</string>
+    <string name="streaks_manage_delete_confirm_title">Delete this streak?</string>
+    <string name="streaks_manage_delete_confirm_body">“%1$s” and all of its day history will be removed from this device. Sharing for this streak stops. This can\'t be undone.</string>
+    <string name="streaks_manage_delete_confirm_action">Delete</string>
     <string name="streaks_cancel">Cancel</string>
     <string name="streaks_done">Nice — keep going</string>
     <string name="streaks_milestone_channel_name">MyExodus milestones</string>

@@ -13,7 +13,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Shield
@@ -44,7 +43,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.R
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
-import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.usage.AccountingOutage
 import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.domainusage.DomainUsageEngine
@@ -56,11 +54,9 @@ import com.example.myexodus.settings.StrictModeManager
 import com.example.myexodus.settings.WidgetSettings
 import com.example.myexodus.settings.readProtectionChecks
 import com.example.myexodus.settings.requestBatteryExemption
-import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.ui.BrandMark
 import com.example.myexodus.ui.WindowWidth
-import com.example.myexodus.ui.recovery.CoachingPlanScreen
 import com.example.myexodus.ui.recovery.RecoveryPrefs
 import com.example.myexodus.ui.recovery.RiskWindowsScreen
 import com.example.myexodus.ui.rememberWindowWidth
@@ -83,11 +79,6 @@ fun SettingsScreen(
     widgetSettings: WidgetSettings,
     onWidgetSettingsChanged: () -> Unit,
     planRepository: RecoveryPlanRepository,
-    rulesRepository: RulesRepository,
-    /** Owner mandate 2026-10-04: the sharing pane's per-streak consent reads/writes. */
-    habitRepository: HabitRepository,
-    /** v16/ADR #135: the sharing pane's roster (pairId → partner name), read fresh at open. */
-    loadPartnerNames: suspend () -> Map<String, String>,
     recoveryPrefs: RecoveryPrefs,
     domainUsageEngine: DomainUsageEngine,
     accountingOutageSource: AccountingOutageSource,
@@ -95,10 +86,6 @@ fun SettingsScreen(
     partnerBlock: NudgeSettingsViewModel.UiState? = null,
     onPartnerBlockRefresh: () -> Unit = {},
     onPartnerBlockChange: (Boolean) -> Unit = {},
-    /** Cross-tab entry (owner ask 2026-10-04): the Partner hub's "nothing shared" card opens
-     *  this tab straight on the sharing pane. Consumed on arrival so back/re-entry behave. */
-    openPane: String? = null,
-    onOpenPaneConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -114,12 +101,6 @@ fun SettingsScreen(
     // System back leaves a pane the way its BackRow does; at the index the shell's own
     // handler takes over (tab → Home).
     BackHandler(enabled = pane != null) { pane = null }
-    LaunchedEffect(openPane) {
-        if (openPane != null) {
-            pane = openPane
-            onOpenPaneConsumed()
-        }
-    }
 
     // Permissions change in system Settings while this screen is backgrounded; re-read on
     // every resume so a granted permission is never shown as missing.
@@ -169,13 +150,6 @@ fun SettingsScreen(
                 modifier = modifier,
             )
         }
-        PANE_COACHING_PLAN -> CoachingPlanScreen(
-            planRepository = planRepository,
-            rulesRepository = rulesRepository,
-            prefs = recoveryPrefs,
-            onBack = { pane = null },
-            modifier = modifier,
-        )
         PANE_RISK_WINDOWS -> RiskWindowsScreen(
             planRepository = planRepository,
             prefs = recoveryPrefs,
@@ -183,12 +157,6 @@ fun SettingsScreen(
             modifier = modifier,
         )
         PANE_ABOUT -> AboutScreen(onBack = { pane = null }, modifier = modifier)
-        PANE_SHARING -> SharingScreen(
-            habitRepository = habitRepository,
-            loadPartnerNames = loadPartnerNames,
-            onBack = { pane = null },
-            modifier = modifier,
-        )
         else -> SettingsIndex(
             modifier = modifier,
             serviceEnabled = serviceEnabled,
@@ -207,10 +175,8 @@ fun SettingsScreen(
 }
 
 private const val PANE_PROTECTION = "protection"
-private const val PANE_COACHING_PLAN = "coaching_plan"
 private const val PANE_RISK_WINDOWS = "risk_windows"
 private const val PANE_ABOUT = "about"
-internal const val PANE_SHARING = "sharing"
 
 @Composable
 private fun SettingsIndex(
@@ -301,14 +267,6 @@ private fun SettingsIndex(
 
                 RowDivider()
                 IndexRow(
-                    icon = Icons.Outlined.MenuBook,
-                    title = stringResource(R.string.settings_recovery_plan_title),
-                    subtitle = stringResource(R.string.settings_recovery_plan_body),
-                    onClick = { onOpenPane(PANE_COACHING_PLAN) },
-                )
-
-                RowDivider()
-                IndexRow(
                     icon = Icons.Outlined.Schedule,
                     title = stringResource(R.string.settings_recovery_windows_title),
                     subtitle = stringResource(R.string.settings_recovery_windows_body),
@@ -337,17 +295,6 @@ private fun SettingsIndex(
                         },
                     )
                 }
-
-                RowDivider()
-                // Owner mandate 2026-10-04: the consent surface — which streaks and which
-                // other information a partner may see. Always present: the gates apply to
-                // whatever pairing exists now or later.
-                IndexRow(
-                    icon = Icons.Outlined.Visibility,
-                    title = stringResource(R.string.settings_sharing_title),
-                    subtitle = stringResource(R.string.settings_sharing_row_body),
-                    onClick = { onOpenPane(PANE_SHARING) },
-                )
 
                 RowDivider()
                 ToggleRow(

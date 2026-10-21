@@ -32,6 +32,10 @@ interface PairSharingDao {
     @Query("DELETE FROM pair_streak_sharing WHERE pair_id IN (:pairIds)")
     suspend fun deleteStreakFor(pairIds: List<String>)
 
+    /** Habit deletion: stop sharing it with every pair (past activity events are not recalled). */
+    @Query("DELETE FROM pair_streak_sharing WHERE habit_progress_id = :habitId")
+    suspend fun deleteStreakForHabit(habitId: String)
+
     @Query("SELECT * FROM pair_profile_sharing")
     suspend fun profileAll(): List<PairProfileSharing>
 

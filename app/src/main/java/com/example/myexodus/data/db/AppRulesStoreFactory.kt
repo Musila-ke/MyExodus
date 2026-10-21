@@ -807,6 +807,48 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * v16 → v17 (owner ask 2026-10-21): partner-authored plans. Two new tables — the plan
+         * head (revision + the two pending flags that stand in for an outbox) and its ordered
+         * checklist lines keyed (plan, task) so a recipient's checked state survives an edit.
+         * No existing table changes.
+         */
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_plan (" +
+                        "plan_id TEXT NOT NULL, pair_id TEXT, authored INTEGER NOT NULL, " +
+                        "title TEXT NOT NULL, revision INTEGER NOT NULL, " +
+                        "updated_at_ms INTEGER NOT NULL, pending_publish INTEGER NOT NULL, " +
+                        "pending_progress INTEGER NOT NULL, PRIMARY KEY(plan_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_plan_pair_id " +
+                        "ON partner_plan (pair_id)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_plan_task (" +
+                        "plan_id TEXT NOT NULL, task_id TEXT NOT NULL, task_order INTEGER NOT NULL, " +
+                        "text TEXT NOT NULL, done INTEGER NOT NULL, done_at_ms INTEGER, " +
+                        "PRIMARY KEY(plan_id, task_id), " +
+                        "FOREIGN KEY(plan_id) REFERENCES partner_plan(plan_id) " +
+                        "ON UPDATE NO ACTION ON DELETE CASCADE)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_plan_task_plan_id " +
+                        "ON partner_plan_task (plan_id)",
+                ).use { it.step() }
+            }
+        }
+
+        /** v17 rollback: a v16 build has no plan surfaces, so the tables go outright. */
+        val MIGRATION_17_16 = object : Migration(17, 16) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("DROP TABLE IF EXISTS partner_plan_task").use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS partner_plan").use { it.step() }
+            }
+        }
+
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override suspend fun migrate(connection: SQLiteConnection) {
                 // Recovery resource UI (plan v3 W7): the urge/recovery session log and the
@@ -1020,8 +1062,9 @@ class AppRulesStoreFactory(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
             MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
+            MIGRATION_16_17,
             MIGRATION_10_9, MIGRATION_12_11, MIGRATION_13_12, MIGRATION_14_13, MIGRATION_15_14,
-            MIGRATION_16_15,
+            MIGRATION_16_15, MIGRATION_17_16,
         )
     }
 }

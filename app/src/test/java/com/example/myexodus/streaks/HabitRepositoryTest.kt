@@ -699,6 +699,102 @@ class HabitRepositoryTest {
         assertEquals("a streak master on counts as sharing", false, repository.sharesNothingWith("pair-2"))
     }
 
+    @Test
+    fun renameHabit_persistsTheTrimmedLabel_andLeavesTheStreakUntouched() = runBlocking {
+        seedProfile()
+        val seeded = (onboard() as HabitRepository.OnboardingResult.Ready).state
+
+        val result = repository.renameHabit(seeded.habitId, "  Instagram (work)  ")
+
+        assertTrue(result is HabitRepository.RenameResult.Renamed)
+        assertEquals("Instagram (work)", repository.state.value!!.targetLabel)
+        assertEquals("Instagram (work)", repository.habits().single().label)
+        // Rename is a label write only: the same streak keeps its identity and milestones.
+        assertEquals(seeded.streakId, repository.state.value!!.streakId)
+        assertEquals(3, store.milestoneEventDao().getForStreak(seeded.streakId).size)
+    }
+
+    @Test
+    fun renameHabit_refusesBlankOverlongAndUnknownHabits() = runBlocking {
+        seedProfile()
+        val seeded = (onboard() as HabitRepository.OnboardingResult.Ready).state
+
+        assertEquals(
+            HabitRepository.RenameResult.InvalidName,
+            repository.renameHabit(seeded.habitId, "   "),
+        )
+        assertEquals(
+            HabitRepository.RenameResult.InvalidName,
+            repository.renameHabit(seeded.habitId, "x".repeat(HabitRepository.MAX_LABEL_LENGTH + 1)),
+        )
+        assertEquals(
+            HabitRepository.RenameResult.NotFound,
+            repository.renameHabit("missing-habit", "Name"),
+        )
+        assertEquals("Instagram", repository.state.value!!.targetLabel)
+    }
+
+    @Test
+    fun deleteHabit_removesItsRowsAndSharing_andDisplaysTheRemainingHabit() = runBlocking {
+        seedProfile()
+        val first = (onboard() as HabitRepository.OnboardingResult.Ready).state
+        val second = (onboard(label = "Betting apps") as HabitRepository.OnboardingResult.Ready).state
+        seedStreakConsent(second.habitId)
+        assertNotNull(store.pairSharingDao().streakFor("pair-1", second.habitId))
+
+        val result = repository.deleteHabit(second.habitId)
+
+        val deleted = result as HabitRepository.DeleteResult.Deleted
+        assertEquals(first.habitId, deleted.state!!.habitId)
+        assertEquals(first.habitId, repository.state.value!!.habitId)
+        assertNull(store.habitProgressDao().getById(second.habitId))
+        assertNull(store.recoveryStreakDao().getActiveStreak(second.habitId))
+        assertTrue(store.milestoneEventDao().getForStreak(second.streakId).isEmpty())
+        assertNull(store.pairSharingDao().streakFor("pair-1", second.habitId))
+        // The surviving habit is untouched.
+        assertNotNull(store.recoveryStreakDao().getActiveStreak(first.habitId))
+        assertEquals(3, store.milestoneEventDao().getForStreak(first.streakId).size)
+        assertEquals(listOf("Instagram"), repository.habits().map { it.label })
+    }
+
+    @Test
+    fun deleteHabit_ofTheLastHabit_returnsTheScreenToSetup() = runBlocking {
+        seedProfile()
+        val only = (onboard() as HabitRepository.OnboardingResult.Ready).state
+
+        val result = repository.deleteHabit(only.habitId) as HabitRepository.DeleteResult.Deleted
+
+        assertNull(result.state)
+        assertNull(repository.state.value)
+        assertTrue(repository.resolved.value)
+        assertTrue(repository.habits().isEmpty())
+    }
+
+    @Test
+    fun deleteHabit_ofANonDisplayedHabit_keepsTheDisplayedState() = runBlocking {
+        seedProfile()
+        val first = (onboard() as HabitRepository.OnboardingResult.Ready).state
+        val second = (onboard(label = "Betting apps") as HabitRepository.OnboardingResult.Ready).state
+
+        val result = repository.deleteHabit(first.habitId) as HabitRepository.DeleteResult.Deleted
+
+        assertEquals(second.habitId, result.state!!.habitId)
+        assertEquals(second, repository.state.value)
+        assertNull(store.habitProgressDao().getById(first.habitId))
+    }
+
+    @Test
+    fun deleteHabit_unknownHabit_reportsNotFound_andDeletesNothing() = runBlocking {
+        seedProfile()
+        onboard()
+
+        assertEquals(
+            HabitRepository.DeleteResult.NotFound,
+            repository.deleteHabit("missing-habit"),
+        )
+        assertEquals(1, repository.habits().size)
+    }
+
     private suspend fun journalRows() =
         store.partnerActivityDao().pendingForPair("pair-1", sinceMs = 0L, limit = 100)
 

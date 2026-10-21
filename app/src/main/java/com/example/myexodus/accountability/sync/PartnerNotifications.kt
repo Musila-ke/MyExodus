@@ -14,6 +14,7 @@ import com.example.myexodus.R
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.PlanWire
 import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.ui.partner.shortKeyId
 import java.text.DateFormat
@@ -122,6 +123,12 @@ object PartnerNotifications {
                 context.getString(R.string.partner_message_title_named, partnerName) to
                     payload.text.takeIf { it.isNotBlank() }
                         ?.let { context.getString(R.string.partner_message_quoted, it) }
+            // ADR #193: a new or edited plan is the one plan event worth an alert — progress
+            // is filtered out before this call.
+            PlanWire.TYPE_PLAN_PUBLISHED ->
+                context.getString(R.string.partner_plan_title_named, partnerName) to
+                    payload.plan?.title?.takeIf { it.isNotBlank() }
+                        ?.let { context.getString(R.string.partner_plan_body_named, it) }
             else -> null to null
         }
         val richBody = rich.second
@@ -133,7 +140,10 @@ object PartnerNotifications {
             idFor(NOTIF_PARTNER_EVENT, pairId),
             R.string.partner_event_title,
             R.string.partner_event_text,
-            onlyAlertOnce = true,
+            // Owner requirement: an edit to a plan must alert, not silently repaint a tray
+            // entry the user has not tapped yet. Plan publishes are rare; activity bursts
+            // keep the one-alert rule.
+            onlyAlertOnce = payload.type != PlanWire.TYPE_PLAN_PUBLISHED,
             // The rich title is only claimed when its details are actually present — a
             // pre-wire-v2 sender's relapse degrades to the generic named copy, never a title
             // that promises a streak name the body cannot show.

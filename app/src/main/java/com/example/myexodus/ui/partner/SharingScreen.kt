@@ -1,4 +1,4 @@
-package com.example.myexodus.ui.settings
+package com.example.myexodus.ui.partner
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
@@ -38,6 +38,9 @@ import com.example.myexodus.streaks.ProfileSharingFlags
 import com.example.myexodus.streaks.SharingMatrix
 import com.example.myexodus.streaks.StreakSharingFlags
 import com.example.myexodus.ui.BackRow
+import com.example.myexodus.ui.settings.IndexRow
+import com.example.myexodus.ui.settings.RowDivider
+import com.example.myexodus.ui.settings.ToggleRow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -162,7 +165,7 @@ fun SharingScreen(
             label = when (val item = openItem) {
                 is OpenItem.Streak -> item.item.label
                 OpenItem.Other -> stringResource(R.string.settings_sharing_other_header)
-                null -> stringResource(R.string.settings_sharing_title)
+                null -> stringResource(R.string.partner_tile_sharing)
             },
             onBack = { if (openItemId != null) backOneLevel() else onBack() },
         )

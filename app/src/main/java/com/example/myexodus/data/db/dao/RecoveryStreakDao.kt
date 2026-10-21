@@ -30,6 +30,11 @@ interface RecoveryStreakDao {
     )
     suspend fun getByHabit(habitId: String): List<RecoveryStreak>
 
+    /** Streak deletion (habit removed by the user). Milestones must be deleted first — their
+     *  select keys on the streak rows. */
+    @Query("DELETE FROM recovery_streak WHERE habit_id = :habitId")
+    suspend fun deleteForHabit(habitId: String)
+
     /**
      * §6 relapse rollover: ends the streak in one statement, stamping what the OS reported
      * at logging time for later ordering/anomaly analysis. Returns 0 if it was already

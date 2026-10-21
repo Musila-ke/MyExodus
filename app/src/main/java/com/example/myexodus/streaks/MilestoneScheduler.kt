@@ -40,6 +40,21 @@ class MilestoneScheduler(
         store.recoveryStreakDao().activeHabitIds().forEach { reconcile(it) }
     }
 
+    /**
+     * Cancels a habit's pending milestone alarms. Deletion cannot rely on [reconcile]: it
+     * derives its work list from durable rows, and by the time the call would run those rows
+     * are gone, leaving orphaned PendingIntents behind. Called before the delete transaction
+     * so the streak ids the alarms are keyed by are still readable.
+     */
+    suspend fun cancelFor(habitId: String) {
+        val store = storeFactory.open() ?: return
+        store.recoveryStreakDao().getByHabit(habitId).forEach { streak ->
+            MilestoneEvent.MILESTONE_DAYS.forEach { day ->
+                alarmManager().cancel(pendingIntentFor(streak.streakId, day))
+            }
+        }
+    }
+
     suspend fun reconcile(habitId: String) {
         val store = storeFactory.open() ?: return
         val nowWall = readings().tWallMillis

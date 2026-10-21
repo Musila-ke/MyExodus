@@ -2,6 +2,11 @@ package com.example.myexodus.ui
 
 import android.content.Context
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +17,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Handshake
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LocalFireDepartment
@@ -26,9 +33,10 @@ import androidx.compose.material.icons.outlined.SelfImprovement as LotusOutlined
 import androidx.compose.material.icons.outlined.Settings as SettingsOutlined
 import androidx.compose.material.icons.outlined.Shield as ShieldOutlined
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.OutlinedTextField
@@ -47,9 +55,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -63,6 +71,7 @@ import com.example.myexodus.blocking.recovery.RecoveryStateStore
 import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.blocking.usage.PlatformUsageReader
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
+import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.sos.NudgeEnvelope
 import com.example.myexodus.accountability.sos.NudgeRepository
 import com.example.myexodus.accountability.sync.MessageSendOutcome
@@ -89,11 +98,11 @@ import com.example.myexodus.ui.recovery.RecoveryPrefs
 import com.example.myexodus.ui.recovery.RecoveryScreen
 import com.example.myexodus.ui.rules.RulesScreen
 import com.example.myexodus.ui.settings.NudgeSettingsViewModel
-import com.example.myexodus.ui.settings.PANE_SHARING
 import com.example.myexodus.ui.settings.SettingsScreen
 import com.example.myexodus.ui.streaks.HabitPickerSheet
 import com.example.myexodus.ui.streaks.StreaksScreen
 import com.example.myexodus.ui.streaks.StreaksViewModel
+import com.example.myexodus.ui.streaks.daysFree
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -175,6 +184,8 @@ fun AppShell(
     planRepository: RecoveryPlanRepository,
     /** Owner mandate 2026-10-04: the Settings sharing pane's per-streak consent writes. */
     habitRepository: HabitRepository,
+    /** ADR #193: partner plans, reached from the Partner hub. */
+    partnerPlanRepository: PartnerPlanRepository,
     sessions: RecoverySessionRepository,
     prefs: RecoveryPrefs,
     recoveryEntry: String? = null,
@@ -187,9 +198,6 @@ fun AppShell(
     val contentTab = tab.coerceIn(0, Tabs.lastIndex)
     var pickerOpen by rememberSaveable { mutableStateOf(false) }
     var openRuleId by rememberSaveable { mutableStateOf<String?>(null) }
-    // Owner ask 2026-10-04: cross-tab pane entry — the Partner hub's "nothing shared" card
-    // lands on Settings with the sharing pane already open (consumed by SettingsScreen).
-    var settingsPane by rememberSaveable { mutableStateOf<String?>(null) }
     val expanded = rememberWindowWidth() == WindowWidth.EXPANDED
 
     // System back at a tab's root returns to the start destination before exiting (Android's
@@ -208,6 +216,8 @@ fun AppShell(
     val onboardingInFlight by streaks.onboardingInFlight.collectAsStateWithLifecycle()
     val relapseInFlight by streaks.relapseInFlight.collectAsStateWithLifecycle()
     val relapseFeedback by streaks.relapseFeedback.collectAsStateWithLifecycle()
+    val manageFeedback by streaks.manageFeedback.collectAsStateWithLifecycle()
+    val manageInFlight by streaks.manageInFlight.collectAsStateWithLifecycle()
 
     // SOS §8.15 (Step 8): the Reach out control's sender state.
     val sosState by sos.state.collectAsStateWithLifecycle()
@@ -230,6 +240,13 @@ fun AppShell(
         }
     }
     var sosConfirmOpen by remember { mutableStateOf(false) }
+    // Owner directive 2026-10-21: one expandable action button on Home replaces the single
+    // Reach out FAB — reach out, log a relapse, and log an urge behind one quiet control
+    // instead of a row of FABs.
+    var actionsOpen by rememberSaveable { mutableStateOf(false) }
+    var relapseConfirmOpen by remember { mutableStateOf(false) }
+    BackHandler(enabled = actionsOpen) { actionsOpen = false }
+    LaunchedEffect(contentTab) { if (contentTab != 0) actionsOpen = false }
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     LaunchedEffect(sosState) {
@@ -270,8 +287,16 @@ fun AppShell(
         // 2026-10-15: always present — the partner_sos_enabled Remote Config gate is removed
         // (the server-side kill switch is the control); a live pair and Home visibility stay.
         floatingActionButton = {
-            if (contentTab == 0 && partnerNames.isNotEmpty()) {
-                ReachOutFab(state = sosState, onClick = { sosConfirmOpen = true })
+            if (contentTab == 0) {
+                HomeActionsFab(
+                    expanded = actionsOpen,
+                    canReachOut = partnerNames.isNotEmpty(),
+                    canLogRelapse = habit != null,
+                    onToggle = { actionsOpen = !actionsOpen },
+                    onReachOut = { actionsOpen = false; sosConfirmOpen = true },
+                    onLogRelapse = { actionsOpen = false; relapseConfirmOpen = true },
+                    onLogUrge = { actionsOpen = false; tab = 2 },
+                )
             }
         },
         bottomBar = {
@@ -376,6 +401,11 @@ fun AppShell(
                         onboardingInFlight = onboardingInFlight,
                         relapseInFlight = relapseInFlight,
                         relapseFeedback = relapseFeedback,
+                        manageFeedback = manageFeedback,
+                        manageInFlight = manageInFlight,
+                        onRenameHabit = streaks::renameHabit,
+                        onDeleteHabit = streaks::deleteHabit,
+                        onClearManageFeedback = streaks::clearManageFeedback,
                         onOnboard = streaks::onboard,
                         onOpenHabitPicker = { pickerOpen = true },
                         onCancelAddHabit = streaks::cancelAddHabit,
@@ -385,6 +415,7 @@ fun AppShell(
                     contentTab == 4 -> PartnerScreen(
                         source = partnerSource,
                         habitRepository = habitRepository,
+                        planRepository = partnerPlanRepository,
                         selection = partnerSelection,
                         ceremony = ceremonyDeps,
                         notificationsEnabled = partnerNotificationsEnabled,
@@ -396,10 +427,6 @@ fun AppShell(
                         onDismissUnpair = onDismissUnpair,
                         onRenameUser = onRenameUser,
                         onSendMessage = onSendMessage,
-                        onOpenSharing = {
-                            settingsPane = PANE_SHARING
-                            tab = Tabs.indexOfFirst { it.key == NavKeys.SETTINGS }
-                        },
                         modifier = contentModifier,
                     )
                     contentTab == 5 -> SettingsScreen(
@@ -410,9 +437,6 @@ fun AppShell(
                         widgetSettings = widgetSettings,
                         onWidgetSettingsChanged = onWidgetSettingsChanged,
                         planRepository = planRepository,
-                        rulesRepository = repository,
-                        habitRepository = habitRepository,
-                        loadPartnerNames = { partnerSource.partnerDisplayNames() },
                         recoveryPrefs = prefs,
                         domainUsageEngine = domainUsageEngine,
                         accountingOutageSource = accountingOutage,
@@ -420,8 +444,6 @@ fun AppShell(
                         partnerBlock = partnerBlock,
                         onPartnerBlockRefresh = nudgeSettings::refresh,
                         onPartnerBlockChange = nudgeSettings::setBlocked,
-                        openPane = settingsPane,
-                        onOpenPaneConsumed = { settingsPane = null },
                         modifier = contentModifier,
                     )
                 }
@@ -436,6 +458,42 @@ fun AppShell(
             targetName = sosTargetName,
             onSend = { msg -> sosConfirmOpen = false; sos.onTap(msg) },
             onDismiss = { sosConfirmOpen = false },
+        )
+    }
+
+    // Home's quick action: the same confirmation and copy the Streaks card uses (the widget's
+    // hold action shares it too). Confirming records the relapse and lands on Streaks, where
+    // the support line renders — the Home sheet never claims success on its own.
+    if (relapseConfirmOpen) {
+        val days = habit?.let { daysFree(it.currentStreakElapsedMs) } ?: 1
+        AlertDialog(
+            onDismissRequest = { relapseConfirmOpen = false },
+            title = { Text(stringResource(R.string.streaks_relapse_confirm_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.streaks_relapse_confirm_body,
+                        days,
+                        stringResource(
+                            if (days == 1) R.string.streaks_day_singular else R.string.streaks_day_plural,
+                        ),
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        relapseConfirmOpen = false
+                        streaks.logRelapse()
+                        tab = 3
+                    },
+                ) { Text(stringResource(R.string.streaks_relapse_confirm_action)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { relapseConfirmOpen = false }) {
+                    Text(stringResource(R.string.streaks_cancel))
+                }
+            },
         )
     }
 
@@ -515,27 +573,75 @@ internal fun SosConfirmDialog(
 }
 
 /**
- * SOS §8.15 rev (owner mandate 2026-10-04): the Reach out control is a FAB, not a Home card —
- * one tap raises the confirmation dialog; the sender state machine behind it is unchanged.
- * Dimmed and inert while a result is on screen (the old card's disabled-button rule); a
- * spinner replaces the icon mid-send.
+ * Owner directive 2026-10-21: one expandable action button replaces a row of FABs. Collapsed
+ * it is a single accent control; expanded it reveals the three things a Home visit can
+ * legitimately act on — reach out (only with a live pair), log a relapse (only with a habit),
+ * and log an urge. Each shortcut opens its own confirmation/flow; nothing sends from here.
  */
 @Composable
-private fun ReachOutFab(state: SosViewModel.SosSendState, onClick: () -> Unit) {
-    val actionable = state == SosViewModel.SosSendState.Idle ||
-        state == SosViewModel.SosSendState.CouldNotConfirm
-    val sending = state == SosViewModel.SosSendState.Sending
-    ExtendedFloatingActionButton(
-        onClick = { if (actionable) onClick() },
-        icon = {
-            if (sending) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-            } else {
-                Icon(Icons.Filled.WavingHand, contentDescription = null)
+private fun HomeActionsFab(
+    expanded: Boolean,
+    canReachOut: Boolean,
+    canLogRelapse: Boolean,
+    onToggle: () -> Unit,
+    onReachOut: () -> Unit,
+    onLogRelapse: () -> Unit,
+    onLogUrge: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
+            exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom),
+        ) {
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (canLogRelapse) {
+                    QuickAction(
+                        icon = { Icon(painterResource(R.drawable.ic_log_relapse), contentDescription = null) },
+                        label = stringResource(R.string.streaks_relapse_action),
+                        onClick = onLogRelapse,
+                    )
+                }
+                if (canReachOut) {
+                    QuickAction(
+                        icon = { Icon(Icons.Filled.WavingHand, contentDescription = null) },
+                        label = stringResource(R.string.sos_reach_out),
+                        onClick = onReachOut,
+                    )
+                }
+                QuickAction(
+                    icon = { Icon(painterResource(R.drawable.ic_log_urge), contentDescription = null) },
+                    label = stringResource(R.string.home_action_log_urge),
+                    onClick = onLogUrge,
+                )
             }
-        },
-        text = { Text(stringResource(R.string.sos_reach_out)) },
-        modifier = Modifier.alpha(if (actionable || sending) 1f else 0.6f),
+        }
+        FloatingActionButton(onClick = onToggle) {
+            Icon(
+                imageVector = if (expanded) Icons.Filled.Close else Icons.Filled.Add,
+                contentDescription = stringResource(
+                    if (expanded) R.string.home_quick_actions_close else R.string.home_quick_actions_open,
+                ),
+            )
+        }
+    }
+}
+
+/** A shortcut in the Home action dial — a quiet tonal pill, not a second accent. */
+@Composable
+private fun QuickAction(icon: @Composable () -> Unit, label: String, onClick: () -> Unit) {
+    ExtendedFloatingActionButton(
+        onClick = onClick,
+        icon = icon,
+        text = { Text(label) },
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
     )
 }
 

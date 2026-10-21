@@ -124,6 +124,75 @@ class StreaksViewModel @Inject constructor(
         }
     }
 
+    private val _manageFeedback = MutableStateFlow<ManageFeedback?>(null)
+
+    /** Outcome of the last rename/delete from the Manage spoke; copy is resolved by the screen. */
+    val manageFeedback: StateFlow<ManageFeedback?> = _manageFeedback.asStateFlow()
+
+    private val _manageInFlight = MutableStateFlow(false)
+
+    /** Rename/delete duplicate-tap guard, like [relapseInFlight]. */
+    val manageInFlight: StateFlow<Boolean> = _manageInFlight.asStateFlow()
+
+    fun clearManageFeedback() {
+        _manageFeedback.value = null
+    }
+
+    /** Renames the displayed habit. Success refreshes the switcher's read model too. */
+    fun renameHabit(habitId: String, label: String) {
+        if (_manageInFlight.value) return
+        _manageInFlight.value = true
+        _manageFeedback.value = null
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                when (repository.renameHabit(habitId, label)) {
+                    is HabitRepository.RenameResult.Renamed -> {
+                        _habits.value = repository.habits()
+                        _manageFeedback.value = ManageFeedback.Renamed
+                    }
+
+                    HabitRepository.RenameResult.InvalidName ->
+                        _manageFeedback.value = ManageFeedback.InvalidName
+
+                    HabitRepository.RenameResult.StoreUnavailable ->
+                        _manageFeedback.value = ManageFeedback.StoreUnavailable
+
+                    HabitRepository.RenameResult.NotFound ->
+                        _manageFeedback.value = ManageFeedback.NotFound
+                }
+            } finally {
+                _manageInFlight.value = false
+            }
+        }
+    }
+
+    /** Deletes the displayed habit and its local history. The repository resolves the next
+     *  displayed habit (or null → the screen falls back to setup). */
+    fun deleteHabit(habitId: String) {
+        if (_manageInFlight.value) return
+        _manageInFlight.value = true
+        _manageFeedback.value = null
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                when (repository.deleteHabit(habitId)) {
+                    is HabitRepository.DeleteResult.Deleted -> {
+                        _habits.value = repository.habits()
+                        _relapseFeedback.value = null
+                        _manageFeedback.value = ManageFeedback.Deleted
+                    }
+
+                    HabitRepository.DeleteResult.StoreUnavailable ->
+                        _manageFeedback.value = ManageFeedback.StoreUnavailable
+
+                    HabitRepository.DeleteResult.NotFound ->
+                        _manageFeedback.value = ManageFeedback.NotFound
+                }
+            } finally {
+                _manageInFlight.value = false
+            }
+        }
+    }
+
     /** Opens the setup form to add another habit (only reachable when one already exists). */
     fun beginAddHabit() {
         _setupError.value = null
@@ -223,6 +292,19 @@ class StreaksViewModel @Inject constructor(
 
     /** Setup-form failure the screen maps to copy (finding #20); resources stay out of VMs. */
     enum class SetupError { START_IN_FUTURE, INVALID_DURATION, IMPLAUSIBLE_CLOCK, STORE_UNAVAILABLE }
+
+    /** Rename/delete outcome the screen maps to copy (finding #20 class). */
+    sealed interface ManageFeedback {
+        data object Renamed : ManageFeedback
+
+        data object Deleted : ManageFeedback
+
+        data object InvalidName : ManageFeedback
+
+        data object StoreUnavailable : ManageFeedback
+
+        data object NotFound : ManageFeedback
+    }
 
     /** The last relapse outcome, resolved to display copy by the screen (finding #20). */
     sealed interface RelapseFeedback {

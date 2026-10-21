@@ -62,7 +62,12 @@ service cloud.firestore {
         && request.resource.data.timestamp == request.time
         && exists(/databases/$(database)/documents/pairings/$(request.resource.data.pairId))
         && get(/databases/$(database)/documents/pairings/$(request.resource.data.pairId)).data.status == 'active'
-        && request.auth.uid in get(/databases/$(database)/documents/pairings/$(request.resource.data.pairId)).data.members;
+        && request.auth.uid in get(/databases/$(database)/documents/pairings/$(request.resource.data.pairId)).data.members
+        // Step 2 gate (2026-10-21): the RECIPIENT must be the other member too. Without this,
+        // any paired user could post junk into any mailbox using their own active pairId;
+        // the relay rejects it (PAIRING_INVALID) but only after storage, and before rate
+        // limiting — an unthrottled mailbox-fill path. Free with the same get().
+        && recipientUid in get(/databases/$(database)/documents/pairings/$(request.resource.data.pairId)).data.members;
       // Immutable after create; deletion is exclusively the scheduled cleanup function's
       // job (AD-18b). A client must never be able to delete a mailbox document.
       allow update, delete: if false;

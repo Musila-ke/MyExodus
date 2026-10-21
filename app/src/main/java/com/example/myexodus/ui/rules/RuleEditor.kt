@@ -124,6 +124,9 @@ fun RuleEditorScreen(
      *  the accessibility usage accounting and are unaffected. */
     websiteLimitsMode: EngineMode,
     onEnableWebsiteEngine: () -> Unit,
+    /** Owner correction 2026-10-21: the curated categories sit where a website rule is
+     *  created, so a user who doesn't know an address never has to leave the editor. */
+    onBrowsePresets: (categoryId: String) -> Unit,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -439,6 +442,14 @@ fun RuleEditorScreen(
                     ),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (initial == null) {
+                    Text(
+                        stringResource(R.string.editor_presets_hint),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    CategoryPresetChips(onOpenPresets = onBrowsePresets)
+                }
             }
         }
 

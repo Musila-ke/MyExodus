@@ -47,6 +47,9 @@ data class EventPayload(
     val schemaVersion: Int? = null,
     /** Activity types only: partner-visible aggregate after the local state transition (§4.6). */
     val stateAfter: ActivityStateAfter? = null,
+    /** Plan types only (ADR #193): the plan snapshot or the recipient's progress set.
+     *  Absent on every other type, so their encodings stay byte-identical. */
+    val plan: PlanBody? = null,
 ) {
     companion object {
         const val TYPE_ACTIVITY = "activity"
@@ -174,6 +177,7 @@ private const val K_DECISION = "dec"
 private const val K_PROTOCOL_VERSION = "pv"
 private const val K_SCHEMA_VERSION = "sv"
 private const val K_STATE_AFTER = "st"
+private const val K_PLAN = "pl"
 private const val K_DAYS_FREE = "df"
 private const val K_RELAPSE_COUNT = "rc"
 private const val K_MILESTONES = "ms"
@@ -199,6 +203,7 @@ fun encodePayload(p: EventPayload): ByteArray = CanonicalCbor.encodeMap(
         p.protocolVersion?.let { add(K_PROTOCOL_VERSION to CanonicalCbor.int(it.toLong())) }
         p.schemaVersion?.let { add(K_SCHEMA_VERSION to CanonicalCbor.int(it.toLong())) }
         p.stateAfter?.let { add(K_STATE_AFTER to encodeStateAfter(it)) }
+        p.plan?.let { add(K_PLAN to encodePlan(it)) }
     },
 )
 
@@ -218,6 +223,7 @@ fun decodePayload(bytes: ByteArray): EventPayload {
         // future-schema body leaves stateAfter null and classifyActivity() separates
         // Malformed from Unsupported without rejecting the chain event that carries it.
         stateAfter = obj.get(K_STATE_AFTER)?.takeIf { !it.isNull }?.let(::decodeStateAfterOrNull),
+        plan = obj.get(K_PLAN)?.takeIf { !it.isNull }?.let(::decodePlanOrNull),
     )
 }
 
