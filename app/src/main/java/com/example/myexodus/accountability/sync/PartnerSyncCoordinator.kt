@@ -180,7 +180,14 @@ class PartnerSyncCoordinator(
         runCatching {
             val store = storeFactory.open() ?: return@runCatching
             val consent = store.pairSharingDao().profileFor(enrollment.pairId) ?: return@runCatching
-            if (!syncAvailabilityConsent(enrollment.pairId, consent.shareAvailability)) {
+            if (syncAvailabilityConsent(enrollment.pairId, consent.shareAvailability)) {
+                // Step 10: the server holds this value — clear the pending marker, but only if
+                // the user has not toggled again since (the CAS is on the acknowledged value).
+                store.pairSharingDao().clearAvailabilityPendingIfMatches(
+                    enrollment.pairId,
+                    consent.shareAvailability,
+                )
+            } else {
                 Log.w(TAG, "availability consent sync not acknowledged; retrying next pass")
             }
         }.onFailure { Log.w(TAG, "availability consent sync failed", it) }

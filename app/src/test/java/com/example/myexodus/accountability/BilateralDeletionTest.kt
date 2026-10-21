@@ -11,13 +11,14 @@ import com.example.myexodus.accountability.crypto.IdentityEpochStore
 import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.SignedEnvelope
+import com.example.myexodus.accountability.serialization.UnsignedEnvelope
 import com.example.myexodus.accountability.state.AccountabilityDatabase
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainStateStore
 import com.example.myexodus.accountability.state.SessionKeyManager
 import com.example.myexodus.accountability.state.UnpairPhase
 import com.example.myexodus.accountability.state.UnpairState
-import com.example.myexodus.accountability.sync.MailboxOutboxDrainer
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
@@ -80,11 +81,9 @@ class BilateralDeletionTest {
     /** Simulates the 2026-09-28 crypto-dead pair: EventCreator cannot derive a CEK. */
     private var agreementKeyMissing = false
 
-    /** drainOutbox fake: queued outcomes, optionally marking the pair's real outbox rows SENT
-     *  (what the production drainer does) so the journal's delivered bookkeeping is exercised. */
-    private val drainQueue = ArrayDeque<MailboxOutboxDrainer.DrainResult>()
-    private val drained = mutableListOf<Triple<String, String, String>>()
-    private var markOnDrain = false
+    /** terminatePair fake: records every attempt and reports the server acknowledgement. */
+    private var terminateResult = true
+    private var terminateThrows = false
 
     /** deliverRequest fake: records the journaled document fields and reports success. */
     private var deliverResult = true
@@ -118,17 +117,6 @@ class BilateralDeletionTest {
         )
         deletion = BilateralDeletion(
             creator = creator,
-            drainOutbox = { pair, authorUid, partnerUid ->
-                drained += Triple(pair, authorUid, partnerUid)
-                val outcome = drainQueue.removeFirstOrNull()
-                    ?: MailboxOutboxDrainer.DrainResult.Sent(0)
-                if (markOnDrain) {
-                    for (row in db.outboxDao().pendingFor(pair, 100)) {
-                        db.outboxDao().markSent(row.messageId)
-                    }
-                }
-                outcome
-            },
             enrollmentDao = db.enrollmentDao(),
             store = store,
             journal = db.unpairStateDao(),
@@ -140,7 +128,11 @@ class BilateralDeletionTest {
                 destroyedDeviceKey = true
                 ops += "destroy-device"
             },
-            terminatePair = { terminated += it },
+            terminatePair = {
+                terminated += it
+                if (terminateThrows) error("attestation unavailable")
+                terminateResult
+            },
             deliverRequest = { partnerUid, row ->
                 deliveredRequests += Triple(partnerUid, row.messageId, row.requestEnvelope.size)
                 deliverResult
@@ -209,13 +201,9 @@ class BilateralDeletionTest {
 
     @Test
     fun partnerReachable_confirmsOnAck_terminalPhase() = runTest {
-        markOnDrain = true
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(1)
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(0)
-
         assertEquals(BilateralDeletion.DeletionResult.Deleted, deletion.initiate(pairId, "uid-a", "uid-b", signing()))
 
-        // Local shred ran unconditionally; the request is out; the wait is honest.
+        // Local shred ran unconditionally; only the deletion request left the device.
         assertTrue("last enrollment gone — device key destroyed", destroyedDeviceKey)
         assertEquals("only this pair's key shredded", listOf(pairAlias), destroyedPairAliases)
         assertNull(db.enrollmentDao().getByPairId(pairId))
@@ -226,8 +214,13 @@ class BilateralDeletionTest {
         assertTrue("delivered bookkeeping", paired.delivered)
         assertTrue("shred recorded", paired.localShredded)
         assertNull("no confirmation yet — no erasure claim", paired.confirmedAtEpochMillis)
+        assertEquals("server-side exit acknowledged", clock, paired.revokedAtEpochMillis)
         assertEquals(UnpairPhase.AWAITING_CONFIRMATION, paired.phaseAt(clock))
         assertEquals(listOf(pairId), terminated) // credential revoked once the request is out
+        // Step 10: the seeded ordinary event was cancelled with the relationship — the only
+        // mailbox write the unpair makes is the deletion request itself, from the journal.
+        assertEquals(1, deliveredRequests.size)
+        assertEquals("uid-b", deliveredRequests.single().first)
 
         // The partner's device processes it and acks: the next pass confirms — TERMINAL.
         partnerAcked = true
@@ -239,30 +232,34 @@ class BilateralDeletionTest {
 
     @Test
     fun partnerUnreachable_sevenDayTimeout_localOnlyTerminated_neverTerminal() = runTest {
-        markOnDrain = true
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(1)
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(0)
+        deliverResult = false // offline: nothing leaves this device
         deletion.initiate(pairId, "uid-a", "uid-b", signing())
 
-        // Well before the window: still waiting, not claiming anything about the partner.
+        // Well before the window: the local exit is already in force, the server flip is
+        // honestly reported as pending, and nothing claims anything about the partner.
         clock += UnpairState.CONFIRM_TIMEOUT_MILLIS - 1
         deletion.resumePending()
-        assertEquals(UnpairPhase.AWAITING_CONFIRMATION, db.unpairStateDao().get(pairId)!!.phaseAt(clock))
+        val waiting = db.unpairStateDao().get(pairId)!!
+        assertNull(waiting.revokedAtEpochMillis)
+        assertTrue("no revocation attempt before delivery or the timeout", terminated.isEmpty())
+        assertEquals(UnpairPhase.AWAITING_REVOCATION, waiting.phaseAt(clock))
+        assertFalse("an unacknowledged revocation can never be dismissed", waiting.isDismissible(clock))
 
-        // Time crosses the 7-day window (accelerated): LOCAL_ONLY_TERMINATED — a state the UI
-        // must report distinctly from TERMINAL — and no confirmation timestamp exists.
+        // Time crosses the 7-day window (accelerated): the exit is forced even for an
+        // undelivered request, and the state is LOCAL_ONLY_TERMINATED — reported distinctly
+        // from TERMINAL — with no confirmation timestamp.
         clock += 1
         deletion.resumePending()
         val row = db.unpairStateDao().get(pairId)!!
         assertNull(row.confirmedAtEpochMillis)
+        assertEquals("the exit is attempted at the timeout", clock, row.revokedAtEpochMillis)
+        assertEquals(listOf(pairId), terminated)
         assertEquals(UnpairPhase.LOCAL_ONLY_TERMINATED, row.phaseAt(clock))
+        assertTrue("the row is now dismissible (the retry has a bound)", row.isDismissible(clock))
     }
 
     @Test
     fun lateAckAfterTimeout_upgradesToTerminal() = runTest {
-        markOnDrain = true
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(1)
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(0)
         deletion.initiate(pairId, "uid-a", "uid-b", signing())
 
         clock += UnpairState.CONFIRM_TIMEOUT_MILLIS + 1
@@ -281,9 +278,6 @@ class BilateralDeletionTest {
     @Test
     fun unpairOfOnePair_destroysOnlyItsKey_leavesSiblingPairIntact() = runTest {
         seedSecondPair()
-        markOnDrain = true
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(1)
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(0)
 
         assertEquals(BilateralDeletion.DeletionResult.Deleted, deletion.initiate(pairId, "uid-a", "uid-b", signing()))
 
@@ -301,11 +295,6 @@ class BilateralDeletionTest {
     @Test
     fun deviceLevelKeyDiesOnlyWithTheLastEnrollment() = runTest {
         seedSecondPair()
-        markOnDrain = true
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(1)
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(0)
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(1)
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(0)
 
         deletion.initiate(pairId, "uid-a", "uid-b", signing())
         assertFalse("one pair left — the pre-v12 shared key must survive", destroyedDeviceKey)
@@ -331,7 +320,10 @@ class BilateralDeletionTest {
         assertTrue(row.localShredded)
         assertTrue("no request bytes — nothing to deliver", row.requestEnvelope.isEmpty())
         assertNull(row.confirmedAtEpochMillis)
-        assertEquals(UnpairPhase.AWAITING_CONFIRMATION, row.phaseAt(clock))
+        assertNull("with nothing delivered, no server exit is claimed", row.revokedAtEpochMillis)
+        assertTrue(deliveredRequests.isEmpty())
+        assertTrue(terminated.isEmpty())
+        assertEquals(UnpairPhase.AWAITING_REVOCATION, row.phaseAt(clock))
     }
 
     @Test
@@ -345,7 +337,7 @@ class BilateralDeletionTest {
         assertNull(db.enrollmentDao().getByPairId(pairId))
         assertTrue(store.chainFor(pairId).isEmpty())
         assertNull("approval rows shredded with the pair", db.approvalRequestDao().byId("k:1"))
-        assertTrue("no drain attempted without a delivery target", drained.isEmpty())
+        assertTrue("no delivery attempted without a delivery target", deliveredRequests.isEmpty())
         val row = db.unpairStateDao().get(pairId)!!
         assertEquals(UnpairState.ROLE_REQUESTER, row.role)
         assertNull(row.partnerUid)
@@ -361,11 +353,11 @@ class BilateralDeletionTest {
         assertEquals("", reEntered.messageId)
 
         // Nothing is in flight: no delivery, no ack — and no revocation before the window
-        // lapses (a live grid must not be terminated while the wait is still honest).
+        // lapses (a live pair must not be terminated while the wait is still honest).
         deletion.resumePending()
         assertTrue(deliveredRequests.isEmpty())
         assertTrue(terminated.isEmpty())
-        assertEquals(UnpairPhase.AWAITING_CONFIRMATION, db.unpairStateDao().get(pairId)!!.phaseAt(clock))
+        assertEquals(UnpairPhase.AWAITING_REVOCATION, db.unpairStateDao().get(pairId)!!.phaseAt(clock))
 
         // The window lapses: LOCAL_ONLY_TERMINATED, and the revocation attempt rides along
         // (a denied terminate for a non-member is the documented no-op).
@@ -403,7 +395,9 @@ class BilateralDeletionTest {
         val row = db.unpairStateDao().get(pairId)!!
         assertTrue(row.localShredded)
         assertNull(row.confirmedAtEpochMillis)
-        assertEquals(UnpairPhase.AWAITING_CONFIRMATION, row.phaseAt(clock))
+        assertNull("the server exit is still owed", row.revokedAtEpochMillis)
+        assertTrue(terminated.isEmpty())
+        assertEquals(UnpairPhase.AWAITING_REVOCATION, row.phaseAt(clock))
     }
 
     @Test
@@ -471,56 +465,144 @@ class BilateralDeletionTest {
 
     @Test
     fun reEnteringInitiate_continuesWithoutSecondRequest() = runTest {
-        markOnDrain = true
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(1)
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(0)
         deletion.initiate(pairId, "uid-a", "uid-b", signing())
         val afterFirst = db.unpairStateDao().get(pairId)!!
-        val drainsAfterFirst = drained.size
+        var deliveredAfterFirst = deliveredRequests.size
 
         // Re-tap (e.g. restored screen): resumes the same attempt — same message id, same
-        // timeline, no second request event, no second drain pass.
+        // timeline, no second request event, no second delivery.
         assertEquals(BilateralDeletion.DeletionResult.Deleted, deletion.initiate(pairId, "uid-a", "uid-b", signing()))
         val afterSecond = db.unpairStateDao().get(pairId)!!
         assertEquals(afterFirst.messageId, afterSecond.messageId)
         assertEquals(afterFirst.requestedAtEpochMillis, afterSecond.requestedAtEpochMillis)
-        assertEquals(drainsAfterFirst, drained.size)
+        assertEquals(1, deliveredAfterFirst)
+        assertEquals(deliveredAfterFirst, deliveredRequests.size)
+        assertEquals(listOf(pairId), terminated)
         // A second request would have needed a new outbox row; the wiped pair has none.
         assertTrue(store.chainFor(pairId).isEmpty())
         assertTrue(db.outboxDao().pendingFor(pairId, 100).isEmpty())
     }
 
-    // --- Draining and delivery ---
+    // --- Step 10 §8.4: revocation cancels queued envelopes; only the request is delivered ---
 
     @Test
-    fun initiate_drainsEveryPendingBatch_beforeShredding() = runTest {
-        // Older attempts queued behind the deletion event must all reach the mailbox before
-        // the key dies — otherwise they would be stranded forever.
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(2)
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(1)
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(0)
+    fun revocation_cancelsTheQueuedEnvelopes_theRequestIsTheOnlyMailboxWrite() = runTest {
+        // A second ordinary event is queued behind the seeded one — neither may be rerouted,
+        // flushed, or delivered after the relationship ends.
+        creator.create(pairId, EventPayload(type = "activity", text = "second"), signing())
+        val queued = db.outboxDao().pendingFor(pairId, 100)
+        assertEquals(2, queued.size)
+        val queuedIds = queued.map { it.messageId }
+
         assertEquals(BilateralDeletion.DeletionResult.Deleted, deletion.initiate(pairId, "uid-a", "uid-b", signing()))
 
         assertTrue(destroyedDeviceKey)
-        assertEquals(3, drained.size)
+        assertEquals("exactly the request was delivered", 1, deliveredRequests.size)
+        assertTrue("no queued event was delivered", queuedIds.none { it == deliveredRequests.single().second })
+        // Every queued row is gone with the wipe, and the gate that a racing drain consults is
+        // closed for each of them.
+        assertTrue(db.outboxDao().pendingFor(pairId, 100).isEmpty())
+        for (id in queuedIds) {
+            assertFalse("upload gate closed for $id", store.stillAuthorized(pairId, id))
+        }
     }
 
     @Test
+    fun futureEvents_afterRevocation_areRefusedAtCreationAndAtTheStore() = runTest {
+        deletion.initiate(pairId, "uid-a", "uid-b", signing())
+
+        // §8.2: the same check that guards creation also guards the append transaction, so a
+        // race that slipped past creation still cannot write a chain/outbox row.
+        val created = creator.create(pairId, EventPayload(type = "activity", text = "late"), signing())
+        assertTrue(created is EventCreator.CreateResult.Failed)
+        assertEquals(
+            ChainStateStore.AppendResult.NotEnrolled,
+            store.appendLocal(pairId, seedEnvelopeForAppend()),
+        )
+        assertTrue(store.chainFor(pairId).isEmpty())
+        assertTrue(db.outboxDao().pendingFor(pairId, 100).isEmpty())
+        assertEquals("no extra delivery", 1, deliveredRequests.size)
+    }
+
+    // --- Delivery from the journal ---
+
+    @Test
     fun undeliveredRequest_journalBytesSurviveForLaterRedelivery() = runTest {
-        // The drain fails (offline): the shred still runs (AD-13b), and the journal must carry
+        // The write fails (offline): the shred still runs (AD-13b), and the journal must carry
         // everything a later redelivery needs — bytes, sender key id, key epoch.
-        drainQueue += MailboxOutboxDrainer.DrainResult.Failed("offline")
+        deliverResult = false
         assertEquals(BilateralDeletion.DeletionResult.Deleted, deletion.initiate(pairId, "uid-a", "uid-b", signing()))
 
         val row = db.unpairStateDao().get(pairId)!!
         assertTrue(row.requestEnvelope.isNotEmpty())
         assertTrue(row.senderKeyId == mySenderKeyId)
         assertTrue(row.localShredded)
+        assertFalse(row.delivered)
+        assertNull("nothing delivered, so no server exit claimed", row.revokedAtEpochMillis)
 
-        // Next pass delivers from the journal alone (no chain state, no enrollment left).
+        // Next pass delivers from the journal alone (no chain state, no enrollment left). The
+        // first attempt was the failed one recorded above; both carry the same journaled bytes.
+        deliverResult = true
         deletion.resumePending()
-        assertEquals(listOf(Triple("uid-b", row.messageId, row.requestEnvelope.size)), deliveredRequests)
-        assertTrue(db.unpairStateDao().get(pairId)!!.delivered)
+        assertEquals(2, deliveredRequests.size)
+        assertEquals(deliveredRequests[0], deliveredRequests[1])
+        assertEquals(Triple("uid-b", row.messageId, row.requestEnvelope.size), deliveredRequests.last())
+        val redelivered = db.unpairStateDao().get(pairId)!!
+        assertTrue(redelivered.delivered)
+        assertEquals(clock, redelivered.revokedAtEpochMillis)
+    }
+
+    @Test
+    fun offlineRevocation_isRetriedEveryPass_andReportedPendingUntilAcknowledged() = runTest {
+        deliverResult = false
+        terminateResult = false
+        deletion.initiate(pairId, "uid-a", "uid-b", signing())
+        // Offline: no delivery means the exit is not even attempted yet — still pending.
+        assertEquals(UnpairPhase.AWAITING_REVOCATION, db.unpairStateDao().get(pairId)!!.phaseAt(clock))
+        assertFalse(db.unpairStateDao().get(pairId)!!.isDismissible(clock))
+
+        // Back online: the request lands; the server flip is attempted but not acknowledged.
+        deliverResult = true
+        deletion.resumePending()
+        val delivered = db.unpairStateDao().get(pairId)!!
+        assertTrue(delivered.delivered)
+        assertNull("a denied/ambiguous terminate is NOT an acknowledgement", delivered.revokedAtEpochMillis)
+        assertEquals(UnpairPhase.AWAITING_REVOCATION, delivered.phaseAt(clock))
+        assertFalse("the card must keep showing the exit as pending", delivered.isDismissible(clock))
+
+        // Even the partner's ack cannot outrank the unacknowledged server exit in the window:
+        // the relationship is still active server-side, so the card says so.
+        partnerAcked = true
+        deletion.resumePending()
+        val confirmed = db.unpairStateDao().get(pairId)!!
+        assertEquals(clock, confirmed.confirmedAtEpochMillis)
+        assertNull(confirmed.revokedAtEpochMillis)
+
+        // The next pass retries the terminate (every pass, no backoff cliff); success journals
+        // the acknowledgement exactly once and the phase settles.
+        terminateResult = true
+        deletion.resumePending()
+        val settled = db.unpairStateDao().get(pairId)!!
+        assertEquals(clock, settled.revokedAtEpochMillis)
+        assertEquals(UnpairPhase.TERMINAL, settled.phaseAt(clock))
+        assertTrue(settled.isDismissible(clock))
+        assertEquals(
+            "one journaled request: a failed attempt then the acknowledgement attempt",
+            2, deliveredRequests.size,
+        )
+        assertEquals("both attempts carry the same journaled bytes", deliveredRequests[0], deliveredRequests[1])
+    }
+
+    @Test
+    fun terminateThrows_doesNotEscapeThePass_andIsRetried() = runTest {
+        terminateThrows = true
+        assertEquals(BilateralDeletion.DeletionResult.Deleted, deletion.initiate(pairId, "uid-a", "uid-b", signing()))
+        assertNull(db.unpairStateDao().get(pairId)!!.revokedAtEpochMillis)
+
+        terminateThrows = false
+        deletion.resumePending()
+        assertEquals(clock, db.unpairStateDao().get(pairId)!!.revokedAtEpochMillis)
+        assertEquals(2, terminated.size) // the failed attempt + the retry
     }
 
     // --- Responder ---
@@ -567,9 +649,6 @@ class BilateralDeletionTest {
 
     @Test
     fun resumePending_reportsTrue_onConfirmation_falseWhenSettled() = runTest {
-        markOnDrain = true
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(1)
-        drainQueue += MailboxOutboxDrainer.DrainResult.Sent(0)
         deletion.initiate(pairId, "uid-a", "uid-b", signing())
 
         // Settled row (delivered, awaiting the ack): nothing advances — keep the tick quiet
@@ -597,6 +676,21 @@ class BilateralDeletionTest {
     private fun signing(): Signature = Signature.getInstance("SHA256withECDSA").apply {
         initSign(mySigning.private)
     }
+
+    /** A structurally valid first event for the append-guard test (the store never verifies
+     *  signatures; the guard refuses before any structure is examined). */
+    private fun seedEnvelopeForAppend() = SignedEnvelope(
+        unsigned = UnsignedEnvelope(
+            senderKeyId = mySenderKeyId,
+            epoch = 0,
+            sequence = 1,
+            previousEventHash = null,
+            nonce = ByteArray(12),
+            ciphertext = byteArrayOf(9),
+            createdAtEpochMillis = clock,
+        ),
+        signature = ByteArray(8),
+    )
 
     companion object {
         private fun ecKeyPair(): KeyPair = KeyPairGenerator.getInstance("EC").apply {

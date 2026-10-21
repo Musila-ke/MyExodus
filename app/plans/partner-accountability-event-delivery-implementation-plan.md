@@ -1217,3 +1217,51 @@ Commands (run 2026-10-21): `npm test` → 104/104 pass; `npm run test:rules` →
 - The live test messages were sent directly through the FCM v1 API, not through the relay's production send call (that path is covered by the payload suite and the emulator dispatch tests). The acceptance metric distinction is proven in code and tests, not by comparing a production send against a device display.
 - Notification-disabled and channel-blocked **display** states were not re-induced on this device in Step 9; Step 6's device leg proved the banner/fix paths on the old channel id, and the new id's creation, precedence, and test-alert routing are Robolectric-pinned. `dumpsys notification` proves the channels' live importance and the legacy deletion.
 - No non-GMS hardware exists here; `PROVIDER_UNSUPPORTED` is unit-proven and was AVD-proven in Step 6. A real two-device partner notification remains Step 11's matrix (OPD #37).
+
+## Appendix S10 — Step 10 consent revocation + relationship exit (executed 2026-10-22)
+
+### Required work → implementation → evidence
+
+| Step 10 requirement | Implementation | Evidence |
+|---|---|---|
+| Atomically update local authorization on revocation | `initiate` journals the request first, creates it while keys live, then `shredPair`: cancel PENDING rows → destroy the pair key (device key only with the last enrollment) → `wipePair` (enrollment first, then chain/head/outbox/approval rows in one transaction) | `ChainStateStoreTest.wipePair_deletesTheEnrollmentFirst…`; `BilateralDeletionTest.revocation_cancelsTheQueuedEnvelopes…`, `deviceLevelKeyDiesOnlyWithTheLastEnrollment` |
+| Remove unsent recipient envelopes | Every PENDING outbox row of the pair → `CANCELLED_BY_REVOCATION`; the pair's rows then fall with the wipe. Rows of other pairs untouched | `cancelUnsentEnvelopes_cancelsEveryPendingRowOfThePair_andOnlyThatPair`; `revocation_cancelsTheQueuedEnvelopes_theRequestIsTheOnlyMailboxWrite` |
+| Send the authorized relationship-revocation request if online | The request is created before the shred and delivered from the journal after it; offline attempts stay undelivered and are retried from the same bytes each pass | `undeliveredRequest_journalBytesSurviveForLaterRedelivery`; `offlineRevocation_isRetriedEveryPass…` |
+| Reject future fetch/upload for that relationship | Upload gate `stillAuthorized` = live enrollment AND row PENDING, rechecked per row inside the drainer; `FirestoreMailboxReceiver` returns `isNotEnrolled` when the enrollment is gone; `EventCreator.create` and `ChainStateStore.appendLocal` refuse without an enrollment (the append check runs in-transaction) | `drain_revocationBetweenBatchReadAndWrite_skipsTheCancelledRow_sendsTheRest`; `drain_authorizationRecheckFailure_neverSends`; `appendLocal_withoutAnEnrollment_isNotEnrolled_andWritesNothing`, `appendLocal_afterWipePair_isNotEnrolled_theRevocationWinsTheRace`; `futureEvents_afterRevocation_areRefusedAtCreationAndAtTheStore` |
+| Do not reroute queued events | Cancellation is terminal for the row; nothing is re-encrypted for, or reassigned to, another recipient (no fallback path exists in the code) | `revocation_cancelsTheQueuedEnvelopes…` (exactly one mailbox write, the request); `stillAuthorized_falseOnceTheRowIsCancelledOrTheEnrollmentIsGone` |
+| Ensure DMS does not keep notifying the revoked partner | The server exit flips `/pairings/{pairId}.status = terminated`; mailbox create rules require `status == 'active'`; `dms-logic` treats terminated as no active partner; the local availability consent converges to off through the pending marker | Rules source (lines 26–33, 64); `relay-logic.js`; `dms-logic.js`; `PartnerSyncCoordinatorTest.availabilityConsent_*`; `HabitRepositoryTest.setPairProfileSharing_availabilityTransition…` |
+| Offline: local effect immediately, server exit retried, UI shows pending until acknowledged | Local teardown is synchronous regardless of network. `revoked_at` (server exit) is separate from `confirmed_at` (partner ack); inside the 7-day window an unacknowledged exit is `AWAITING_REVOCATION` and non-dismissible even if the partner acked; terminate retried every pass, throw-safe, `revoked_at` written once | `offlineRevocation_…`, `terminateThrows_…`, `partnerReachable_confirmsOnAck_terminalPhase`, `partnerUnreachable_sevenDayTimeout…`, `lateAckAfterTimeout_upgradesToTerminal`; migrations 13→14 / 14→13 |
+
+### Validation evidence (Step 10 list)
+
+| Required validation | Evidence | Result |
+|---|---|---|
+| Revoke during event creation | Creation refuses (`CreateResult.Failed` because the enrollment is gone) and the store-level append refuses in-transaction (`AppendResult.NotEnrolled`) even for a race that slipped past creation; no chain/outbox row is written | green |
+| Revoke after encryption / before upload | Queued rows are cancelled, not sent; a drain that read the batch before the revocation rechecks per row and skips cancelled rows without recording an attempt; exact journaled bytes remain the only retry source | green |
+| Revoke during upload | The upload gate reads enrollment + row status inside the write path; a cancelled row or an absent enrollment fails the gate before the Firestore write | green |
+| Revoke after server storage / during partner fetch | Stored ciphertext is not deleted early (AD-18b); the deletion request tells the partner device to shred, and the partner's receiver refuses to decrypt once its enrollment is gone; the server relationship flips `terminated`, after which rules deny every further mailbox create for the pair | green (unit + source-pinned); live two-device leg is Step 11 |
+| Revoke while offline | Local teardown completes; the request stays journaled and is retried; the UI reads `AWAITING_REVOCATION` (pending, non-dismissible) until the server exit is acknowledged; the terminate exception path does not escape the pass; the 7-day timeout reports `LOCAL_ONLY_TERMINATED`, never TERMINAL | green |
+| No new event reaches the revoked partner through any alternate path | Only the journaled deletion request is delivered after revocation; replay and append refuse without enrollment; the drainer's per-row authorization check closes the batch-read race; no fallback/reroute code path exists | green |
+
+### Device evidence (X6532, 2026-10-22)
+
+- `install -r` only (never uninstall). The accountability DB was at `user_version` 13 before the install; after launch the on-device file reads **14**, and `unpair_state` has the `revoked_at` column — the real v13→v14 migration ran on hardware.
+- The pre-existing journal row survived (`delivered = 1`, `revoked_at` NULL) — an old exit is not retroactively claimed by the new column.
+- `MainActivity` launched, the process stayed alive, the VPN/sync engine logged normal domain-usage lines, and logcat showed no fatal exception. The rules store (v19→v20) opened without error; a failed migration would have aborted startup.
+- **Blocked, stated honestly:** the device sat on its lock screen for this session, so the Partner unpair card was not driven or photographed on-device in Step 10; and no live two-identity exit was possible on one phone. Both legs belong to Step 11 / OPD #37.
+
+### Interpretations recorded (ADR #205)
+
+1. **The partner's ack and the server's exit are different facts.** `TERMINAL` requires both; an unacknowledged server exit outranks a partner ack inside the window, because the pairing document may still allow writes.
+2. **Cancellation is a state, not a delete-then-forget.** Marking the row keeps the "authorization ended before delivery" evidence and makes every late batch read fail closed.
+3. **The append check belongs inside the transaction.** A creation-time check alone leaves a race; the enrollment row is the single authority and the write path re-reads it.
+4. **Retry the terminate every pass.** The 7-day window is short and the server flip is one idempotent write; a backoff schedule would burn passes without reducing load.
+5. **The pending marker exists because a switch is not convergence.** The local switch is immediate; the server value is a separate fact, cleared only by the CAS on the acknowledged value.
+6. **The migration registries are the only lists.** Hand-written per-test migration lists are the drift class that already caused one failure in this step; pointing every builder at `ALL_MIGRATIONS` makes the next schema bump fail loudly in the coverage test instead of silently.
+
+### Honest limits
+
+- The server-side half (rules, relay, DMS) is source-verified and was previously deployed; Step 10 added no backend change and performed no live terminate against production from this session.
+- Stored ciphertext for a revoked relationship is not deleted at revocation; the recipient key shred makes it unreadable and AD-18b's 30-day cap removes it. This is the recorded limit (ADR #205 and §8.4).
+- The UI card's `AWAITING_REVOCATION` state is JVM-pinned (phase logic + string mapping) and its earlier states were device-proven in ADR #127; the Step 10 card itself was not re-photographed on-device because the phone was locked.
+- Full JVM: **220 classes / 1,985 tests / 0 failures / 0 errors / 0 skipped**.

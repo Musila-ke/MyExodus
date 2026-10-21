@@ -52,6 +52,9 @@ data class Outbox(
         const val STATUS_SENT = "SENT"
         /** §8.4 `EXPIRED`: retention ended delivery. The row (and its state) is kept. */
         const val STATUS_EXPIRED = "EXPIRED"
+        /** §8.4 `CANCELLED_BY_REVOCATION` (Step 10): authorization ended before delivery.
+         *  Terminal — the envelope is never sent, and ownership does not reroute to anyone. */
+        const val STATUS_CANCELLED_BY_REVOCATION = "CANCELLED_BY_REVOCATION"
         const val REJECTION_RATE_LIMITED = "RATE_LIMITED"
 
         /** §8.7 pending relay ciphertext retention: 30 days, aligned with the relay's cap. */

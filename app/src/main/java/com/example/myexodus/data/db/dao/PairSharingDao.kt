@@ -45,6 +45,18 @@ interface PairSharingDao {
     @Upsert
     suspend fun upsertProfile(row: PairProfileSharing)
 
+    /**
+     * Step 10 convergence: clears the pending marker only when the persisted availability
+     * value still equals the value the server just acknowledged. A newer toggle that landed
+     * between the call and its ack therefore keeps its own pending marker — the CAS is what
+     * stops an older acknowledgement from erasing a newer transition's retry.
+     */
+    @Query(
+        "UPDATE pair_profile_sharing SET availability_consent_pending = 0 " +
+            "WHERE pair_id = :pairId AND share_availability = :acknowledgedValue",
+    )
+    suspend fun clearAvailabilityPendingIfMatches(pairId: String, acknowledgedValue: Boolean): Int
+
     @Query("DELETE FROM pair_profile_sharing WHERE pair_id IN (:pairIds)")
     suspend fun deleteProfileFor(pairIds: List<String>)
 

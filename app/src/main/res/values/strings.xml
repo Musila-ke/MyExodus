@@ -844,6 +844,7 @@
     <string name="settings_sharing_recovery_body">Your partner hears when you finish a recovery session or update your coaching plan.</string>
     <string name="settings_sharing_availability_title">Device availability</string>
     <string name="settings_sharing_availability_body">Your partner sees whether blocking is switched on and working on this device, and whether it checked in recently. Never your apps or usage.</string>
+    <string name="settings_sharing_availability_pending">Waiting for the server to confirm this change. It finishes automatically when you’re back online — the switch above is already in effect on this device.</string>
     <string name="settings_sharing_empty">No streaks yet. Set one up under Streaks, then choose here what your partner can see.</string>
     <string name="settings_sharing_failed">Couldn’t save that change. MyExodus can’t reach its local database right now. Your data is safe — try again in a moment.</string>
     <string name="settings_sharing_unavailable">Couldn’t read your sharing settings. MyExodus can’t reach its local database right now. Your data is safe — try again in a moment.</string>
@@ -951,6 +952,7 @@
     <string name="partner_unpair_failed">Couldn’t end the partnership. Check your connection and try again.</string>
     <string name="partner_unpair_local_done">Your data on this device has been erased</string>
     <string name="partner_unpair_waiting">Waiting to confirm your partner’s device has also erased its data</string>
+    <string name="partner_unpair_revocation_pending">Finishing the exit on the server. Nothing new can be sent to your partner — it finishes automatically when you’re back online.</string>
     <string name="partner_unpair_confirmed">Your partner’s device has also erased its data.</string>
     <string name="partner_unpair_unconfirmed">Could not confirm your partner’s device erased its data.</string>
     <string name="partner_unpair_responder_done">Your partner ended the partnership. Your data for it on this device has been erased.</string>

@@ -134,6 +134,7 @@ class EventCreator(
             is ChainStateStore.AppendResult.Gap -> CreateResult.Failed("chain gap")
             is ChainStateStore.AppendResult.Fork -> CreateResult.Failed("forked chain")
             is ChainStateStore.AppendResult.Rejected -> CreateResult.Failed("rejected")
+            is ChainStateStore.AppendResult.NotEnrolled -> CreateResult.Failed("not enrolled")
         }
     }
 }

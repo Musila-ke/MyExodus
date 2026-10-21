@@ -67,6 +67,23 @@ interface OutboxDao {
     @Query("UPDATE outbox SET status = 'SENT' WHERE message_id = :messageId")
     suspend fun markSent(messageId: String)
 
+    /**
+     * Step 10 (§8.4 `CANCELLED_BY_REVOCATION`): revocation ends delivery for everything the
+     * pair has not already uploaded. Only PENDING rows move — a SENT row already lives on the
+     * relay and is outside the sender's hands; an EXPIRED row is already terminal. Returns
+     * the number of cancelled rows.
+     */
+    @Query(
+        "UPDATE outbox SET status = 'CANCELLED_BY_REVOCATION' WHERE status = 'PENDING' " +
+            "AND event_id IN (SELECT id FROM events WHERE pair_id = :pairId)",
+    )
+    suspend fun cancelPendingByPair(pairId: String): Int
+
+    /** §8.2 pre-upload recheck: is this exact row still due for delivery? False when a
+     *  concurrent revocation cancelled it (or a concurrent drainer already sent it). */
+    @Query("SELECT COUNT(*) FROM outbox WHERE message_id = :messageId AND status = 'PENDING'")
+    suspend fun isStillPending(messageId: String): Int
+
     /** The Step 13 unpair journal snapshots this row before the wipe deletes it: the journal
      *  must outlive the outbox (and the enrollment behind [OutboxRowSnapshot.senderKeyId]) and
      *  carry everything a post-shred re-delivery of that one message needs. */

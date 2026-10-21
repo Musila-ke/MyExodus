@@ -25,10 +25,11 @@ import java.util.Base64
  * and a replay of an already-delivered message (a crash between the write and the SENT mark —
  * under the rules' create-only gate that replay reads as a denied update, indistinguishable
  * from either other cause). Retrying is the only option that never drops a message; §8.7
- * retention (30 days) bounds the queue, unpair clears the outbox
- * ([com.example.myexodus.accountability.state.ChainStateStore.deletePairData]), and Step 10
- * removes rows for revoked relationships — so a permanently-rejected row cannot outlive its
- * relationship.
+ * retention (30 days) bounds the queue, and Step 10 cancels the relationship's PENDING rows
+ * ([com.example.myexodus.accountability.state.ChainStateStore.cancelUnsentEnvelopes]) before
+ * the unpair wipe clears them — so a permanently-rejected row cannot outlive its relationship.
+ * Every row is re-authorized immediately before its write ([stillAuthorized], §8.2): a
+ * revocation that commits after the batch read can never deliver what the loop already read.
  *
  * Local bookkeeping writes ([markSent], [recordAttempt]) are best-effort: a Room/SQLCipher
  * hiccup (disk full, locked DB) is logged, never thrown — [drain] always returns a
@@ -38,6 +39,10 @@ import java.util.Base64
  */
 class MailboxOutboxDrainer(
     private val pendingRows: suspend (pairId: String, nowEpochMillis: Long, limit: Int) -> List<PendingOutboxRow>,
+    /** §8.2 pre-upload check: the pair is still enrolled and this row is still PENDING —
+     *  false whenever a revocation raced the batch read. Read in one transaction by the
+     *  production wiring ([com.example.myexodus.accountability.state.ChainStateStore.stillAuthorized]). */
+    private val stillAuthorized: suspend (pairId: String, messageId: String) -> Boolean,
     private val markSent: suspend (messageId: String) -> Unit,
     private val recordAttempt: suspend (
         messageId: String,
@@ -88,6 +93,16 @@ class MailboxOutboxDrainer(
         }
         var sent = 0
         for (row in rows) {
+            // Step 10 §8.2: authorization is rechecked immediately before each write. The
+            // batch read can predate a revocation by milliseconds; on an unknown/denied
+            // recheck the row is skipped, never sent.
+            val authorized = try {
+                stillAuthorized(pairId, row.messageId)
+            } catch (e: Exception) {
+                Log.w(TAG, "authorization recheck failed for ${row.messageId} — not sending", e)
+                false
+            }
+            if (!authorized) continue
             val data = FirestoreSchema.mailboxMessageData(
                 senderId = row.senderKeyId,
                 senderUid = authorUid,

@@ -408,6 +408,16 @@ private fun ItemDetail(
                         enabled = !saving,
                         onCheckedChange = { onProfileChange(profileFlags.copy(shareAvailability = it)) },
                     )
+                    // Step 10: the switch and what this device does are already live — this is
+                    // only the server-side convergence report, so it reads as pending, not error.
+                    if (profileFlags.availabilityPending) {
+                        Text(
+                            stringResource(R.string.settings_sharing_availability_pending),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 56.dp, end = 16.dp, bottom = 12.dp),
+                        )
+                    }
                 }
             }
         }

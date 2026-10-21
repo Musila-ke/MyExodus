@@ -876,6 +876,60 @@ class PartnerSyncCoordinatorTest {
         assertEquals("the retry starts from the same unacknowledged value", 1, consentCalls.size)
     }
 
+    /** Step 10: the marker is retired ONLY by an acknowledgement of the value that was sent —
+     *  never by an unacknowledged attempt, so the offline window keeps showing "pending". */
+    @Test
+    fun availabilityConsent_unacknowledgedToggle_staysPendingForTheNextPass() = runTest {
+        enroll()
+        seedConsent(shareAvailability = true, availabilityConsentPending = true)
+        coordinator = coordinator(warmSigner(), syncConsent = { _, _ -> false })
+
+        coordinator.syncOnce()
+
+        assertEquals(listOf(pairId to true), consentCalls)
+        assertEquals(
+            "a failed round trip must not claim convergence",
+            true,
+            factory.open()!!.pairSharingDao().profileFor(pairId)!!.availabilityConsentPending,
+        )
+    }
+
+    /** Step 10: an acknowledgement that lands after the user flipped the switch again is stale —
+     *  the CAS on the acknowledged value must leave the newer transition pending. */
+    @Test
+    fun availabilityConsent_ackForASupersededValue_doesNotClearANewerToggle() = runTest {
+        enroll()
+        seedConsent(shareAvailability = true, availabilityConsentPending = true)
+        coordinator = coordinator(
+            warmSigner(),
+            syncConsent = { _, _ ->
+                // The user revokes availability while the "on" write is in flight.
+                factory.open()!!.pairSharingDao().upsertProfile(
+                    PairProfileSharing(
+                        pairId = pairId,
+                        shareCheckins = false,
+                        shareRecovery = false,
+                        checkinsEnabledSinceMs = 0,
+                        recoveryEnabledSinceMs = 0,
+                        shareAvailability = false,
+                        availabilityEnabledSinceMs = 0,
+                        availabilityConsentPending = true,
+                    ),
+                )
+                true
+            },
+        )
+
+        coordinator.syncOnce()
+
+        assertEquals(listOf(pairId to true), consentCalls)
+        assertEquals(
+            "the revocation's marker survives the stale acknowledgement",
+            true,
+            factory.open()!!.pairSharingDao().profileFor(pairId)!!.availabilityConsentPending,
+        )
+    }
+
     // ---- helpers ----
 
     /** v16 (ADR #135): nothing reconciles for a pair without its own consent rows — seeding
@@ -890,6 +944,7 @@ class PartnerSyncCoordinatorTest {
         shareRecovery: Boolean = false,
         shareAvailability: Boolean = false,
         availabilityEnabledSinceMs: Long = 0,
+        availabilityConsentPending: Boolean = false,
     ) {
         val store = factory.open()!!
         if (store.userProfileDao().getById(TEST_PROFILE_ID) == null) {
@@ -952,6 +1007,7 @@ class PartnerSyncCoordinatorTest {
                     recoveryEnabledSinceMs = 0,
                     shareAvailability = shareAvailability,
                     availabilityEnabledSinceMs = availabilityEnabledSinceMs,
+                    availabilityConsentPending = availabilityConsentPending,
                 ),
             )
         }

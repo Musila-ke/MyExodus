@@ -23,4 +23,10 @@ data class PairProfileSharing(
     val shareAvailability: Boolean = false,
     @ColumnInfo(name = "availability_enabled_since_ms", defaultValue = "0")
     val availabilityEnabledSinceMs: Long = 0,
+    /** Step 10 (schema v20): the availability consent changed and the server has not yet
+     *  acknowledged it — the revocation/transition is retried every pass and the settings
+     *  screen says so. Local behavior (snapshot sending) always follows [shareAvailability],
+     *  never this flag; it is purely the server-convergence report. */
+    @ColumnInfo(name = "availability_consent_pending", defaultValue = "0")
+    val availabilityConsentPending: Boolean = false,
 )

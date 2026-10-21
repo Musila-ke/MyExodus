@@ -1542,6 +1542,9 @@ private fun EndedCard(
                 style = MaterialTheme.typography.bodyMedium,
             )
             val (remoteRes, confirmed) = when (state.phase) {
+                // Step 10: the server has not acknowledged the exit yet — say that plainly
+                // instead of implying the relationship state is settled.
+                UnpairPhase.AWAITING_REVOCATION -> R.string.partner_unpair_revocation_pending to false
                 UnpairPhase.AWAITING_CONFIRMATION -> R.string.partner_unpair_waiting to false
                 UnpairPhase.TERMINAL -> R.string.partner_unpair_confirmed to true
                 UnpairPhase.LOCAL_ONLY_TERMINATED -> R.string.partner_unpair_unconfirmed to false
@@ -1556,10 +1559,12 @@ private fun EndedCard(
                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                 },
             )
-            if (state.phase == UnpairPhase.AWAITING_CONFIRMATION) {
-                // #14: the confirmation arrives on its own (push + the automatic pass); this is
-                // the recovery nudge for a poll that looks stuck, not a primary path — so it
-                // stays quiet.
+            if (state.phase == UnpairPhase.AWAITING_CONFIRMATION ||
+                state.phase == UnpairPhase.AWAITING_REVOCATION
+            ) {
+                // #14: the confirmation (and the server acknowledgement) arrives on its own
+                // (push + the automatic pass); this is the recovery nudge for a wait that looks
+                // stuck, not a primary path — so it stays quiet.
                 TextButton(onClick = onCheckNow, enabled = !checking) {
                     Text(
                         stringResource(

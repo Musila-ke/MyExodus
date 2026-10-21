@@ -55,21 +55,11 @@ class EnrollmentDaoTest {
         createdAtEpochMillis = 1_700_000_000_000L + seed,
     )
 
+    // The single registry — a hand-written list silently lags the next schema bump (the
+    // AppRulesStore drift class, ADR #50/#58; this list had been missing 13→14).
     private fun openDatabase(): AccountabilityDatabase = Room.databaseBuilder(context, AccountabilityDatabase::class.java, dbName)
-        .addMigrations(
-            AccountabilityDatabase.MIGRATION_1_2,
-            AccountabilityDatabase.MIGRATION_2_3,
-            AccountabilityDatabase.MIGRATION_3_4, // watermark column (mailbox quota fix)
-            AccountabilityDatabase.MIGRATION_4_5, // outbox, processed_events, key_epoch
-            AccountabilityDatabase.MIGRATION_5_6, // AD-08 repair columns
-            AccountabilityDatabase.MIGRATION_6_7, // approval_requests + pairing epoch
-            AccountabilityDatabase.MIGRATION_7_8, // unpair journal (AD-13a/b)
-            AccountabilityDatabase.MIGRATION_8_9, // Step 15 rotation anchors
-            AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
-            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
-            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
-            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
-        ).build()
+        .addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS)
+        .build()
 
     @Test
     fun upsert_get_roundTrips() = runTest {
@@ -121,7 +111,7 @@ class EnrollmentDaoTest {
             ),
         )
         v1.close()
-        db = openDatabase() // Room validates the schema and runs the full 1->…->6 migration chain
+        db = openDatabase() // Room validates the schema and runs the full 1->…->14 migration chain
         assertEquals(1, db.chainEventDao().chainFor("pair-1").size)
         db.enrollmentDao().upsert(record("a1b2c3d4e5f60718"))
         assertEquals("a1b2c3d4e5f60718", db.enrollmentDao().getByPairId("a1b2c3d4e5f60718")?.pairId)

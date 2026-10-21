@@ -4,10 +4,8 @@ import android.util.Log
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.state.ChainStateStore
-import com.example.myexodus.accountability.state.Outbox
 import com.example.myexodus.accountability.state.UnpairState
 import com.example.myexodus.accountability.state.UnpairStateDao
-import com.example.myexodus.accountability.sync.MailboxOutboxDrainer
 import java.security.Signature
 import java.util.UUID
 
@@ -17,9 +15,10 @@ import java.util.UUID
  * **Initiator** ([initiate], then [resumePending] across later passes): the journal row is
  * written first, before the request event exists, pinned to the message id the event will
  * carry — a crash past that point cannot skip the shred, because the row (not the event) is
- * what later passes resume from. The request is then signed, encrypted, chained, and drained
- * while the keys still live; the local shred (agreement-key destruction + pair wipe) runs
- * *unconditionally and immediately* — never gated on the partner, and re-run by [resumePending]
+ * what later passes resume from. The request is then signed, encrypted, and chained while the
+ * keys still live, and delivered post-shred from its journaled bytes; the local shred
+ * (agreement-key destruction + pair wipe) runs *unconditionally and immediately* — never gated
+ * on the partner, and re-run by [resumePending]
  * whenever it finds a row whose shred never finished (AD-13b). Delivery and the partner's confirmation are tracked in
  * the [UnpairState] journal, which survives the wipe: the request's exact bytes are journaled
  * so a post-shred re-delivery needs no chain state, and the partner's AD-18b ack on that
@@ -34,11 +33,14 @@ import java.util.UUID
  * cannot over-claim; a failed ack write is retried from the journal on later passes — the
  * responder's enrollment is already gone, so nothing else would ever retry it.
  *
- * Revocation: the pair document's status is flipped to `terminated` (the rules pin members +
- * active->terminated; the registerPairing function turns `terminated` into an AD-07 re-pair on
- * the next pairing). It is written once the request is out (or at the 7-day timeout — an
- * undelivered unpair must not leave the credential writable forever). The initiator of a
- * mutual unpair simply loses the race: a denied terminate is a no-op.
+ * Revocation (Step 10): ending a pair is an authorization change, so it takes effect locally
+ * first — every PENDING outbox envelope is `CANCELLED_BY_REVOCATION` and the enrollment falls
+ * in the same wipe, then the pair document's status is flipped to `terminated` (the rules pin
+ * members + active->terminated; registerPairing turns `terminated` into an AD-07 re-pair).
+ * The flip is retried until it is acknowledged, and `revoked_at` journals the acknowledgement:
+ * while it is absent the UI reports "revocation pending" rather than pretending the server has
+ * revoked. A terminate denied because the partner got there first is an acknowledgement too —
+ * the relationship is already terminated (a mutual unpair simply loses the race).
  *
  * Destruction is PAIR-scoped (§19.5 / ADR #106): each enrollment carries its own agreement
  * key alias, so shredding one pair destroys only that key and the other pairs keep working.
@@ -52,7 +54,6 @@ import java.util.UUID
  */
 class BilateralDeletion(
     private val creator: EventCreator,
-    private val drainOutbox: suspend (pairId: String, authorUid: String, partnerUid: String) -> MailboxOutboxDrainer.DrainResult,
     private val enrollmentDao: EnrollmentDao,
     private val store: ChainStateStore,
     private val journal: UnpairStateDao,
@@ -62,9 +63,12 @@ class BilateralDeletion(
     /** Destroys the legacy device-level agreement key — only ever called once no enrollment
      *  remains (it is the shared key of every pre-v12 pair, and the AD-22 wipe canary). */
     private val destroyDeviceAgreementKey: () -> Unit,
-    /** Flips `/pairings/{pairId}` status to `terminated`; already-terminated / no longer a
-     *  member is a no-op, not a failure (the partner may have terminated first). */
-    private val terminatePair: suspend (pairId: String) -> Unit,
+    /** Flips `/pairings/{pairId}` status to `terminated`. True = the server-side relationship
+     *  exit is acknowledged: the write landed, or the pair is already terminated / no longer
+     *  accessible to this account (the partner may have terminated first — an exit either way).
+     *  False = not acknowledged (offline, attestation, or the pair still reads active) — the
+     *  caller journals nothing and retries next pass. */
+    private val terminatePair: suspend (pairId: String) -> Boolean,
     /** Writes the journaled request bytes to the partner's mailbox at the journaled messageId,
      *  with the journaled document metadata (sender key id + key epoch).
      *  True = the document is there (a fresh write, ALREADY_EXISTS, or a denied replay — the
@@ -196,14 +200,9 @@ class BilateralDeletion(
             ),
         )
 
-        if (authorUid != null && partnerUid != null) {
-            drainAllPending(pairId, authorUid, partnerUid)
-            if (snapshot != null && store.outboxSnapshot(messageId)?.status == Outbox.STATUS_SENT) {
-                journal.markDelivered(pairId)
-            }
-        }
-
-        // AD-13b: unconditional and immediate — no drain outcome blocks the shred.
+        // Step 10: revocation cancels every unsent envelope — the queued events are NOT
+        // rerouted and NOT flushed first. Only the deletion request itself is delivered, from
+        // the journaled bytes above, by [resumeRequester].
         shredPair(pairId)
 
         resumeRequester(pairId)
@@ -227,13 +226,19 @@ class BilateralDeletion(
      * die before the wipe or a crash between the steps reads as a local wipe.
      */
     private suspend fun shredPair(pairId: String) {
+        // Step 10 §8.4: authorization ends before delivery does. Cancelling first means any
+        // drain that already read these rows cannot send them (it rechecks inside the write
+        // lock), and nothing queued for the departing partner leaves after this point.
+        store.cancelUnsentEnvelopes(pairId)
         val record = enrollmentDao.getByPairId(pairId)
         if (record?.myAgreementKeyAlias != null) destroyPairAgreementKey(record.myAgreementKeyAlias)
         // The device-level key dies BEFORE the last enrollment's wipe: the AD-22 canary reads
         // *device key present + no enrollment* as a local wipe, so destroying it after the wipe
         // would turn a crash between the two steps into a false "Pairing data was lost" report.
         if (record != null && enrollmentDao.all().size == 1) destroyDeviceAgreementKey()
-        wipePair(pairId)
+        // Enrollment row and pair rows fall together, enrollment first (Step 10 §8.2): the
+        // local authorization record is the thing every write path checks.
+        store.wipePair(pairId)
         // Crash-resume where the wipe already ran (record == null): nothing left to derive
         // from, so the shared key must still go.
         if (enrollmentDao.all().isEmpty()) destroyDeviceAgreementKey()
@@ -302,7 +307,7 @@ class BilateralDeletion(
     }
 
     private fun UnpairState.progressSignature(): String =
-        "$pairId|$role|$delivered|$ackSent|$localShredded|$confirmedAtEpochMillis"
+        "$pairId|$role|$delivered|$ackSent|$localShredded|$confirmedAtEpochMillis|$revokedAtEpochMillis"
 
     /** Deletes the journal row behind the terminal card — guarded by [UnpairState.isDismissible]
      *  so an early dismissal can never strand the initiator's confirmation. */
@@ -320,26 +325,37 @@ class BilateralDeletion(
      *  state is reported. */
     private suspend fun resumeRequester(pairId: String) {
         val row = journal.get(pairId) ?: return
-        var delivered = row.delivered
         val partnerUid = row.partnerUid
+        var confirmed = row.confirmedAtEpochMillis != null
+        var delivered = row.delivered
 
-        if (partnerUid != null) {
-            if (row.confirmedAtEpochMillis == null && row.messageId.isNotEmpty() &&
-                runCatching { pollPartnerAck(partnerUid, row.messageId) }.getOrDefault(false)
-            ) {
-                journal.markConfirmed(pairId, now())
-                terminate(pairId)
-                return
-            }
+        if (!confirmed && partnerUid != null && row.messageId.isNotEmpty() &&
+            runCatching { pollPartnerAck(partnerUid, row.messageId) }.getOrDefault(false)
+        ) {
+            journal.markConfirmed(pairId, now())
+            confirmed = true
+        }
 
-            if (!delivered && row.messageId.isNotEmpty() && row.requestEnvelope.isNotEmpty()) {
-                if (runCatching { deliverRequest(partnerUid, row) }.getOrDefault(false)) {
-                    journal.markDelivered(pairId)
-                    delivered = true
-                }
+        // A confirmed request needs no delivery (the ack is proof they processed it), and a
+        // delivered one is never re-sent — the journal keeps the bytes only for the retry
+        // window between shred and first successful write.
+        if (!confirmed && !delivered && partnerUid != null &&
+            row.messageId.isNotEmpty() && row.requestEnvelope.isNotEmpty()
+        ) {
+            if (runCatching { deliverRequest(partnerUid, row) }.getOrDefault(false)) {
+                journal.markDelivered(pairId)
+                delivered = true
             }
         }
-        if (delivered || now() - row.requestedAtEpochMillis >= UnpairState.CONFIRM_TIMEOUT_MILLIS) {
+
+        // Step 10: the server-side revocation is retried until acknowledged. Delivered = the
+        // attempt is made (offline stays not-delivered, so the UI can honestly say "pending");
+        // an undelivered request still flips the pair at the 7-day timeout, so ending a
+        // partnership never leaves the credential writable forever. Once acknowledged,
+        // [terminate] journals the fact and there is nothing left to retry.
+        if (row.revokedAtEpochMillis == null &&
+            (confirmed || delivered || now() - row.requestedAtEpochMillis >= UnpairState.CONFIRM_TIMEOUT_MILLIS)
+        ) {
             terminate(pairId)
         }
     }
@@ -353,34 +369,21 @@ class BilateralDeletion(
         }
     }
 
-    /** Drains until the outbox is empty, not just until the request itself is sent: the wipe
-     *  deletes pending outbox rows, so anything not delivered first is lost forever. Bounded:
-     *  Req 27 caps the chain at 1000 events, so 40 batches (50+ each) is headroom. */
-    private suspend fun drainAllPending(pairId: String, authorUid: String, partnerUid: String) {
-        for (batch in 0 until MAX_DRAIN_BATCHES) {
-            when (val drained = runCatching { drainOutbox(pairId, authorUid, partnerUid) }.getOrNull()) {
-                is MailboxOutboxDrainer.DrainResult.Sent -> if (drained.eventsDelivered == 0) break
-                // Denied/failed: stop this pass; [resumePending] retries the request itself.
-                null, is MailboxOutboxDrainer.DrainResult.Failed,
-                is MailboxOutboxDrainer.DrainResult.PermissionDenied -> break
-            }
-        }
-    }
-
+    /** Step 10: journals the server-side acknowledgement that ends the relationship. A false
+     *  return leaves `revoked_at` null — the UI keeps saying "pending" and the next pass
+     *  retries, forever if need be (there is no timeout on revocation itself). */
     private suspend fun terminate(pairId: String) {
-        runCatching { terminatePair(pairId) }
+        val acknowledged = runCatching { terminatePair(pairId) }
             .onFailure { Log.w(TAG, "pair termination failed pairId=$pairId (retried next pass)", it) }
-    }
-
-    private suspend fun wipePair(pairId: String) {
-        store.deletePairData(pairId)
-        enrollmentDao.getByPairId(pairId)?.let { enrollmentDao.delete(it) }
+            .getOrDefault(false)
+        if (acknowledged) {
+            journal.markRevoked(pairId, now())
+        } else {
+            Log.w(TAG, "server-side revocation not acknowledged pairId=$pairId (retried next pass)")
+        }
     }
 
     companion object {
         const val TAG = "MyExodusDeletion"
-
-        /** Drain cap: 40 batches x 50 events covers 2x the Req 27 chain cap of 1000. */
-        const val MAX_DRAIN_BATCHES = 40
     }
 }

@@ -45,11 +45,17 @@ class MailboxOutboxDrainerTest {
         var evicted = 0
         var expiredSweeps = 0
         var requestedLimit = -1
+        val cancelled = mutableSetOf<String>()
+        var authorizeError: Exception? = null
 
         val drainer = MailboxOutboxDrainer(
             pendingRows = { _, _, limit ->
                 requestedLimit = limit
                 readError?.let { throw it } ?: rows
+            },
+            stillAuthorized = { _, id ->
+                authorizeError?.let { throw it }
+                id !in cancelled
             },
             markSent = { sent += it },
             recordAttempt = { messageId, at, nextAt, code ->
@@ -211,5 +217,33 @@ class MailboxOutboxDrainerTest {
         fake.drainer.drain("pair-1", "uid-me", "uid-partner")
 
         assertTrue(fake.latencies.isEmpty())
+    }
+
+    // ---- Step 10 §8.2: authorization is rechecked before every upload attempt ----
+
+    @Test
+    fun drain_revocationBetweenBatchReadAndWrite_skipsTheCancelledRow_sendsTheRest() = runBlocking {
+        val fake = Fake(listOf(row("m1", byteArrayOf(1)), row("m2", byteArrayOf(2))))
+        fake.cancelled += "m1"
+
+        val result = fake.drainer.drain("pair-1", "uid-me", "uid-partner")
+
+        assertEquals(MailboxOutboxDrainer.DrainResult.Sent(1), result)
+        assertEquals(listOf("m2"), fake.writes.map { it.messageId })
+        assertEquals(listOf("m2"), fake.sent)
+        // A skip is not a failure: no attempt is recorded against the revoked row.
+        assertTrue(fake.attempts.isEmpty())
+    }
+
+    @Test
+    fun drain_authorizationRecheckFailure_neverSends_onAnUnknownState() = runBlocking {
+        val fake = Fake(listOf(row("m1", byteArrayOf(1))))
+        fake.authorizeError = IllegalStateException("db locked")
+
+        val result = fake.drainer.drain("pair-1", "uid-me", "uid-partner")
+
+        assertEquals(MailboxOutboxDrainer.DrainResult.Sent(0), result)
+        assertTrue(fake.writes.isEmpty())
+        assertTrue(fake.sent.isEmpty())
     }
 }

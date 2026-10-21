@@ -39,6 +39,13 @@ class ChainStateStore(
 
         /** Structurally invalid for this chain position (e.g. stale or first-with-previous-hash). */
         data object Rejected : AppendResult
+
+        /**
+         * Step 10: the pair has no live local enrollment, so its relationship is no longer
+         * authorized. Checked inside the append transaction — a shred that commits between
+         * event creation and this call wins, and no orphan chain/outbox row is written.
+         */
+        data object NotEnrolled : AppendResult
     }
 
     /** [messageId] lets a caller that must later address this message's mailbox document
@@ -198,6 +205,8 @@ class ChainStateStore(
         afterSequence: Long,
         limit: Int = REPLAY_BATCH_LIMIT,
     ): Int = db.withWriteTransaction {
+        // Step 10: replays are deliveries too — never enqueue them for a revoked relationship.
+        if (db.enrollmentDao().getByPairId(pairId) == null) return@withWriteTransaction 0
         val events = db.chainEventDao().sentEventsAfter(pairId, senderKeyId, afterSequence, limit)
         // A replay is a brand-new mailbox document, so its retention window starts now —
         // anchoring expiry to the original creation time would expire old repairs on arrival.
@@ -221,10 +230,36 @@ class ChainStateStore(
      *  metadata) — read before the wipe so the journal can outlive the row it describes. */
     suspend fun outboxSnapshot(messageId: String): OutboxRowSnapshot? = db.outboxDao().snapshotOf(messageId)
 
-    /** §10 bilateral deletion: wipes the pair's chain, head, outbound, and approval rows
-     *  atomically (enrollment handled by caller; the unpair journal deliberately survives —
-     *  it is a different table and must outlive the wipe). */
-    suspend fun deletePairData(pairId: String) = db.withWriteTransaction {
+    /**
+     * Step 10 §8.4: revocation removes unsent recipient envelopes. Marks every PENDING outbox
+     * row of the pair `CANCELLED_BY_REVOCATION` in one transaction — the rows are then
+     * undeliverable and un-rottable (the wipe deletes them moments later; the status exists so
+     * a drain racing this transaction can never write what it read before it). Envelopes that
+     * are already SENT are untouched: they left this device before authorization ended, and
+     * ownership is never rerouted.
+     */
+    suspend fun cancelUnsentEnvelopes(pairId: String): Int = db.withWriteTransaction {
+        db.outboxDao().cancelPendingByPair(pairId)
+    }
+
+    /**
+     * §8.2 pre-upload recheck for the drainer: the pair still has its enrollment AND this exact
+     * message is still PENDING. Read in one transaction so a revocation cannot land between the
+     * two reads. False = deliver nothing; the caller leaves the row alone.
+     */
+    suspend fun stillAuthorized(pairId: String, messageId: String): Boolean = db.withWriteTransaction {
+        db.enrollmentDao().getByPairId(pairId) != null && db.outboxDao().isStillPending(messageId) > 0
+    }
+
+    /**
+     * §10 bilateral deletion: wipes the pair's authorization (its enrollment row) and its
+     * chain, head, outbound, and approval rows in ONE transaction — enrollment first, so
+     * [appendLocal]'s in-transaction guard observes the revocation no matter which transaction
+     * wins the write lock (Step 10). The unpair journal deliberately survives — it is a
+     * different table and must outlive the wipe.
+     */
+    suspend fun wipePair(pairId: String) = db.withWriteTransaction {
+        db.enrollmentDao().getByPairId(pairId)?.let { db.enrollmentDao().delete(it) }
         db.outboxDao().deleteByPair(pairId) // before the events delete — the subquery reads events
         db.chainEventDao().deleteByPair(pairId)
         db.chainHeadDao().deleteByPair(pairId)
@@ -232,7 +267,7 @@ class ChainStateStore(
     }
 
     /**
-     * Plan §8 Step 17 (AD-22): the wipe-detection counterpart of [deletePairData] — with no
+     * Plan §8 Step 17 (AD-22): the wipe-detection counterpart of [wipePair] — with no
      * enrollment there is no pairId to scope to, and the pre-wipe wipe (without a shred) is by
      * definition the pair data's last owner. Clears exactly the pair-scoped tables the
      * enrollment would have owned; enrollments (none by detection's premise), the unpair
@@ -254,6 +289,13 @@ class ChainStateStore(
         messageId: String? = null,
         eventId: String? = null,
     ): AppendResult {
+        // §8.2/Step 10: authorization is checked before the envelope exists (EventCreator) and
+        // again here, inside the writing transaction — the enrollment row is the local
+        // authorization record, and its absence means the relationship was revoked (or never
+        // existed). Writes serialize, so a shred that commits first is observed here.
+        if (direction == ChainEvent.DIRECTION_SENT && db.enrollmentDao().getByPairId(pairId) == null) {
+            return AppendResult.NotEnrolled
+        }
         val unsigned = envelope.unsigned
         val sender = unsigned.senderKeyId
         val hash = eventHash(unsigned)

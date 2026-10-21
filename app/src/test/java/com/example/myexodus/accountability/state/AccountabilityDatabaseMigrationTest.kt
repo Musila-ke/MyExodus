@@ -123,20 +123,7 @@ class AccountabilityDatabaseMigrationTest {
             context,
             AccountabilityDatabase::class.java,
             AccountabilityDatabase.DB_NAME,
-        ).addMigrations(
-            AccountabilityDatabase.MIGRATION_1_2,
-            AccountabilityDatabase.MIGRATION_2_3,
-            AccountabilityDatabase.MIGRATION_3_4, // watermark column (mailbox quota fix)
-            AccountabilityDatabase.MIGRATION_4_5, // outbox, processed_events, key_epoch
-            AccountabilityDatabase.MIGRATION_5_6, // AD-08 repair columns
-            AccountabilityDatabase.MIGRATION_6_7, // approval_requests + pairing epoch
-            AccountabilityDatabase.MIGRATION_7_8, // unpair journal (AD-13a/b)
-            AccountabilityDatabase.MIGRATION_8_9, // Step 15 rotation anchors
-            AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
-            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
-            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
-            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
-        ).build()
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
         runBlocking {
             // Fresh identity_epoch table: no rows yet, fully usable.
             assertNull(db.identityEpochDao().current())
@@ -177,20 +164,7 @@ class AccountabilityDatabaseMigrationTest {
             context,
             AccountabilityDatabase::class.java,
             AccountabilityDatabase.DB_NAME,
-        ).addMigrations(
-            AccountabilityDatabase.MIGRATION_1_2,
-            AccountabilityDatabase.MIGRATION_2_3,
-            AccountabilityDatabase.MIGRATION_3_4,
-            AccountabilityDatabase.MIGRATION_4_5,
-            AccountabilityDatabase.MIGRATION_5_6,
-            AccountabilityDatabase.MIGRATION_6_7,
-            AccountabilityDatabase.MIGRATION_7_8, // unpair journal (AD-13a/b)
-            AccountabilityDatabase.MIGRATION_8_9, // Step 15 rotation anchors
-            AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
-            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
-            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
-            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
-        ).build()
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
         runBlocking {
             // The ADD COLUMN default backfills the pre-existing head row.
             val head = db.chainHeadDao().get("pair-a", "k1")
@@ -250,20 +224,7 @@ class AccountabilityDatabaseMigrationTest {
             context,
             AccountabilityDatabase::class.java,
             AccountabilityDatabase.DB_NAME,
-        ).addMigrations(
-            AccountabilityDatabase.MIGRATION_1_2,
-            AccountabilityDatabase.MIGRATION_2_3,
-            AccountabilityDatabase.MIGRATION_3_4,
-            AccountabilityDatabase.MIGRATION_4_5,
-            AccountabilityDatabase.MIGRATION_5_6,
-            AccountabilityDatabase.MIGRATION_6_7,
-            AccountabilityDatabase.MIGRATION_7_8, // unpair journal (AD-13a/b)
-            AccountabilityDatabase.MIGRATION_8_9, // Step 15 rotation anchors
-            AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
-            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
-            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
-            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
-        ).build()
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
         runBlocking {
             val head = db.chainHeadDao().get("pair-a", "k1")
             assertEquals(ChainHead.REPAIR_NONE, head?.repairState)
@@ -303,20 +264,7 @@ class AccountabilityDatabaseMigrationTest {
             context,
             AccountabilityDatabase::class.java,
             AccountabilityDatabase.DB_NAME,
-        ).addMigrations(
-            AccountabilityDatabase.MIGRATION_1_2,
-            AccountabilityDatabase.MIGRATION_2_3,
-            AccountabilityDatabase.MIGRATION_3_4,
-            AccountabilityDatabase.MIGRATION_4_5,
-            AccountabilityDatabase.MIGRATION_5_6,
-            AccountabilityDatabase.MIGRATION_6_7,
-            AccountabilityDatabase.MIGRATION_7_8, // unpair journal (AD-13a/b)
-            AccountabilityDatabase.MIGRATION_8_9, // Step 15 rotation anchors
-            AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
-            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
-            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
-            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
-        ).build()
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
         runBlocking {
             val enrollment = db.enrollmentDao().getByPairId("pair-a")!!
             assertEquals("k1", enrollment.mySenderKeyId)
@@ -368,20 +316,7 @@ class AccountabilityDatabaseMigrationTest {
             context,
             AccountabilityDatabase::class.java,
             AccountabilityDatabase.DB_NAME,
-        ).addMigrations(
-            AccountabilityDatabase.MIGRATION_1_2,
-            AccountabilityDatabase.MIGRATION_2_3,
-            AccountabilityDatabase.MIGRATION_3_4,
-            AccountabilityDatabase.MIGRATION_4_5,
-            AccountabilityDatabase.MIGRATION_5_6,
-            AccountabilityDatabase.MIGRATION_6_7,
-            AccountabilityDatabase.MIGRATION_7_8,
-            AccountabilityDatabase.MIGRATION_8_9, // Step 15 rotation anchors
-            AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
-            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
-            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
-            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
-        ).build()
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
         runBlocking {
             val enrollment = db.enrollmentDao().getByPairId("pair-a")!!
             assertEquals("k1", enrollment.mySenderKeyId)
@@ -402,7 +337,11 @@ class AccountabilityDatabaseMigrationTest {
             )
             val loaded = db.unpairStateDao().get("pair-a")!!
             assertTrue(loaded.localShredded)
-            assertEquals(UnpairPhase.AWAITING_CONFIRMATION, loaded.phaseAt(11))
+            // Step 10: an unacknowledged server-side exit is reported as pending even though
+            // the local revocation is already in force.
+            assertNull(loaded.revokedAtEpochMillis)
+            assertEquals(UnpairPhase.AWAITING_REVOCATION, loaded.phaseAt(11))
+            db.unpairStateDao().markRevoked("pair-a", 11)
             db.unpairStateDao().markConfirmed("pair-a", 12)
             assertEquals(UnpairPhase.TERMINAL, db.unpairStateDao().get("pair-a")!!.phaseAt(12))
         }
@@ -435,20 +374,7 @@ class AccountabilityDatabaseMigrationTest {
             context,
             AccountabilityDatabase::class.java,
             AccountabilityDatabase.DB_NAME,
-        ).addMigrations(
-            AccountabilityDatabase.MIGRATION_1_2,
-            AccountabilityDatabase.MIGRATION_2_3,
-            AccountabilityDatabase.MIGRATION_3_4,
-            AccountabilityDatabase.MIGRATION_4_5,
-            AccountabilityDatabase.MIGRATION_5_6,
-            AccountabilityDatabase.MIGRATION_6_7,
-            AccountabilityDatabase.MIGRATION_7_8,
-            AccountabilityDatabase.MIGRATION_8_9, // Step 15 rotation anchors
-            AccountabilityDatabase.MIGRATION_9_10, // Step 18 rejection-check columns
-            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
-            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
-            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
-        ).build()
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
         runBlocking {
             val head = db.chainHeadDao().get("pair-a", "k1")!!
             assertEquals(500L, head.lastSequence)
@@ -491,20 +417,7 @@ class AccountabilityDatabaseMigrationTest {
             context,
             AccountabilityDatabase::class.java,
             AccountabilityDatabase.DB_NAME,
-        ).addMigrations(
-            AccountabilityDatabase.MIGRATION_1_2,
-            AccountabilityDatabase.MIGRATION_2_3,
-            AccountabilityDatabase.MIGRATION_3_4,
-            AccountabilityDatabase.MIGRATION_4_5,
-            AccountabilityDatabase.MIGRATION_5_6,
-            AccountabilityDatabase.MIGRATION_6_7,
-            AccountabilityDatabase.MIGRATION_7_8,
-            AccountabilityDatabase.MIGRATION_8_9,
-            AccountabilityDatabase.MIGRATION_9_10,
-            AccountabilityDatabase.MIGRATION_10_11, // §19.5 partner label
-            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
-            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
-        ).build()
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
         runBlocking {
             // The migrated row survives byte-for-byte and is due exactly one read-back.
             val snapshot = db.outboxDao().snapshotOf("m-1")!!
@@ -559,20 +472,7 @@ class AccountabilityDatabaseMigrationTest {
             context,
             AccountabilityDatabase::class.java,
             AccountabilityDatabase.DB_NAME,
-        ).addMigrations(
-            AccountabilityDatabase.MIGRATION_1_2,
-            AccountabilityDatabase.MIGRATION_2_3,
-            AccountabilityDatabase.MIGRATION_3_4,
-            AccountabilityDatabase.MIGRATION_4_5,
-            AccountabilityDatabase.MIGRATION_5_6,
-            AccountabilityDatabase.MIGRATION_6_7,
-            AccountabilityDatabase.MIGRATION_7_8,
-            AccountabilityDatabase.MIGRATION_8_9,
-            AccountabilityDatabase.MIGRATION_9_10,
-            AccountabilityDatabase.MIGRATION_10_11,
-            AccountabilityDatabase.MIGRATION_11_12, // ADR #106 per-pair agreement key alias
-            AccountabilityDatabase.MIGRATION_12_13, // PA Step 4: event_id + outbox retry/retention
-        ).build()
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
         runBlocking {
             val enrollment = checkNotNull(db.enrollmentDao().getByPairId("pair-a"))
             assertEquals("k1", enrollment.mySenderKeyId)
@@ -632,20 +532,7 @@ class AccountabilityDatabaseMigrationTest {
             context,
             AccountabilityDatabase::class.java,
             AccountabilityDatabase.DB_NAME,
-        ).addMigrations(
-            AccountabilityDatabase.MIGRATION_1_2,
-            AccountabilityDatabase.MIGRATION_2_3,
-            AccountabilityDatabase.MIGRATION_3_4,
-            AccountabilityDatabase.MIGRATION_4_5,
-            AccountabilityDatabase.MIGRATION_5_6,
-            AccountabilityDatabase.MIGRATION_6_7,
-            AccountabilityDatabase.MIGRATION_7_8,
-            AccountabilityDatabase.MIGRATION_8_9,
-            AccountabilityDatabase.MIGRATION_9_10,
-            AccountabilityDatabase.MIGRATION_10_11,
-            AccountabilityDatabase.MIGRATION_11_12,
-            AccountabilityDatabase.MIGRATION_12_13,
-        ).build()
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
         runBlocking {
             val enrollment = checkNotNull(db.enrollmentDao().getByPairId("pair-a"))
             assertEquals("k1", enrollment.mySenderKeyId)
@@ -867,6 +754,118 @@ class AccountabilityDatabaseMigrationTest {
                 assertArrayEquals(byteArrayOf(2, 3), s.getBlob(2))
                 assertEquals(Outbox.STATUS_PENDING, s.getText(3))
                 assertEquals("the v12 counter survives, v13 retry state does not", 1L, s.getLong(4))
+            }
+        }
+    }
+
+    /**
+     * Partner-accountability Step 10 (v13→v14): the unpair journal gains the server-revocation
+     * acknowledgement. An upgraded device's live row keeps every field and reads back with a
+     * null `revoked_at` — the honest "pending" that keeps the retry alive and self-heals on the
+     * next sync pass — and the acknowledgement is write-once.
+     */
+    @Test
+    fun migration13to14_addsTheServerRevocationAck_preservingTheJournalRow() {
+        val dbPath = context.getDatabasePath(AccountabilityDatabase.DB_NAME).absolutePath
+
+        AndroidSQLiteDriver().open(dbPath).use { conn ->
+            V12_DDL.forEach { ddl -> conn.prepare(ddl).use { it.step() } }
+            conn.prepare(
+                "INSERT INTO unpair_state (pair_id, role, partner_uid, message_id, sender_key_id, " +
+                    "key_epoch, request_envelope, delivered, ack_sent, local_shredded, requested_at, " +
+                    "confirmed_at) VALUES ('pair-a', 'REQUESTER', 'uid-b', 'm-1', 'k1', 2, x'03', 1, 0, 1, 10, NULL)",
+            ).use { it.step() }
+            // Build an exact v13 file: the real 12→13 step, stamped as the schema version.
+            runBlocking { AccountabilityDatabase.MIGRATION_12_13.migrate(conn) }
+            conn.prepare("PRAGMA user_version = 13").use { it.step() }
+        }
+
+        val db = Room.databaseBuilder(
+            context,
+            AccountabilityDatabase::class.java,
+            AccountabilityDatabase.DB_NAME,
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
+        runBlocking {
+            val row = checkNotNull(db.unpairStateDao().get("pair-a"))
+            assertEquals("uid-b", row.partnerUid)
+            assertEquals(2, row.keyEpoch)
+            assertArrayEquals(byteArrayOf(3), row.requestEnvelope)
+            assertTrue(row.delivered && row.localShredded && !row.ackSent)
+            assertEquals(10L, row.requestedAtEpochMillis)
+            assertNull("an upgraded row has not claimed a server exit it never observed", row.revokedAtEpochMillis)
+            assertEquals(UnpairPhase.AWAITING_REVOCATION, row.phaseAt(11))
+            assertFalse("no dismissal while the exit acknowledgement is owed", row.isDismissible(11))
+
+            // The acknowledgement is live and write-once: the first ack stamps the moment; a
+            // later pass cannot overwrite it.
+            db.unpairStateDao().markRevoked("pair-a", 20)
+            db.unpairStateDao().markRevoked("pair-a", 99)
+            val revoked = checkNotNull(db.unpairStateDao().get("pair-a"))
+            assertEquals(20L, revoked.revokedAtEpochMillis)
+            assertEquals("the server exit is settled; the partner's own shred is not", UnpairPhase.AWAITING_CONFIRMATION, revoked.phaseAt(21))
+            db.unpairStateDao().markConfirmed("pair-a", 22)
+            assertEquals(UnpairPhase.TERMINAL, db.unpairStateDao().get("pair-a")!!.phaseAt(23))
+        }
+        db.close()
+    }
+
+    /**
+     * D-33 rollback (v14→v13): the down step restores the exact v13 `unpair_state` shape — the
+     * acknowledgement column gone — while every journal field and row survives. A downgrade is
+     * a schema step, never a data loss; the exit simply reads as pending again on the older
+     * build.
+     */
+    @Test
+    fun migration14to13_restoresTheV13Shape_preservingTheJournalRow() {
+        val dbPath = context.getDatabasePath(AccountabilityDatabase.DB_NAME).absolutePath
+
+        AndroidSQLiteDriver().open(dbPath).use { conn ->
+            V12_DDL.forEach { ddl -> conn.prepare(ddl).use { it.step() } }
+            conn.prepare("PRAGMA user_version = 12").use { it.step() }
+        }
+
+        // Forward through Room's real path (12→13→14), then write v14-only state.
+        val db = Room.databaseBuilder(
+            context,
+            AccountabilityDatabase::class.java,
+            AccountabilityDatabase.DB_NAME,
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
+        runBlocking {
+            db.unpairStateDao().upsert(
+                UnpairState(
+                    pairId = "pair-a",
+                    role = UnpairState.ROLE_REQUESTER,
+                    partnerUid = "uid-b",
+                    messageId = "m-1",
+                    senderKeyId = "k1",
+                    keyEpoch = 2,
+                    requestEnvelope = byteArrayOf(3, 4),
+                    delivered = true,
+                    ackSent = false,
+                    localShredded = true,
+                    requestedAtEpochMillis = 10,
+                    confirmedAtEpochMillis = 12,
+                    revokedAtEpochMillis = 11,
+                ),
+            )
+        }
+        db.close()
+
+        AndroidSQLiteDriver().open(dbPath).use { conn ->
+            runBlocking { AccountabilityDatabase.MIGRATION_14_13.migrate(conn) }
+
+            assertFalse("v14's acknowledgement is gone", "revoked_at" in columnNames(conn, "unpair_state"))
+            conn.prepare(
+                "SELECT partner_uid, message_id, sender_key_id, request_envelope, delivered, " +
+                    "confirmed_at FROM unpair_state",
+            ).use { s ->
+                assertTrue("the journal row survives", s.step())
+                assertEquals("uid-b", s.getText(0))
+                assertEquals("m-1", s.getText(1))
+                assertEquals("k1", s.getText(2))
+                assertArrayEquals(byteArrayOf(3, 4), s.getBlob(3))
+                assertEquals(1L, s.getLong(4))
+                assertEquals(12L, s.getLong(5))
             }
         }
     }

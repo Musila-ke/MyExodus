@@ -232,8 +232,9 @@ internal class FakeExchange(
         cloud.tokenDocs.remove(FirestoreSchema.pairingTokenDocumentId(token))
     }
 
-    override suspend fun terminatePair(pairId: String) {
+    override suspend fun terminatePair(pairId: String): Boolean {
         cloud.pairings.remove(pairId)
+        return true
     }
 
     private fun flip(bytes: ByteArray): ByteArray =

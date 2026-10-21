@@ -91,7 +91,7 @@ import com.example.myexodus.domainusage.RuleUsageDao
         PartnerMonitoringCheckin::class,
         PartnerMonitoringSnapshot::class,
     ],
-    version = 19,
+    version = 20,
     exportSchema = true,
 )
 abstract class AppRulesStore : RoomDatabase() {

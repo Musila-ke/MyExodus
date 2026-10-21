@@ -25,7 +25,7 @@ import com.example.myexodus.accountability.enrollment.EnrollmentRecord
         ProcessedEvent::class,
         UnpairState::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = false,
 )
 abstract class AccountabilityDatabase : RoomDatabase() {
@@ -311,6 +311,55 @@ abstract class AccountabilityDatabase : RoomDatabase() {
         }
 
         /**
+         * v14 adds the Step 10 server-revocation acknowledgement on the unpair journal. Nullable,
+         * so an upgraded device's existing row simply reports "revocation pending" until the
+         * next sync pass retries the terminate and journals the acknowledgement — honest and
+         * self-healing, never a claim.
+         */
+        internal val MIGRATION_13_14 = object : Migration(13, 14) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE unpair_state ADD COLUMN revoked_at INTEGER",
+                ).use { it.step() }
+            }
+        }
+
+        /**
+         * v14 rollback (D-33): rebuilds the v13 `unpair_state` from its exact DDL and copies
+         * every row — the acknowledgement timestamp is the only column dropped.
+         */
+        internal val MIGRATION_14_13 = object : Migration(14, 13) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE `unpair_state_new` (" +
+                        "`pair_id` TEXT NOT NULL, " +
+                        "`role` TEXT NOT NULL, " +
+                        "`partner_uid` TEXT, " +
+                        "`message_id` TEXT NOT NULL, " +
+                        "`sender_key_id` TEXT, " +
+                        "`key_epoch` INTEGER NOT NULL DEFAULT 0, " +
+                        "`request_envelope` BLOB NOT NULL, " +
+                        "`delivered` INTEGER NOT NULL, " +
+                        "`ack_sent` INTEGER NOT NULL, " +
+                        "`local_shredded` INTEGER NOT NULL, " +
+                        "`requested_at` INTEGER NOT NULL, " +
+                        "`confirmed_at` INTEGER, " +
+                        "PRIMARY KEY(`pair_id`))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO `unpair_state_new` (pair_id, role, partner_uid, message_id, " +
+                        "sender_key_id, key_epoch, request_envelope, delivered, ack_sent, " +
+                        "local_shredded, requested_at, confirmed_at) " +
+                        "SELECT pair_id, role, partner_uid, message_id, sender_key_id, key_epoch, " +
+                        "request_envelope, delivered, ack_sent, local_shredded, requested_at, " +
+                        "confirmed_at FROM `unpair_state`",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE `unpair_state`").use { it.step() }
+                connection.prepare("ALTER TABLE `unpair_state_new` RENAME TO `unpair_state`").use { it.step() }
+            }
+        }
+
+        /**
          * Every migration, oldest schema to current, plus the one downgrade step (D-33) that
          * Room selects by `(from, to)` — the one list every builder registers.
          * Hand-maintained copies have silently diverged twice (7→8, ADR #50; 9→10, ADR #58),
@@ -320,7 +369,7 @@ abstract class AccountabilityDatabase : RoomDatabase() {
         internal val ALL_MIGRATIONS: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
-            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_12,
+            MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_12, MIGRATION_13_14, MIGRATION_14_13,
         )
 
         @Volatile private var instance: AccountabilityDatabase? = null

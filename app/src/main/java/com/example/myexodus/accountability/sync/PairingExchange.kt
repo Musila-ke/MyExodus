@@ -262,21 +262,36 @@ open class PairingExchange(
     }
 
     /**
-     * §8 Step 13 revocation: flips `/pairings/{pairId}` status to `terminated` — the rules pin
-     * the update to members + active→terminated (no other field, no un-terminating), and the
-     * mailbox create rule (status == 'active') makes further partner writes structurally
-     * impossible (Req 29: ending a partnership stops all future syncs). The registerPairing
-     * function reads `terminated` as a re-pair and increments the AD-07 epoch. Denial is a
-     * no-op: the row is already terminated (the partner got there first) or gone entirely.
+     * §8 Step 13 / Step 10 revocation: flips `/pairings/{pairId}` status to `terminated` — the
+     * rules pin the update to members + active→terminated (no other field, no un-terminating),
+     * and the mailbox create rule (status == 'active') makes further partner writes
+     * structurally impossible (Req 29: ending a partnership stops all future syncs). The
+     * registerPairing function reads `terminated` as a re-pair and increments the AD-07 epoch.
+     *
+     * Returns true only when the server-side exit is acknowledged: the write landed, the
+     * document is gone, or a denial proved the document is already `terminated` (the one
+     * client write cannot change a terminated document, so a member's denied flip that reads
+     * back `terminated` is the partner having terminated first). Network, attestation, and
+     * ambiguous denials return false — Step 10's journal keeps that row pending and retries.
      */
-    open suspend fun terminatePair(pairId: String) {
+    open suspend fun terminatePair(pairId: String): Boolean {
         AppCheckInstaller.install(appContext)
-        try {
-            FirestoreSchema.pairingDocument(firestore, pairId)
-                .update("status", "terminated")
-                .await()
+        val document = FirestoreSchema.pairingDocument(firestore, pairId)
+        return try {
+            document.update("status", "terminated").await()
+            true
         } catch (e: FirebaseFirestoreException) {
-            // Already terminated, or not (yet) a member — nothing to revoke.
+            when (e.code) {
+                FirebaseFirestoreException.Code.NOT_FOUND -> true
+                FirebaseFirestoreException.Code.PERMISSION_DENIED,
+                FirebaseFirestoreException.Code.FAILED_PRECONDITION,
+                -> runCatching {
+                    val snapshot = document.get().await()
+                    !snapshot.exists() || snapshot.getString("status") == "terminated"
+                }.getOrDefault(false)
+
+                else -> false
+            }
         }
     }
 

@@ -590,6 +590,90 @@ class AppRulesStoreMigrationTest {
     }
 
     /**
+     * Partner-accountability Step 10 (v19→v20) and its rollback: the server-convergence marker
+     * is added defaulted-off, so an upgraded row's last acknowledged availability value stays
+     * acknowledged instead of being re-sent as a pending change. A toggled row carries the
+     * marker; the rollback rebuild keeps every consent choice and watermark while dropping the
+     * marker column.
+     */
+    @Test
+    fun migration19to20AndBack_addsTheAvailabilityPendingMarker() {
+        val scratchPath = context.getDatabasePath("availability-pending-test.db").absolutePath
+        AndroidSQLiteDriver().open(scratchPath).use { conn ->
+            conn.prepare("CREATE TABLE sentinel_table (id INTEGER NOT NULL PRIMARY KEY)").use { it.step() }
+            conn.prepare("INSERT INTO sentinel_table (id) VALUES (12)").use { it.step() }
+            conn.prepare(
+                "CREATE TABLE pair_profile_sharing (" +
+                    "pair_id TEXT NOT NULL, share_checkins INTEGER NOT NULL, " +
+                    "share_recovery INTEGER NOT NULL, checkins_enabled_since_ms INTEGER NOT NULL, " +
+                    "recovery_enabled_since_ms INTEGER NOT NULL, " +
+                    "share_availability INTEGER NOT NULL DEFAULT 0, " +
+                    "availability_enabled_since_ms INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(pair_id))",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO pair_profile_sharing VALUES ('pair-1', 1, 0, 300, 0, 1, 500)",
+            ).use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_19_20.migrate(conn) }
+
+            assertTrue(
+                "the convergence marker column is added",
+                "availability_consent_pending" in columnNames(conn, "pair_profile_sharing"),
+            )
+            conn.prepare(
+                "SELECT share_checkins, checkins_enabled_since_ms, share_availability, " +
+                    "availability_enabled_since_ms, availability_consent_pending " +
+                    "FROM pair_profile_sharing WHERE pair_id = 'pair-1'",
+            ).use { stmt ->
+                assertTrue(stmt.step())
+                assertEquals("the consent flag survives", 1L, stmt.getLong(0))
+                assertEquals("the watermark survives", 300L, stmt.getLong(1))
+                assertEquals("availability survives", 1L, stmt.getLong(2))
+                assertEquals("the availability watermark survives", 500L, stmt.getLong(3))
+                assertEquals(
+                    "an existing row's acknowledged value is not re-queued as pending",
+                    0L,
+                    stmt.getLong(4),
+                )
+            }
+            // A toggle after the upgrade marks the row for server convergence.
+            conn.prepare(
+                "UPDATE pair_profile_sharing SET share_availability = 0, availability_consent_pending = 1 " +
+                    "WHERE pair_id = 'pair-1'",
+            ).use { it.step() }
+            conn.prepare(
+                "SELECT share_availability, availability_consent_pending FROM pair_profile_sharing",
+            ).use { stmt ->
+                assertTrue(stmt.step())
+                assertEquals("the pending toggle reads back", 0L, stmt.getLong(0))
+                assertEquals("the marker reads back", 1L, stmt.getLong(1))
+            }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_20_19.migrate(conn) }
+
+            assertTrue(
+                "the rollback removes the convergence marker",
+                "availability_consent_pending" !in columnNames(conn, "pair_profile_sharing"),
+            )
+            conn.prepare(
+                "SELECT share_checkins, checkins_enabled_since_ms, share_availability, " +
+                    "availability_enabled_since_ms FROM pair_profile_sharing WHERE pair_id = 'pair-1'",
+            ).use { stmt ->
+                assertTrue(stmt.step())
+                assertEquals("the consent flag survives the rollback rebuild", 1L, stmt.getLong(0))
+                assertEquals("the watermark survives the rollback rebuild", 300L, stmt.getLong(1))
+                assertEquals("the availability choice survives", 0L, stmt.getLong(2))
+                assertEquals("the availability watermark survives", 500L, stmt.getLong(3))
+            }
+            assertTrue(
+                "nothing else is touched on rollback",
+                "id" in columnNames(conn, "sentinel_table"),
+            )
+        }
+        context.deleteDatabase("availability-pending-test.db")
+    }
+
+    /**
      * The v16 consent matrix (ADR #135), direct invocation: 15→16 drops the legacy consent
      * columns outright (recreate-table, no seed — "nothing until you choose" for every
      * install) and adds the per-(pair, item) tables plus the journal's consent key; 16→15

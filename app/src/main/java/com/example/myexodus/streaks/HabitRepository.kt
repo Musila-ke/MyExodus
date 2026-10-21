@@ -3,6 +3,7 @@ package com.example.myexodus.streaks
 import androidx.room3.withWriteTransaction
 import com.example.myexodus.accountability.activity.PartnerActivityJournal
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.HabitProgress
@@ -86,6 +87,8 @@ data class ProfileSharingFlags(
     val shareCheckIns: Boolean,
     val shareRecovery: Boolean,
     val shareAvailability: Boolean = false,
+    /** Step 10: the availability change is not yet acknowledged by the server. */
+    val availabilityPending: Boolean = false,
 ) {
     companion object {
         val None = ProfileSharingFlags(shareCheckIns = false, shareRecovery = false)
@@ -365,7 +368,12 @@ class HabitRepository(
         }
         val profileFlags = db.pairSharingDao().profileAll()
             .associate {
-                it.pairId to ProfileSharingFlags(it.shareCheckins, it.shareRecovery, it.shareAvailability)
+                it.pairId to ProfileSharingFlags(
+                    it.shareCheckins,
+                    it.shareRecovery,
+                    it.shareAvailability,
+                    it.availabilityConsentPending,
+                )
             }
         return SharingMatrix(habits = habits, profile = profileFlags)
     }
@@ -427,7 +435,11 @@ class HabitRepository(
 
     /** Full-state write of one pair's profile-level categories; watermark semantics match
      *  [setPairStreakSharing]. No snapshot: attempt and session rows are announcements, not
-     *  state — there is no current-state catch-up to send. */
+     *  state — there is no current-state catch-up to send.
+     *
+     *  Step 10: an availability transition (revocation included) sets the pending marker and
+     *  kicks a sync pass — the local behavior follows the switch immediately, and the marker is
+     *  cleared only by the server acknowledgement CAS ([PairSharingDao.clearAvailabilityPendingIfMatches]). */
     suspend fun setPairProfileSharing(
         pairId: String,
         shareCheckIns: Boolean,
@@ -436,9 +448,13 @@ class HabitRepository(
     ): Boolean {
         val db = storeFactory.open() ?: return false
         val now = readings().tWallMillis
-        return runCatching {
+        var availabilityChanged = false
+        val written = runCatching {
             db.withWriteTransaction<Unit> {
                 val before = db.pairSharingDao().profileFor(pairId)
+                // A first write with availability off expresses no choice — only an actual
+                // transition (including off, once, from on) needs server convergence.
+                availabilityChanged = shareAvailability != (before?.shareAvailability ?: false)
                 db.pairSharingDao().upsertProfile(
                     PairProfileSharing(
                         pairId = pairId,
@@ -448,10 +464,17 @@ class HabitRepository(
                         recoveryEnabledSinceMs = watermark(before?.recoveryEnabledSinceMs, before?.shareRecovery, shareRecovery, now),
                         shareAvailability = shareAvailability,
                         availabilityEnabledSinceMs = watermark(before?.availabilityEnabledSinceMs, before?.shareAvailability, shareAvailability, now),
+                        availabilityConsentPending = if (availabilityChanged) {
+                            true
+                        } else {
+                            before?.availabilityConsentPending ?: false
+                        },
                     ),
                 )
             }
         }.isSuccess
+        if (written && availabilityChanged) PartnerSyncSignals.activityEmitted.tryEmit(Unit)
+        return written
     }
 
     /** The enable watermark: pinned at the false→true transition, kept otherwise (the value is

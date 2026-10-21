@@ -955,6 +955,48 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * v19 → v20 (partner-accountability Step 10): the server-convergence marker for the
+         * availability consent. Existing rows default to not-pending — their last acknowledged
+         * value is whatever they hold; a toggle made after the upgrade sets the marker.
+         */
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE pair_profile_sharing ADD COLUMN availability_consent_pending INTEGER NOT NULL DEFAULT 0",
+                ).use { it.step() }
+            }
+        }
+
+        /** v20 rollback: rebuilt without the convergence marker; every consent choice,
+         *  including device availability and its watermark, survives. */
+        val MIGRATION_20_19 = object : Migration(20, 19) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS pair_profile_sharing_old (" +
+                        "pair_id TEXT NOT NULL, share_checkins INTEGER NOT NULL, " +
+                        "share_recovery INTEGER NOT NULL, " +
+                        "checkins_enabled_since_ms INTEGER NOT NULL, " +
+                        "recovery_enabled_since_ms INTEGER NOT NULL, " +
+                        "share_availability INTEGER NOT NULL DEFAULT 0, " +
+                        "availability_enabled_since_ms INTEGER NOT NULL DEFAULT 0, " +
+                        "PRIMARY KEY(pair_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO pair_profile_sharing_old (pair_id, share_checkins, share_recovery, " +
+                        "checkins_enabled_since_ms, recovery_enabled_since_ms, share_availability, " +
+                        "availability_enabled_since_ms) " +
+                        "SELECT pair_id, share_checkins, share_recovery, checkins_enabled_since_ms, " +
+                        "recovery_enabled_since_ms, share_availability, availability_enabled_since_ms " +
+                        "FROM pair_profile_sharing",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS pair_profile_sharing").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE pair_profile_sharing_old RENAME TO pair_profile_sharing",
+                ).use { it.step() }
+            }
+        }
+
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override suspend fun migrate(connection: SQLiteConnection) {
                 // Recovery resource UI (plan v3 W7): the urge/recovery session log and the
@@ -1168,9 +1210,9 @@ class AppRulesStoreFactory(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
             MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16,
-            MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19,
+            MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20,
             MIGRATION_10_9, MIGRATION_12_11, MIGRATION_13_12, MIGRATION_14_13, MIGRATION_15_14,
-            MIGRATION_16_15, MIGRATION_17_16, MIGRATION_18_17, MIGRATION_19_18,
+            MIGRATION_16_15, MIGRATION_17_16, MIGRATION_18_17, MIGRATION_19_18, MIGRATION_20_19,
         )
     }
 }

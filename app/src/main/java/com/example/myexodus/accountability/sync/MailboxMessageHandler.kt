@@ -200,6 +200,10 @@ class MailboxMessageHandler(
                     ChainStateStore.AppendResult.Gap -> Kind.GAP
                     ChainStateStore.AppendResult.Fork -> Kind.FORK
                     ChainStateStore.AppendResult.Rejected -> Kind.REJECTED
+                    // Unreachable by construction (the guard is SENT-only, and a fetched
+                    // message is RECEIVED) — but if the enrollment vanished mid-fetch, the
+                    // message must not be acked, so REJECTED is the honest reading.
+                    ChainStateStore.AppendResult.NotEnrolled -> Kind.REJECTED
                 }
                 if (kind in ACKED_KINDS) {
                     runCatching { ack(recipientUid, messageId) }

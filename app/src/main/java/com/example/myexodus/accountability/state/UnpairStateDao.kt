@@ -38,6 +38,10 @@ interface UnpairStateDao {
     @Query("UPDATE unpair_state SET confirmed_at = :atEpochMillis WHERE pair_id = :pairId")
     suspend fun markConfirmed(pairId: String, atEpochMillis: Long)
 
+    /** Step 10: first acknowledgement wins — a later pass must not rewrite the timestamp. */
+    @Query("UPDATE unpair_state SET revoked_at = COALESCE(revoked_at, :atEpochMillis) WHERE pair_id = :pairId")
+    suspend fun markRevoked(pairId: String, atEpochMillis: Long)
+
     /** User dismissed a terminal card (or a stale row was superseded by a re-pair). */
     @Query("DELETE FROM unpair_state WHERE pair_id = :pairId")
     suspend fun delete(pairId: String)

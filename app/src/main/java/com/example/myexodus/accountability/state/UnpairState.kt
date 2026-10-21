@@ -45,25 +45,44 @@ data class UnpairState(
     @ColumnInfo(name = "requested_at") val requestedAtEpochMillis: Long,
     /** Set when the partner's device ack was observed — THE remote-erasure evidence (AD-13b). */
     @ColumnInfo(name = "confirmed_at") val confirmedAtEpochMillis: Long? = null,
+    /** Step 10: when the server acknowledged the relationship exit (`/pairings/{id}` reads
+     *  `terminated`, or it was already terminated/gone). Null = server-side revocation is
+     *  still pending — the local revocation is in force regardless, and the UI must say so. */
+    @ColumnInfo(name = "revoked_at") val revokedAtEpochMillis: Long? = null,
 ) {
 
     /** The phase this row reports at [nowEpochMillis] — derived, never stored: the 7-day
-     *  timeout must hold even if the app never ran at the exact boundary moment. */
-    fun phaseAt(nowEpochMillis: Long): UnpairPhase = when {
-        role == ROLE_RESPONDER -> UnpairPhase.TERMINAL
-        confirmedAtEpochMillis != null -> UnpairPhase.TERMINAL
-        nowEpochMillis - requestedAtEpochMillis >= CONFIRM_TIMEOUT_MILLIS ->
-            UnpairPhase.LOCAL_ONLY_TERMINATED
+     *  timeout must hold even if the app never ran at the exact boundary moment.
+     *
+     *  [UnpairPhase.AWAITING_REVOCATION] outranks confirmation inside the 7-day window on
+     *  purpose: the local exit is real, but until the server has revoked the relationship the
+     *  card must not imply the relationship state is settled — and the row must keep driving
+     *  the retry. Past 7 days the established honesty boundary wins: the row reports what could
+     *  not be confirmed instead of pending forever. */
+    fun phaseAt(nowEpochMillis: Long): UnpairPhase {
+        val elapsed = nowEpochMillis - requestedAtEpochMillis
+        return when {
+            role == ROLE_RESPONDER -> UnpairPhase.TERMINAL
+            revokedAtEpochMillis == null && elapsed < CONFIRM_TIMEOUT_MILLIS ->
+                UnpairPhase.AWAITING_REVOCATION
 
-        else -> UnpairPhase.AWAITING_CONFIRMATION
+            confirmedAtEpochMillis != null -> UnpairPhase.TERMINAL
+            elapsed >= CONFIRM_TIMEOUT_MILLIS -> UnpairPhase.LOCAL_ONLY_TERMINATED
+            else -> UnpairPhase.AWAITING_CONFIRMATION
+        }
     }
 
     /** The terminal card may be dismissed (and the row deleted) only once the wait is over and
-     *  — responder side — the owed ack is out: dismissing earlier would strand the initiator's
-     *  confirmation. Single source for the UI read model and the unpair dismissal guard. */
-    fun isDismissible(nowEpochMillis: Long): Boolean =
-        phaseAt(nowEpochMillis) != UnpairPhase.AWAITING_CONFIRMATION &&
-            (role != ROLE_RESPONDER || ackSent)
+     *  — requesters — the server-side revocation is acknowledged: deleting the journal row
+     *  earlier would strand the retry that only this row drives. Responder side, the owed ack
+     *  is the gate. Single source for the UI read model and the dismissal guard. */
+    fun isDismissible(nowEpochMillis: Long): Boolean = when {
+        role == ROLE_RESPONDER -> ackSent
+        else -> when (phaseAt(nowEpochMillis)) {
+            UnpairPhase.TERMINAL, UnpairPhase.LOCAL_ONLY_TERMINATED -> true
+            UnpairPhase.AWAITING_CONFIRMATION, UnpairPhase.AWAITING_REVOCATION -> false
+        }
+    }
 
     companion object {
         const val ROLE_REQUESTER = "REQUESTER"
@@ -81,6 +100,13 @@ data class UnpairState(
 enum class UnpairPhase {
     /** `LOCAL_SHRED_COMPLETE`: this device erased its data; the partner's device has not confirmed. */
     AWAITING_CONFIRMATION,
+
+    /**
+     * Step 10: the local revocation is in force (nothing new can be sent or fetched for the
+     * relationship), but the server has not yet acknowledged the relationship exit — offline,
+     * or the flip has not landed. Reported honestly as pending and retried every pass.
+     */
+    AWAITING_REVOCATION,
 
     /** `REMOTE_SHRED_CONFIRMED`: the partner's own device confirmed it erased its copy. */
     TERMINAL,

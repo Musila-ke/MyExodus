@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.data.db.ActivityLogKeyManager
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
@@ -16,7 +17,9 @@ import com.example.myexodus.data.db.entity.PairStreakSharing
 import com.example.myexodus.data.db.entity.UserProfile
 import com.example.myexodus.streaks.HabitRepository.OnboardingResult.Rejected.Reason
 import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -676,6 +679,61 @@ class HabitRepositoryTest {
         assertEquals(habitId, item.progressId)
         assertEquals("Instagram", item.label)
         assertNull("a habit with no consent row shows as not shared for every pair", item.perPair["pair-1"])
+    }
+
+    /** Step 10: availability is a server-converged consent — every transition (revocation
+     *  included) marks the row pending and kicks a sync pass; only the server's acknowledgement
+     *  of the SAME value clears it. A write that leaves availability alone changes neither. */
+    @Test
+    fun setPairProfileSharing_availabilityTransition_marksPendingAndKicksOneSyncPass() = runBlocking {
+        seedProfile()
+        onboard()
+        val kicks = mutableListOf<Unit>()
+        val collector = launch(Dispatchers.Unconfined) {
+            PartnerSyncSignals.activityEmitted.collect { kicks += it }
+        }
+        try {
+            assertTrue(
+                repository.setPairProfileSharing("pair-1", true, false, shareAvailability = true),
+            )
+            assertTrue(
+                "the toggle awaits server convergence",
+                store.pairSharingDao().profileFor("pair-1")!!.availabilityConsentPending,
+            )
+            assertEquals("the toggle kicks exactly one sync pass", 1, kicks.size)
+
+            assertTrue(
+                repository.setPairProfileSharing("pair-1", true, true, shareAvailability = true),
+            )
+            assertTrue(
+                "an unacknowledged marker survives a non-availability rewrite",
+                store.pairSharingDao().profileFor("pair-1")!!.availabilityConsentPending,
+            )
+            assertEquals("no transition, no kick", 1, kicks.size)
+
+            assertTrue(
+                repository.setPairProfileSharing("pair-1", true, true, shareAvailability = false),
+            )
+            assertTrue(
+                "revoking availability is itself a transition",
+                store.pairSharingDao().profileFor("pair-1")!!.availabilityConsentPending,
+            )
+            assertEquals("the revocation kicks a sync pass", 2, kicks.size)
+
+            store.pairSharingDao().clearAvailabilityPendingIfMatches("pair-1", acknowledgedValue = true)
+            assertTrue(
+                "an ack for the superseded value must not clear the revocation",
+                store.pairSharingDao().profileFor("pair-1")!!.availabilityConsentPending,
+            )
+            store.pairSharingDao().clearAvailabilityPendingIfMatches("pair-1", acknowledgedValue = false)
+            assertEquals(
+                "the acknowledgement of the current value clears the marker",
+                false,
+                store.pairSharingDao().profileFor("pair-1")!!.availabilityConsentPending,
+            )
+        } finally {
+            collector.cancel()
+        }
     }
 
     /** Owner ask 2026-10-04: the hub's "nothing shared yet" card gate — true until ANY

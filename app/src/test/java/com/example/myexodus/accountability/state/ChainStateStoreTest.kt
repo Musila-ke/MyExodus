@@ -4,18 +4,21 @@ import android.app.Application
 import android.content.Context
 import androidx.room3.Room
 import androidx.test.core.app.ApplicationProvider
+import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.SignedEnvelope
 import com.example.myexodus.accountability.serialization.UnsignedEnvelope
 import com.example.myexodus.accountability.serialization.decodeSigned
 import com.example.myexodus.accountability.serialization.eventHash
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -41,7 +44,23 @@ class ChainStateStoreTest {
         db = Room.databaseBuilder(context, AccountabilityDatabase::class.java, dbName)
             .build()
         store = ChainStateStore(db)
+        // Step 10 §8.2: a local append requires a live enrollment (the local authorization
+        // record). Every pre-Step-10 test here builds chains, so the two pairs it uses are
+        // enrolled up front; the revocation tests delete/wipe deliberately.
+        runBlocking {
+            db.enrollmentDao().upsert(enrollment(pairId))
+            db.enrollmentDao().upsert(enrollment("pair-2"))
+        }
     }
+
+    private fun enrollment(id: String) = EnrollmentRecord(
+        pairId = id,
+        mySenderKeyId = sender,
+        partnerSigningKeyId = "b".repeat(64),
+        partnerSigningPubKey = byteArrayOf(1),
+        partnerAgreementPubKey = byteArrayOf(2),
+        createdAtEpochMillis = NOW,
+    )
 
     @After
     fun tearDown() {
@@ -396,13 +415,90 @@ class ChainStateStoreTest {
     }
 
     @Test
-    fun deletePairData_clearsTheOutboxWithTheChain() = runTest {
+    fun wipePair_deletesTheEnrollmentFirst_thenThePairsChainAndOutbox_only() = runTest {
         store.appendLocal(pairId, envelope(1))
         // A second pair's queued event must survive the wipe.
         store.appendLocal("pair-2", envelope(1, seed = 5))
-        store.deletePairData(pairId)
+        store.wipePair(pairId)
+        assertNull(db.enrollmentDao().getByPairId(pairId))
+        assertTrue(db.chainEventDao().chainFor(pairId).isEmpty())
+        assertNull(db.chainHeadDao().get(pairId, sender))
         assertTrue(db.outboxDao().pendingFor(pairId, 10).isEmpty())
+        // The other relationship is untouched.
+        assertNotNull(db.enrollmentDao().getByPairId("pair-2"))
         assertEquals(1, db.outboxDao().pendingFor("pair-2", 10).size)
+        assertEquals(1L, db.chainHeadDao().get("pair-2", sender)?.lastSequence)
+    }
+
+    // --- Step 10 §8.2/§8.4: revocation is the local authorization change. ---
+
+    @Test
+    fun appendLocal_withoutAnEnrollment_isNotEnrolled_andWritesNothing() = runTest {
+        assertEquals(ChainStateStore.AppendResult.NotEnrolled, store.appendLocal("never-paired", envelope(1)))
+        assertNull(db.chainHeadDao().get("never-paired", sender))
+        assertTrue(db.chainEventDao().chainFor("never-paired").isEmpty())
+        assertTrue(db.outboxDao().pendingFor("never-paired", 10).isEmpty())
+    }
+
+    @Test
+    fun appendLocal_afterWipePair_isNotEnrolled_theRevocationWinsTheRace() = runTest {
+        store.appendLocal(pairId, envelope(1))
+        store.wipePair(pairId)
+
+        // An event already built (encrypted, signed) before the revocation committed must not
+        // resurrect the chain or the outbox — the guard runs inside the append transaction.
+        assertEquals(ChainStateStore.AppendResult.NotEnrolled, store.appendLocal(pairId, envelope(1, seed = 9)))
+        assertTrue(db.chainEventDao().chainFor(pairId).isEmpty())
+        assertNull(db.chainHeadDao().get(pairId, sender))
+        assertTrue(db.outboxDao().pendingFor(pairId, 10).isEmpty())
+    }
+
+    @Test
+    fun cancelUnsentEnvelopes_cancelsEveryPendingRowOfThePair_andOnlyThatPair() = runTest {
+        store.appendLocal(pairId, envelope(1))
+        val e2 = chained(2, envelope(1))
+        store.appendLocal(pairId, e2)
+        val rows = db.outboxDao().pendingFor(pairId, 10)
+        val sentId = rows[0].messageId
+        val pendingId = rows[1].messageId
+        db.outboxDao().markSent(sentId)
+
+        store.appendLocal("pair-2", envelope(1, seed = 5))
+        val otherId = db.outboxDao().pendingFor("pair-2", 10).single().messageId
+
+        assertEquals("only the pair's one still-PENDING row is cancelled", 1, store.cancelUnsentEnvelopes(pairId))
+
+        assertEquals(Outbox.STATUS_CANCELLED_BY_REVOCATION, db.outboxDao().snapshotOf(pendingId)?.status)
+        assertEquals("an already-SENT envelope is outside the sender's hands", Outbox.STATUS_SENT, db.outboxDao().snapshotOf(sentId)?.status)
+        assertEquals(Outbox.STATUS_PENDING, db.outboxDao().snapshotOf(otherId)?.status)
+    }
+
+    @Test
+    fun stillAuthorized_falseOnceTheRowIsCancelledOrTheEnrollmentIsGone() = runTest {
+        store.appendLocal(pairId, envelope(1))
+        val pendingId = db.outboxDao().pendingFor(pairId, 10).single().messageId
+        assertTrue("live enrollment + PENDING row", store.stillAuthorized(pairId, pendingId))
+
+        store.cancelUnsentEnvelopes(pairId)
+        assertFalse("the cancellation alone closes the upload gate", store.stillAuthorized(pairId, pendingId))
+
+        // The second revocation window: authorization gone, wipe not yet committed. The
+        // enrollment check must close the gate even for a row still stamped PENDING.
+        store.appendLocal(pairId, chained(2, envelope(1)))
+        val freshId = db.outboxDao().pendingFor(pairId, 10).single().messageId
+        assertTrue(store.stillAuthorized(pairId, freshId))
+        db.enrollmentDao().getByPairId(pairId)?.let { db.enrollmentDao().delete(it) }
+        assertFalse(store.stillAuthorized(pairId, freshId))
+    }
+
+    @Test
+    fun enqueueReplay_withoutAnEnrollment_replaysNothing() = runTest {
+        store.appendLocal(pairId, envelope(1))
+        db.outboxDao().markSent(db.outboxDao().pendingFor(pairId, 10).single().messageId)
+        db.enrollmentDao().getByPairId(pairId)?.let { db.enrollmentDao().delete(it) }
+
+        assertEquals(0, store.enqueueReplay(pairId, sender, afterSequence = 0))
+        assertTrue(db.outboxDao().pendingFor(pairId, 10).isEmpty())
     }
 
     @Test

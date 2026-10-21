@@ -56,6 +56,7 @@ class MailboxOutboxDrainerCrashWindowTest {
                     pending.removeAll { it.messageId == id }
                 }
             },
+            stillAuthorized = { _, id -> id in pending.map { it.messageId } },
             recordAttempt = { id, at, _, _ ->
                 attemptError?.let { throw it }
                 attempts += id to at

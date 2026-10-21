@@ -4,8 +4,10 @@ import android.app.Application
 import android.content.Context
 import androidx.room3.Room
 import androidx.test.core.app.ApplicationProvider
+import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.SignedEnvelope
 import com.example.myexodus.accountability.serialization.UnsignedEnvelope
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -43,6 +45,19 @@ class SessionKeyManagerTest {
         db = Room.databaseBuilder(context, AccountabilityDatabase::class.java, dbName).build()
         store = ChainStateStore(db)
         manager = SessionKeyManager(store)
+        // Step 10 §8.2: a local append requires a live enrollment.
+        runBlocking {
+            db.enrollmentDao().upsert(
+                EnrollmentRecord(
+                    pairId = pairId,
+                    mySenderKeyId = sender,
+                    partnerSigningKeyId = "b".repeat(64),
+                    partnerSigningPubKey = byteArrayOf(1),
+                    partnerAgreementPubKey = byteArrayOf(2),
+                    createdAtEpochMillis = now,
+                ),
+            )
+        }
     }
 
     @After

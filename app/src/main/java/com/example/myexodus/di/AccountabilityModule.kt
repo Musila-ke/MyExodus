@@ -379,6 +379,7 @@ object AccountabilityModule {
     @Provides @Singleton
     fun provideMailboxOutboxDrainer(
         db: AccountabilityDatabase,
+        store: ChainStateStore,
         firestore: FirebaseFirestore,
         crashReporting: CrashReporting,
     ): MailboxOutboxDrainer {
@@ -387,6 +388,7 @@ object AccountabilityModule {
             pendingRows = { pairId, nowEpochMillis, limit ->
                 dao.pendingForDrain(pairId, nowEpochMillis, limit)
             },
+            stillAuthorized = store::stillAuthorized,
             markSent = dao::markSent,
             recordAttempt = { messageId, atEpochMillis, nextAttemptAtEpochMillis, errorCode ->
                 dao.recordAttempt(messageId, atEpochMillis, nextAttemptAtEpochMillis, errorCode)
@@ -478,7 +480,6 @@ object AccountabilityModule {
         @ApplicationContext context: Context,
         db: AccountabilityDatabase,
         creator: EventCreator,
-        drainer: MailboxOutboxDrainer,
         enrollmentDao: EnrollmentDao,
         store: ChainStateStore,
         keystore: AccountabilityKeyStore,
@@ -487,7 +488,6 @@ object AccountabilityModule {
     ): BilateralDeletion {
         return BilateralDeletion(
             creator = creator,
-            drainOutbox = drainer::drain,
             enrollmentDao = enrollmentDao,
             store = store,
             journal = db.unpairStateDao(),

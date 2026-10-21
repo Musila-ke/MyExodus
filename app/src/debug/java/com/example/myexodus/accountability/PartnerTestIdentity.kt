@@ -215,6 +215,10 @@ class PartnerTestIdentity(
     /** Production drainer wired to B's own DB + the secondary app — the replay leg's transport. */
     fun outboxDrainer(): MailboxOutboxDrainer = MailboxOutboxDrainer(
         pendingRows = { pairId, now, limit -> db.outboxDao().pendingForDrain(pairId, now, limit) },
+        stillAuthorized = { pairId, messageId ->
+            db.enrollmentDao().getByPairId(pairId) != null &&
+                db.outboxDao().isStillPending(messageId) > 0
+        },
         markSent = { messageId -> db.outboxDao().markSent(messageId) },
         recordAttempt = { messageId, at, nextAt, code ->
             db.outboxDao().recordAttempt(messageId, at, nextAt, code)
