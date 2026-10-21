@@ -1060,7 +1060,7 @@ test('payload: the wire message is fixed copy plus the generic sync key — no r
     { notice_type: NOTICE_AVAILABILITY, relationship_id: PAIR_ID }, ['tok-a'],
   );
   assert.strictEqual(availability.notification.title, 'Partner check-in');
-  assert.strictEqual(availability.notification.body, 'A paired device has not checked in recently.');
+  assert.strictEqual(availability.notification.body, 'A paired device has not checked in recently. This is not proof the app was removed or blocking was turned off.');
   assert.deepStrictEqual(availability.data, { v: '1', type: 'SYNC_AVAILABLE' });
   assert.deepStrictEqual(Object.keys(availability.data).sort(), ['type', 'v'], 'no extra data keys');
   assert.deepStrictEqual(availability.android.notification, { channelId: 'availability_alerts_v1' });

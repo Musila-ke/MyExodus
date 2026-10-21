@@ -74,7 +74,7 @@ test('availability notice: fixed copy, high priority, hashed collapse key that n
   assert.deepStrictEqual(message.data, { v: '1', type: 'SYNC_AVAILABLE' });
   assert.deepStrictEqual(message.notification, {
     title: 'Partner check-in',
-    body: 'A paired device has not checked in recently.',
+    body: 'A paired device has not checked in recently. This is not proof the app was removed or blocking was turned off.',
   });
   assert.strictEqual(message.android.priority, 'high', 'user-visible time-sensitive notice');
   assert.strictEqual(message.android.ttl, 60 * 60 * 1000);

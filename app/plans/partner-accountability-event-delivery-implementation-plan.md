@@ -1354,3 +1354,51 @@ ADR #207 records the decisions; the operator recipe lives in `app/docs/MyExodus 
 - After a long off window, queued client rows drain within their ≤6 h backoff cap of re-enable, and overdue DMS deadlines are processed on the next tick — truthful, not immediate.
 - The switch does not affect the SOS path or any other feature (separate `partnerSosEnabled` field).
 - The gate does not replace monitoring: the fleet late-burst breaker and its alert (ADR #201) still page the operator while the feature is on.
+
+## Appendix S13 — Definition of Done reconciliation (plan §18, against S1–S12 evidence, 2026-10-22)
+
+Step 12 was the last numbered step in §7, so this appendix closes the plan by walking §18 line by line. Verdicts are **PASS**, **PASS (as scoped)** where a literal reading does not apply to this project, or **OPEN** where only external conditions can close it — never inferred from a green suite alone. Each row names the evidence already recorded above.
+
+### Gap found at this gate, and closed
+
+§18 requires: *"User-facing copy states that device silence is not proof of uninstall, tamper, or violation; explains delayed notifications and offline-revocation limits; and does not promise recall of information already decrypted by a recipient."*
+
+Delayed notifications and offline revocation were already explained (`partner_connection_body_late`, `partner_sync_delayed`, `partner_unpair_revocation_pending`), and no string promises recall (grepped). **The positive statement that silence is not proof did not exist anywhere** — the copy was neutral but silent on the interpretation a partner is most likely to form. Fixed on both surfaces:
+
+- **In-app:** new `partner_connection_silence_note` — "Not checking in isn't proof the app was removed, blocking was turned off, or anything was tampered with." Rendered in `PartnerConnectionCard` whenever consent is on and the state is anything but `CHECKING_IN` (`PartnerScreen.kt`).
+- **Notice:** `PUSH_BODY_SILENT` now reads "A paired device has not checked in recently. This is not proof the app was removed or blocking was turned off." The notice is still identity-free and whole-content — nothing requires a fetch to interpret. `dmsDeadlineWorker` redeployed this session.
+- **Evidence:** functions `npm test` **147/147** and DMS emulator **34/34** (both now pin the new notice text); full JVM suite **220 classes / 1,985 tests / 0 failures / 0 errors / 0 skipped**. Honest limit: the project has no Compose/Robolectric UI-test harness, and the X6532 keyguard stayed secure, so the card's visual render was not photographed; the condition is a static guard and the string resource is compile-verified.
+
+### §18 checklist verdicts
+
+| # | Requirement (abridged) | Verdict | Evidence |
+|---|---|---|---|
+| 1 | Existing pairing, crypto, detectors, relay, persistence, monitoring reused without unrelated redesign | PASS | S1 change map; S5 gate ("existing pipeline already meets the contract"); ADR #198 |
+| 2 | Step 2 crypto gate states stateless/stateful, proves confidentiality/authenticity + crash-safe retry; gaps as blockers; no custom crypto | PASS | S2 classification + guarantee evidence; S3/S4 reuse; no crypto dependency added |
+| 3 | Allowlisted schemas; `relationship_seq`, gaps, resync, `POSSIBLE_MISSING_UPDATES` | PASS (label differs) | S3 allowlist; S6 gap → `REPAIR_PENDING` → resync → `GAP_MARKER`; the user-visible state ships as `PartnerChainStatus.INCOMPLETE` ("Some history missing"), which is the plan's `POSSIBLE_MISSING_UPDATES` under clearer copy; `ChainStateStoreTest`, `ChainRepairCoordinatorTest`, `PartnerSyncScenariosInstrumentedTest` |
+| 4 | Local writes transactional, SQLCipher, bounded, idempotent; committed envelope reused on ambiguous outcome | PASS | S4 (v13 schema, unique `event_id` per pair+sender, outbox rollout, idempotency tests) |
+| 5 | Local ciphertext removed after acceptance; server ciphertext removed by ack/expiry/revocation; retention documented | PASS | S4 drain; S5 records the deliberate ≤30-day local repair copy (declared, not accidental); `functions/cleanup.js` `cleanupMailboxes`; S10 revocation |
+| 6 | Upload/fetch/ack/revoke contracts mapped to existing routes and tested | PASS | S5 requirement→code map; rules suite 20/20 (cross-partner isolation, replay, oversize, rate limit, revocation) |
+| 7 | DMS durable delayed queue/indexed bounded worker; no unbounded scan, no Redis-expiry trigger | PASS | S8 DB-as-queue design; bounded due query; 100k soak |
+| 8 | DMS generation/CAS, transactional outbox, outage compensation, breaker, suppression, six-hour threshold tested | PASS | S8/S9 emulator topology + late-burst breaker; reminder cap per `(install, relationship, outage_generation)` |
+| 9 | Connection ≠ monitoring snapshot ≠ inbox completeness; stale → `UNKNOWN`; heartbeat alone never "healthy" | PASS | S7 (ACTIVE needs FGS + <90 s authority stamp; stale → UNKNOWN); separate connection and chain cards |
+| 10 | Notification permission/channel/provider checks, user-triggered test, in-app warning, generic payload, one-reminder cap | PASS | S6 `PartnerAlertHealth` + test alert; S9 channels/payload; S8 cap |
+| 11 | WorkManager best effort; FGS hook only while legitimately active; no new FGS/exact alarm/keep-alive/anti-uninstall/sensitive permission | PASS | S7 piggyback design; S11 policy table: manifest unchanged across PA commits |
+| 12 | App Standby diagnostics API 28+, API 26–27 degrade cleanly, guidance does not promise unrestricted operation | PASS | `PartnerHeartbeatClient` gates on `SDK_INT >= P` (API 28); no exemption request; S11 App Standby finding recorded |
+| 13 | Backup/key-loss/clear-data/device replacement/re-enrollment and install-counter namespace tested | PARTIAL | Namespace and migration JVM/emulator-proven (S7); re-enrollment/identity rotation JVM-proven S4/S10 + `IdentityMigrationTest`; **physical reinstall/clear-data blocked** by the owner's never-uninstall rule |
+| 14 | Tiered cross-OEM report attached, tested vs unverified distinguished | PASS | `partner-accountability-compatibility-report-2026-10-22.md`; S11 labels (Transsion PARTIALLY TESTED; all other tier-1 families UNVERIFIED) |
+| 15 | 100k-install load, scheduler/ingestion outage, correlated outage, queue recovery, notification tests, performance/battery soak | PASS | S8 100k soak (p95 11.2 s), outage + breaker tests, lease requeue; S11 soak; S12 battery baseline with stated conditions |
+| 16 | Play and APK flavors reviewed for target SDK, permissions, FGS purpose, disclosures, kill switch | PASS (as scoped) | No Play flavor and no product flavors exist — ADR #15 makes Play distribution out of scope; APK half verified in S11 + S12 |
+| 17 | Monitoring, operator alerting, recovery runbooks, staged rollout, migration rollback, push-outbox recovery | PASS | S8 alert policy + release procedure; S12 live staged rollback; S4 `13↔12` / `18↔17` down migrations tested; S8 lease requeue |
+| 18 | All acceptance criteria pass; no Critical/High blocker open | **OPEN (one AC)** | Every software-verifiable AC in §17 passes and no Critical/High blocker is open; the tiered physical-device-matrix AC cannot pass on one available phone and is reported with honest labels rather than claimed |
+| 19 | User-facing copy: silence is not proof; delayed notifications; offline revocation; no recall promise | PASS (after this gate's fix) | Copy added + notice redeployed; delayed/offline copy already present; recall never promised |
+
+### What remains open, and what closes each
+
+- **§17 tiered physical-device matrix AC / §18 row 18.** Closes only with hardware: Pixel, Samsung, Xiaomi/Redmi/POCO, OPPO/realme, OnePlus, Vivo/iQOO, Motorola, TECNO/Infinix/itel, plus a physical API 26 and API 36 device. Labels are already in the S11 report; no code change is pending.
+- **Two-device legs** (partner receives/resolves on a second phone, live unpair, snapshot receive half, OPD #37 naming cases). Closes with a second physical device or after the authentication work.
+- **Reboot / reboot-before-first-unlock.** Blocked by wireless-only adb (dies at reboot); closes with USB debugging attached.
+- **Cohort → expand rollout stages (§13, Step 12).** Owner-gated and blocked on the release channel (GitHub Releases, ADR #171).
+- **On-device legs blocked by the secure keyguard this session:** client send-refusal (Step 12) and the new card copy's visual render. Closes on the next unlocked device window; the logic is pinned by suites, not claimed as device-proven.
+
+**Conclusion:** all buildable work in the plan is complete. The remaining open lines are external conditions, each named above with its closing condition — none is a code TODO.

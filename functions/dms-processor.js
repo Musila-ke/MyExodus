@@ -63,7 +63,9 @@ const ANDROID_PACKAGE = 'com.example.myexodus';
 const CHANNEL_AVAILABILITY = 'availability_alerts_v1';
 const CHANNEL_CHECKIN = 'checkin_reminders_v1';
 const PUSH_TITLE = 'Partner check-in';
-const PUSH_BODY_SILENT = 'A paired device has not checked in recently.';
+// §18 DoD: the notice itself must say silence is not proof — a partner may read it as an
+// accusation otherwise. Still identity-free and whole-content (no fetch needed to interpret).
+const PUSH_BODY_SILENT = 'A paired device has not checked in recently. This is not proof the app was removed or blocking was turned off.';
 const PUSH_BODY_RECOVERED = 'A paired device has checked in again.';
 const PUSH_TTL_MS = 60 * 60 * 1000;
 

@@ -1148,6 +1148,15 @@ private fun PartnerConnectionCard(status: PartnerStatus) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // §18 DoD: whenever the partner is looking at anything but a fresh check-in, say what
+        // silence is not. Heartbeat absence is never evidence of removal, tamper, or violation.
+        if (status.consent && status.connection != PartnerConnection.CHECKING_IN) {
+            Text(
+                stringResource(R.string.partner_connection_silence_note),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

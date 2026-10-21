@@ -736,6 +736,9 @@
     <string name="partner_connection_body_not_checking_in">No check-in for over 90 minutes.</string>
     <string name="partner_connection_body_no_data">No check-in has reached the server yet.</string>
     <string name="partner_connection_body_not_shared">Your partner hasn’t chosen to share device availability.</string>
+    <!-- §18 Definition of Done: the partner-facing copy must say silence is not proof. Shown
+         whenever the connection is anything but Checking in. -->
+    <string name="partner_connection_silence_note">Not checking in isn’t proof the app was removed, blocking was turned off, or anything was tampered with.</string>
     <string name="partner_connection_bucket_within_hour">Last check-in: within the hour</string>
     <string name="partner_connection_bucket_hours">Last check-in: 1–6 hours ago</string>
     <string name="partner_connection_bucket_over_six">Last check-in: over 6 hours ago</string>
