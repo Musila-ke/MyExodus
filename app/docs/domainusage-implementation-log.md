@@ -1063,7 +1063,8 @@ meter and the toggle, answered from code + tests, and one real defect found and 
 
 - **Where the figure comes from (audit #9).** A website rule's "used today" is that
   `(rule id, revision)` counter in `UsageLedger` — time attributed at flow open by DNS answer or
-  TLS SNI, from every app on the device, with a 15 s idle tail per activity streak. Matching is a
+  TLS SNI, from every app on the device *(superseded the same day by ADR #189: browser-owned flows
+  only)*, with a 15 s idle tail per activity streak. Matching is a
   registrable-domain suffix on a dot boundary (`UrlPatternTest`), so `instagram.com` matches
   `i.instagram.com` but not `cdninstagram.com`; background/keep-alive flows explain a 30-minute
   reading against ~15 minutes of perceived browsing, and the UI floors to whole minutes. The
@@ -1100,3 +1101,71 @@ meter and the toggle, answered from code + tests, and one real defect found and 
   not a regression. The live instagram.com attribution probe stays blocked on the AVD's own
   DNS/IPv6 upstream and is redundant: ADR #179 already metered instagram.com to 25/30 min on the
   X6532.
+
+## Browser-only website metering — the owner-evidence fix (2026-10-19, ADR #189)
+
+Owner report: `instagram.com` showed 11/30 with no browser visit that day. Evidence first (dossier
+`~/Documents/MyExodusEvidence/2026-10-19-instagram-counter/README.md`): the Instagram app
+foreground 08:27:22–08:32:02 moved the counter exactly +15,000 ms via its API hosts
+(`i.instagram.com`, `graph.instagram.com`), and a temporary `googlevideo.com` rule accrued
+91,275 ms from ~90 s of YouTube-app playback. No UID/package filter existed under `domainusage/`.
+The owner selected **"Browser time only"**: website limits meter browser-owned flows; the site's
+own app belongs to app rules; unresolvable flows are never counted.
+
+**Implementation.** New `FlowOwner` (`BROWSER`/`NON_BROWSER`/`UNKNOWN`), `FlowOwnerClassifier`
+(`ConnectivityManager.getConnectionOwnerUid`, API 29+, called once per flow open with the TUN
+packet's source/destination 5-tuple), `BrowserPackages` (curated Chromium/Firefox/Opera/Samsung/
+AOSP-OEM set + reflective `RoleManager.getRoleHolders(ROLE_BROWSER)`; the reflective helper was
+extracted to `blocking/RoleHolders.kt`, shared with `EmergencyExclusionManager`). Both engine
+hooks take the owner and gate before attribution: non-browser and unknown flows return
+`PassThroughTap`/allow — never metered, registered, swept, or reset. New counters
+`flows_owner_browser`/`flows_owner_non_browser`/`flows_owner_unknown`. Every failure direction
+(SDK < 29, unresolved tuple, exception, null package list) is `UNKNOWN` → fail-open.
+`editor_limit_scope_notice` rewritten to match.
+
+**JVM.** Full suite **206 suites / 1,821 tests / 0 failures / 0 errors / 0 skipped**;
+`assembleDebug` OK. New tests: `aNonBrowserFlowIsPassedThroughWithoutMeteringOrAttribution`,
+`anUnknownOwnerIsNeverMeteredAndNeverReset`, `anExhaustedRuleStillCutsABrowserFlow`,
+`BrowserPackagesTest` (5 cases). Existing hook tests updated to pass `FlowOwner.BROWSER`.
+
+**Device (X6532, 2026-10-19, debug APK 49,714,378 B, `install -r`, data preserved).**
+- Golden regression: `instagram.com` **1,660,933 ms before and after** a 25 s Instagram-app
+  launch (previously +15,000 ms); `flows_owner_non_browser` 7→13.
+- YouTube app: `media_session` `PLAYING`; 45+ s with a temp `googlevideo.com` rule → **0 ms**;
+  uid 10133 `browser=false` (TCP+UDP); `flows_owner_non_browser` 150→211.
+- Chrome: temp `example.com` → **32,711 ms** after the page load (34,543 ms at the next probe);
+  uid 10114 `browser=true`; `flows_owner_browser` 0→100.
+- Brave: temp `example.org` → **16,155 ms**; uid 10318 `browser=true`; Brave foreground.
+- Cleanup: all temp rules deleted; only the owner's `instagram.com` rule remains; its counter
+  still reads exactly **1,660,933 ms**.
+
+**API-37 AVD (`MyExodus_API37`, same day).** Current APK `install -r`; temp `example.org` rule →
+**14,808 ms**; Chrome uid 10172 `browser=true`; `flows_owner_browser=44`,
+`flows_owner_non_browser=4`, `flows_owner_unknown=2`.
+
+Honest limits: the owner's rule never exhausted, so the quota-reset path was not re-driven on
+device (JVM `anExhaustedRuleStillCutsABrowserFlow`); no API 26–28 device exists in the test pool
+(`UNKNOWN` fail-open proven on JVM only). Mid-test the owner toggled Wi-Fi and the first Chrome
+run stalled with `ERR_NAME_NOT_RESOLVED`; once the network recovered, a raw DNS query through the
+tunnel answered and all assertions passed — environmental.
+
+## 2026-10-20 — F-DC-3: the day scope re-evaluates at the midnight boundary
+
+**Finding (audit pass, 2026-10-20).** Metering plan §6.5 step 5 requires the rule snapshot to be
+re-read when the effective day key changes so `enforcedToday` is re-evaluated. `DomainRuleProvider`
+computes `enforcedToday` once per snapshot emission, and the engine's only refresh point was the
+rules collector — so a website rule's day mask changed at midnight only when some other event
+published a new snapshot. App rules were unaffected (`RulesSnapshot.isLimitTracked`,
+`UsageAccountingEngine.processUsageObservation` evaluate day scope per call).
+
+**Fix.** `DomainUsageEngine.start`'s `UsageTickLoop.onRollover` now calls
+`updateRules(rules.first())` after handing the rollover final to the db thread. It runs on the
+tick thread (single-writer preserved); `first()` re-collects the provider flow, so the adapter's
+map — and `enforcedToday` — reflect the new day. ADR #192.
+
+**JVM evidence.** New `DomainUsageLifecycleTest.aDayRolloverReReadsTheRulesFlow_soEnforcedTodayFollowsTheNewDay`:
+a cold flow flips its rule's day mask at midnight; the ledger crosses midnight; the live counter's
+`enforcedToday` becomes false; an emission counter rises, proving a fresh collection. Class result:
+15 tests / 0 failures / 0 errors. Mutation check: with `updateRules(rules.first())` commented out
+the test fails exactly at "the rollover applies the new day's scope to the live counter"; restored,
+green.

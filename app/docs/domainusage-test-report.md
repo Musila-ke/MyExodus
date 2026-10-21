@@ -754,3 +754,34 @@ each with a regression and an ADR (#182–#185). The suite gained 15 net tests.
 0 skipped** (+15 net; audit baseline 1,796). Honest limits: A-02's device leg used a temporary
 website rule and AAAA probes, not a full browsing session; the release-variant evidence is
 compilation, not a release-APK device run (release is not distributed — A-13).
+
+## 15. Browser-only website metering (2026-10-19, ADR #189)
+
+Owner report: `instagram.com` at 11/30 with no browser visit. The evidence dossier proved the
+counter metered attributed flow time from every app (Instagram app launch → exactly +15,000 ms;
+temp `googlevideo.com` rule → 91,275 ms from YouTube-app playback). Owner decision: website limits
+count **browser-owned flows only**; the site's own app is out of scope; unresolved flows are never
+counted. Implementation and semantics are recorded in ADR #189; this section is the test evidence.
+
+**Historical note.** Any earlier statement in this report that metering spans every app on the
+device describes the pre-#189 behavior and is dated-historical as of 2026-10-19.
+
+| Claim | Evidence | Verdict |
+|---|---|---|
+| Non-browser flows are never metered or attributed | JVM `aNonBrowserFlowIsPassedThroughWithoutMeteringOrAttribution` (443 TCP, 80 TCP, UDP; counter 0; registry empty; `flows_owner_non_browser=3`) | **PASS** |
+| Unknown owners fail open (no meter, no reset) | JVM `anUnknownOwnerIsNeverMeteredAndNeverReset` (exhausted rule, no resets, no UDP drops) | **PASS** |
+| An exhausted rule still cuts a browser flow | JVM `anExhaustedRuleStillCutsABrowserFlow` (1 reset, `flow_resets_new=1`) | **PASS** |
+| Browser classification: role holders, shared UIDs, non-browsers, null lists | JVM `BrowserPackagesTest` (5 cases) | **PASS** |
+| Golden regression: the reported path no longer moves the counter | X6532: `instagram.com` **1,660,933 ms before and after** a 25 s Instagram-app launch (previously +15,000 ms); `flows_owner_non_browser` 7→13 | **PASS** |
+| The site's own app is not counted while actually streaming | X6532: YouTube `media_session` `state=PLAYING`; temp `googlevideo.com` rule stayed **0 ms** over 45+ s; uid 10133 `browser=false` (TCP+UDP) | **PASS** |
+| Chrome accrues | X6532: temp `example.com` → **32,711 ms** (34,543 ms at next probe); uid 10114 `browser=true`; page rendered | **PASS** |
+| Brave accrues (cross-browser) | X6532: temp `example.org` → **16,155 ms**; uid 10318 `browser=true`; Brave foreground | **PASS** |
+| Browser leg on API 37 | AVD `MyExodus_API37`: temp `example.org` → **14,808 ms**; Chrome uid 10172 `browser=true`; `flows_owner_browser=44` | **PASS** |
+| Cleanup restores the owner's state | Both devices: every temp rule deleted; phone rule list shows only `instagram.com`; counter still exactly `1,660,933 ms` | **PASS** |
+
+**Suite after the change:** full JVM **206 suites / 1,821 tests / 0 failures / 0 errors /
+0 skipped**. Honest limits: the owner's rule never exhausted,
+so the device pass did not re-drive the quota-reset path (covered on JVM); no API 26–28 device is
+in the test pool (the `UNKNOWN` fail-open path is JVM-proven); mid-test the phone's Wi-Fi was
+toggled by the owner and the first Chrome run stalled with `ERR_NAME_NOT_RESOLVED` until the
+network recovered — after recovery the tunnel DNS answered a raw query and every assertion passed.

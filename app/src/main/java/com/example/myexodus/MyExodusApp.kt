@@ -181,14 +181,7 @@ class MyExodusApp : Application(), Configuration.Provider {
         registerActivityLifecycleCallbacks(backgroundCheckpointer)
         // §8 Step 9: USER_UNLOCKED is delivered dynamically-only (never a manifest receiver).
         val unlockFilter = IntentFilter(Intent.ACTION_USER_UNLOCKED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(userUnlockedReceiver, unlockFilter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            // RECEIVER_EXPORTED is a 33+ constant; its value (2) is ignored by the 26-32
-            // registerReceiver (flags were reserved until 33) but keeps every path flagged.
-            @Suppress("InlinedApi")
-            registerReceiver(userUnlockedReceiver, unlockFilter, Context.RECEIVER_EXPORTED)
-        }
+        registerSystemReceiver(userUnlockedReceiver, unlockFilter)
         // WorkManager cannot be touched pre-unlock (direct-boot components; its CE workdb is
         // unreachable — "WorkManager can't be accessed from direct boot"). The health-check
         // period is unique-name KEEP: any post-unlock process start enqueues it.

@@ -41,7 +41,7 @@ class RelayHotPathAllocationTest {
 
         /** The real call path the Baseline holds — `GuardedTap`, not the inner tap. */
         fun decidedTap(): FlowTap {
-            val tap = engine.tcpFlowOpened(DnsFixtures.ip(93, 184, 216, 34), 443, control)
+            val tap = engine.tcpFlowOpened(DnsFixtures.ip(93, 184, 216, 34), 443, control, FlowOwner.BROWSER)
             val hello = javaClass.getResourceAsStream("/tls/fixture_a_example_com.bin")!!.use { it.readBytes() }
             val forwarded = tap.onClientData(hello, 0, hello.size) as ClientDataResult.Forward
             forwarded.data.release()

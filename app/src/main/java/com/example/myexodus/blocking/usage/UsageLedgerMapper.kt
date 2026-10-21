@@ -74,6 +74,17 @@ object UsageLedgerMapper {
         "correction:$targetEventId:$wallClockTsMs"
 
     /**
+     * A carryover owns no interval, so [eventIdFor]'s bounds give every top-up in a boot the
+     * same id — the second reconcile after a pause collides with the first and is dropped
+     * (owner-caught 2026-10-20: a repeated rule toggle lost 1 h 21 m of usage). The top-up is
+     * identified by what it claims — the package, the platform total it raises to, and the
+     * instant it closed — which keeps a retried reconcile of the same claim idempotent while
+     * letting a later, larger claim land as its own row.
+     */
+    fun carryoverEventIdFor(packageName: String, wallClockTsMs: Long, targetTotalMs: Long): String =
+        "carryover:$packageName:$wallClockTsMs:$targetTotalMs"
+
+    /**
      * §8.2 validation, returning the rejection reason or null when the draft is insertable.
      * A rejected draft is never written and never silently dropped — the caller decides what
      * to do with the reason.

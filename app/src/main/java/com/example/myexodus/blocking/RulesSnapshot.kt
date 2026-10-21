@@ -22,6 +22,17 @@ data class RulesSnapshot(
     val urlRules: List<UrlPattern>,
     val version: Long,
 ) {
+    /**
+     * A tracked package = a rule with a real limit, on a day the rule covers — mirrors
+     * BlockDecisionEngine Rule 2's `dailyLimitMs > 0` gate plus the rule's day scope (a rule
+     * not active today never accrues, so it must not open a usage session). Both accounting
+     * paths read this off the cached snapshot: no DB I/O on the event or poll path.
+     */
+    fun isLimitTracked(packageName: String): Boolean {
+        val rule = appRules[packageName] ?: return false
+        return rule.dailyLimitMs > 0L && dayScopeCoversToday(rule.activeDaysOfWeek, rule.timezone)
+    }
+
     /** Empty-but-published snapshot: published by the fast path when no cache exists yet. */
     companion object {
         val EMPTY = RulesSnapshot(emptyMap(), emptyList(), 0L)

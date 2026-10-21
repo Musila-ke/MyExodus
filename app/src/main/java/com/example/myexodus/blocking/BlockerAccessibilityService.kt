@@ -20,6 +20,7 @@ import android.view.accessibility.AccessibilityWindowInfo
 import androidx.core.net.toUri
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.MainActivity
+import com.example.myexodus.registerSystemReceiver
 import com.example.myexodus.blocking.recovery.RecoveryStateStore
 import com.example.myexodus.blocking.usage.EnforcementAction
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
@@ -542,7 +543,7 @@ class BlockerAccessibilityService : AccessibilityService() {
         }
         if (usageSessions.activePackage == packageName) return
         if (emergency.isProtected(packageName, null)) return
-        if (!isLimitTracked(packageName)) return
+        if (!publisher.snapshot.isLimitTracked(packageName)) return
         val displayId = allWindows().firstOrNull { runCatching { it.isActive }.getOrDefault(false) }
             ?.displayIdOrDefault() ?: Display.DEFAULT_DISPLAY
         val scheduleBlocked =
@@ -589,7 +590,7 @@ class BlockerAccessibilityService : AccessibilityService() {
             return
         }
         val limitWalled = dailyWallPackage(displayId) == packageName
-        val tracked = sessionTracked(scheduleBlocked, limitWalled, isLimitTracked(packageName)) {
+        val tracked = sessionTracked(scheduleBlocked, limitWalled, publisher.snapshot.isLimitTracked(packageName)) {
             status.requiresExplicitReEnable
         }
         val observed = usageSessions.observeForeground(
@@ -675,7 +676,7 @@ class BlockerAccessibilityService : AccessibilityService() {
         // only for tracked rules, but an edit can land between open and tick. Re-checked here,
         // off the transactionally-republished snapshot, because the engine's contract is
         // "callers never send untracked rules" — a limit of 0 reaching it means Block (§9).
-        if (!isLimitTracked(tick.packageName)) return
+        if (!publisher.snapshot.isLimitTracked(tick.packageName)) return
         scope.launch {
             runCatching {
                 val action = usageEngine.processUsageObservation(
@@ -781,15 +782,6 @@ class BlockerAccessibilityService : AccessibilityService() {
         if (target != packageName) return false
         closeBlockedApp(target)
         return true
-    }
-
-    /** A tracked package = an enabled rule with a real limit, on a day the rule covers —
-     *  mirrors BlockDecisionEngine Rule 2's `dailyLimitMs > 0` gate plus the rule's day scope
-     *  (a rule not active today never accrues, so it must not open a session). Read off the
-     *  cached snapshot: no DB I/O on the event path. */
-    private fun isLimitTracked(packageName: String): Boolean {
-        val rule = publisher.snapshot.appRules[packageName] ?: return false
-        return rule.dailyLimitMs > 0L && dayScopeCoversToday(rule.activeDaysOfWeek, rule.timezone)
     }
 
     /** Multi-window (plan §8 Step 5 / Decision 10): an Allow for one window must not lift
@@ -1055,18 +1047,9 @@ class BlockerAccessibilityService : AccessibilityService() {
             override fun onReceive(context: Context?, intent: Intent?) = emergency.refresh()
         }
         // TelephonyManager.ACTION_DEFAULT_DIALER_CHANGED is removed from the compileSdk 37
-        // stubs; the constant's value is stable across all supported API levels. NOT_EXPORTED
-        // (API 33+): the dialer-change broadcast is sent by the system, which exempts it from
-        // the same-app-only restriction; non-exported also blocks third-party spoofs of the action.
+        // stubs; the constant's value is stable across all supported API levels.
         val filter = IntentFilter("android.telephony.action.DEFAULT_DIALER_CHANGED")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            // RECEIVER_EXPORTED is a 33+ constant; its value (2) is ignored by the 26-32
-            // registerReceiver (flags were reserved until 33) but keeps every path flagged.
-            @Suppress("InlinedApi")
-            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
-        }
+        registerSystemReceiver(receiver, filter)
         dialerReceiver = receiver
     }
 
@@ -1107,14 +1090,7 @@ class BlockerAccessibilityService : AccessibilityService() {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_USER_PRESENT)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            // RECEIVER_EXPORTED is a 33+ constant; its value (2) is ignored by the 26-32
-            // registerReceiver (flags were reserved until 33) but keeps every path flagged.
-            @Suppress("InlinedApi")
-            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
-        }
+        registerSystemReceiver(receiver, filter)
         screenOffReceiver = receiver
     }
 

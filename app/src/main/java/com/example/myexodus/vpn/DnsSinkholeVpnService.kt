@@ -23,7 +23,9 @@ import com.example.myexodus.domainusage.DnsQueryResult
 import com.example.myexodus.domainusage.DomainRuleProvider
 import com.example.myexodus.domainusage.DomainUsageEngine
 import com.example.myexodus.domainusage.DomainUsageHost
+import com.example.myexodus.domainusage.EngineMode
 import com.example.myexodus.domainusage.FlowControl
+import com.example.myexodus.domainusage.FlowOwner
 import com.example.myexodus.domainusage.FlowTap
 import com.example.myexodus.domainusage.OwnedBytes
 import com.example.myexodus.domainusage.PassThroughTap
@@ -138,6 +140,9 @@ class DnsSinkholeVpnService : VpnService() {
 
     private val flows = ConcurrentHashMap<String, TcpFlow>()
     private val udpFlows = ConcurrentHashMap<String, UdpFlow>()
+
+    /** ADR #189: per-flow owner lookup, initialized on the first relayed flow after onCreate. */
+    private val flowOwners by lazy { FlowOwnerClassifier(this) }
     private val pendingDns = ConcurrentHashMap<String, PendingDns>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -464,7 +469,9 @@ class DnsSinkholeVpnService : VpnService() {
         var flow = udpFlows[key]
         if (flow == null) {
             val candidate = UdpFlow(ip.src, udp.srcPort, ip.dst, udp.dstPort)
-            when (val admission = engine.udpFlowOpened(ip.dst, udp.dstPort, candidate)) {
+            val owner = if (engine.mode == EngineMode.OFF) FlowOwner.UNKNOWN
+            else flowOwners.udpOwner(ip.src, udp.srcPort, ip.dst, udp.dstPort)
+            when (val admission = engine.udpFlowOpened(ip.dst, udp.dstPort, candidate, owner)) {
                 // §6.4/§6.10: attributed to an exhausted rule under ENFORCE. No socket is opened
                 // for it; the datagram is refused with an ICMP Port-Unreachable instead of a
                 // silent drop, so QUIC clients fall back to TCP within a second, not a timeout.
@@ -567,7 +574,9 @@ class DnsSinkholeVpnService : VpnService() {
             flows[key] = f
             // After the map insert: an exhausted-rule admission resets the flow, and that reset
             // must find (and remove) the flow it decided against.
-            f.tap = engine.tcpFlowOpened(ip.dst, tcp.dstPort, f)
+            val owner = if (engine.mode == EngineMode.OFF) FlowOwner.UNKNOWN
+            else flowOwners.tcpOwner(ip.src, tcp.srcPort, ip.dst, tcp.dstPort)
+            f.tap = engine.tcpFlowOpened(ip.dst, tcp.dstPort, f, owner)
             if (BuildConfig.DEBUG) Log.i(TAG, "tcp syn flow $key seq=${tcp.seq} payload=${tcp.payloadLength} win=${tcp.window} hex=${packet.take(64).joinToString("") { "%02x".format(it) }}")
             thread(name = "vpn-connect-$key") { connectUpstream(f) }
             return

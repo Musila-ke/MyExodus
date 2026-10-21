@@ -4,9 +4,12 @@ import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.data.db.entity.RestrictionRule
 import java.io.File
+import java.time.LocalDate
+import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -92,6 +95,23 @@ class RulesSnapshotTest {
 
         assertEquals(listOf("r-1"), snapshot.appRules.values.map { it.ruleId })
         assertEquals(listOf("r-2"), snapshot.urlRules.map { it.ruleId })
+    }
+
+    /** Shared by both accounting paths before a session may open. */
+    @Test
+    fun isLimitTracked_requiresARuleWithAPositiveLimit_onACoveredDay() {
+        val noLimit = rule.copy(ruleId = "r-none", blockedPackage = "com.example.none", dailyLimitMs = 0L)
+        val snapshot = RulesSnapshot.build(listOf(rule, noLimit), 1L, now)
+
+        assertTrue(snapshot.isLimitTracked("com.instagram.android"))
+        assertFalse("zero limit never accrues", snapshot.isLimitTracked("com.example.none"))
+        assertFalse("no rule at all", snapshot.isLimitTracked("com.example.unknown"))
+
+        // Rule timezone defaults to UTC ("1111111" is a superset, never exercised here).
+        val todayIndex = LocalDate.now(ZoneId.of("UTC")).dayOfWeek.value - 1
+        val everyDayButToday = String(CharArray(7) { if (it == todayIndex) '0' else '1' })
+        val offDay = RulesSnapshot.build(listOf(rule.copy(activeDaysOfWeek = everyDayButToday)), 2L, now)
+        assertFalse("a rule not active today must not open a session", offDay.isLimitTracked("com.instagram.android"))
     }
 
     @Test

@@ -8,6 +8,8 @@ import android.content.Intent
 import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.core.net.toUri
 import android.os.SystemClock
 import android.util.DisplayMetrics
@@ -38,7 +40,7 @@ import kotlinx.coroutines.runBlocking
  * drives the parts that need shell powers (key presses, touch injection) by reacting to
  * MARKER log lines, and asserts the tapjacking result from the victim's logcat lines.
  *
- * Host usage: am start -n <app>/.blocking.DeviceVerificationActivity --es suite <functional|latency|multiwindow|browser|fgs|fgs-down|sync|seed-ui|clear-ui|usage-seed|usage-clear|appblock-seed|appblock-clear|reenable> [--ez requireService false] [--ez preSplit true (multiwindow only: the suite seeds, logs MARKER_MULTIWINDOW_SEEDED, and waits for the host to form the split — host launches the victim fullscreen, then Recents → Split screen → pick a partner app; the suite observes, never launches)] [usage-seed: --es pkg <pkg> --ei limitMs <n> --ei usedMs <n> [--es days <7-char Mon-first, default 1111111 — rule day scope] [--ez quotaOnly true — no window at all: the pure daily-limit rule] [--es anchorDate <yyyy-MM-dd> --es tzAnchor <tzid> — §12 rollover/tz-change legs; defaults: today / device tz] [--es w1 <NOT_DUE|PENDING_DELIVERY|DELIVERED> --es w2 <same> — §12 mid-day-change-while-pending leg; default NOT_DUE] [--ez notifyEngine true — mirrors the editor's post-save onDailyLimitChanged call]; usage-clear: --es pkg <pkg> [--ez withRule true — also delete the seeded rule]]. Focus-free row reads (mid-measurement): `am broadcast -n <app>/.blocking.DeviceVerificationReceiver -a usage-read --es pkg <pkg>`.
+ * Host usage: am start -n <app>/.blocking.DeviceVerificationActivity --es suite <functional|latency|multiwindow|browser|fgs|fgs-down|sync|seed-ui|clear-ui|usage-seed|usage-clear|appblock-seed|appblock-clear|overlay-dismiss|reenable> [--ez requireService false] [--ez preSplit true (multiwindow only: the suite seeds, logs MARKER_MULTIWINDOW_SEEDED, and waits for the host to form the split — host launches the victim fullscreen, then Recents → Split screen → pick a partner app; the suite observes, never launches)] [usage-seed: --es pkg <pkg> --ei limitMs <n> --ei usedMs <n> [--es days <7-char Mon-first, default 1111111 — rule day scope] [--ez quotaOnly true — no window at all: the pure daily-limit rule] [--es anchorDate <yyyy-MM-dd> --es tzAnchor <tzid> — §12 rollover/tz-change legs; defaults: today / device tz] [--es w1 <NOT_DUE|PENDING_DELIVERY|DELIVERED> --es w2 <same> — §12 mid-day-change-while-pending leg; default NOT_DUE] [--ez notifyEngine true — mirrors the editor's post-save onDailyLimitChanged call]; usage-clear: --es pkg <pkg> [--ez withRule true — also delete the seeded rule]]. Focus-free row reads (mid-measurement): `am broadcast -n <app>/.blocking.DeviceVerificationReceiver -a usage-read --es pkg <pkg>`.
  *
  * `seed-ui`/`clear-ui` seed and remove four rules (one per live-state branch of the home
  * dashboard) for UI screenshot verification; they keep existing data — no DB reset.
@@ -96,6 +98,7 @@ class DeviceVerificationActivity : Activity() {
             "usage-clear" -> usageClearSuite()
             "appblock-seed" -> appBlockSeedSuite()
             "appblock-clear" -> appBlockClearSuite()
+            "overlay-dismiss" -> overlayDismissSuite()
             "reenable" -> reenableSuite()
             else -> error("unknown suite '$suite'")
         }
@@ -158,7 +161,9 @@ class DeviceVerificationActivity : Activity() {
      * of the §12 matrix don't need real-time waits. The limit is written through
      * [RulesRepository.updateRule]/[RulesRepository.insertRule] so policy-version bumping and
      * the live snapshot behave exactly as an editor save. Host:
-     * `--es suite usage-seed --es pkg <pkg> --ei limitMs <n> --ei usedMs <n>`.
+     * `--es suite usage-seed --es pkg <pkg> --ei limitMs <n> --ei usedMs <n>`
+     * `[--ei wStart <min> --ei wEnd <min> — schedule legs]`
+     * `[--ez alwaysOn true] [--el expiresInMs <signed n> — expiry legs]`.
      */
     private suspend fun usageSeedSuite() {
         val pkg = intent.getStringExtra(EXTRA_PKG) ?: error("--es $EXTRA_PKG required")
@@ -187,26 +192,43 @@ class DeviceVerificationActivity : Activity() {
         // 5h AHEAD of seed time rather than at a fixed clock hour: a fixed 22:00–07:00
         // window walled every night-time QA run ("outside its window" only held during
         // day runs — caught on-device 2026-09-15 verifying the connect-time re-acquire).
+        // Matrix legs override the window (wStart/wEnd, minute-of-day) for the schedule-
+        // inside/outside pair, and can seed always-on or an expiry (expiresInMs) for the
+        // decision-model legs; all still go through RulesRepository, so the snapshot bumps.
         val nowMin = LocalTime.now().toSecondOfDay() / 60
-        val windowStart = if (quotaOnly) null else ((nowMin + 300) % 1440).toLong()
-        val windowEnd = if (quotaOnly) null else ((nowMin + 360) % 1440).toLong()
+        val wStartExtra = intent.takeIf { it.hasExtra(EXTRA_W_START) }?.getIntExtra(EXTRA_W_START, 0)
+        val wEndExtra = intent.takeIf { it.hasExtra(EXTRA_W_END) }?.getIntExtra(EXTRA_W_END, 0)
+        val windowStart = when {
+            quotaOnly -> null
+            wStartExtra != null -> wStartExtra.toLong()
+            else -> ((nowMin + 300) % 1440).toLong()
+        }
+        val windowEnd = when {
+            quotaOnly -> null
+            wEndExtra != null -> wEndExtra.toLong()
+            else -> ((nowMin + 360) % 1440).toLong()
+        }
+        val alwaysOn = intent.getBooleanExtra(EXTRA_ALWAYS_ON, false)
+        val expiresInMs = intent.getLongExtra(EXTRA_EXPIRES_IN_MS, 0L)
+        val expiresAt = if (expiresInMs != 0L) System.currentTimeMillis() + expiresInMs else 0L
         if (existing != null) {
             repo.updateRule(
                 existing.copy(
-                    dailyLimitMs = limitMs, isEnabled = true,
+                    dailyLimitMs = limitMs, isEnabled = true, isAlwaysOn = alwaysOn,
                     timeRangeStart = windowStart, timeRangeEnd = windowEnd,
                     activeDaysOfWeek = days, timezone = TimeZone.getDefault().id,
+                    blockExpiresAt = expiresAt,
                 ),
             )
         } else {
             repo.insertRule(
                 RestrictionRule(
                     ruleId = "rule-${System.nanoTime()}", profileId = profile.userId,
-                    blockedPackage = pkg, targetType = "APP", isAlwaysOn = false,
+                    blockedPackage = pkg, targetType = "APP", isAlwaysOn = alwaysOn,
                     dailyLimitMs = limitMs, timeRangeStart = windowStart,
                     timeRangeEnd = windowEnd,
                     activeDaysOfWeek = days, timezone = TimeZone.getDefault().id,
-                    blockExpiresAt = 0L, severityLevel = "HIGH",
+                    blockExpiresAt = expiresAt, severityLevel = "HIGH",
                 ),
             )
         }
@@ -305,6 +327,34 @@ class DeviceVerificationActivity : Activity() {
             ?: error("pkg $pkg has no $APPBLOCK_SEED_PREFIX rule — refusing to delete anything else")
         entryPoint.rulesRepository().deleteRule(seeded)
         Log.i(TAG, "appblock cleared pkg=$pkg rule=${seeded.ruleId}")
+    }
+
+    // --- scene reset for the blocking-matrix sweep (2026-10-20) --------------------------
+
+    /**
+     * Taps the persistent wall's real Close action — daily wall (user ruling 2026-09-27) and
+     * app-block card (owner ruling 2026-10-03) stay standing until it. The service's own
+     * overlay never appears in `visibleWindows()` (that lists only other apps' windows), so
+     * this goes straight to the view listener — the same `performClick` a finger produces.
+     * No standing wall ⇒ logged no-op; a rejected click ⇒ check error (host sees a real
+     * failure instead of a silent "PASS"). Host: `--es suite overlay-dismiss`.
+     */
+    private fun overlayDismissSuite() {
+        val service = checkNotNull(BlockerAccessibilityService.instance) { "accessibility service not bound" }
+        val displayId = Display.DEFAULT_DISPLAY
+        // The wall's view lives on the service's main thread; this suite runs on a worker.
+        var clicked = false
+        val latch = java.util.concurrent.CountDownLatch(1)
+        Handler(Looper.getMainLooper()).post {
+            clicked = service.overlay.debugClickDismiss(displayId)
+            latch.countDown()
+        }
+        check(latch.await(3, java.util.concurrent.TimeUnit.SECONDS)) { "main thread never ran the click" }
+        if (!clicked) {
+            Log.i(TAG, "overlay-dismiss: no standing wall on display $displayId")
+            return
+        }
+        Log.i(TAG, "overlay-dismiss: clicked the wall's Close on display $displayId")
     }
 
     // --- explicit re-enable (§8.2) for host scripts --------------------------------------
@@ -747,6 +797,10 @@ class DeviceVerificationActivity : Activity() {
         const val EXTRA_TZ_ANCHOR = "tzAnchor"
         const val EXTRA_DAYS = "days"
         const val EXTRA_QUOTA_ONLY = "quotaOnly"
+        const val EXTRA_W_START = "wStart"
+        const val EXTRA_W_END = "wEnd"
+        const val EXTRA_ALWAYS_ON = "alwaysOn"
+        const val EXTRA_EXPIRES_IN_MS = "expiresInMs"
         const val EXTRA_W1 = "w1"
         const val EXTRA_W2 = "w2"
         const val EXTRA_NOTIFY_ENGINE = "notifyEngine"

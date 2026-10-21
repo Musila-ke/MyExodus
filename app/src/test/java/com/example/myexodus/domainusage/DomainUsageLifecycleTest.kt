@@ -430,6 +430,42 @@ class DomainUsageLifecycleTest {
         }
     }
 
+    @Test
+    fun aDayRolloverReReadsTheRulesFlow_soEnforcedTodayFollowsTheNewDay() = runTest {
+        val host = FakeDomainUsageHost()
+        val engine = engine()
+        val emissions = java.util.concurrent.atomic.AtomicInteger()
+        val dayActive = java.util.concurrent.atomic.AtomicBoolean(true)
+        val rules = kotlinx.coroutines.flow.flow {
+            emissions.incrementAndGet()
+            emit(listOf(rule.copy(enforcedToday = dayActive.get())))
+        }
+        withRealDispatchers { tick, db ->
+            engine.start(
+                rules = rules,
+                seedRevisions = {},
+                dao = { FakeRuleUsageDao() },
+                host = host,
+                tickDispatcher = tick,
+                dbDispatcher = db,
+            )
+            val counter = engine.ledger!!.counterFor("r1", 0L)!!
+            assertTrue("the startup rule tracks today", counter.enforcedToday)
+            val collectedBefore = emissions.get()
+            val oldDay = engine.ledger!!.dayKey
+
+            // Midnight passes and the rule's day scope flips: a cold flow re-collection is the
+            // only way this new value reaches the engine (nothing re-emits it).
+            dayActive.set(false)
+            wall.instant = wall.instant.plusSeconds(86_400L)
+            await("the ledger crossed midnight") { engine.ledger!!.dayKey != oldDay }
+            await("the rollover applies the new day's scope to the live counter") { !counter.enforcedToday }
+            assertTrue("the re-read is a fresh collection, not the cached emission",
+                emissions.get() > collectedBefore)
+            assertTrue(engine.stop())
+        }
+    }
+
     /** Real single-thread executors: `stop()`'s bounded `runBlocking` needs real threads. */
     private suspend fun withRealDispatchers(block: suspend (CoroutineDispatcher, CoroutineDispatcher) -> Unit) {
         val tickExec = Executors.newSingleThreadExecutor { Thread(it, "test-tick") }

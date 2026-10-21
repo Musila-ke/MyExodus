@@ -181,12 +181,17 @@ class DomainUsageEngine(
 
     /**
      * §6.3/§6.4: the per-flow admission. Port 443 gets the inspecting tap (when a buffer is free);
-     * everything else is DNS-fallback-attributed right here.
+     * everything else is DNS-fallback-attributed right here. ADR #189: only flows owned by a
+     * browser are admitted to metering — another app's traffic (the site's own app, background
+     * sync) and an unresolved owner pass through untouched, so a website rule neither counts nor
+     * resets them.
      */
-    fun tcpFlowOpened(dstIp: ByteArray, dstPort: Int, control: FlowControl): FlowTap {
+    fun tcpFlowOpened(dstIp: ByteArray, dstPort: Int, control: FlowControl, owner: FlowOwner): FlowTap {
         if (mode == EngineMode.OFF) return PassThroughTap
         return hook<FlowTap>(PassThroughTap) {
             counters.inc(Counter.flows_tcp_total)
+            countOwner(owner)
+            if (owner != FlowOwner.BROWSER) return@hook PassThroughTap
             if (dstPort != 443) return@hook attributeAtOpen(dstIp, control)
             counters.inc(Counter.tls443_flows)
             // §6.3 step 2: no buffer free ⇒ pass through immediately, attributed by DNS.
@@ -195,10 +200,12 @@ class DomainUsageEngine(
         }
     }
 
-    /** §6.4: the UDP 5-tuple's admission, decided once at open. */
-    fun udpFlowOpened(dstIp: ByteArray, dstPort: Int, control: FlowControl): UdpAdmission {
+    /** §6.4: the UDP 5-tuple's admission, decided once at open. Browser-gated like TCP. */
+    fun udpFlowOpened(dstIp: ByteArray, dstPort: Int, control: FlowControl, owner: FlowOwner): UdpAdmission {
         if (mode == EngineMode.OFF) return allowPassThrough
         return hook<UdpAdmission>(allowPassThrough) {
+            countOwner(owner)
+            if (owner != FlowOwner.BROWSER) return@hook allowPassThrough
             val rule = (resolver.byDns(dstIp, ruleIndex, wallClock.nowMillis()) as? AttributionResolver.Dns.Hit)?.rule
             val counter = rule?.let { counterFor(it) } ?: return@hook allowPassThrough
             if (mode == EngineMode.ENFORCE && counter.exhausted) {
@@ -212,6 +219,14 @@ class DomainUsageEngine(
     }
 
     private val allowPassThrough = UdpAdmission.Allow(PassThroughTap)
+
+    private fun countOwner(owner: FlowOwner) {
+        when (owner) {
+            FlowOwner.BROWSER -> counters.inc(Counter.flows_owner_browser)
+            FlowOwner.NON_BROWSER -> counters.inc(Counter.flows_owner_non_browser)
+            FlowOwner.UNKNOWN -> counters.inc(Counter.flows_owner_unknown)
+        }
+    }
 
     /** §4.6 for non-443 flows: DNS fallback at open; an exhausted rule is cut at attribution. */
     private fun attributeAtOpen(dstIp: ByteArray, control: FlowControl): FlowTap {
@@ -326,7 +341,16 @@ class DomainUsageEngine(
             UsageTickLoop(
                 ledger = ledger,
                 counters = counters,
-                onRollover = { rollover -> dbScope.launch { persistRollover(rollover) } },
+                onRollover = { rollover ->
+                    dbScope.launch { persistRollover(rollover) }
+                    // §6.5 step 5: re-read the rule snapshot on the new day so `enforcedToday`
+                    // is re-evaluated. The collector's last emission carries the day scope of
+                    // the day it was adapted on; without this re-read a rule that activates or
+                    // deactivates at midnight keeps the previous day's mask until the next
+                    // snapshot publish (apps get this for free — isLimitTracked evaluates
+                    // dayScopeCoversToday on every call).
+                    updateRules(rules.first())
+                },
                 onTick = {
                     for (warning in ledger.takeLimitWarnings()) {
                         host.postWebsiteLimitWarning(warning.level, warning.remainingMs, warning.pattern)

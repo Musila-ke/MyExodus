@@ -57,9 +57,10 @@ interface UsageLedgerDao {
     )
     suspend fun dayTotals(kinds: Collection<Int>): List<LedgerDayTotal>
 
-    /** The credit-edge audit's anchor query (ADR #160): the newest credit wall per package
-     *  among the interval-owning kinds, bounded by a wall cutoff so the audit can never
-     *  re-open a span older than the day it may credit. */
+    /** The credit-edge audit's anchor query (ADR #160, amended by ADR #191): the newest wall
+     *  per package among the credit-answering kinds (ACCOUNTING, RECONCILIATION,
+     *  MIGRATION_CARRYOVER), bounded by a wall cutoff so the audit can never re-open a span
+     *  older than the day it may credit. */
     @Query(
         "SELECT package_name AS package_name, MAX(wall_clock_ts_ms) AS credit_wall_ms " +
             "FROM usage_ledger WHERE package_name IN (:packageNames) AND kind IN (:kinds) " +

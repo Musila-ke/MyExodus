@@ -28,7 +28,7 @@ import android.view.accessibility.AccessibilityWindowInfo
  */
 class EmergencyExclusionManager(
     private val appContext: Context,
-    private val roleHolderQuery: (role: String) -> List<String> = { role -> reflectRoleHolders(appContext, role) },
+    private val roleHolderQuery: (role: String) -> List<String> = { role -> roleHolders(appContext, role) },
     private val dialerQuery: () -> Set<String> = {
         runCatching {
             val telecom = appContext.getSystemService(Context.TELECOM_SERVICE) as? TelecomManager
@@ -144,19 +144,5 @@ class EmergencyExclusionManager(
             "com.sh.smart.caller",           // XOS default dialer (observed 2026-08-27 via `cmd role`)
         )
 
-        /**
-         * `RoleManager.getRoleHolders` is absent from current platform stubs; invoke it
-         * reflectively so runtimes that still ship it (API 29+ era) stay covered.
-         */
-        private fun reflectRoleHolders(context: Context, role: String): List<String> = runCatching {
-            // ROLE_SERVICE is API 29; getSystemService(unknown service) returns null below it,
-            // which is exactly what the reflective fallback expects.
-            @Suppress("InlinedApi")
-            val roleManager = context.getSystemService(Context.ROLE_SERVICE)
-                ?: return@runCatching emptyList()
-            val method = roleManager.javaClass.getMethod("getRoleHolders", String::class.java)
-            @Suppress("UNCHECKED_CAST")
-            method.invoke(roleManager, role) as? List<String> ?: emptyList()
-        }.getOrDefault(emptyList())
     }
 }

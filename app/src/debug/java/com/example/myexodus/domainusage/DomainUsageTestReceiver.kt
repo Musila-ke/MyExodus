@@ -39,6 +39,7 @@ import kotlinx.coroutines.withContext
  * Commands (all `-n com.example.myexodus/.domainusage.DomainUsageTestReceiver`):
  *   -a du-mode        --es mode OFF|ACCOUNT|ENFORCE|clear
  *   -a du-addrule     --es pattern <p> --el limitSec <n> [--el expiresInSec <n>]
+ *                     [--ez alwaysOn <b>] [--ei wStart <min> --ei wEnd <min>]
  *   -a du-setlimit    --es id <ruleId> --el limitSec <n>
  *   -a du-editpattern --es id <ruleId> --es pattern <p>
  *   -a du-delrule     --es id <ruleId>
@@ -127,15 +128,24 @@ class DomainUsageTestReceiver : BroadcastReceiver() {
         val check = siteLimitTarget(pattern, psl, siteLimitPatternsOf(rules, psl, null))
         when (check) {
             is SiteLimitCheck.Ok -> {
+                // Matrix legs C-11/C-12: an always-on or scheduled website rule, seeded through
+                // the same repository path as the editor. Window minutes are minute-of-day; a
+                // missing pair keeps the historical no-window shape.
+                val wStart = intent.takeIf { it.hasExtra("wStart") }?.getIntExtra("wStart", 0)
+                val wEnd = intent.takeIf { it.hasExtra("wEnd") }?.getIntExtra("wEnd", 0)
                 val rule = baseRule(repo, check.host).copy(
                     dailyLimitMs = clampStoredLimitMs(limitSec * 1000L),
+                    isAlwaysOn = intent.getBooleanExtra("alwaysOn", false),
+                    timeRangeStart = wStart?.toLong(),
+                    timeRangeEnd = wEnd?.toLong(),
                     blockExpiresAt = if (expiresInSec > 0L) nowMillis + expiresInSec * 1000L else 0L,
                 )
                 repo.insertRule(rule)
                 Log.i(
                     TAG,
                     "DUPROBE addrule result=Ok id=${rule.ruleId} limitMs=${rule.dailyLimitMs} " +
-                        "expiresAt=${rule.blockExpiresAt}",
+                        "expiresAt=${rule.blockExpiresAt} alwaysOn=${rule.isAlwaysOn} " +
+                        "window=${rule.timeRangeStart}..${rule.timeRangeEnd}",
                 )
             }
             is SiteLimitCheck.HasPath -> Log.i(TAG, "DUPROBE addrule result=HasPath")

@@ -4,7 +4,7 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.util.Log
-import java.time.LocalDate
+import java.time.Instant
 import java.time.ZoneId
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorService
@@ -52,7 +52,10 @@ class PlatformUsageReader(private val context: Context) {
 
     private fun readForegroundMs(packageName: String, nowMillis: Long): Long? {
         val zone = ZoneId.systemDefault()
-        val midnight = LocalDate.now(zone).atStartOfDay(zone).toInstant().toEpochMilli()
+        // Midnight of the asked instant, not of "now": a caller passing an explicit clock (the
+        // debug day-audit harness, tests) must get the window it asked for.
+        val midnight = Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
+            .atStartOfDay(zone).toInstant().toEpochMilli()
         val marks = readMarksByPackage(midnight, nowMillis) ?: return null
         return UsageGapRepair.foregroundMsWithin(marks[packageName].orEmpty(), midnight, nowMillis)
     }

@@ -39,7 +39,7 @@ class InspectingTcpTapTest {
 
         fun counter(id: String = "r1", revision: Long = 0L) = ledger.counterFor(id, revision)!!
 
-        fun open(dstPort: Int = 443): FlowTap = engine.tcpFlowOpened(ip, dstPort, control)
+        fun open(dstPort: Int = 443): FlowTap = engine.tcpFlowOpened(ip, dstPort, control, FlowOwner.BROWSER)
     }
 
     private fun fixture(name: String): ByteArray =

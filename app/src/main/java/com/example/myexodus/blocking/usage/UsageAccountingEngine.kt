@@ -307,6 +307,9 @@ class UsageAccountingEngine(
                             bootCount = systemBootCount(appContext),
                             source = UsageLedgerSource.MAINTENANCE,
                             wallClockTsMs = nowWallClockMs,
+                            eventIdOverride = UsageLedgerMapper.carryoverEventIdFor(
+                                packageName, nowWallClockMs, merged,
+                            ),
                         ),
                     )
                 ) {
@@ -453,19 +456,20 @@ class UsageAccountingEngine(
         credited
     }
 
-    /**
-     * ADR #160's credit-edge anchor: per package, the wall of the newest interval-owning
-     * credit (ACCOUNTING/RECONCILIATION — the same kinds §8.9's overlap check reads, because
-     * only those own an interval whose end the anchor may claim). A package absent from the
-     * map has no credit inside the range — its uncredited span starts at the range's floor.
-     */
+    /** The wall through which some path has answered for each package's usage (ADR #160,
+     *  amended by ADR #191): ACCOUNTING/RECONCILIATION edges plus MIGRATION_CARRYOVER — a
+     *  carryover owns no interval, but its absolute platform total covers everything up to its
+     *  wall, so it must anchor the audit too (device-caught 2026-10-20: excluding it let the
+     *  gap repair re-credit 164,998 ms the carryovers had already counted). A package absent
+     *  from the map has no credit inside the range — its uncredited span starts at the range's
+     *  floor. */
     suspend fun lastCreditWallPerPackage(
         packageNames: Collection<String>,
         sinceWallClockMs: Long,
     ): Map<String, Long> = withContext(dispatcher) {
         val db = storeFactory.open() ?: return@withContext emptyMap()
         db.usageLedgerDao()
-            .creditEdges(packageNames, OVERLAP_KINDS, sinceWallClockMs)
+            .creditEdges(packageNames, CREDIT_EDGE_KINDS, sinceWallClockMs)
             .associate { it.packageName to it.creditWallMs }
     }
 
@@ -622,6 +626,12 @@ class UsageAccountingEngine(
         /** §8.9's overlap rule covers the two kinds that own an accounting interval — the only
          *  rows a reconciliation credit can duplicate. */
         private val OVERLAP_KINDS = listOf(UsageLedgerKind.ACCOUNTING, UsageLedgerKind.RECONCILIATION)
+
+        /** ADR #160's credit edge plus carryovers: a carryover owns no interval, but its
+         *  absolute platform total answers for everything through its wall, so a later gap
+         *  repair must not re-open the span it already covered (device-caught 2026-10-20:
+         *  164,998 ms of paused-window usage double-credited after two re-enables). */
+        private val CREDIT_EDGE_KINDS = OVERLAP_KINDS + UsageLedgerKind.MIGRATION_CARRYOVER
 
         /**
          * FR3 thresholds (Step 3): limits ≥ 10 min warn at 10 and 5 minutes of remaining

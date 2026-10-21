@@ -195,6 +195,12 @@ internal class BlockOverlayView(
         discIcon.layoutParams = FrameLayout.LayoutParams(iconSize, iconSize, Gravity.CENTER)
     }
 
+    /** Debug seam: the same Close listener a finger fires. False when no dismissible wall is
+     *  bound — this host's own overlay is invisible to `visibleWindows()`, so the device suite
+     *  cannot reach it through the accessibility tree (2026-10-20: dismiss "passed" no-op). */
+    internal fun debugClickDismiss(): Boolean =
+        wallDismissButton.visibility == android.view.View.VISIBLE && wallDismissButton.performClick()
+
     /** The wall's visual anchor: the blocked target's real icon on a soft-teal disc. */
     private val discIcon = ImageView(context).apply {
         scaleType = ImageView.ScaleType.FIT_CENTER

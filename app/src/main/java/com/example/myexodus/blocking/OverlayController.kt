@@ -240,6 +240,15 @@ class OverlayController(
         }
     }
 
+    /** Debug seam for the device suite: taps the live wall's real Close listener. False when
+     *  no dismissible wall is shown, so "no wall" can never read as a successful dismissal. */
+    internal fun debugClickDismiss(displayId: Int): Boolean {
+        val content = contents[displayId]
+        if (shown[displayId] != true) return false
+        if (content !is OverlayContent.DailyLimitBlocked && content !is OverlayContent.AppBlocked) return false
+        return views[displayId]?.debugClickDismiss() == true
+    }
+
     /** Called from the service's onDestroy; overlay windows are system-owned once the
      *  accessibility service unbinds, this just releases our references promptly. */
     fun detachAll() {

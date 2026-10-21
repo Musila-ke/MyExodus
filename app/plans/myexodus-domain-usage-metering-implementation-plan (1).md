@@ -23,7 +23,7 @@ The Baseline already sits in the packet path of all IPv4 device traffic. This fe
 
 **Enforcement contract:** Best-effort friction, not tamper-proof. The feature does not defeat a user who deliberately uses another VPN, stops the VPN, uses an app with its own encrypted DNS, or moves the device clock forward. Those states are detected where detection is defined in this spec and shown in the UI. They are never presented as enforced. **Encrypted Client Hello (ECH) is an accepted attribution limitation, not something this architecture can claim to defeat** (§4.6, §16 item R-ECH).
 
-**Not built (final):** TLS interception/MITM, URL/path rules, full QUIC parsing, IPv6 relay, per-app attribution, domain groups/CDN sibling coverage, off-device sync of usage, remote telemetry, a user-facing on/off toggle.
+**Not built (final):** TLS interception/MITM, URL/path rules, full QUIC parsing, IPv6 relay, per-app attribution, domain groups/CDN sibling coverage, off-device sync of usage, remote telemetry, a user-facing on/off toggle. *(Revision 2026-10-19, ADR #189: a UID→browser boolean gate now runs at flow open — `getConnectionOwnerUid` + default-browser/known-browser classification — and non-browser flows are not metered. This is not a per-app usage breakdown; per-app attribution in the sense of this line remains not built.)*
 
 ---
 

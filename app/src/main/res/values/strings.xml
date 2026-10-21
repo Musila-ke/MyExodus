@@ -266,7 +266,7 @@
     <string name="editor_site_limit_never_block">This site is needed for internet connectivity or help resources and can’t be limited.</string>
     <string name="editor_site_limit_resolver">This is a DNS service and can’t be limited.</string>
     <string name="editor_site_limit_duplicate">This site already has a limit set.</string>
-    <string name="editor_limit_scope_notice">Limits apply to this site and its subdomains, across every app on this device — including the site’s own app. Other domains used by the same service aren’t counted.</string>
+    <string name="editor_limit_scope_notice">Limits count this site and its subdomains in browsers. Other apps — including the site’s own app — aren’t counted. Other domains used by the same service aren’t counted.</string>
     <string name="editor_limit_connection_notice">Usage is measured per connection your device makes to this site, not per page or request — a site that reuses one connection for several pages may show usage differently than expected.</string>
     <string name="editor_active_days">Active on</string>
     <string name="editor_from">From</string>

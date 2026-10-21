@@ -361,6 +361,23 @@ class UsageAccountingEngineTest {
     }
 
     @Test
+    fun reconcile_repeatedTopUps_sameBoot_eachDeltaLands() = runTest {
+        // Owner-caught 2026-10-20: usage spent while a rule is paused is invisible to the live
+        // paths, so every re-enable must carry the platform delta. Each top-up after the first
+        // used to re-derive the first one's zero-interval id, collide, and silently credit 0 —
+        // a repeated toggle permanently lost the paused time until the next boot.
+        engine.reconcileWithPlatform(PKG, 45 * MIN)
+        engine.reconcileWithPlatform(PKG, 62 * MIN)
+        engine.reconcileWithPlatform(PKG, 71 * MIN)
+
+        assertEquals(71 * MIN, trackerRow()!!.msUsedToday)
+        val carryovers = db.usageLedgerDao().rowsOfKindSince(UsageLedgerKind.MIGRATION_CARRYOVER, 0L)
+        assertEquals(listOf(9 * MIN, 17 * MIN, 45 * MIN), carryovers.map { it.creditedMs }.sorted())
+        // Projection stays equal to the journal (§8.3): a rebuild rewrites nothing.
+        assertEquals(0, ledger.rebuildProjection())
+    }
+
+    @Test
     fun reconcile_nullOrZeroPlatform_noOpNoRowCreated() = runTest {
         engine.reconcileWithPlatform(PKG, null)
         engine.reconcileWithPlatform(PKG, 0L)
@@ -541,14 +558,15 @@ class UsageAccountingEngineTest {
     // --- lastCreditWallPerPackage (ADR #160's credit edge) ---------------------------------
 
     @Test
-    fun lastCreditWallPerPackage_picksTheNewestIntervalOwningCredit() = runTest {
+    fun lastCreditWallPerPackage_carryoverAnchorsTheEdgeToo() = runTest {
         creditRow(UsageLedgerKind.ACCOUNTING, wallNowMs - 10 * MIN)
         creditRow(UsageLedgerKind.RECONCILIATION, wallNowMs - 5 * MIN)
-        // Not interval-owning: a later carryover covers no span, so it cannot anchor the audit.
+        // ADR #191: a carryover owns no interval, but its absolute platform total answers for
+        // everything through its wall — it is the newest credit and must anchor the audit.
         creditRow(UsageLedgerKind.MIGRATION_CARRYOVER, wallNowMs - MIN)
 
         assertEquals(
-            mapOf(PKG to (wallNowMs - 5 * MIN)),
+            mapOf(PKG to (wallNowMs - MIN)),
             engine.lastCreditWallPerPackage(listOf(PKG), sinceWallClockMs = 0L),
         )
     }
@@ -562,6 +580,33 @@ class UsageAccountingEngineTest {
         creditRow(UsageLedgerKind.RULE_EVALUATION, wallNowMs - MIN)
 
         assertTrue(engine.lastCreditWallPerPackage(listOf(PKG), sinceWallClockMs = 0L).isEmpty())
+    }
+
+    @Test
+    fun carryoverAdvancesTheCreditEdge_soTheRepairCannotRecreditThePausedWindow() = runTest {
+        // Device catch 2026-10-20 (ADR #191): pause, use the app, re-enable — the carryover
+        // credits the paused total, then the FGS audit anchored at the pre-pause ACCOUNTING
+        // edge and re-credited 164,998 ms of the same paused windows (tracker ended 164,998 ms
+        // ahead of Digital Wellbeing). With the carryover as the anchor, the repair window
+        // begins after it and the paused marks fall outside.
+        val pausedFrom = wallNowMs - 30 * MIN
+        creditRow(UsageLedgerKind.ACCOUNTING, pausedFrom)
+        val marks = listOf(
+            UsageMark(pausedFrom + 5 * MIN, true),
+            UsageMark(pausedFrom + 10 * MIN, false),
+        )
+        engine.reconcileWithPlatform(PKG, 45 * MIN)
+
+        val edge = engine.lastCreditWallPerPackage(listOf(PKG), sinceWallClockMs = 0L)[PKG]!!
+        assertEquals(wallNowMs, edge)
+        val window = UsageGapRepair.uncreditedWindow(
+            lastCreditWallMs = edge,
+            localMidnightEpochMillis = 0L,
+            bootOriginWallMs = 0L,
+            resumeWallMs = wallNowMs + MIN,
+            stopWallMs = pausedFrom,
+        )!!
+        assertEquals(0L, UsageGapRepair.foregroundMsWithin(marks, window.first, window.last + 1))
     }
 
     @Test

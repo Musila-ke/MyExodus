@@ -48,9 +48,9 @@ class DomainUsageEngineHooksTest {
         h.use("example.com")
         val query = DnsFixtures.query("example.com", DnsMessage.TYPE_A)
 
-        assertSame(PassThroughTap, h.engine.tcpFlowOpened(h.ip, 443, h.control))
-        assertSame(PassThroughTap, h.engine.tcpFlowOpened(h.ip, 80, h.control))
-        val admission = h.engine.udpFlowOpened(h.ip, 53, h.control) as UdpAdmission.Allow
+        assertSame(PassThroughTap, h.engine.tcpFlowOpened(h.ip, 443, h.control, FlowOwner.BROWSER))
+        assertSame(PassThroughTap, h.engine.tcpFlowOpened(h.ip, 80, h.control, FlowOwner.BROWSER))
+        val admission = h.engine.udpFlowOpened(h.ip, 53, h.control, FlowOwner.BROWSER) as UdpAdmission.Allow
         assertSame(PassThroughTap, admission.tap)
         assertSame(DnsQueryResult.Forward, h.engine.onDnsQuery(query, query.size))
 
@@ -65,7 +65,7 @@ class DomainUsageEngineHooksTest {
         h.use("limited.example")
         h.engine.observations.record(h.ip, "limited.example", 300)
 
-        val tap = h.engine.tcpFlowOpened(h.ip, 80, h.control)
+        val tap = h.engine.tcpFlowOpened(h.ip, 80, h.control, FlowOwner.BROWSER)
         assertEquals(ClientDataResult.PassThrough, tap.onClientData(ByteArray(1_000), 0, 1_000))
         h.mono.now = 1_000
         h.ledger.tick()
@@ -80,7 +80,7 @@ class DomainUsageEngineHooksTest {
         val h = Harness()
         h.use("limited.example")
 
-        val tap = h.engine.tcpFlowOpened(h.ip, 80, h.control)
+        val tap = h.engine.tcpFlowOpened(h.ip, 80, h.control, FlowOwner.BROWSER)
         assertEquals(ClientDataResult.PassThrough, tap.onClientData(ByteArray(1_000), 0, 1_000))
         h.mono.now = 1_000
         h.ledger.tick()
@@ -96,7 +96,7 @@ class DomainUsageEngineHooksTest {
         h.engine.observations.record(h.ip, "limited.example", 300)
         h.counter().exhausted = true
 
-        h.engine.tcpFlowOpened(h.ip, 80, h.control)
+        h.engine.tcpFlowOpened(h.ip, 80, h.control, FlowOwner.BROWSER)
 
         assertEquals(1, h.control.resets)
         assertEquals(1L, h.counters.get(Counter.flow_resets_new))
@@ -111,7 +111,7 @@ class DomainUsageEngineHooksTest {
         h.engine.observations.record(h.ip, "limited.example", 300)
         h.counter().exhausted = true
 
-        assertSame(UdpAdmission.Drop, h.engine.udpFlowOpened(h.ip, 443, h.control))
+        assertSame(UdpAdmission.Drop, h.engine.udpFlowOpened(h.ip, 443, h.control, FlowOwner.BROWSER))
         assertEquals(1L, h.counters.get(Counter.udp_dropped))
         assertEquals("the drop is protocol-level, not a socket teardown", 0, h.control.resets)
         assertTrue(h.engine.registry.isEmpty(h.counter().key))
@@ -123,7 +123,7 @@ class DomainUsageEngineHooksTest {
         h.use("limited.example")
         h.engine.observations.record(h.ip, "limited.example", 300)
 
-        val admission = h.engine.udpFlowOpened(h.ip, 443, h.control) as UdpAdmission.Allow
+        val admission = h.engine.udpFlowOpened(h.ip, 443, h.control, FlowOwner.BROWSER) as UdpAdmission.Allow
         assertEquals(ClientDataResult.PassThrough, admission.tap.onClientData(ByteArray(600), 0, 600))
         h.mono.now = 1_000
         h.ledger.tick()
@@ -138,9 +138,10 @@ class DomainUsageEngineHooksTest {
         val h = Harness()
         h.use("limited.example")
 
-        val admission = h.engine.udpFlowOpened(h.ip, 443, h.control) as UdpAdmission.Allow
+        val admission = h.engine.udpFlowOpened(h.ip, 443, h.control, FlowOwner.BROWSER) as UdpAdmission.Allow
         assertSame(PassThroughTap, admission.tap)
-        assertEquals(0L, h.counters.snapshot().values.sum())
+        assertEquals(0L, h.counters.get(Counter.flows_attributed_total))
+        assertEquals(1L, h.counters.get(Counter.flows_owner_browser))
     }
 
     @Test
@@ -150,9 +151,63 @@ class DomainUsageEngineHooksTest {
         h.engine.observations.record(h.ip, "limited.example", 300)
         h.counter().exhausted = true
 
-        val admission = h.engine.udpFlowOpened(h.ip, 443, h.control) as UdpAdmission.Allow
+        val admission = h.engine.udpFlowOpened(h.ip, 443, h.control, FlowOwner.BROWSER) as UdpAdmission.Allow
         assertEquals(ClientDataResult.PassThrough, admission.tap.onClientData(ByteArray(600), 0, 600))
         assertEquals(0L, h.counters.get(Counter.udp_dropped))
+    }
+
+    // --- ADR #189: website rules meter browser traffic only ---
+
+    @Test
+    fun aNonBrowserFlowIsPassedThroughWithoutMeteringOrAttribution() {
+        val h = Harness()
+        h.use("limited.example")
+        h.engine.observations.record(h.ip, "limited.example", 300)
+
+        assertSame(PassThroughTap, h.engine.tcpFlowOpened(h.ip, 443, h.control, FlowOwner.NON_BROWSER))
+        assertSame(PassThroughTap, h.engine.tcpFlowOpened(h.ip, 80, h.control, FlowOwner.NON_BROWSER))
+        val admission = h.engine.udpFlowOpened(h.ip, 443, h.control, FlowOwner.NON_BROWSER) as UdpAdmission.Allow
+        assertSame(PassThroughTap, admission.tap)
+        h.mono.now = 1_000
+        h.ledger.tick()
+
+        assertEquals("the site's own app must not move the website counter", 0L, h.counter().totalMs)
+        assertEquals(0L, h.counters.get(Counter.flows_attributed_total))
+        assertEquals(3L, h.counters.get(Counter.flows_owner_non_browser))
+        assertTrue(h.engine.registry.isEmpty(h.counter().key))
+    }
+
+    @Test
+    fun anUnknownOwnerIsNeverMeteredAndNeverReset() {
+        val h = Harness()
+        h.use("limited.example")
+        h.engine.observations.record(h.ip, "limited.example", 300)
+        h.counter().exhausted = true
+
+        assertSame(PassThroughTap, h.engine.tcpFlowOpened(h.ip, 80, h.control, FlowOwner.UNKNOWN))
+        val admission = h.engine.udpFlowOpened(h.ip, 443, h.control, FlowOwner.UNKNOWN) as UdpAdmission.Allow
+        assertSame(PassThroughTap, admission.tap)
+        h.mono.now = 1_000
+        h.ledger.tick()
+
+        assertEquals("an unresolved owner is never cut by a website quota", 0, h.control.resets)
+        assertEquals(0L, h.counters.get(Counter.flow_resets_new))
+        assertEquals(0L, h.counters.get(Counter.udp_dropped))
+        assertEquals(0L, h.counter().totalMs)
+        assertEquals(2L, h.counters.get(Counter.flows_owner_unknown))
+    }
+
+    @Test
+    fun anExhaustedRuleStillCutsABrowserFlow() {
+        val h = Harness()
+        h.use("limited.example")
+        h.engine.observations.record(h.ip, "limited.example", 300)
+        h.counter().exhausted = true
+
+        h.engine.tcpFlowOpened(h.ip, 80, h.control, FlowOwner.BROWSER)
+
+        assertEquals(1, h.control.resets)
+        assertEquals(1L, h.counters.get(Counter.flow_resets_new))
     }
 
     // --- DNS seams (§6.1/§6.2) ---
@@ -213,8 +268,8 @@ class DomainUsageEngineHooksTest {
             DnsQueryResult.Forward,
             h.engine.onDnsQuery(aaaa, aaaa.size),
         )
-        assertSame(PassThroughTap, h.engine.tcpFlowOpened(h.ip, 80, h.control))
-        val admission = h.engine.udpFlowOpened(h.ip, 443, h.control) as UdpAdmission.Allow
+        assertSame(PassThroughTap, h.engine.tcpFlowOpened(h.ip, 80, h.control, FlowOwner.BROWSER))
+        val admission = h.engine.udpFlowOpened(h.ip, 443, h.control, FlowOwner.BROWSER) as UdpAdmission.Allow
         assertSame(PassThroughTap, admission.tap)
         assertEquals("an exhausted rule cannot cut a flow against totals that never loaded", 0, h.control.resets)
         assertEquals(0L, h.counters.get(Counter.dns_nxdomain_served))
@@ -227,8 +282,8 @@ class DomainUsageEngineHooksTest {
         val h = Harness()
         val query = DnsFixtures.query("limited.example", DnsMessage.TYPE_A)
 
-        h.engine.tcpFlowOpened(h.ip, 80, h.control)
-        val admission = h.engine.udpFlowOpened(h.ip, 443, h.control) as UdpAdmission.Allow
+        h.engine.tcpFlowOpened(h.ip, 80, h.control, FlowOwner.BROWSER)
+        val admission = h.engine.udpFlowOpened(h.ip, 443, h.control, FlowOwner.BROWSER) as UdpAdmission.Allow
         h.engine.onDnsQuery(query, query.size)
 
         assertSame("no rule ⇒ nothing is ever held, dropped or shaped (FR-12)", PassThroughTap, admission.tap)

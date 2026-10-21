@@ -18,6 +18,7 @@ import android.util.Log
 import android.view.Display
 import androidx.core.content.ContextCompat
 import com.example.myexodus.BuildConfig
+import com.example.myexodus.registerSystemReceiver
 import com.example.myexodus.blocking.usage.EnforcementAction
 import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.blocking.usage.GapRecoveryRequest
@@ -788,7 +789,7 @@ class EnforcementForegroundService : Service() {
         // the machine closes any open session without reopening.
         val observed = usageSessions.observeForeground(
             latest,
-            tracked = !scheduleBlocked && latest != wall && isLimitTracked(latest),
+            tracked = !scheduleBlocked && latest != wall && publisher.snapshot.isLimitTracked(latest),
             displayId = Display.DEFAULT_DISPLAY,
             nowElapsedMs = SystemClock.elapsedRealtime(),
             bootCount = systemBootCount(this),
@@ -842,7 +843,7 @@ class EnforcementForegroundService : Service() {
         // Same mid-session re-check as Path A: an edit that removes the limit (or pauses the
         // rule) between session-open and tick must stop crediting — the engine treats a limit
         // of 0 as "already at limit" and would wall a rule that no longer has one.
-        if (!isLimitTracked(tick.packageName)) return
+        if (!publisher.snapshot.isLimitTracked(tick.packageName)) return
         scope.launch {
             runCatching {
                 // Refine the cadence before the write: the budget read is advisory, and a
@@ -910,15 +911,6 @@ class EnforcementForegroundService : Service() {
         }
     }
 
-    /** A tracked package = an enabled rule with a real limit, on a day the rule covers —
-     *  mirrors BlockDecisionEngine Rule 2's `dailyLimitMs > 0` gate plus the rule's day scope
-     *  (a rule not active today never accrues, so it must not open a session). Read off the
-     *  cached snapshot: no DB I/O on the poll path. */
-    private fun isLimitTracked(packageName: String): Boolean {
-        val rule = publisher.snapshot.appRules[packageName] ?: return false
-        return rule.dailyLimitMs > 0L && dayScopeCoversToday(rule.activeDaysOfWeek, rule.timezone)
-    }
-
     /** Deterministic hide on screen-off, mirroring Path A's: the keyguard foreground change
      *  can lag seconds, and a wall left on the lock screen would greet the user on unlock.
      *  The session closes with its final tick — no phantom accrual while dark. */
@@ -934,14 +926,7 @@ class EnforcementForegroundService : Service() {
             }
         }
         val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            // RECEIVER_EXPORTED is a 33+ constant; its value (2) is ignored by the 26-32
-            // registerReceiver (flags were reserved until 33) but keeps every path flagged.
-            @Suppress("InlinedApi")
-            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
-        }
+        registerSystemReceiver(receiver, filter)
         screenOffReceiver = receiver
     }
 
