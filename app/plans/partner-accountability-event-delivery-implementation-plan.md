@@ -847,3 +847,32 @@ The mailbox **create** rule required the sender to be a member of an `active` pa
 - The relay still accepts a `terminated` pairing for the members-bound unpair deletion-request race (ADR #107 design); this is intentional and tested.
 - Ciphertext already stored before a revocation remains until the recipient acks or the 30-day cap removes it; the recipient's key is destroyed by the shred, so it is unreadable. Step 10 owns the full revocation/exit surface.
 - No consent matrix is consulted for the new event kinds yet — Step 3 defines the event contract and Step 4/6 wire the per-kind gate.
+
+## Appendix S3 — Step 3 event contract + minimizer (executed 2026-10-21)
+
+**Delivered:** `accountability/serialization/AccountabilityEventWire.kt` — the closed, versioned body for the new event-delivery feature, plus the Step 4 delivery-state enum. 13 JVM tests, 0 failures.
+
+### Contract
+
+- `schema_version` = 1 (exact; any other version is declined).
+- `event_id` — canonical lowercase UUID, random per event, stable/idempotent across retries.
+- `relationship_seq` — positive, monotonic per sender-install/relationship stream.
+- `event_kind` — `ACCOUNTABILITY_EVENT`, `MONITORING_STATUS`, `GAP_MARKER`.
+- `event_category` — closed allowlist: `BLOCKED_APP_ATTEMPT`, `BLOCKED_DOMAIN_ATTEMPT`, `MONITORING_PERMISSION_CHANGED`, `MONITORING_COMPONENT_UNAVAILABLE`, `DEVICE_STATUS_CHANGED`, `GAP_MARKER`. Kind and category must agree.
+- `occurred_at_minute` — epoch minute, floored (never rounded up). Untrusted client metadata, never a DMS basis.
+- Monitoring snapshots additionally carry `monitoring_state` (`ACTIVE`/`DEGRADED`/`UNAVAILABLE`/`UNKNOWN`), `outbox_age_bucket` (`UNDER_1H`, `ONE_TO_SIX_HOURS`, `SIX_TO_TWENTY_FOUR_HOURS`, `OVER_TWENTY_FOUR_HOURS`, `UNKNOWN`), and `latest_relationship_seq` (≥ the event's own sequence).
+- Gap markers carry `missing_seq_start` / `missing_seq_end`.
+- No other field is legal; the decoder declines unknown keys, wrong types, unknown enum values, missing/forbidden fields, out-of-range numbers, malformed CBOR, and bodies over **512 bytes**.
+- Recipient relationship and delivery state are deliberately **not in the body** (§8.1); Step 4 persists them as outbox metadata, and the seven §8.4 states are defined in `EventDeliveryState` for that mapping.
+
+### Reconciliation recorded (plan §2 FR2 vs §8.1)
+
+§2 FR2 requires the five normalized categories above; §8.1's `event_category` examples name content categories (`ADULT_CONTENT`, `SOCIAL_MEDIA`, …). Carrying both would mean either a second, unlisted taxonomy field or dropping a required FR2 value. Decision: **`event_category` is FR2's five normalized categories + `GAP_MARKER`**; the §8.1 examples are read as illustrative ("such as"), and content categories are deferred to a future schema version, to be added only when the consent matrix actually gains a content scope. This keeps consent per event category (blocks vs monitoring vs device status), which is the scope this feature ships.
+
+### Minimizer evidence
+
+The model has exactly one `String` field (`event_id`, UUID-format-checked) — asserted by reflection in the test. Raw URLs, hostnames, package names, app labels, notification text, arbitrary JSON, and location have no field to occupy; unknown-key rejection is tested for each of those names. Builders accept no free-text parameters other than the event id.
+
+### Tests (`AccountabilityEventContractTest`, 13)
+
+Every category round-trips; floored minutes; deterministic, ≤512-byte encoding; 12 prohibited field names rejected; non-UUID event ids rejected in both the builder and decoder; unknown version/kind/category/enum declined; wrong types declined; kind/category mismatch declined; required/forbidden field sets per kind; out-of-range sequences and gap ranges declined; malformed bytes never throw; delivery states match §8.4 exactly.
