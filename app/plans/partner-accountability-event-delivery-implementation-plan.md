@@ -1265,3 +1265,54 @@ Commands (run 2026-10-21): `npm test` → 104/104 pass; `npm run test:rules` →
 - Stored ciphertext for a revoked relationship is not deleted at revocation; the recipient key shred makes it unreadable and AD-18b's 30-day cap removes it. This is the recorded limit (ADR #205 and §8.4).
 - The UI card's `AWAITING_REVOCATION` state is JVM-pinned (phase logic + string mapping) and its earlier states were device-proven in ADR #127; the Step 10 card itself was not re-photographed on-device because the phone was locked.
 - Full JVM: **220 classes / 1,985 tests / 0 failures / 0 errors / 0 skipped**.
+
+## Appendix S11 — Step 11 cross-OEM compatibility + release checks (executed 2026-10-22)
+
+Governing report: `app/docs/partner-accountability-compatibility-report-2026-10-22.md` (device facts, per-leg evidence, reproduction commands, vendor labels, security/policy checks). ADR #206 records the decisions. No manufacturer-specific code was added — no reproducible incompatibility was demonstrated, so the plan's precondition was not met.
+
+### Required work → implementation → evidence
+
+| Step 11 requirement | Implementation | Evidence |
+|---|---|---|
+| Run the §12 matrix on physical devices | Full single-device-verifiable matrix on the Infinix X6532 (XOS/Android 14/API 34, build `X6532-V632AABCDEFGHIJKLMNO-UGo-OP-260710V3278`, patch 2026-08-01, GMS 26.39.33, Wi-Fi + LTE, full-tunnel `tun0`, owner uid 10414) plus the sanctioned API-37 AVD for the visual/no-GMS legs; every leg restored its device state | Report leg table, 18 executed rows + 4 blocked |
+| Record manufacturer, model, OS/build, GMS/HMS, permissions, network, reproduction steps | Device fact tables + inline commands (`cmd jobscheduler run -f -n androidx.work.systemjobscheduler …`, `dumpsys deviceidle force-idle|unforce`, `cmd power set-mode 1|0` + `dumpsys battery unplug|reset`, `pm revoke|grant … POST_NOTIFICATIONS`) | Report “Devices” and “Reproduction commands” |
+| Label each vendor/OS family honestly | Transsion/XOS `PARTIALLY TESTED` (one model, one OS version); GMS-free `PARTIALLY TESTED (emulator only)`; Pixel, Samsung, Xiaomi/Redmi/POCO, OPPO/realme, OnePlus, Vivo/iQOO, Motorola `UNVERIFIED`; API 26 and a physical API 36 device `UNVERIFIED` | Report vendor matrix table |
+| Do not add manufacturer-specific code without a reproducible incompatibility | No OEM branch, keyed table or workaround added; the two observed deviations (App Standby clamp, Doze-without-exemption freeze) are documented platform semantics, not defects | ADR #206 decisions 2–5; report legs |
+| Doze | With exemption: deep IDLE, process/FGS alive, server beats 36 (22:10:20Z) and 37 (22:15:49Z) accepted, `next_deadline_at` +6 h. Without exemption: killed process not restarted inside idle (30 s window), recovery after `unforce` + allowlist → pid 9262, FGS foreground, full sync pass. No self-restart is claimed; DMS deadlines are the backstop | Report Doze rows |
+| App Standby (API 28+) | Baseline `EXEMPTED`; with allowlist removed, `am set-standby-bucket rare|restricted` read back 10 (ACTIVE) while running and force-stopped, no `STANDBY_BUCKET_CHANGED`; AOSP semantics (FGS ⇒ ACTIVE; debug override clamped). Behavioral RARE/RESTRICTED rendering is JVM-pinned, stated as a limit | Report App Standby row; JVM `PartnerHeartbeatClient` standby tests |
+| Battery saver | `dumpsys battery unplug` + `cmd power set-mode 1` → `mSettingBatterySaverEnabled=true`; FGS stayed foreground; restored to mode 0 + `dumpsys battery reset` | Report Battery saver row |
+| Network loss | Not re-run on the X6532 in Step 11 (Wi-Fi is the only adb channel): Step 7's device-proven offline leg (ADR #200: counter preserved, next online beat accepted) stands; the Doze-without-exemption leg exercises the frozen-process/no-network path | Report Network loss row; ADR #200 |
+| Device reboot / reboot-before-first-unlock | BLOCKED — no USB on the machine; wireless adb does not survive reboot and the device owner was unavailable to re-enable it. Not claimed | Report blocked rows |
+| App update | In-place `install -r` over a running process twice (pid 32261 → 3770 → 17836); `MY_PACKAGE_REPLACED` both times; FGS `isForeground=true`; DB `user_version` 14 before/after; no FATAL | Report App update row |
+| Permission revocation | `pm revoke android.permission.POST_NOTIFICATIONS` → `granted=false`, AppOps `ignore`; process restarted cleanly (5083 → 5810), no FATAL; `pm grant` restored. AVD additionally captured the user-facing “Notifications are off” banner + Allow action | Report Permission revocation / Notifications-disabled rows |
+| Process death / explicit force-stop | SIGKILL of the app process → pid 3770 → 4276 within 12 s (START_STICKY + ensure-FGS on process start, ADR #152), FGS foreground, DB v14. `am force-stop` → intended stopped state (no pid, 0 services); relaunch → pid 5013, FGS foreground. No self-restart claim after force-stop | Report rows |
+| User profile changes | BLOCKED — one profile on the device; creating/switching requires owner interaction | Report blocked row |
+| VPN conflict | `tun0` active (owner uid 10414) while beats 36/37 were accepted and a sync pass ran; no tunnel-attributable failures | Report VPN row |
+| No GMS | AVD: `pm disable-user com.google.android.gms` → app launched (pid 9734, no FATAL), Partner tab renders “Push alerts aren’t supported here” + the still-arrives copy; GMS re-enabled afterwards | Report No-GMS row |
+| Notifications disabled | AVD: Partner tab renders “Notifications are off” / “MyExodus can’t tell you when new partner activity arrives…” + “Allow notifications” | Report row |
+| Soak | Server counter 34 → 35 (refused, resynced) → 36 → 37 → 39, `last_received_at` 22:33:51Z, `next_deadline_at` 04:33:51Z (exactly +6 h), `late_deadline_at` 23:18:51Z, `liveness_generation` 30, `notice_state` NONE; no FATAL across all legs | Report Soak row; Firestore `dms_install_state/ALOAaMXMCmWfuGc2JXWw7tEfop92_cdhfw9AARkGUzw9EvoZRxA` |
+
+### Security and policy checks
+
+| Check | Result | Evidence |
+|---|---|---|
+| No code path auto-clicks/navigates/blocks system settings to prevent revocation/uninstall | PASS — the accessibility service acts only on user-configured blocked packages, excludes its own package, and uses `GLOBAL_ACTION_HOME` only to close a blocked app; no Settings automation; Settings deep links are user-initiated fix routing | Source review; report table |
+| Review manifest and sensitive-API declarations | PASS — `AndroidManifest.xml` unchanged across PA Steps 1–10 (`git log a8f5418..HEAD -- app/src/main/AndroidManifest.xml` empty) | Git + manifest read |
+| No new Accessibility / Notification Listener / exact-alarm / full-screen-intent / FGS permission | PASS — no `SCHEDULE_EXACT_ALARM`, `USE_FULL_SCREEN_INTENT`, `NotificationListenerService` or `setExact*`; `FOREGROUND_SERVICE_SPECIAL_USE` predates the feature (enforcement FGS, 2026-08-27) and the heartbeat only piggybacks it; `PartnerMessagingService` is `exported=false` | Manifest read; ADR #200 |
+| Static analysis | PASS — opengrep 7 custom rules / 361 tracked files / 0 findings after rewording one diagnostic label that named “dek”/“key” while logging only elapsed ms (message-text false positive; rule kept as signal) | `/tmp/opengrep_full.txt` re-run |
+| Secret scanning | PASS — gitleaks history scan 78 commits, no leaks; working-tree hits are 3 gitignored cache artifacts (`.cache/web-search-pro/*.json`, `scripts/.cache/du-test-server.pem`) | gitleaks output; `git check-ignore -v` |
+| Dependency scan | PASS for the shipped APK — Trivy HIGH/CRITICAL findings are `androidLintTool`/UTP tooling classpaths (bcprov 1.79, netty UTP); the app ships bcprov 1.85.2, above every listed fix version (CVE-2025-14813 fixes 1.80.2/1.81.1/1.84), no runtime netty | Trivy output; dependency tree |
+| Backend authorization tests | PASS — functions `npm test` 145/145; Firestore rules emulator suite 18/18, exit 0 | Test outputs |
+| Focused security review of the event/consent flow | PASS — mailbox create requires the pair’s other member and `status == 'active'`; closed CBOR allowlist (§8.10); E2EE payloads; relay stores ciphertext only; per-row authorization recheck in the drainer (ADR #205); DMS dispatch re-joins `pairings/{pairId}` and requires both consents; `dms_install_state` deny-all; App Check enforced on all partner callables; the deletion request is the only post-revocation mailbox write | ADR #204/#205 review; rules source |
+
+### Release-readiness assessment
+
+Ready for the direct-APK release channel behind the existing rollout gate. No OEM-specific incompatibility was demonstrated, so no OEM-specific code was added. Remaining unknowns are hardware coverage (all non-Transsion families), reboot legs, profile changes and two-phone end-to-end — all blocked on device availability, not on observed defects. Step 12 (staged rollout / operational verification) remains owner-gated.
+
+### Honest limits
+
+- One physical device only; the §12 tiering refuses to convert that into a general claim. All other tier-1 families and the minimum supported API 26 are `UNVERIFIED`.
+- Reboot, reboot-before-first-unlock and user-profile legs were not run (hardware/owner constraints), and are recorded BLOCKED, not passed.
+- App Standby Rare/Restricted rendering is JVM-pinned, not device-proven, because the platform clamped the debug override.
+- The network-loss leg was not re-run in Step 11 (cutting Wi-Fi cuts the only adb channel); Step 7's device-proven offline evidence stands.
+- Full JVM on the final source: **220 classes / 1,985 tests / 0 failures / 0 errors / 0 skipped**. Final build installed in place on the X6532 (pid 17836, `MY_PACKAGE_REPLACED`, FGS foreground, DB `user_version` 14, `EXEMPTED`, zero FATAL).
