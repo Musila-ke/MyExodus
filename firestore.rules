@@ -220,10 +220,18 @@ service cloud.firestore {
     // status comes from the read-at-time derivation (§8.10), never a precise timestamp.
     match /dms_install_state/{document=**} { allow read, write: if false; }
 
+    // DMS Step 8 (§8.11): the durable notification outbox, the operator-recorded ingestion-
+    // outage intervals, and the processor's deployment config are Admin SDK only. Consent
+    // itself lives on the authoritative pairing document and is written by the
+    // setAvailabilityConsent callable — there is no client-writable DMS surface at all.
+    match /dms_notification_outbox/{document=**} { allow read, write: if false; }
+    match /dms_ingestion_outages/{document=**} { allow read, write: if false; }
+
     // SOS push queue + feature flag: Admin SDK only (plan §8.2/§8.4). Default-deny would
     // cover both, but the explicit lines keep the function-only surface auditable in one
     // place, same as the v1 relay collections above.
     match /nudgePushQueue/{document=**} { allow read, write: if false; }
     match /config/features { allow read, write: if false; }
+    match /config/dms { allow read, write: if false; }
   }
 }

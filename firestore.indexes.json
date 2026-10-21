@@ -17,6 +17,14 @@
         { "fieldPath": "ackedAt", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "dms_notification_outbox",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "next_attempt_at_ms", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

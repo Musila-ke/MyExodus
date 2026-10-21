@@ -302,3 +302,20 @@ exports._createResumePendingNudgesHandler = createResumePendingNudgesHandler;
 const { createSubmitHeartbeat, createSubmitHeartbeatHandler } = require('./heartbeat');
 exports.submitHeartbeat = createSubmitHeartbeat({ db });
 exports._createSubmitHeartbeatHandler = createSubmitHeartbeatHandler;
+
+// Plan §7 Step 8 / §8.10-§8.11: DMS relationship contracts — explicit
+// `DEVICE_AVAILABILITY_STATUS` consent, read-time status derivation, operator-recorded
+// ingestion outages. `_create*Handler` are the emulator suite's seams.
+const {
+  setAvailabilityConsent,
+  readPartnerStatus,
+  recordIngestionOutage,
+} = require('./dms');
+exports.setAvailabilityConsent = setAvailabilityConsent;
+exports.readPartnerStatus = readPartnerStatus;
+exports.recordIngestionOutage = recordIngestionOutage;
+
+// Plan §7 Step 8 / §8.11-§8.12: the every-5-minute bounded deadline processor + durable
+// notification dispatch. `_createDmsWorkerHandler` is the emulator suite's seam.
+const { dmsDeadlineWorker } = require('./dms-processor');
+exports.dmsDeadlineWorker = dmsDeadlineWorker;

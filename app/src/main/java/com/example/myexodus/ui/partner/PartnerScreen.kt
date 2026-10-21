@@ -68,6 +68,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.myexodus.R
+import com.example.myexodus.accountability.monitoring.PartnerConnection
+import com.example.myexodus.accountability.monitoring.PartnerConnectionBucket
+import com.example.myexodus.accountability.monitoring.PartnerStatus
 import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.state.ApprovalRequest
@@ -254,6 +257,9 @@ fun PartnerScreen(
      *  = saved, leaves on the retry cadence; [MessageSendOutcome.FAILED] = nothing written. */
     onSendMessage: suspend (pairId: String, text: String) -> MessageSendOutcome =
         { _, _ -> MessageSendOutcome.FAILED },
+    /** Plan Step 8: the server-derived connection reading (§8.10), coarse buckets only. Null =
+     *  no honest answer right now — the card then claims nothing. */
+    onLoadPartnerStatus: suspend (pairId: String) -> PartnerStatus? = { null },
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -284,6 +290,9 @@ fun PartnerScreen(
     // loading), which renders as the tile's description rather than a fabricated zero.
     var planHub by remember { mutableStateOf<PlanHubStatus?>(null) }
     var planHubRefresh by remember { mutableStateOf(0) }
+    // Plan Step 8 (§8.13): the partner's server-derived connection signal, kept apart from the
+    // E2EE monitoring report and from sync freshness. Null = no honest reading.
+    var partnerStatus by remember { mutableStateOf<PartnerStatus?>(null) }
 
     // Finding #57: roster switches start overlapping reloads (every roster row fires one), and
     // IO-pool completions can arrive out of order. Only the newest reload may publish, or a
@@ -310,6 +319,15 @@ fun PartnerScreen(
         // pulls, resume, pair switches. A failure reads as "unknown", never as a false claim.
         sharesNothing = (state as? PartnerDashboardUi.Paired)?.let { paired ->
             runCatching { habitRepository.sharesNothingWith(paired.pairId) }.getOrNull()
+        }
+        // Plan Step 8: every repaint path (pull, resume, switch, check-now) refreshes the
+        // connection reading through the client's one-call-a-minute bound, so a burst of
+        // reloads can never become a callable burst. A failure clears it rather than repeating
+        // a stale claim from before the silence.
+        partnerStatus = (state as? PartnerDashboardUi.Paired)?.let { paired ->
+            runCatching { onLoadPartnerStatus(paired.pairId) }
+                .onFailure { Log.w(TAG, "partner status read failed", it) }
+                .getOrNull()
         }
     }
 
@@ -701,6 +719,9 @@ fun PartnerScreen(
                 // §7 Step 7 / §8.13: their device's own monitoring report, kept separate from
                 // the sync and chain cards — a live mailbox never proves their monitor runs.
                 current.monitoring?.let { PartnerMonitoringCard(it) }
+                // Plan Step 8 / §8.13: connection (server-observed check-ins) is its own third
+                // signal — never folded into the monitoring card or the sync card.
+                partnerStatus?.let { PartnerConnectionCard(it) }
                 // Owner ask 2026-10-04: a pair with every switch off looks identical to an
                 // active one, and the partner silently receives nothing. Said once, with the
                 // one route to fixing it.
@@ -1049,6 +1070,81 @@ private fun PartnerMonitoringCard(monitoring: PartnerMonitoringUi) {
             Text(
                 stringResource(R.string.partner_monitoring_delayed),
                 style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Plan Step 8 / §4/§8.13: the partner's server-derived connection signal. Coarse buckets only —
+ * the screen never shows a check-in timestamp. `consent == false` is its own state ("not
+ * shared"), not "not checking in": nothing is shared, so nothing can be concluded. LATE is shown
+ * quietly because it can be completely normal (doze, WorkManager deferral).
+ */
+@Composable
+private fun PartnerConnectionCard(status: PartnerStatus) {
+    PartnerSurface(spacing = 6.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                stringResource(R.string.partner_connection_title),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            StatusPill(
+                text = stringResource(
+                    if (!status.consent) {
+                        R.string.partner_connection_state_not_shared
+                    } else {
+                        when (status.connection) {
+                            PartnerConnection.CHECKING_IN -> R.string.partner_connection_state_checking_in
+                            PartnerConnection.LATE -> R.string.partner_connection_state_late
+                            PartnerConnection.NOT_CHECKING_IN ->
+                                R.string.partner_connection_state_not_checking_in
+                            PartnerConnection.NO_DATA -> R.string.partner_connection_state_no_data
+                        }
+                    },
+                ),
+                tone = if (!status.consent) {
+                    PillTone.QUIET
+                } else {
+                    when (status.connection) {
+                        PartnerConnection.CHECKING_IN -> PillTone.POSITIVE
+                        PartnerConnection.NOT_CHECKING_IN -> PillTone.NEGATIVE
+                        else -> PillTone.QUIET
+                    }
+                },
+            )
+        }
+        Text(
+            stringResource(
+                if (!status.consent) {
+                    R.string.partner_connection_body_not_shared
+                } else {
+                    when (status.connection) {
+                        PartnerConnection.CHECKING_IN -> R.string.partner_connection_body_checking_in
+                        PartnerConnection.LATE -> R.string.partner_connection_body_late
+                        PartnerConnection.NOT_CHECKING_IN ->
+                            R.string.partner_connection_body_not_checking_in
+                        PartnerConnection.NO_DATA -> R.string.partner_connection_body_no_data
+                    }
+                },
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        // A server answer can only carry a real bucket alongside a real connection; NO_DATA in
+        // either place means there is nothing to time, so no bucket line is claimed.
+        val bucketRes = when (status.bucket) {
+            PartnerConnectionBucket.WITHIN_1H -> R.string.partner_connection_bucket_within_hour
+            PartnerConnectionBucket.HOURS_1_TO_6 -> R.string.partner_connection_bucket_hours
+            PartnerConnectionBucket.OVER_6H -> R.string.partner_connection_bucket_over_six
+            PartnerConnectionBucket.NO_DATA -> null
+        }
+        if (status.consent && status.connection != PartnerConnection.NO_DATA && bucketRes != null) {
+            Text(
+                stringResource(bucketRes),
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }

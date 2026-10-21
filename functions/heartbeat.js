@@ -23,8 +23,19 @@ const {
   isValidCounter,
   decideHeartbeat,
 } = require('./heartbeat-logic');
+const {
+  consentingPartner,
+  noticeDocId,
+  NOTICE_AVAILABILITY,
+  NOTICE_RECOVERY,
+  NOTICE_PENDING,
+  NOTICE_DISPATCHING,
+  NOTICE_SENT,
+  NOTICE_SUPPRESSED,
+} = require('./dms-logic');
 
 const REGION = 'us-central1';
+const MAX_RELATIONSHIPS_PER_INSTALL = 50;
 
 /**
  * Test seam (house pattern, cf. `_createSendNudgeHandler`): the raw handler with an injected
@@ -61,7 +72,72 @@ function createSubmitHeartbeatHandler({ db, now = () => Date.now() }) {
       const decision = decideHeartbeat(previous, counter, nowMs);
 
       if (decision.outcome === 'ACCEPTED') {
-        tx.set(stateRef, {
+        // Recovery notices (§4): a fresh beat after a SENT notice restores liveness and owes
+        // each consenting relationship at most one generic recovery update. The outbox rows
+        // are written in THIS transaction — the same one that clears notice_state — so a crash
+        // can never leave a recovered device silently "notified" (or a stale recovery queued).
+        const wasNotified = previous != null && previous.notice_state === 'NOTIFIED';
+        const outageGeneration = previous ? Number(previous.outage_generation) || 0 : 0;
+        let recoveryRows = 0;
+        if (wasNotified) {
+          const generation = outageGeneration;
+          const pairsSnap = await tx.get(
+            db.collection('pairings')
+              .where('members', 'array-contains', auth.uid)
+              .limit(MAX_RELATIONSHIPS_PER_INSTALL),
+          );
+          const candidates = [];
+          for (const pairDoc of pairsSnap.docs) {
+            const partner = consentingPartner(pairDoc.data(), auth.uid);
+            if (!partner) continue;
+            const noticeRef = db.doc(
+              `dms_notification_outbox/${noticeDocId(installId, pairDoc.id, generation, NOTICE_AVAILABILITY)}`,
+            );
+            const recoveryRef = db.doc(
+              `dms_notification_outbox/${noticeDocId(installId, pairDoc.id, generation, NOTICE_RECOVERY)}`,
+            );
+            const [noticeSnap, recoverySnap] = await Promise.all([
+              tx.get(noticeRef),
+              tx.get(recoveryRef),
+            ]);
+            candidates.push({ pairId: pairDoc.id, partner, noticeRef, noticeSnap, recoveryRef, recoverySnap });
+          }
+          // All reads are done; now the writes.
+          for (const candidate of candidates) {
+            const notice = candidate.noticeSnap.exists ? candidate.noticeSnap.data() : null;
+            const status = notice ? notice.status : null;
+            if (status === NOTICE_PENDING) {
+              // The notice never left; it must not leave after the device came back. Its
+              // deterministic id is never reused for this outage generation.
+              tx.update(candidate.noticeRef, {
+                status: NOTICE_SUPPRESSED,
+                suppressed_reason: 'RECOVERED_BEFORE_DISPATCH',
+                updated_at_ms: nowMs,
+              });
+              continue;
+            }
+            const possiblySent = status === NOTICE_SENT ||
+              (status === NOTICE_DISPATCHING &&
+                Number(notice.lease_until_ms) > nowMs);
+            if (!possiblySent || candidate.recoverySnap.exists) continue;
+            tx.set(candidate.recoveryRef, {
+              install_id: installId,
+              state_doc_id: stateRef.id,
+              monitored_uid: auth.uid,
+              relationship_id: candidate.pairId,
+              recipient_uid: candidate.partner.recipientUid,
+              outage_generation: generation,
+              notice_type: NOTICE_RECOVERY,
+              status: NOTICE_PENDING,
+              attempts: 0,
+              next_attempt_at_ms: nowMs,
+              created_at_ms: nowMs,
+            });
+            recoveryRows += 1;
+          }
+        }
+
+        const stateUpdate = {
           uid: auth.uid,
           install_id: installId,
           last_counter: decision.serverCounter,
@@ -69,10 +145,18 @@ function createSubmitHeartbeatHandler({ db, now = () => Date.now() }) {
           last_received_at: Timestamp.fromMillis(decision.lastReceivedAtMs),
           last_received_at_ms: decision.lastReceivedAtMs,
           next_deadline_at: Timestamp.fromMillis(decision.nextDeadlineAtMs),
-          // The deadline processor owns this; a heartbeat never edits it.
+          // The deadline processor owns the generation; a heartbeat carries it forward and
+          // clears the notice flag, which is what ends the outage.
           last_notified_generation: previous ? previous.last_notified_generation || 0 : 0,
+          outage_generation: outageGeneration,
+          notice_state: wasNotified ? 'NONE' : (previous && previous.notice_state) || 'NONE',
           updated_at: Timestamp.fromMillis(nowMs),
-        }, { merge: true });
+        };
+        if (wasNotified) stateUpdate.recovered_at_ms = nowMs;
+        tx.set(stateRef, stateUpdate, { merge: true });
+        if (wasNotified) {
+          logger.info('heartbeat recovered a notified install', { recoveryRows });
+        }
       }
       return {
         accepted: decision.outcome === 'ACCEPTED',

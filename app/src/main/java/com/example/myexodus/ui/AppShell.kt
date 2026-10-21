@@ -75,6 +75,7 @@ import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.sos.NudgeEnvelope
 import com.example.myexodus.accountability.sos.NudgeRepository
 import com.example.myexodus.accountability.sync.MessageSendOutcome
+import com.example.myexodus.accountability.monitoring.PartnerStatus
 import com.example.myexodus.accountability.sync.PartnerAlertHealth
 import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.data.db.AppRulesStore
@@ -163,6 +164,9 @@ fun AppShell(
     /** SOS §8.19 (Step 11): the recipient block switch behind the Settings row. */
     nudgeSettings: NudgeSettingsViewModel,
     partnerSource: PartnerDashboardSource,
+    /** Plan Step 8 (§8.10): the partner's server-derived connection reading, coarse buckets
+     *  only. The client bounds callable traffic; null = no honest answer right now. */
+    onLoadPartnerStatus: suspend (pairId: String) -> PartnerStatus? = { null },
     /** §19.4 item 4: the production ceremony's seams; §19.5: the persisted user pick. */
     partnerSelection: PartnerSelection,
     ceremonyDeps: PairingCeremonyDeps,
@@ -443,6 +447,7 @@ fun AppShell(
                         onDismissUnpair = onDismissUnpair,
                         onRenameUser = onRenameUser,
                         onSendMessage = onSendMessage,
+                        onLoadPartnerStatus = onLoadPartnerStatus,
                         modifier = contentModifier,
                     )
                     contentTab == 5 -> SettingsScreen(

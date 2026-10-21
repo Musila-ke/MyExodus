@@ -50,9 +50,11 @@ import com.example.myexodus.accountability.activity.PartnerActivityJournal
 import com.example.myexodus.accountability.activity.PartnerActivityReceiver
 import com.example.myexodus.accountability.monitoring.MonitoringSnapshotReceiver
 import com.example.myexodus.accountability.monitoring.MonitoringSnapshotRecorder
+import com.example.myexodus.accountability.monitoring.PartnerDmsClient
 import com.example.myexodus.accountability.monitoring.PartnerHeartbeatClient
 import com.example.myexodus.accountability.monitoring.StandbyBucket
 import com.example.myexodus.accountability.monitoring.parseHeartbeatReply
+import com.example.myexodus.accountability.monitoring.parsePartnerStatus
 import com.example.myexodus.blocking.EnforcementForegroundService
 import com.example.myexodus.accountability.plan.PartnerPlanReceiver
 import com.example.myexodus.accountability.plan.PartnerPlanRepository
@@ -775,6 +777,7 @@ object AccountabilityModule {
         sessionKeyManager: SessionKeyManager,
         rejectionChecker: MailboxRejectionChecker,
         reachability: PairingReachabilityStore,
+        dms: PartnerDmsClient,
     ): PartnerSyncCoordinator = PartnerSyncCoordinator(
         enrollmentDao = enrollmentDao,
         storeFactory = storeFactory,
@@ -793,6 +796,43 @@ object AccountabilityModule {
         checkRejections = { pairId, partnerUid -> rejectionChecker.check(partnerUid, pairId) },
         pruneReachability = reachability::prune,
         checkIn = { heartbeat.checkIn() },
+        syncAvailabilityConsent = { pairId, enabled -> dms.syncConsent(pairId, enabled) },
+    )
+
+    /** Plan Step 8 (§8.10/§8.11): the DMS client half — consent convergence onto the authoritative
+     *  pairing document and the coarse connection read the Partner tab renders. Both callables
+     *  are the handlers the Firestore-emulator suite drives in `functions/dms.js`. */
+    @Provides @Singleton
+    fun providePartnerDmsClient(
+        @ApplicationContext context: Context,
+        resolver: PairUidResolver,
+        functions: FirebaseFunctions,
+    ): PartnerDmsClient = PartnerDmsClient(
+        uid = { resolver.ensureUid() },
+        requestConsent = { pairId, enabled ->
+            AppCheckInstaller.install(context)
+            runCatching {
+                val answer = functions.getHttpsCallable("setAvailabilityConsent")
+                    .call(mapOf("pairId" to pairId, "enabled" to enabled))
+                    .await()
+                    .data as? Map<*, *>
+                // The handler echoes the pair it wrote; a foreign answer is not an ack.
+                answer?.get("pairId") == pairId
+            }.onFailure { Log.w(TAG, "setAvailabilityConsent call failed", it) }
+                .getOrDefault(false)
+        },
+        readRemoteStatus = { pairId ->
+            AppCheckInstaller.install(context)
+            runCatching {
+                parsePartnerStatus(
+                    functions.getHttpsCallable("readPartnerStatus")
+                        .call(mapOf("pairId" to pairId))
+                        .await()
+                        .data,
+                )
+            }.onFailure { Log.w(TAG, "readPartnerStatus call failed", it) }
+                .getOrNull()
+        },
     )
 
     /**

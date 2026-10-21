@@ -9,6 +9,7 @@ import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.PairingFlow
 import com.example.myexodus.accountability.monitoring.MonitoringSnapshotRecorder
+import com.example.myexodus.accountability.monitoring.PartnerDmsClient
 import com.example.myexodus.accountability.monitoring.PartnerHeartbeatClient
 import com.example.myexodus.accountability.sos.NudgeInboxRepository
 import com.example.myexodus.accountability.state.AccountabilityDatabase
@@ -65,6 +66,9 @@ interface RoundTripTestEntryPoint {
 
     /** §7 Step 7 sender half: the exact recorder the FGS runs, for the device consent leg. */
     fun monitoringSnapshotRecorder(): MonitoringSnapshotRecorder
+
+    /** PA Step 8: the exact DMS client the sync pass and Partner tab use. */
+    fun partnerDmsClient(): PartnerDmsClient
 
     /** The production uid resolver — the device leg picks a pair whose server pairing exists. */
     fun pairUidResolver(): PairUidResolver

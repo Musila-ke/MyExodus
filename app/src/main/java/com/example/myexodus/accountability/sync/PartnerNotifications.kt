@@ -67,6 +67,12 @@ object PartnerNotifications {
      *  only in debug builds. No production surface posts to it by design. */
     const val CHANNEL_SYNC_STATUS = "sync_status"
 
+    /** Plan Step 8 (§8.12): the server's six-hour availability notice channel. The id matches
+     *  `CHANNEL_AVAILABILITY` in functions/dms-processor.js — a rename here renames what the
+     *  worker sends to. HIGH because the notice is user-visible and time-sensitive (§8.12);
+     *  the payload itself is fixed generic copy. */
+    const val CHANNEL_AVAILABILITY_ALERTS = "availability_alerts_v1"
+
     /** Per-pair notification id (§19.5 multi-partner): base + pairId hash, so N partners'
      *  entries coexist in the tray. A hash collision only degrades to the old
      *  replace-in-place behavior — never a lost alert for a different pair's item. */
@@ -93,6 +99,21 @@ object PartnerNotifications {
             NotificationChannel(
                 CHANNEL_PARTNER_ALERTS,
                 context.getString(R.string.partner_channel_activity_name),
+                NotificationManager.IMPORTANCE_HIGH,
+            ),
+        )
+    }
+
+    /** Plan Step 8: created at startup so the six-hour notice's channel exists before the
+     *  first dispatch. Create-only, same device-observed reason as [ensurePartnerAlertsChannel]
+     *  — re-creating an existing channel can silently rewrite its importance. */
+    fun ensureAvailabilityAlertsChannel(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        if (manager.getNotificationChannel(CHANNEL_AVAILABILITY_ALERTS) != null) return
+        manager.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_AVAILABILITY_ALERTS,
+                context.getString(R.string.partner_channel_availability_name),
                 NotificationManager.IMPORTANCE_HIGH,
             ),
         )

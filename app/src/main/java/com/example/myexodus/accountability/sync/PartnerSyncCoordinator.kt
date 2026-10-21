@@ -86,6 +86,10 @@ class PartnerSyncCoordinator(
      *  rides every paired run. It runs only while paired — no relationship, nothing to report —
      *  and the client enforces its own 15-minute window. */
     private val checkIn: suspend () -> Unit = {},
+    /** Step 8 (§8.10): converge this pair's explicit `DEVICE_AVAILABILITY_STATUS` choice onto
+     *  the authoritative pairing document. True = the server holds it (or already did). */
+    private val syncAvailabilityConsent: suspend (pairId: String, enabled: Boolean) -> Boolean =
+        { _, _ -> true },
 ) {
 
     data class SyncReport(
@@ -167,6 +171,19 @@ class PartnerSyncCoordinator(
     private suspend fun syncPair(enrollment: EnrollmentRecord, wakeMessageId: String?): SyncReport? {
         val uids = resolveUids(enrollment.pairId) ?: return null
         val (myUid, partnerUid) = uids
+
+        // Step 8 (§8.10): the local availability switch is the user's intent; the server's pairing
+        // document is what DMS dispatch actually checks at send time, so it converges on every
+        // pass. No local row = this device never expressed a choice, and must not overwrite a
+        // value another install of the same identity may hold. A failure is quiet: the previous
+        // server value stands and the next pass retries — offline revocation stays pending.
+        runCatching {
+            val store = storeFactory.open() ?: return@runCatching
+            val consent = store.pairSharingDao().profileFor(enrollment.pairId) ?: return@runCatching
+            if (!syncAvailabilityConsent(enrollment.pairId, consent.shareAvailability)) {
+                Log.w(TAG, "availability consent sync not acknowledged; retrying next pass")
+            }
+        }.onFailure { Log.w(TAG, "availability consent sync failed", it) }
 
         val rotated = runCatching { rotateKeys(enrollment.pairId, enrollment.mySenderKeyId) }
             .onFailure { Log.w(TAG, "session key rotation failed", it) }

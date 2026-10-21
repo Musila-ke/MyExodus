@@ -135,6 +135,9 @@ class MyExodusApp : Application(), Configuration.Provider {
         // Plan Step 6: the partner_activity channel exists before the first event, so the
         // notification-health reading can tell "muted by the user" from "not created yet".
         PartnerNotifications.ensurePartnerAlertsChannel(this)
+        // Plan Step 8 (§8.12): the server's six-hour availability notice channel exists before
+        // the worker's first dispatch — its id is the worker's `channelId`.
+        PartnerNotifications.ensureAvailabilityAlertsChannel(this)
         startupTrace.lap("channels")
         // Decision 12 opt-out: FirebaseInitProvider ran before this call, so this is what the
         // stored preference overrides from the first moment of each process.

@@ -98,6 +98,9 @@ class PartnerSyncCoordinatorTest {
     private val stepOrder = mutableListOf<String>()
     private val reachabilityPrunes = mutableListOf<Set<String>>()
 
+    /** Step 8: every availability-consent convergence this pass attempted. */
+    private val consentCalls = mutableListOf<Pair<String, Boolean>>()
+
     /** §19.5: the uids each pair resolves to. A test adds a second supported user here; a pair
      *  absent from the map models an unresolvable one (its slice is skipped, the rest run). */
     private val uids = mutableMapOf<String, Pair<String, String>>()
@@ -801,6 +804,78 @@ class PartnerSyncCoordinatorTest {
         assertEquals("one check-in per paired pass (the client enforces the window)", 2, checkIns)
     }
 
+    /**
+     * Plan Step 8 (§8.10): DMS dispatch reads the AUTHORITATIVE pair document, so the local
+     * availability switch must converge there — an on switch that never reaches the server
+     * would leave the partner permanently unable to see a notice they consented to.
+     */
+    @Test
+    fun availabilityConsent_enabled_convergesOntoTheServerOncePerPass() = runTest {
+        enroll()
+        seedConsent(shareAvailability = true)
+
+        coordinator.syncOnce()
+
+        assertEquals(listOf(pairId to true), consentCalls)
+    }
+
+    /** A row exists only after the user touched a sharing toggle; turning availability off
+     *  afterwards must reach the server just as explicitly (revocation is the safe direction,
+     *  but a stale "on" would keep notifying). */
+    @Test
+    fun availabilityConsent_explicitlyOff_convergesFalseToo() = runTest {
+        enroll()
+        seedConsent(shareCheckins = true)
+
+        coordinator.syncOnce()
+
+        assertEquals(listOf(pairId to false), consentCalls)
+    }
+
+    /** No row = this device never expressed a choice. It must not overwrite a value another
+     *  install of the same identity may hold. */
+    @Test
+    fun availabilityConsent_noLocalRow_sendsNothing() = runTest {
+        enroll()
+
+        coordinator.syncOnce()
+
+        assertTrue("nothing expressed locally, nothing written remotely", consentCalls.isEmpty())
+    }
+
+    /** An unresolvable pair never reaches the consent step: the callable would be answered
+     *  with a membership denial and the pass would log noise for a slice it already skipped. */
+    @Test
+    fun availabilityConsent_unresolvedPair_sendsNothing() = runTest {
+        enroll()
+        seedConsent(shareAvailability = true)
+        uids.clear()
+
+        coordinator.syncOnce()
+
+        assertTrue(consentCalls.isEmpty())
+    }
+
+    /** Consent is one independent step: a failed write must not turn the whole pass into a
+     *  failure (drain and pull still run), and the unchanged server value is retried next
+     *  pass — offline revocation stays pending, never silently dropped. */
+    @Test
+    fun availabilityConsent_failureDoesNotStopThePass() = runTest {
+        enroll()
+        seedConsent(shareAvailability = true)
+        coordinator = coordinator(
+            warmSigner(),
+            syncConsent = { _, _ -> throw IllegalStateException("radio down") },
+        )
+
+        val report = coordinator.syncOnce()
+
+        assertTrue("uids still resolved", report.uidsResolved)
+        assertEquals("the drain still ran", 1, drainCalls.size)
+        assertEquals("the pull still ran", listOf(pairId), pullCalls)
+        assertEquals("the retry starts from the same unacknowledged value", 1, consentCalls.size)
+    }
+
     // ---- helpers ----
 
     /** v16 (ADR #135): nothing reconciles for a pair without its own consent rows — seeding
@@ -943,6 +1018,7 @@ class PartnerSyncCoordinatorTest {
         resumeUnpairs: suspend () -> Boolean = { false },
         drainThrowsFor: String? = null,
         checkIn: suspend () -> Unit = {},
+        syncConsent: suspend (String, Boolean) -> Boolean = { _, _ -> true },
     ) = PartnerSyncCoordinator(
         enrollmentDao = db.enrollmentDao(),
         storeFactory = factory,
@@ -979,6 +1055,10 @@ class PartnerSyncCoordinatorTest {
         pruneReachability = { reachabilityPrunes += it },
         resumeUnpairs = resumeUnpairs,
         checkIn = checkIn,
+        syncAvailabilityConsent = { pId, enabled ->
+            consentCalls += pId to enabled
+            syncConsent(pId, enabled)
+        },
     )
 
     private fun enroll(

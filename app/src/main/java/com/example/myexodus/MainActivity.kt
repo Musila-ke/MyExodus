@@ -72,6 +72,7 @@ import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.PairingCeremonyTelemetry
 import com.example.myexodus.accountability.enrollment.PairingFlow
 import com.example.myexodus.accountability.enrollment.PartnerLabel
+import com.example.myexodus.accountability.monitoring.PartnerDmsClient
 import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.state.AccountabilityDatabase
@@ -256,6 +257,9 @@ class MainActivity : FragmentActivity() {
     // pass in-process — WorkManager dispatch is never performed on XOS (ADR #27), so a
     // WM-based path would be dead there.
     @Inject lateinit var partnerSyncCoordinator: PartnerSyncCoordinator
+    // Plan Step 8: the Partner tab's connection card — consent convergence rides the sync
+    // pass; this client is the screen's bounded (60 s) status read.
+    @Inject lateinit var partnerDmsClient: PartnerDmsClient
     @Inject lateinit var pushInstallationRegistrar: PushInstallationRegistrar
     @Inject lateinit var partnerRolloutGate: PartnerRolloutGate
     // Owner mandate 2026-10-04 (realtime): the foreground mailbox doorbell — its ring lands
@@ -570,6 +574,7 @@ class MainActivity : FragmentActivity() {
                         nudgeInbox = nudgeInboxViewModel,
                         nudgeSettings = nudgeSettingsViewModel,
                         partnerSource = partnerDashboardSource,
+                        onLoadPartnerStatus = { pairId -> partnerDmsClient.status(pairId) },
                         partnerSelection = partnerSelection,
                         ceremonyDeps = ceremonyDeps,
                         partnerNotificationsEnabled = notificationsEnabled,
