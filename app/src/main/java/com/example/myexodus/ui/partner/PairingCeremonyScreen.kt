@@ -135,13 +135,11 @@ fun PairingCeremonyScreen(
     onFixNotifications: () -> Unit,
     /** Plan Step 6: the onboarding check is not only the API-33 permission — a muted
      *  partner-activity channel or a missing push provider also breaks alerts. */
+    modifier: Modifier = Modifier,
     alertHealth: PartnerAlertHealth.State = PartnerAlertHealth.State.OK,
     onSendTestAlert: () -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    // Captured for the coroutine/local-fun paths: resource reads there are not @Composable.
-    val context = LocalContext.current
     // §14 bullet 1 says ONE event per attempt terminal. Taps land faster than recomposition:
     // a double-tap on Cancel (or back-row while a cancel coroutine is in flight) would report
     // twice, inflating a rate the plan reads as a security signal. Reset per attempt start.
@@ -153,6 +151,8 @@ fun PairingCeremonyScreen(
     var codeError by remember { mutableStateOf(false) }
     var working by remember { mutableStateOf(false) }
     var copied by remember { mutableStateOf(false) }
+    // Resolved in composition (configuration-aware) and captured by the local funs below.
+    val signTitle = stringResource(R.string.partner_ceremony_sign_title)
 
     LaunchedEffect(Unit) {
         val stored = runCatching { deps.loadName() }.getOrNull()
@@ -169,7 +169,7 @@ fun PairingCeremonyScreen(
         outcome: PairingCeremonyTelemetry.Outcome = PairingCeremonyTelemetry.Outcome.FAILED,
     ) {
         reportOnce(outcome)
-        step = CeremonyStep.Failed(context.getString(title), context.getString(body))
+        step = CeremonyStep.Failed(title, body)
     }
 
     /** Signed-pairing finish, shared by both roles: one biometric prompt, then the flow call. */
@@ -188,8 +188,7 @@ fun PairingCeremonyScreen(
                 fail(R.string.partner_ceremony_offline_title, R.string.partner_ceremony_offline_body)
                 return@launch
             }
-            val title = context.getString(R.string.partner_ceremony_sign_title)
-            val signature = runCatching { deps.sign(title) }.getOrNull()
+            val signature = runCatching { deps.sign(signTitle) }.getOrNull()
             if (signature == null) {
                 // Cancelled prompt: nothing happened, the SAS check still stands — stay put.
                 working = false
@@ -456,8 +455,8 @@ fun PairingCeremonyScreen(
             )
 
             is CeremonyStep.Failed -> FailedTerminal(
-                title = current.title,
-                body = current.body,
+                title = stringResource(current.titleRes),
+                body = stringResource(current.bodyRes),
                 onRetry = {
                     pending = null
                     codeError = false
@@ -502,7 +501,7 @@ private sealed interface CeremonyStep {
     data class ShowingCode(val token: PairingToken, val code: String) : CeremonyStep
     data class Compare(val sas: String) : CeremonyStep
     data class Paired(val pairId: String, val partnerLabel: String?, val partnerKeyId: String) : CeremonyStep
-    data class Failed(val title: String, val body: String) : CeremonyStep
+    data class Failed(val titleRes: Int, val bodyRes: Int) : CeremonyStep
 }
 
 private sealed interface Pending {
@@ -682,6 +681,7 @@ private fun ShowingCode(
     onCancel: () -> Unit,
 ) {
     val context = LocalContext.current
+    val shareText = stringResource(R.string.partner_ceremony_share_text, code)
     CeremonyCard {
         Text(
             stringResource(R.string.partner_ceremony_code_overline),
@@ -721,7 +721,7 @@ private fun ShowingCode(
                 onClick = {
                     val send = Intent(Intent.ACTION_SEND)
                         .setType("text/plain")
-                        .putExtra(Intent.EXTRA_TEXT, context.getString(R.string.partner_ceremony_share_text, code))
+                        .putExtra(Intent.EXTRA_TEXT, shareText)
                     runCatching { context.startActivity(Intent.createChooser(send, null)) }
                 },
                 modifier = Modifier.weight(1f),

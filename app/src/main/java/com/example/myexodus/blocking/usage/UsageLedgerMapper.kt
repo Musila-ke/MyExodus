@@ -4,7 +4,6 @@ import com.example.myexodus.data.db.entity.UsageLedger
 import com.example.myexodus.data.db.entity.UsageLedgerKind
 import java.security.MessageDigest
 import java.time.Instant
-import java.time.LocalDate
 import java.time.ZoneId
 
 /** One journal write, before identity and day attribution are derived from it. */
@@ -126,12 +125,12 @@ object UsageLedgerMapper {
      */
     fun splitAtDayBoundary(draft: LedgerEventDraft, zone: ZoneId): List<LedgerSlice> {
         val span = draft.elapsedEndMs - draft.elapsedStartMs
-        val endDay = LocalDate.ofInstant(Instant.ofEpochMilli(draft.wallClockTsMs), zone)
+        val endDay = Instant.ofEpochMilli(draft.wallClockTsMs).atZone(zone).toLocalDate()
         if (span <= 0L) {
             return listOf(LedgerSlice(endDay.toString(), draft.creditedMs, draft.elapsedStartMs, draft.elapsedEndMs))
         }
         val wallStartMs = draft.wallClockTsMs - span
-        val startDay = LocalDate.ofInstant(Instant.ofEpochMilli(wallStartMs), zone)
+        val startDay = Instant.ofEpochMilli(wallStartMs).atZone(zone).toLocalDate()
         if (startDay == endDay) {
             return listOf(LedgerSlice(endDay.toString(), draft.creditedMs, draft.elapsedStartMs, draft.elapsedEndMs))
         }

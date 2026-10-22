@@ -29,7 +29,12 @@ class WidgetContentTest {
         assertEquals("6 days to a 7-day mark", milestoneSentence(context, 7, 6))
         assertEquals(
             "Next milestone: 7-day mark — 6 days to go.",
-            context.getString(R.string.home_streak_caption_next, 7, 6),
+            context.resources.getQuantityString(R.plurals.home_streak_caption_next, 6, 7, 6),
+        )
+        // Plural grammar at the boundary (lint PluralsCandidate, 2026-10-22).
+        assertEquals(
+            "Next milestone: 7-day mark — 1 day to go.",
+            context.resources.getQuantityString(R.plurals.home_streak_caption_next, 1, 7, 1),
         )
     }
 

@@ -67,7 +67,10 @@
         <!-- launchMode=singleTop: the shell is the app's root activity and must receive every
             deep link (notification taps, widget, block-screen escape hatch) through
             onNewIntent — with standard mode a launch to an existing task is delivered only as
-            a task-bring-to-front on some OEMs (XOS verified), silently dropping the extras. -->
+            a task-bring-to-front on some OEMs (XOS verified), silently dropping the extras.
+            Portrait lock on this activity and the two full-screen surfaces below (block wall,
+            widget action) is a deliberate product choice; Android 16 ignores it on large
+            screens. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -75,6 +78,7 @@
             android:theme="@style/Theme.MyExodus"
             android:windowSoftInputMode="adjustResize"
             android:screenOrientation="portrait"
+            tools:ignore="LockedOrientationActivity,DiscouragedApi"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode">
             <!-- configChanges (the androidx Compose template set) keeps in-flight session state
                 alive: recreation reset the delay timer and the pacer, and made the recovery
@@ -169,6 +173,7 @@
             android:excludeFromRecents="true"
             android:exported="false"
             android:screenOrientation="portrait"
+            tools:ignore="LockedOrientationActivity,DiscouragedApi"
             android:taskAffinity="" />
 
         <!-- Plan §8.5: fires pre-unlock so enforcement data (DE snapshot copy) is published
@@ -228,6 +233,7 @@
             android:exported="false"
             android:launchMode="singleTop"
             android:screenOrientation="portrait"
+            tools:ignore="LockedOrientationActivity,DiscouragedApi"
             android:taskAffinity="com.example.myexodus.widgetsurface"
             android:theme="@style/Theme.MyExodus.WidgetAction" />
 

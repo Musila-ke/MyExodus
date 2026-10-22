@@ -1,6 +1,5 @@
 package com.example.myexodus.ui
 
-import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -259,16 +258,17 @@ fun AppShell(
     LaunchedEffect(contentTab) { if (contentTab != 0) actionsOpen = false }
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
+    val sosMessage = sosStateMessage(sosState)
     LaunchedEffect(sosState) {
-        val message = sosStateMessage(context, sosState) ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar(message)
+        sosMessage?.let { snackbarHostState.showSnackbar(it) }
     }
     // §4.7 App Standby explanation (plan §7 Step 7): at most one non-intrusive notice per
     // constrained transition — the client enforces that. It names where to look and never
     // claims a setting is required or that Unrestricted guarantees delivery.
+    val standbyNotice = stringResource(R.string.partner_standby_notice)
     LaunchedEffect(Unit) {
         PartnerSyncSignals.standbyNotice.collect {
-            snackbarHostState.showSnackbar(context.getString(R.string.partner_standby_notice))
+            snackbarHostState.showSnackbar(standbyNotice)
         }
     }
 
@@ -669,19 +669,20 @@ private fun QuickAction(icon: @Composable () -> Unit, label: String, onClick: ()
 /** The sender state machine's user-visible results (plan §8.15 copy); null while Idle/Sending.
  *  Internal since widget v2: the widget's hold-to-confirm surface renders the same states, and
  *  the copy has exactly one definition (DRY — §8.15 semantics must not fork per surface). */
-internal fun sosStateMessage(context: Context, state: SosViewModel.SosSendState): String? =
+@Composable
+internal fun sosStateMessage(state: SosViewModel.SosSendState): String? =
     when (state) {
-        SosViewModel.SosSendState.Sent -> context.getString(R.string.sos_check_in_sent)
-        SosViewModel.SosSendState.NotSentOffline -> context.getString(R.string.sos_state_offline)
-        SosViewModel.SosSendState.CouldNotConfirm -> context.getString(R.string.sos_state_could_not_confirm)
-        SosViewModel.SosSendState.Unavailable -> context.getString(R.string.sos_state_unavailable)
+        SosViewModel.SosSendState.Sent -> stringResource(R.string.sos_check_in_sent)
+        SosViewModel.SosSendState.NotSentOffline -> stringResource(R.string.sos_state_offline)
+        SosViewModel.SosSendState.CouldNotConfirm -> stringResource(R.string.sos_state_could_not_confirm)
+        SosViewModel.SosSendState.Unavailable -> stringResource(R.string.sos_state_unavailable)
         is SosViewModel.SosSendState.RateLimited -> when (state.reason) {
-            NudgeRepository.RateLimitReason.COOLDOWN -> context.getString(
+            NudgeRepository.RateLimitReason.COOLDOWN -> stringResource(
                 R.string.sos_rate_limited_cooldown,
                 SosViewModel.cooldownMinutes(state.retryAfterSeconds),
             )
-            NudgeRepository.RateLimitReason.DAILY_CAP -> context.getString(R.string.sos_rate_limited_daily_cap)
-            NudgeRepository.RateLimitReason.UNKNOWN -> context.getString(R.string.sos_rate_limited_unknown)
+            NudgeRepository.RateLimitReason.DAILY_CAP -> stringResource(R.string.sos_rate_limited_daily_cap)
+            NudgeRepository.RateLimitReason.UNKNOWN -> stringResource(R.string.sos_rate_limited_unknown)
         }
         else -> null
     }

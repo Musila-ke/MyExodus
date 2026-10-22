@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -68,7 +69,7 @@ internal fun PartnerPlanEditor(
     var saving by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
     // 0 = no validation problem; otherwise the string resource explaining it.
-    var validation by remember { mutableStateOf(0) }
+    var validation by remember { mutableIntStateOf(0) }
 
     fun save() {
         if (saving) return

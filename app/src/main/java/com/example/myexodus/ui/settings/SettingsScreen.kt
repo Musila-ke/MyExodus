@@ -83,10 +83,10 @@ fun SettingsScreen(
     domainUsageEngine: DomainUsageEngine,
     accountingOutageSource: AccountingOutageSource,
     /** SOS §8.19 (Step 11): the recipient's block switch — null hides the row (no partner). */
+    modifier: Modifier = Modifier,
     partnerBlock: NudgeSettingsViewModel.UiState? = null,
     onPartnerBlockRefresh: () -> Unit = {},
     onPartnerBlockChange: (Boolean) -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()

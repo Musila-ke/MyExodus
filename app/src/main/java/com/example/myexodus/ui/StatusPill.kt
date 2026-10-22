@@ -24,7 +24,7 @@ enum class PillTone { QUIET, POSITIVE, NEGATIVE }
  * looked different in the two places would read as two different facts.
  */
 @Composable
-fun StatusPill(text: String, tone: PillTone = PillTone.QUIET, modifier: Modifier = Modifier) {
+fun StatusPill(text: String, modifier: Modifier = Modifier, tone: PillTone = PillTone.QUIET) {
     Surface(
         color = when (tone) {
             PillTone.QUIET -> MaterialTheme.colorScheme.surfaceContainerHighest

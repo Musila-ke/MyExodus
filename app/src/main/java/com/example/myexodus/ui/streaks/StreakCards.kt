@@ -35,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -151,7 +152,7 @@ internal fun StreakSummaryCard(state: HabitState, onSwitch: (() -> Unit)? = null
             if (best > days) {
                 Spacer(Modifier.size(8.dp))
                 Text(
-                    stringResource(R.string.streaks_best_run, best),
+                    pluralStringResource(R.plurals.streaks_best_run, best, best),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
                 )
@@ -199,7 +200,8 @@ private fun MilestoneRungStrip(state: HabitState) {
                     if (achieved) {
                         stringResource(R.string.streaks_rung_reached)
                     } else {
-                        stringResource(R.string.streaks_rung_days_away, daysUntil(state, day))
+                        val away = daysUntil(state, day)
+                        pluralStringResource(R.plurals.streaks_rung_days_away, away, away)
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = if (isNext) MaterialTheme.colorScheme.tertiary else muted,

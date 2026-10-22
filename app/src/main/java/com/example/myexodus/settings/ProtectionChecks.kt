@@ -1,5 +1,6 @@
 package com.example.myexodus.settings
 
+import android.annotation.SuppressLint
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -89,6 +90,7 @@ fun batteryOptimizationSettingsIntent(): Intent = Intent(Settings.ACTION_IGNORE_
  * does not resolve on a given build: that is the plan's settings-guidance path, and a dead
  * intent must not be a dead end.
  */
+@SuppressLint("BatteryLife") // Play policy does not apply — direct-APK channel (ADR #15).
 fun requestBatteryExemption(context: Context) {
     val direct = Intent(
         Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,

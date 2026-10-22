@@ -5,7 +5,6 @@ import com.example.myexodus.data.db.entity.UsageLedger
 import com.example.myexodus.data.db.entity.UsageLedgerSource
 import com.example.myexodus.telemetry.CrashReporting
 import java.time.Instant
-import java.time.LocalDate
 import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -245,7 +244,7 @@ class UsageDiagnosticsRecorder @Inject constructor(
      *  so a test can place the boundary at any hour. */
     private fun localMidnight(wallClockMs: Long): Long {
         val zone = ZoneId.systemDefault()
-        return LocalDate.ofInstant(Instant.ofEpochMilli(wallClockMs), zone).atStartOfDay(zone)
+        return Instant.ofEpochMilli(wallClockMs).atZone(zone).toLocalDate().atStartOfDay(zone)
             .toInstant().toEpochMilli()
     }
 

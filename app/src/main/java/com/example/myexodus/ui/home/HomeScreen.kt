@@ -131,6 +131,7 @@ fun HomeScreen(
     outageSource: AccountingOutageSource,
     onReenable: () -> Unit,
     onOpenSettings: () -> Unit,
+    modifier: Modifier = Modifier,
     onFixOutage: () -> Unit = onOpenSettings,
     onOpenStreaks: () -> Unit,
     onOpenRules: () -> Unit,
@@ -141,7 +142,6 @@ fun HomeScreen(
     streakResolved: Boolean,
     onRetryStreak: () -> Unit = {},
     streakLoadFailed: Boolean = false,
-    modifier: Modifier = Modifier,
     encryptionPending: Boolean = false,
     /** #12: pairId -> shown partner name for the pinned card's sender line. A failed read
      *  degrades to no names — the card falls back to its generic title, never a wrong name.
@@ -594,7 +594,7 @@ private fun StreakHeroCard(
         loading -> stringResource(R.string.home_streak_caption_loading)
         days == null -> stringResource(R.string.home_streak_caption_none)
         nextMilestoneDay != null && daysToNext != null ->
-            stringResource(R.string.home_streak_caption_next, nextMilestoneDay, daysToNext)
+            pluralStringResource(R.plurals.home_streak_caption_next, daysToNext, nextMilestoneDay, daysToNext)
         else -> stringResource(R.string.home_streak_caption_complete)
     }
     Surface(

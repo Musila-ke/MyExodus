@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.max
@@ -313,7 +314,7 @@ private fun NavItem(
             contentDescription = null,
             tint = if (selected) activeTint else idleTint,
             modifier = Modifier
-                .offset(y = iconCentreY - iconSize / 2 + lift)
+                .offset { IntOffset(0, (iconCentreY - iconSize / 2 + lift).roundToPx()) }
                 .size(iconSize)
                 .scale(pressScale),
         )

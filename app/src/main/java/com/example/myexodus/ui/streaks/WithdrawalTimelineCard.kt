@@ -55,8 +55,8 @@ internal fun WithdrawalTimelineCard(state: HabitState) {
                             // The live week is this card's one status, so it wears the same chip
                             // as every other status in the app rather than a fourth treatment.
                             StatusPill(
-                                stringResource(R.string.streaks_timeline_here),
-                                PillTone.POSITIVE,
+                                text = stringResource(R.string.streaks_timeline_here),
+                                tone = PillTone.POSITIVE,
                             )
                         }
                     }

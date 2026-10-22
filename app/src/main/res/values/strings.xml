@@ -1,4 +1,4 @@
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">MyExodus</string>
     <string name="enhanced_mode_block_overlay">Blocked by your MyExodus rules</string>
     <string name="blocked_target_title">%1$s is blocked</string>
@@ -137,7 +137,9 @@
     <string name="home_pinned_next">Next message</string>
     <string name="home_grid_title">Milestones</string>
     <string name="home_grid_day_of">Day %1$d of %2$d</string>
-    <string name="home_grid_all_days">%1$d days and counting</string>
+    <!-- Plurals that cannot reach one (grid window / ladder rungs / curated preset totals) are
+         suppressed per string rather than pluralised: the count is fixed by construction. -->
+    <string name="home_grid_all_days" tools:ignore="PluralsCandidate">%1$d days and counting</string>
     <string name="home_grid_legend">Rings mark days %1$s.</string>
     <!-- The milestone section's empty/error states (2026-09-29): the section renders in every
          load state, so both need copy — what happened, and what the user can do about it. -->
@@ -149,12 +151,15 @@
          raw copy literals left in the UI — invisible to the strings.xml copy audits. -->
     <string name="home_streak_caption_loading">Reading your streak…</string>
     <string name="home_streak_caption_none">No habit tracked yet. A streak starts counting the day you set one up.</string>
-    <string name="home_streak_caption_next">Next milestone: %1$d-day mark — %2$d days to go.</string>
+    <plurals name="home_streak_caption_next">
+        <item quantity="one">Next milestone: %1$d-day mark — %2$d day to go.</item>
+        <item quantity="other">Next milestone: %1$d-day mark — %2$d days to go.</item>
+    </plurals>
     <!-- Milestone celebration modal (owner directive 2026-10-21): the achievement takes the
          screen once, then leaves the day hero unobstructed. -->
     <string name="milestone_dialog_eyebrow">Milestone reached</string>
     <string name="milestone_dialog_habit">Free from %1$s</string>
-    <string name="milestone_dialog_day_short">%1$d days</string>
+    <string name="milestone_dialog_day_short" tools:ignore="PluralsCandidate">%1$d days</string>
     <string name="milestone_dialog_continue">Continue</string>
     <!-- Home quick-action dial (owner directive 2026-10-21): one FAB expands into the three
          shortcuts instead of three separate floating buttons. -->
@@ -259,7 +264,7 @@
     <string name="rules_preset_shopping">Shopping</string>
     <string name="rules_presets_sheet_title">Block by category</string>
     <string name="rules_presets_sheet_body">Curated sites, chosen for you. Review the list — nothing is blocked until you tap Block.</string>
-    <string name="rules_presets_selected_count">%1$d of %2$d selected</string>
+    <string name="rules_presets_selected_count" tools:ignore="PluralsCandidate">%1$d of %2$d selected</string>
     <string name="rules_presets_select_all">Select all</string>
     <string name="rules_presets_clear">Clear</string>
     <string name="rules_presets_all_blocked">Every site in this list is already blocked. Pick another category.</string>
@@ -271,7 +276,7 @@
     </plurals>
     <string name="rules_presets_write_failed">MyExodus couldn’t write the change.</string>
     <string name="rules_presets_error">Couldn’t block these websites. %1$s Try again.</string>
-    <string name="rules_presets_partial">Blocked %1$d of %2$d sites. %3$s Try again — sites that are already blocked won’t be added twice.</string>
+    <string name="rules_presets_partial" tools:ignore="PluralsCandidate">Blocked %1$d of %2$d sites. %3$s Try again — sites that are already blocked won’t be added twice.</string>
     <string name="rules_presets_engine_title">Protection is off</string>
     <string name="rules_presets_engine_body">Website blocks need MyExodus’s VPN to be on. Turn it on now, or block these sites anyway — they start working when protection is on.</string>
     <string name="rules_presets_engine_turn_on">Turn on protection</string>
@@ -608,8 +613,8 @@
     <!-- ADR #84: each tile carries the datum its subpage would otherwise cost a tap to show. -->
     <!-- Tiles are ~88dp of text at 360dp: "Nothing waiting" ellipsized on the device. -->
     <string name="partner_tile_requests_none">None waiting</string>
-    <string name="partner_tile_requests_waiting">%1$d waiting</string>
-    <string name="partner_tile_activity_week">%1$d this week</string>
+    <string name="partner_tile_requests_waiting" tools:ignore="PluralsCandidate">%1$d waiting</string>
+    <string name="partner_tile_activity_week" tools:ignore="PluralsCandidate">%1$d this week</string>
     <string name="partner_tile_never_synced">Never synced</string>
     <string name="partner_tile_synced">Synced %1$s</string>
     <!-- Partner plans (owner ask 2026-10-21, ADR #193): a checklist one user writes and the
@@ -629,7 +634,7 @@
     <string name="partner_plans_for_whom">Who is this plan for?</string>
     <string name="partner_plans_for_self">Just me — stays on this phone</string>
     <string name="partner_plans_cancel">Cancel</string>
-    <string name="partner_plans_progress">%1$d of %2$d done</string>
+    <string name="partner_plans_progress" tools:ignore="PluralsCandidate">%1$d of %2$d done</string>
     <string name="partner_plans_from">From %1$s</string>
     <string name="partner_plans_with">With %1$s</string>
     <string name="partner_plans_unknown_partner">your partner</string>
@@ -642,7 +647,6 @@
     <string name="partner_plans_task_field">Task</string>
     <string name="partner_plans_task_hint">e.g. Read chapter 3</string>
     <string name="partner_plans_add_task">Add task</string>
-    <string name="partner_plans_remove_task">Remove task</string>
     <string name="partner_plans_remove_task_desc">Remove %1$s</string>
     <string name="partner_plans_save">Save plan</string>
     <string name="partner_plans_saving">Saving…</string>
@@ -767,7 +771,7 @@
     <string name="partner_activity_sent_label">Your latest message</string>
     <string name="partner_toast_sent">Sent to %1$s</string>
     <string name="partner_compose_failed">Couldn\'t save your message. Try again.</string>
-    <string name="partner_compose_too_long">Your message is too long. Trim it to %1$d characters or fewer, then send again.</string>
+    <string name="partner_compose_too_long" tools:ignore="PluralsCandidate">Your message is too long. Trim it to %1$d characters or fewer, then send again.</string>
     <string name="partner_compose_suggestion_1">Thinking of you today.</string>
     <string name="partner_compose_suggestion_2">Proud of you for keeping going.</string>
     <string name="partner_compose_suggestion_3">One day at a time — you\'re doing it.</string>
@@ -831,7 +835,7 @@
     <string name="settings_sharing_choose_partner">Which partner sees this?</string>
     <string name="settings_sharing_with_partner">Sharing with %1$s</string>
     <string name="settings_sharing_shared_with_one">Shared with %1$s</string>
-    <string name="settings_sharing_shared_with_many">Shared with %1$d partners</string>
+    <string name="settings_sharing_shared_with_many" tools:ignore="PluralsCandidate">Shared with %1$d partners</string>
     <string name="settings_sharing_no_partners">No partner yet. Pair with someone from the Partner tab, then choose here what they can see.</string>
     <string name="settings_sharing_master_title">Share this streak</string>
     <string name="settings_sharing_streak_body">Its day count and name go to your partner</string>
@@ -866,8 +870,6 @@
          that the tap path never shows an emergency warning. -->
     <string name="sos_reach_out">Reach out</string>
     <string name="sos_reach_out_body">Let your partner know you could use a check-in.</string>
-    <string name="sos_try_again">Try again</string>
-    <string name="sos_state_sent">Sent</string>
     <string name="sos_state_offline">No connection. Not sent.</string>
     <string name="sos_state_could_not_confirm">Couldn’t confirm</string>
     <string name="sos_state_unavailable">Unavailable</string>
@@ -1075,20 +1077,25 @@
     <string name="streaks_subtitle">Your days free and what to expect</string>
     <string name="streaks_what_to_expect">What to expect</string>
     <!-- ADR #79: the row says what kind of material the spoke holds before the tap. -->
-    <string name="streaks_timeline_row_body">A general estimate of the first four weeks — not a clinical measurement.</string>
     <string name="streaks_switch_habit">Switch habit</string>
     <string name="streaks_days_free_from">Days free from %1$s</string>
     <string name="streaks_days_free">Days free</string>
     <string name="streaks_day_singular">day</string>
     <string name="streaks_day_plural">days</string>
-    <string name="streaks_best_run">Best run: %1$d days — that record stays with you.</string>
+    <plurals name="streaks_best_run">
+        <item quantity="one">Best run: %1$d day — that record stays with you.</item>
+        <item quantity="other">Best run: %1$d days — that record stays with you.</item>
+    </plurals>
     <!-- Owner decision 2026-10-03: the chosen stop date is shown as a since-label (identity), never as credited days — the side-by-side reads as two facts, not two counters. -->
     <string name="streaks_free_since">Free since %1$s</string>
     <string name="streaks_rung_reached">Reached</string>
-    <string name="streaks_rung_days_away">%1$d days away</string>
+    <plurals name="streaks_rung_days_away">
+        <item quantity="one">%1$d day away</item>
+        <item quantity="other">%1$d days away</item>
+    </plurals>
     <!-- Rungs are amounts ("7 days"), not ordinal days: the day the threshold is crossed renders
          one higher under the never-0 display (ADR #128). Owner-flagged 2026-10-17. -->
-    <string name="streaks_rung_day">%1$d days</string>
+    <string name="streaks_rung_day" tools:ignore="PluralsCandidate">%1$d days</string>
     <string name="streaks_relapse_title">Had a slip?</string>
     <string name="streaks_relapse_body">Ending this count starts a new one at Day 1. Your best run stays with you.</string>
     <string name="streaks_relapse_action">Log a relapse</string>
@@ -1114,11 +1121,10 @@
     <string name="streaks_manage_delete_confirm_body">“%1$s” and all of its day history will be removed from this device. Sharing for this streak stops. This can\'t be undone.</string>
     <string name="streaks_manage_delete_confirm_action">Delete</string>
     <string name="streaks_cancel">Cancel</string>
-    <string name="streaks_done">Nice — keep going</string>
     <string name="streaks_milestone_channel_name">MyExodus milestones</string>
     <!-- Amount, not ordinal: on firing the app's own counter reads "Day 8" (never-0 display). -->
-    <string name="streaks_milestone_notification_title">%1$d days free from %2$s</string>
-    <string name="streaks_milestone_notification_text">Your streak hit %1$d days. Open MyExodus to keep it going.</string>
+    <string name="streaks_milestone_notification_title" tools:ignore="PluralsCandidate">%1$d days free from %2$s</string>
+    <string name="streaks_milestone_notification_text" tools:ignore="PluralsCandidate">Your streak hit %1$d days. Open MyExodus to keep it going.</string>
     <!-- Timeline spoke. Its week labels and expectation copy stay in StreaksPresentation.kt —
          see the scope note above. -->
     <string name="streaks_timeline_here">You are here</string>

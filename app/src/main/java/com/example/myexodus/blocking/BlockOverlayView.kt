@@ -2,7 +2,6 @@ package com.example.myexodus.blocking
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.os.Build
 import android.util.Log
 import android.content.res.ColorStateList
 import android.content.res.Configuration
@@ -19,6 +18,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.content.res.ResourcesCompat
+import androidx.core.view.isVisible
 import androidx.compose.ui.graphics.toArgb
 import com.example.myexodus.R
 import com.example.myexodus.ui.appLabel
@@ -162,9 +162,7 @@ internal class BlockOverlayView(
         view.letterSpacing = letterSpacingEm
         val typeface = brandTypeface ?: return
         view.typeface = typeface
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            view.fontVariationSettings = "'wght' $weight"
-        }
+        view.fontVariationSettings = "'wght' $weight"
     }
 
     /** The adaptive type ramp the Compose world uses (Adaptive.kt) — the overlay covers the
@@ -199,7 +197,7 @@ internal class BlockOverlayView(
      *  bound — this host's own overlay is invisible to `visibleWindows()`, so the device suite
      *  cannot reach it through the accessibility tree (2026-10-20: dismiss "passed" no-op). */
     internal fun debugClickDismiss(): Boolean =
-        wallDismissButton.visibility == android.view.View.VISIBLE && wallDismissButton.performClick()
+        wallDismissButton.isVisible && wallDismissButton.performClick()
 
     /** The wall's visual anchor: the blocked target's real icon on a soft-teal disc. */
     private val discIcon = ImageView(context).apply {

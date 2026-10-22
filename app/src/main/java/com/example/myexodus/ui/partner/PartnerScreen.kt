@@ -48,6 +48,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -289,7 +290,7 @@ fun PartnerScreen(
     // ADR #193: the hub tile's live datum; null = no honest count (store refused, or still
     // loading), which renders as the tile's description rather than a fabricated zero.
     var planHub by remember { mutableStateOf<PlanHubStatus?>(null) }
-    var planHubRefresh by remember { mutableStateOf(0) }
+    var planHubRefresh by remember { mutableIntStateOf(0) }
     // Plan Step 8 (§8.13): the partner's server-derived connection signal, kept apart from the
     // E2EE monitoring report and from sync freshness. Null = no honest reading.
     var partnerStatus by remember { mutableStateOf<PartnerStatus?>(null) }
@@ -875,6 +876,7 @@ fun PartnerScreen(
         // #96: the message names its recipient, and goes to the pair it names — the selected
         // partner at the moment Send is tapped. Hoisted so the SENT toast names the same one.
         val toName = paired?.let { it.partnerLabel ?: shortKeyId(it.partnerKeyId) }.orEmpty()
+        val sentToast = stringResource(R.string.partner_toast_sent, toName)
         ComposeMessageDialog(
             sending = messageSending,
             outcome = messageOutcome,
@@ -908,9 +910,8 @@ fun PartnerScreen(
                             // main scope shows it instead. The send itself already
                             // succeeded at this point; the crash was the receipt, not
                             // the delivery.
-                            val toastText = context.getString(R.string.partner_toast_sent, toName)
                             scope.launch {
-                                Toast.makeText(context, toastText, Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, sentToast, Toast.LENGTH_SHORT).show()
                             }
                             reload()
                         }
@@ -1516,7 +1517,7 @@ private fun MyRequestsCard(requests: List<ApprovalUi>) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                StatusPill(requestStatusText(request.status), requestStatusTone(request.status))
+                StatusPill(requestStatusText(request.status), tone = requestStatusTone(request.status))
             }
             if (index < requests.lastIndex) HorizontalDivider()
         }

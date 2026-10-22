@@ -12,7 +12,6 @@ import com.example.myexodus.data.db.entity.UsageLedgerSource
 import com.example.myexodus.data.db.entity.isExpiredAt
 import com.example.myexodus.telemetry.CrashReporting
 import java.time.Instant
-import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
 import kotlinx.coroutines.CoroutineDispatcher
@@ -584,7 +583,7 @@ class UsageAccountingEngine(
     /** The device-local date a wall-clock reading belongs to — the single day-attribution
      *  authority ([wallClockNowMs] is its only clock). */
     private fun localDateOf(wallClockMs: Long): String =
-        LocalDate.ofInstant(Instant.ofEpochMilli(wallClockMs), ZoneId.systemDefault()).toString()
+        Instant.ofEpochMilli(wallClockMs).atZone(ZoneId.systemDefault()).toLocalDate().toString()
 
     /** The one construction site for a fresh day's row (Decision 20 shape). */
     private fun newTracker(profileId: String, packageName: String, today: String) = DailyUsageTracker(

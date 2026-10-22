@@ -445,7 +445,6 @@ private fun SosSurface(
     sosState: SosViewModel.SosSendState,
     onDismiss: () -> Unit,
 ) {
-    val context = LocalContext.current
     Text(
         text = stringResource(R.string.widget_hold_sos_title),
         style = MaterialTheme.typography.titleLarge,
@@ -490,9 +489,10 @@ private fun SosSurface(
             Spacer(Modifier.height(24.dp))
             val armed = sosState == SosViewModel.SosSendState.Idle ||
                 sosState == SosViewModel.SosSendState.CouldNotConfirm
+            val defaultMessage = stringResource(R.string.sos_default_message)
             HoldRing(
                 enabled = armed,
-                onConfirm = { viewModel.logReachOut(context.getString(R.string.sos_default_message)) },
+                onConfirm = { viewModel.logReachOut(defaultMessage) },
                 fill = MaterialTheme.colorScheme.primary,
             ) {
                 if (sosState == SosViewModel.SosSendState.Sending) {
@@ -511,7 +511,7 @@ private fun SosSurface(
                 }
             }
             Spacer(Modifier.height(16.dp))
-            sosStateMessage(context, sosState)?.let {
+            sosStateMessage(sosState)?.let {
                 Text(
                     text = it,
                     style = MaterialTheme.typography.bodyMedium,

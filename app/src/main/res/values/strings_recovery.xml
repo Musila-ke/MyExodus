@@ -7,7 +7,6 @@
 -->
 <resources xmlns:tools="http://schemas.android.com/tools">
 
-    <string name="recovery_back">Back</string>
     <string name="recovery_suggested_title">Try right now</string>
     <string name="recovery_risk_window_note">You\'re inside one of your risk windows — low-effort options first.</string>
 
@@ -28,7 +27,6 @@
     <string name="recovery_plan_add">Add</string>
     <string name="recovery_plan_add_title">Add</string>
     <string name="recovery_plan_edit_title">Edit</string>
-    <string name="recovery_plan_edit">Edit</string>
     <string name="recovery_plan_move_up">Move up</string>
     <string name="recovery_plan_move_down">Move down</string>
     <string name="recovery_plan_delete_title">Delete this?</string>
@@ -183,7 +181,6 @@
 
     <!-- Crisis resources (W6) -->
     <string name="recovery_crisis_link">Need urgent help?</string>
-    <string name="recovery_crisis_link_body">Helplines and crisis services, verified for your region.</string>
     <string name="recovery_crisis_back">Get help now</string>
     <string name="recovery_crisis_title">Get help now</string>
     <string name="recovery_crisis_intro">If you\'re in immediate danger, call your local emergency number. These services are run by independent organizations — the numbers below were checked by hand.</string>

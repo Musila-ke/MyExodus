@@ -23,6 +23,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -78,7 +79,7 @@ fun PartnerPlansScreen(
     var askingForWhom by remember { mutableStateOf(false) }
     // null = no notice; true = saved locally; false = saved for the partner.
     var savedNotice by remember { mutableStateOf<Boolean?>(null) }
-    var reloadKey by remember { mutableStateOf(0) }
+    var reloadKey by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(reloadKey) {
         val snapshot = withContext(Dispatchers.IO) {
