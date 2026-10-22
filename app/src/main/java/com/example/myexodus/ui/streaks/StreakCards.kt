@@ -220,6 +220,7 @@ private fun MilestoneRungStrip(state: HabitState) {
  */
 @Composable
 internal fun RelapseCard(
+    habitLabel: String,
     currentDays: Int,
     inFlight: Boolean,
     note: String?,
@@ -235,6 +236,7 @@ internal fun RelapseCard(
                 Text(
                     stringResource(
                         R.string.streaks_relapse_confirm_body,
+                        habitLabel,
                         currentDays,
                         stringResource(
                             if (currentDays == 1) {

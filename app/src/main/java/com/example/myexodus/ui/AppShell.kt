@@ -101,6 +101,7 @@ import com.example.myexodus.ui.recovery.RecoveryScreen
 import com.example.myexodus.ui.rules.RulesScreen
 import com.example.myexodus.ui.settings.NudgeSettingsViewModel
 import com.example.myexodus.ui.settings.SettingsScreen
+import com.example.myexodus.ui.insights.InsightsViewModel
 import com.example.myexodus.ui.streaks.HabitPickerSheet
 import com.example.myexodus.ui.streaks.StreaksScreen
 import com.example.myexodus.ui.streaks.StreaksViewModel
@@ -156,6 +157,8 @@ fun AppShell(
     authority: ProtectionAuthority? = null,
     onReenable: () -> Unit,
     streaks: StreaksViewModel,
+    /** Owner task #22: the Insights spoke's on-demand read model. */
+    insights: InsightsViewModel,
     /** SOS §8.15 (Step 8): Home's Reach out sender state machine. */
     sos: SosViewModel,
     /** SOS §8.16 (Step 9): the recipient inbox — listener follows the Home surface. */
@@ -227,6 +230,7 @@ fun AppShell(
     val relapseFeedback by streaks.relapseFeedback.collectAsStateWithLifecycle()
     val manageFeedback by streaks.manageFeedback.collectAsStateWithLifecycle()
     val manageInFlight by streaks.manageInFlight.collectAsStateWithLifecycle()
+    val insightsState by insights.state.collectAsStateWithLifecycle()
 
     // SOS §8.15 (Step 8): the Reach out control's sender state.
     val sosState by sos.state.collectAsStateWithLifecycle()
@@ -421,6 +425,8 @@ fun AppShell(
                         relapseFeedback = relapseFeedback,
                         manageFeedback = manageFeedback,
                         manageInFlight = manageInFlight,
+                        insights = insightsState,
+                        onRefreshInsights = insights::refresh,
                         onRenameHabit = streaks::renameHabit,
                         onDeleteHabit = streaks::deleteHabit,
                         onClearManageFeedback = streaks::clearManageFeedback,
@@ -494,6 +500,7 @@ fun AppShell(
                 Text(
                     stringResource(
                         R.string.streaks_relapse_confirm_body,
+                        habit?.targetLabel ?: stringResource(R.string.streaks_title),
                         days,
                         stringResource(
                             if (days == 1) R.string.streaks_day_singular else R.string.streaks_day_plural,

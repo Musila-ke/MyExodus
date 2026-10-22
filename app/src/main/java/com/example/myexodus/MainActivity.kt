@@ -127,6 +127,7 @@ import com.example.myexodus.ui.partner.PartnerSelection
 import com.example.myexodus.ui.partner.UnpairOutcome
 import com.example.myexodus.widget.ProtectionSnapshotWriter
 import com.example.myexodus.ui.setup.SetupScreen
+import com.example.myexodus.ui.insights.InsightsViewModel
 import com.example.myexodus.ui.streaks.StreaksViewModel
 import com.example.myexodus.ui.theme.MyExodusTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -283,6 +284,9 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var habitRepository: HabitRepository
 
     private val streaksViewModel: StreaksViewModel by viewModels()
+
+    /** Owner task #22: the Streaks tab's Insights spoke; loads only when opened. */
+    private val insightsViewModel: InsightsViewModel by viewModels()
 
     /** SOS §8.15 (Step 8): the Reach out sender state machine. */
     private val sosViewModel: SosViewModel by viewModels()
@@ -570,6 +574,7 @@ class MainActivity : FragmentActivity() {
                         degradation = degradation,
                         authority = authority,
                         streaks = streaksViewModel,
+                        insights = insightsViewModel,
                         sos = sosViewModel,
                         nudgeInbox = nudgeInboxViewModel,
                         nudgeSettings = nudgeSettingsViewModel,

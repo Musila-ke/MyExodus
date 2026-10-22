@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Timeline
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
@@ -38,10 +39,13 @@ import com.example.myexodus.streaks.WithdrawalSeverity
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.NavTile
 import com.example.myexodus.ui.WindowWidth
+import com.example.myexodus.ui.insights.InsightsScreen
+import com.example.myexodus.ui.insights.InsightsViewModel
 import com.example.myexodus.ui.rememberWindowWidth
 
 private const val VIEW_TIMELINE = "timeline"
 private const val VIEW_MANAGE = "manage"
+private const val VIEW_INSIGHTS = "insights"
 
 /**
  * Streaks tab (plan §8 Step 5): live streak state from the repository's `StateFlow` collected
@@ -74,6 +78,9 @@ fun StreaksScreen(
     relapseFeedback: StreaksViewModel.RelapseFeedback?,
     manageFeedback: StreaksViewModel.ManageFeedback?,
     manageInFlight: Boolean,
+    /** Owner task #22: the Insights spoke loads on open, never with the hub. */
+    insights: InsightsViewModel.State,
+    onRefreshInsights: () -> Unit,
     onRenameHabit: (habitId: String, label: String) -> Unit,
     onDeleteHabit: (habitId: String) -> Unit,
     onClearManageFeedback: () -> Unit,
@@ -105,6 +112,9 @@ fun StreaksScreen(
     // while a spoke is open falls back to the hub instead of stranding a BackRow over nothing.
     val timelineState = state?.takeIf { view == VIEW_TIMELINE }
     val manageState = state?.takeIf { view == VIEW_MANAGE }
+    LaunchedEffect(view) {
+        if (view == VIEW_INSIGHTS) onRefreshInsights()
+    }
     // A successful delete ends the Manage spoke: either another habit took the deleted one's
     // place, or the page itself has fallen back to setup (state == null).
     LaunchedEffect(manageFeedback) {
@@ -120,7 +130,10 @@ fun StreaksScreen(
             .padding(horizontal = sidePadding, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        if (timelineState != null) {
+        if (view == VIEW_INSIGHTS) {
+            BackRow(label = stringResource(R.string.insights_title), onBack = { view = null })
+            InsightsScreen(state = insights, habit = state, onRetry = onRefreshInsights)
+        } else if (timelineState != null) {
             BackRow(label = stringResource(R.string.streaks_what_to_expect), onBack = { view = null })
             WithdrawalTimelineCard(timelineState)
         } else if (manageState != null) {
@@ -184,7 +197,17 @@ fun StreaksScreen(
                         modifier = Modifier.weight(1f),
                     )
                 }
+                // Owner task #22: the one tile that opens the full record, with its window
+                // stated on the face so the page's scope is known before the tap.
+                NavTile(
+                    icon = Icons.Outlined.Insights,
+                    label = stringResource(R.string.insights_title),
+                    status = stringResource(R.string.insights_stat_caption),
+                    onClick = { view = VIEW_INSIGHTS },
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 RelapseCard(
+                    habitLabel = state.targetLabel,
                     currentDays = daysFree(state.currentStreakElapsedMs),
                     inFlight = relapseInFlight,
                     note = relapseFeedback?.let { relapseNoteText(it) },

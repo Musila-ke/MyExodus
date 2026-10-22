@@ -1101,7 +1101,7 @@
     <string name="streaks_relapse_action">Log a relapse</string>
     <string name="streaks_relapse_in_flight">Logging…</string>
     <string name="streaks_relapse_confirm_title">Log a relapse?</string>
-    <string name="streaks_relapse_confirm_body">Your current streak of %1$d %2$s ends and a new one starts at Day 1. Your best run stays on record.</string>
+    <string name="streaks_relapse_confirm_body">This resets “%1$s” to Day 1 — your current run of %2$d %3$s ends, and your best run stays on record.</string>
     <string name="streaks_relapse_confirm_action">Log it</string>
     <string name="streaks_relapse_error_before_start">That relapse time is earlier than this streak\'s start. Check your device\'s date and time settings, then try again.</string>
     <string name="streaks_relapse_error_store">MyExodus can\'t reach its local database right now, so nothing was logged. Try again in a moment.</string>
@@ -1157,4 +1157,55 @@
     <string name="streaks_picker_confirm">OK</string>
     <string name="streaks_picker_title">Your habits</string>
     <string name="streaks_picker_add">Add habit</string>
+
+    <!-- Insights (owner task #22): last-7-days reading of the local journals -->
+    <string name="insights_title">Insights</string>
+    <string name="insights_subtitle">What MyExodus counted on this phone over the last 7 days.</string>
+    <string name="insights_loading">Reading your journals…</string>
+    <string name="insights_unavailable_title">Your journals won\'t open right now</string>
+    <string name="insights_unavailable_body">The encrypted database didn\'t open, so there\'s nothing honest to show. Your data is safe — try again.</string>
+    <string name="insights_retry">Try again</string>
+    <string name="insights_empty_title">Nothing counted yet</string>
+    <string name="insights_empty_body">Once blocking, screen time, urge practice, or a streak records something, it shows up here. Nothing leaves this phone.</string>
+    <string name="insights_blocked_label">Times blocked</string>
+    <string name="insights_overrides_label">Overrides</string>
+    <string name="insights_stat_caption">Last 7 days</string>
+    <string name="insights_blocks_title">Blocked and overridden</string>
+    <string name="insights_blocks_caption">One bar per day — blocked attempts on top, overrides below.</string>
+    <string name="insights_blocks_empty">No blocked attempts or overrides this week.</string>
+    <string name="insights_legend_blocked">Blocked</string>
+    <string name="insights_legend_overrides">Overrides</string>
+    <string name="insights_usage_title">Screen time</string>
+    <string name="insights_usage_caption">Today: %1$s</string>
+    <string name="insights_usage_empty">No credited screen time this week.</string>
+    <string name="insights_time_where_title">Where the time went</string>
+    <string name="insights_most_blocked_title">What you tried most</string>
+    <string name="insights_recovery_title">Urge practice</string>
+    <string name="insights_recovery_completed">Techniques completed</string>
+    <string name="insights_recovery_logged">Urges logged only</string>
+    <string name="insights_recovery_abandoned">Sessions abandoned</string>
+    <string name="insights_recovery_interrupted">Sessions interrupted</string>
+    <string name="insights_recovery_empty">No urge sessions this week.</string>
+    <string name="insights_habits_title">Every streak</string>
+    <string name="insights_habits_empty">No streaks yet.</string>
+    <string name="insights_habit_no_best">No best run yet</string>
+    <string name="insights_attempt_bar_description">%1$s — blocked: %2$d, overrides: %3$d</string>
+    <string name="insights_attempt_bar_none">%1$s — nothing counted</string>
+    <string name="insights_usage_bar_description">%1$s — %2$s counted</string>
+    <plurals name="insights_recovery_all_time">
+        <item quantity="one">%d urge session recorded in total</item>
+        <item quantity="other">%d urge sessions recorded in total</item>
+    </plurals>
+    <plurals name="insights_habit_best">
+        <item quantity="one">Best: %d day</item>
+        <item quantity="other">Best: %d days</item>
+    </plurals>
+    <plurals name="insights_habit_current">
+        <item quantity="one">Now: %d day</item>
+        <item quantity="other">Now: %d days</item>
+    </plurals>
+    <plurals name="insights_habit_relapses">
+        <item quantity="one">%d relapse</item>
+        <item quantity="other">%d relapses</item>
+    </plurals>
 </resources>

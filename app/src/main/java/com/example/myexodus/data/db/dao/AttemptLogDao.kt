@@ -1,5 +1,6 @@
 package com.example.myexodus.data.db.dao
 
+import androidx.room3.ColumnInfo
 import androidx.room3.Dao
 import androidx.room3.Insert
 import androidx.room3.Query
@@ -10,6 +11,19 @@ import kotlinx.coroutines.flow.Flow
 data class TargetAttemptCount(
     val target: String,
     val count: Int,
+)
+
+/** Blocked/override attempts for one target inside a report window. */
+data class TargetOutcomeCount(
+    @ColumnInfo(name = "blocked_target") val target: String,
+    val outcome: String,
+    val count: Int,
+)
+
+/** The timestamp + outcome pair the Insights day strip buckets; no other columns read. */
+data class AttemptStamp(
+    @ColumnInfo(name = "occurred_at_epoch_millis") val occurredAtEpochMillis: Long,
+    val outcome: String,
 )
 
 @Dao
@@ -60,4 +74,25 @@ interface AttemptLogDao {
             "WHERE outcome = 'BLOCKED' GROUP BY blocked_target",
     )
     fun observeBlockedCounts(): Flow<List<TargetAttemptCount>>
+
+    /**
+     * Exact per-target, per-outcome totals at or after [sinceMs] — the Insights report window.
+     * Aggregated in SQL rather than by loading rows, so the numbers stay complete however many
+     * attempts a heavy rule set produces (a `LIMIT` here would undercount silently).
+     */
+    @Query(
+        "SELECT blocked_target AS blocked_target, outcome AS outcome, COUNT(*) AS count " +
+            "FROM attempt_log WHERE occurred_at_epoch_millis >= :sinceMs " +
+            "GROUP BY blocked_target, outcome",
+    )
+    suspend fun countsSince(sinceMs: Long): List<TargetOutcomeCount>
+
+    /** Timestamps + outcomes for the day strip. Two small columns per row; the strip needs
+     *  every attempt to bucket days in the device's own zone, which SQL cannot spell without
+     *  freezing a zone into the query. */
+    @Query(
+        "SELECT occurred_at_epoch_millis AS occurred_at_epoch_millis, outcome AS outcome " +
+            "FROM attempt_log WHERE occurred_at_epoch_millis >= :sinceMs",
+    )
+    suspend fun stampsSince(sinceMs: Long): List<AttemptStamp>
 }

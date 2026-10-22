@@ -57,6 +57,19 @@ interface UsageLedgerDao {
     )
     suspend fun dayTotals(kinds: Collection<Int>): List<LedgerDayTotal>
 
+    /** Per-package day totals from [fromDayKey] onward. ISO day keys order lexicographically,
+     *  so this is the Insights window's bounded read — never the whole 90-day journal. */
+    @Query(
+        "SELECT package_name AS package_name, day_key AS day_key, " +
+            "SUM(credited_ms) AS total_ms FROM usage_ledger " +
+            "WHERE kind IN (:kinds) AND day_key >= :fromDayKey " +
+            "GROUP BY package_name, day_key",
+    )
+    suspend fun dayTotalsSince(
+        kinds: Collection<Int>,
+        fromDayKey: String,
+    ): List<LedgerDayTotal>
+
     /** The credit-edge audit's anchor query (ADR #160, amended by ADR #191): the newest wall
      *  per package among the credit-answering kinds (ACCOUNTING, RECONCILIATION,
      *  MIGRATION_CARRYOVER), bounded by a wall cutoff so the audit can never re-open a span
