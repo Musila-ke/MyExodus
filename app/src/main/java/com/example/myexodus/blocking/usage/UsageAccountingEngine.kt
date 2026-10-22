@@ -10,6 +10,7 @@ import com.example.myexodus.data.db.entity.DailyUsageTracker
 import com.example.myexodus.data.db.entity.UsageLedgerKind
 import com.example.myexodus.data.db.entity.UsageLedgerSource
 import com.example.myexodus.data.db.entity.isExpiredAt
+import com.example.myexodus.data.db.entity.isStaleFor
 import com.example.myexodus.telemetry.CrashReporting
 import java.time.Instant
 import java.time.ZoneId
@@ -56,8 +57,11 @@ object WarningState {
  * delivery credits nothing (the original already advanced the projection), and a rejected or
  * colliding insert credits nothing either — which is what keeps `tracker.msUsedToday` equal to
  * Σ ledger for its own `localDateAnchor` day, the invariant [UsageLedgerRepository.rebuildProjection]
- * restores. Crediting a tick the journal refused would make the projection unreconstructable,
- * which is the whole failure this feature exists to end.
+ * restores. One deliberate exception: Decision 20's reset fires on a date OR zone change, and a
+ * same-date zone move leaves the journal's day history intact while the live counter restarts at
+ * zero — so there the row sits below its day total until the next day. Crediting a tick the
+ * journal refused would make the projection unreconstructable, which is the whole failure this
+ * feature exists to end.
  *
  * Caller contract (§6 steps 3–4): each call carries an *incremental* delta and the caller
  * restarts its session anchor after every call, so a tick is never counted twice. Authority
@@ -121,12 +125,13 @@ class UsageAccountingEngine(
             val trackerDao = db.dailyUsageTrackerDao()
             val existing = trackerDao.findByPackage(profile.userId, packageName)
             val today = localDateOf(nowWallClockMs)
+            val zoneId = ZoneId.systemDefault().id
             val bootCount = systemBootCount(appContext)
             var tracker = existing ?: newTracker(profile.userId, packageName, today)
 
             // (b) rollover first, before any evaluation (§6 step 6) — a stale row must never
             // contribute yesterday's usage to today's decision.
-            val rolledOver = tracker.localDateAnchor != today
+            val rolledOver = tracker.isStaleFor(today, zoneId)
             if (rolledOver) tracker = tracker.rolledOverTo(today)
 
             // (b2) day scope (user decision 2026-09-20): on a day the rule does not cover the
@@ -280,7 +285,7 @@ class UsageAccountingEngine(
             val today = localDateOf(nowWallClockMs)
             val existing = trackerDao.findByPackage(profile.userId, packageName)
             val base = existing?.let {
-                if (it.localDateAnchor != today) it.rolledOverTo(today) else it
+                if (it.isStaleFor(today, ZoneId.systemDefault().id)) it.rolledOverTo(today) else it
             }
             // Inactive day scope accrues nothing (user decision 2026-09-20) — never seed into
             // it; a stale row still rolls, matching processUsageObservation's own handling.
@@ -374,11 +379,12 @@ class UsageAccountingEngine(
                 ?.takeIf { it.isEnabled && !it.isExpiredAt(nowWallClockMs) }
                 ?: return@withWriteTransaction 0L
             val today = localDateOf(nowWallClockMs)
+            val zoneId = ZoneId.systemDefault().id
             val bootCount = systemBootCount(appContext)
             val trackerDao = db.dailyUsageTrackerDao()
             val existing = trackerDao.findByPackage(profile.userId, packageName)
             var tracker = existing ?: newTracker(profile.userId, packageName, today)
-            val rolledOver = tracker.localDateAnchor != today
+            val rolledOver = tracker.isStaleFor(today, zoneId)
             if (rolledOver) tracker = tracker.rolledOverTo(today)
             // Same day-scope rule as every credit path (user decision 2026-09-20).
             if (!dayScopeCoversToday(rule.activeDaysOfWeek, rule.timezone)) {
@@ -554,7 +560,7 @@ class UsageAccountingEngine(
         val today = localDateOf(nowWallClockMs)
         val tz = ZoneId.systemDefault().id
         val used = tracker
-            ?.takeIf { it.localDateAnchor == today && it.timezoneIdAtAnchor == tz }
+            ?.takeIf { !it.isStaleFor(today, tz) }
             ?.msUsedToday
             ?: 0L
         (rule.dailyLimitMs - used).coerceAtLeast(0)
@@ -573,8 +579,9 @@ class UsageAccountingEngine(
             val profile = db.userProfileDao().getActive() ?: return@withWriteTransaction 0
             val trackerDao = db.dailyUsageTrackerDao()
             val today = localDateOf(wallClockNowMs())
+            val zoneId = ZoneId.systemDefault().id
             val stale = trackerDao.getForProfile(profile.userId)
-                .filter { it.localDateAnchor != today }
+                .filter { it.isStaleFor(today, zoneId) }
             stale.forEach { trackerDao.update(it.rolledOverTo(today)) }
             stale.size
         }

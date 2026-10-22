@@ -33,7 +33,11 @@
 #
 # Every cell starts with a scene reset: a standing wall survives HOME and MainActivity (only
 # its Close button dismisses it) and would re-evict the next launch with no decision. The
-# reset clicks that real Close through the verification suite, then parks on HOME.
+# reset parks on HOME first, then clicks that real Close through the verification suite —
+# dismissing while the target is still foreground races the next poll, which re-raises the
+# wall and contaminates every following cell (AVD, 2026-10-22).
+# Precondition: dismiss Gmail's one-time "New in Gmail" onboarding ("GOT IT") on a fresh AVD.
+# Left up, it relaunches after the reset's HOME and re-foregrounds the blocked package.
 #
 # Usage: scripts/blocking-matrix-sweep.sh [device-serial]
 #        SKIP=33 scripts/blocking-matrix-sweep.sh [device-serial]   # resume at cell 33
@@ -55,7 +59,9 @@ PASS=0; FAIL=0
 SKIP=${SKIP:-0}   # first cell number to execute; earlier cells are skipped (resume after an abort)
 
 # A locked phone makes `am start -W` wait forever (run 2026-10-20 22:54 wedged 5 h this way).
-# Fail fast instead, and bound every launch wait so even a mid-cell lock can only cost one cell.
+# Fail fast instead. Note that after HOME on API 37 the launch itself can be deferred: `-W`
+# then never returns even with a connected device (2026-10-22, 17:24), so the harness starts
+# the suite without `-W` and gates on the engine snapshot instead.
 require_interactive() {
     local state
     state=$($ADB -s "$DEV" shell 'dumpsys power | grep -m1 mWakefulness=; dumpsys window | grep -m1 isKeyguardShowing' 2>/dev/null)
@@ -104,27 +110,35 @@ fgs_count() { grep -c "detected $PKG — launching blocker" "$CELLLOG" || :; }
 usage_block_count() { grep -c "observe $PKG .* Block (" "$CELLLOG" || :; }
 
 reset_scene() {
-    # Close any persistent wall through its real listener (no-op when none is shown), then
-    # park on HOME so the next seed never runs with the target still foreground (a spent
-    # quota written at that moment makes the 10 s usage tick raise the daily wall on it).
+    # HOME FIRST, then close any persistent wall through its real listener (no-op when none).
+    # Order matters (2026-10-22, AVD run): dismissing while the target is still foreground
+    # lets the next poll re-raise the wall a beat later, and the now-standing wall contaminates
+    # every following cell (observed as a sweep-long STALE-CARD chain starting at the first
+    # usage-tick Block cell). With the target backgrounded first, nothing can re-raise it.
     # The buffer clear comes first, so the cell's log is bounded and a full-buffer dump
     # (2.4 s per tag) never slows the poll or rotates mid-cell.
     $ADB -s "$DEV" logcat -c >/dev/null 2>&1
-    $ADB -s "$DEV" shell timeout 20 am start -W -n com.example.myexodus/.blocking.DeviceVerificationActivity \
-        --es suite overlay-dismiss >/dev/null 2>&1
-    sleep 1
     $ADB -s "$DEV" shell input keyevent 3 >/dev/null 2>&1
-    sleep 1
+    sleep 2   # let the launcher transition finish; a start inside it gets deferred (2026-10-22)
+    # No `-W`: on API 37 a start right after HOME was deferred and `am -W` never returned —
+    # the run wedged 3.5 min on its first reset, and the device-side `timeout` left a zombie
+    # while adbd kept the host shell open (AVD 2026-10-22, ~17:24). The suite needs no launch
+    # ack: it runs on its own thread and finishes; the sleep below only has to outlast it.
+    $ADB -s "$DEV" shell timeout 20 am start -n com.example.myexodus/.blocking.DeviceVerificationActivity \
+        --es suite overlay-dismiss >/dev/null 2>&1
+    sleep 3   # measured: the suite's click lands ~2.4 s after the start
 }
 
 wait_snapshot() { # prevVersion — the seed's policy bump is only in force once a newer snapshot lands
     local prev=$1 cur i
-    for i in $(seq 1 24); do
+    # 60 s, not 12 s: after an ANR the app is killed and the next seed rides a cold start
+    # (dex + verification + SQLCipher measured >12 s on the loaded AVD, 2026-10-22 17:29).
+    for i in $(seq 1 120); do
         cur=$(snapshot_version)
         if [ -n "$cur" ] && [ "$cur" != "$prev" ]; then return 0; fi
         sleep 0.5
     done
-    echo "  (snapshot did not advance past v$prev within 12s)" >&2
+    echo "  (snapshot did not advance past v$prev within 60s)" >&2
 }
 # Seed -> publish measured at ~2.0s; the wait above is mandatory, not a fixed sleep. The buffer
 # clear sits in reset_scene, BEFORE the seed writes anything, so it can never wipe the version
@@ -138,7 +152,9 @@ seed() { # wStart wEnd day expiryMs alwaysOn limitMs usedMs
     [ "$4" != 0 ] && args+=(--el expiresInMs "$4")
     local prev
     prev=$(snapshot_version)
-    $ADB -s "$DEV" shell timeout 20 am start -W -n com.example.myexodus/.blocking.DeviceVerificationActivity "${args[@]}" >/dev/null 2>&1
+    # No `-W` (same wedge as reset_scene); `wait_snapshot` is the real gate — it observes the
+    # seeded policy in the engine's own snapshot rather than trusting a launch callback.
+    $ADB -s "$DEV" shell timeout 20 am start -n com.example.myexodus/.blocking.DeviceVerificationActivity "${args[@]}" >/dev/null 2>&1
     wait_snapshot "$prev"
     sleep 1
 }
@@ -232,6 +248,14 @@ run_cell() { # id shape window quota day expiry
 
 echo "sweep start $(date '+%H:%M:%S') windowInside=$WIN_IN windowOutside=$WIN_OUT skip=$SKIP" | tee "$OUT"
 require_interactive
+# Warm-up: after an ANR the process is dead and the first seed would race a cold start.
+# Launch the app once and wait for its first engine snapshot before any cell (2026-10-22).
+$ADB -s "$DEV" shell am start -n com.example.myexodus/.MainActivity >/dev/null 2>&1
+for i in $(seq 1 120); do
+    [ -n "$(snapshot_version)" ] && break
+    sleep 0.5
+done
+sleep 2
 # Known-clean start: a wall left by a previous run re-evicts the first launch without a
 # decision, which would taint the first cell.
 reset_scene
@@ -260,7 +284,7 @@ for day in on off; do
   done
 done
 
-$ADB -s "$DEV" shell timeout 20 am start -W -n com.example.myexodus/.blocking.DeviceVerificationActivity \
+$ADB -s "$DEV" shell timeout 20 am start -n com.example.myexodus/.blocking.DeviceVerificationActivity \
     --es suite usage-clear --es pkg "$PKG" --ez withRule true >/dev/null 2>&1
 reset_scene   # leave no wall standing on the owner's phone
 echo "sweep end $(date '+%H:%M:%S') pass=$PASS fail=$FAIL cells=$((PASS + FAIL))" | tee -a "$OUT"

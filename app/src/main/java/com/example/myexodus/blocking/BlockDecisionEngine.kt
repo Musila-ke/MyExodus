@@ -82,8 +82,15 @@ class BlockDecisionEngine(
         )
     }
 
-    fun decideUrl(canonical: CanonicalUrl, nowEpochMillis: Long, usageTodayMs: Long? = null): BlockDecision {
-        val pattern = matchingUrlRule(canonical) ?: return BlockDecision.Allow
+    fun decideUrl(canonical: CanonicalUrl, nowEpochMillis: Long, usageTodayMs: Long? = null): BlockDecision =
+        decideUrlFor(matchingUrlRule(canonical), nowEpochMillis, usageTodayMs)
+
+    /** Decide against an already-resolved rule [pattern]. The scanner resolves the rule once to
+     *  fetch that rule's usage, then decides here: a second snapshot read could straddle a
+     *  rules publish and evaluate a *different* rule than the usage was measured for. [pattern]
+     *  null means "no matching rule" — Allow, never a re-resolve. */
+    fun decideUrlFor(pattern: UrlPattern?, nowEpochMillis: Long, usageTodayMs: Long? = null): BlockDecision {
+        if (pattern == null) return BlockDecision.Allow
         return evaluate(
             isAlwaysOn = pattern.isAlwaysOn,
             dailyLimitMs = pattern.dailyLimitMs,

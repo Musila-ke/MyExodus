@@ -171,11 +171,26 @@ class UsageAccountingEngineTest {
     }
 
     @Test
-    fun rollover_anyAnchorMismatchResets_coveredByTimezoneMoveCase() = runTest {
+    fun rollover_futureDateAnchor_resets() = runTest {
         // Decision 20: any stored-vs-current date mismatch rolls, regardless of direction.
         seedTracker(today.plusDays(1).toString(), msUsed = 5 * MIN)
         assertEquals(NoAction, engine.processUsageObservation(PKG, 2 * MIN, 10 * SEC, UsageLedgerSource.PATH_A))
         assertEquals(2 * MIN, trackerRow()!!.msUsedToday)
+    }
+
+    @Test
+    fun rollover_timezoneMove_sameDate_resets() = runTest {
+        // Decision 20's anchor is the (date, IANA zone) PAIR. Same date, different zone is
+        // still a new day: the row must reset and re-stamp the current zone. Was date-only,
+        // while remainingBudgetMs already treated a zone mismatch as zero usage (deep review
+        // 2026-10-22) — the two reads disagreed after a timezone move.
+        val deviceZone = ZoneId.systemDefault().id
+        val otherZone = if (deviceZone == "UTC") "Pacific/Kiritimati" else "UTC"
+        seedTracker(today.toString(), msUsed = 5 * MIN, zoneId = otherZone)
+        assertEquals(NoAction, engine.processUsageObservation(PKG, 2 * MIN, 10 * SEC, UsageLedgerSource.PATH_A))
+        val row = trackerRow()!!
+        assertEquals(2 * MIN, row.msUsedToday)
+        assertEquals(deviceZone, row.timezoneIdAtAnchor)
     }
 
     @Test
@@ -300,7 +315,7 @@ class UsageAccountingEngineTest {
             DailyUsageTracker(
                 trackerId = "stale", profileId = PROFILE_ID, packageName = PKG,
                 localDateAnchor = today.minusDays(1).toString(),
-                timezoneIdAtAnchor = "UTC", msUsedToday = 29 * MIN,
+                timezoneIdAtAnchor = ZoneId.systemDefault().id, msUsedToday = 29 * MIN,
                 warning1State = WarningState.DELIVERED, warning2State = WarningState.PENDING_DELIVERY,
                 blockedToday = true,
             ),
@@ -309,7 +324,7 @@ class UsageAccountingEngineTest {
             DailyUsageTracker(
                 trackerId = "today", profileId = PROFILE_ID, packageName = TODAY_PKG,
                 localDateAnchor = today.toString(),
-                timezoneIdAtAnchor = "UTC", msUsedToday = 5 * MIN,
+                timezoneIdAtAnchor = ZoneId.systemDefault().id, msUsedToday = 5 * MIN,
                 warning1State = WarningState.DELIVERED, warning2State = WarningState.NOT_DUE,
                 blockedToday = true,
             ),
@@ -686,11 +701,16 @@ class UsageAccountingEngineTest {
     private suspend fun trackerRow(): DailyUsageTracker? =
         db.dailyUsageTrackerDao().findByPackage(PROFILE_ID, PKG)
 
-    private suspend fun seedTracker(anchor: String, msUsed: Long, blocked: Boolean = false) {
+    private suspend fun seedTracker(
+        anchor: String,
+        msUsed: Long,
+        blocked: Boolean = false,
+        zoneId: String = ZoneId.systemDefault().id,
+    ) {
         db.dailyUsageTrackerDao().insert(
             DailyUsageTracker(
                 trackerId = "seed-1", profileId = PROFILE_ID, packageName = PKG,
-                localDateAnchor = anchor, timezoneIdAtAnchor = "UTC", msUsedToday = msUsed,
+                localDateAnchor = anchor, timezoneIdAtAnchor = zoneId, msUsedToday = msUsed,
                 warning1State = WarningState.NOT_DUE, warning2State = WarningState.NOT_DUE,
                 blockedToday = blocked,
             ),

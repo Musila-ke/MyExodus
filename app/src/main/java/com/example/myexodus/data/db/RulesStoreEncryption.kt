@@ -30,8 +30,15 @@ class RulesStoreEncryption(
 
     fun classifyFailure(e: Throwable): KeyFailure = keyManager.classifyFailure(e)
 
-    /** Decides and, when needed, runs the plaintext→encrypted conversion. */
-    fun prepareForOpen(buildDestination: (File) -> Unit): ConversionOutcome {
+    /**
+     * Decides and, when needed, runs the plaintext→encrypted conversion. [migrateSource]
+     * brings a plaintext file older than the current schema up to date before it is copied
+     * (the conversion's raw copy cannot run superseded Room migrations).
+     */
+    fun prepareForOpen(
+        migrateSource: () -> Unit = {},
+        buildDestination: (File) -> Unit,
+    ): ConversionOutcome {
         backupPresentAtStart = recoveryManager.hasConversionBackup()
         val rules = recoveryManager.rulesDbFile
 
@@ -47,7 +54,7 @@ class RulesStoreEncryption(
             // Fresh install: the encrypted store is created directly (plan §8 Step 0).
             !rules.exists() -> ConversionOutcome.Encrypted
             migration.isPlaintextDatabase(rules) ->
-                if (migration.run(buildDestination)) ConversionOutcome.Encrypted
+                if (migration.run(buildDestination, migrateSource)) ConversionOutcome.Encrypted
                 else ConversionOutcome.Pending
             else -> ConversionOutcome.Encrypted // already encrypted
         }

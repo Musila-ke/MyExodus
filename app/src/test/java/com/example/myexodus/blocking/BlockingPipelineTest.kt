@@ -157,6 +157,23 @@ class BlockingPipelineTest {
             UrlPattern.canonicalizeCandidate("https://news.example.com/forums")!!, wednesdayNoon))
     }
 
+    @Test
+    fun urlDecision_usesTheResolvedRule_notAFreshSnapshotRead() {
+        // The scanner resolves the rule to fetch ITS usage, then decides. If a rules publish
+        // lands between those two steps, a re-resolve would evaluate a different rule than the
+        // usage was measured for. The first read shows the rule; every later read shows none.
+        var reads = 0
+        val flipping = BlockDecisionEngine {
+            reads++
+            if (reads == 1) snapshot else snapshot.copy(urlRules = emptyList())
+        }
+        val candidate = UrlPattern.canonicalizeCandidate("https://betting.example.com")!!
+        val resolved = flipping.matchingUrlRule(candidate)!!
+        assertEquals(BlockDecision.Block("CRITICAL", true), flipping.decideUrlFor(resolved, wednesdayNoon))
+        assertEquals(1, reads)
+        assertEquals(BlockDecision.Allow, flipping.decideUrlFor(null, wednesdayNoon))
+    }
+
     private fun pattern(ruleId: String, raw: String, severity: String): UrlPattern =
         UrlPattern.from(
             com.example.myexodus.data.db.entity.RestrictionRule(

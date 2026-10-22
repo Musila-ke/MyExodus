@@ -1,5 +1,7 @@
 # MyExodus Secure Persistence Layer — Implementation Plan
 
+**Status (2026-10-22, docs audit): ✅ BUILT — this is the spec of record, not a build queue. Do not build from this document.** The shipped layer is `AppRulesStore` (Room 3 + SQLCipher, `AppRulesStoreFactory` with a Keystore-wrapped DEK), exported schemas under `app/schemas/` (current DB version 20), and the migration harness in `androidTest`; accountability state has its own `AccountabilityDatabase` (version 14). Device migrations are recorded in the ADRs and V1.md.
+
 ## 1. Feature Overview
 
 MyExodus needs a local, encrypted, relational persistence layer for user profiles, blocking rules, usage telemetry, habit progress, coaching content, and synchronization events. The database runs fully offline, encrypts its contents at rest, and protects its encryption key using Android Keystore. It is built with Room 3 and SQLCipher for Android, targeting a single-device, solo-developer V1 with no server-side key recovery.

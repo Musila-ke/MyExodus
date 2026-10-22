@@ -317,7 +317,13 @@ fun RulesScreen(
             if (failure == null) {
                 presetCategoryId = null
             } else {
-                presetError = presetFailureMessage(failure, inserted, pending.size, context)
+                val message = presetFailureMessage(failure, inserted, pending.size, context)
+                presetError = message
+                if (presetCategoryId == null) {
+                    // The sheet was dismissed mid-batch, so its own error line left with it —
+                    // a partial write must still be reported somewhere the user can see.
+                    errorMessage = message
+                }
             }
         }
     }
@@ -332,9 +338,13 @@ fun RulesScreen(
                     onBack = { route = ROUTE_LIST },
                     modifier = modifier,
                 )
+            } else if (editRuleId != null && rules == null) {
+                // Still loading is not "the rule is gone" either: process-death restore and
+                // the Home block-row deep link both enter this route before the Flow's first
+                // emission, and "no longer exists" would be a claim this screen cannot make yet.
+                RulesLoading(modifier = modifier)
             } else if (editRuleId != null && editing == null) {
-                // Config change / process death before the Flow re-emitted; a rule that was
-                // really deleted simply leaves the back action available.
+                // Loaded, and the id really is absent — the rule was deleted elsewhere.
                 EditorUnavailable(onBack = { route = ROUTE_LIST }, modifier = modifier)
             } else {
                 RuleEditorScreen(

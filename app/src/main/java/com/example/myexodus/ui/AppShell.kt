@@ -50,14 +50,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.R
@@ -78,6 +80,7 @@ import com.example.myexodus.accountability.monitoring.PartnerStatus
 import com.example.myexodus.accountability.sync.PartnerAlertHealth
 import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.data.db.AppRulesStore
+import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.domainusage.DomainUsageEngine
 import com.example.myexodus.domainusage.PublicSuffixList
 import com.example.myexodus.recovery.RecoveryPlanRepository
@@ -98,6 +101,7 @@ import com.example.myexodus.ui.partner.PartnerSelection
 import com.example.myexodus.ui.partner.UnpairOutcome
 import com.example.myexodus.ui.recovery.RecoveryPrefs
 import com.example.myexodus.ui.recovery.RecoveryScreen
+import com.example.myexodus.ui.recovery.UrgeLogSheet
 import com.example.myexodus.ui.rules.RulesScreen
 import com.example.myexodus.ui.settings.NudgeSettingsViewModel
 import com.example.myexodus.ui.settings.SettingsScreen
@@ -106,7 +110,9 @@ import com.example.myexodus.ui.streaks.HabitPickerSheet
 import com.example.myexodus.ui.streaks.StreaksScreen
 import com.example.myexodus.ui.streaks.StreaksViewModel
 import com.example.myexodus.ui.streaks.daysFree
+import java.time.ZoneId
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private val Tabs = listOf(
@@ -258,10 +264,14 @@ fun AppShell(
     // instead of a row of FABs.
     var actionsOpen by rememberSaveable { mutableStateOf(false) }
     var relapseConfirmOpen by remember { mutableStateOf(false) }
+    var urgeSheetOpen by rememberSaveable { mutableStateOf(false) }
+    // The Home shortcut writes the row itself — a quick action that only switched tabs left
+    // users believing an urge was logged when the sheet had never been opened (owner report
+    // 2026-10-22). The sheet and the write path are the Recovery screen's, not a copy.
+    val homeScope = rememberCoroutineScope()
     BackHandler(enabled = actionsOpen) { actionsOpen = false }
     LaunchedEffect(contentTab) { if (contentTab != 0) actionsOpen = false }
     val snackbarHostState = remember { SnackbarHostState() }
-    val context = LocalContext.current
     val sosMessage = sosStateMessage(sosState)
     LaunchedEffect(sosState) {
         sosMessage?.let { snackbarHostState.showSnackbar(it) }
@@ -317,7 +327,7 @@ fun AppShell(
                     onToggle = { actionsOpen = !actionsOpen },
                     onReachOut = { actionsOpen = false; sosConfirmOpen = true },
                     onLogRelapse = { actionsOpen = false; relapseConfirmOpen = true },
-                    onLogUrge = { actionsOpen = false; tab = 2 },
+                    onLogUrge = { actionsOpen = false; urgeSheetOpen = true },
                 )
             }
         },
@@ -525,6 +535,31 @@ fun AppShell(
         )
     }
 
+    // Home's urge quick action: the Recovery tab's sheet, saved through the same repository
+    // path (terminal-born `none` row, never mirrored) and confirmed by a snackbar. The note is
+    // habitless and rule-less, so the confirmation claims neither a streak nor a block.
+    // Resolved in composition (stringResource), not through the context in the callback:
+    // a context read is not configuration-aware and would keep a stale string across a
+    // locale change (lint LocalContextGetResourceValueCall, ADR #208 gate).
+    val urgeSavedMessage = stringResource(R.string.home_urge_saved)
+    if (urgeSheetOpen) {
+        UrgeLogSheet(
+            onDismiss = { urgeSheetOpen = false },
+            onSubmit = { intensity ->
+                urgeSheetOpen = false
+                homeScope.launch(Dispatchers.IO) {
+                    sessions.logOnly(
+                        intensity = intensity,
+                        entry = RecoverySession.ENTRY_HOME,
+                        zoneId = ZoneId.systemDefault().id,
+                        nowEpochMs = System.currentTimeMillis(),
+                    )
+                    snackbarHostState.showSnackbar(urgeSavedMessage)
+                }
+            },
+        )
+    }
+
     // One shared habit picker for both entry points (Home hero + Streaks summary card);
     // "Add habit" from Home lands on the Streaks tab where the form renders.
     if (pickerOpen) {
@@ -666,6 +701,10 @@ private fun HomeActionsFab(
 private fun QuickAction(icon: @Composable () -> Unit, label: String, onClick: () -> Unit) {
     ExtendedFloatingActionButton(
         onClick = onClick,
+        // The label is drawn by ExtendedFAB's text slot but was absent from the exported
+        // accessibility node on device (TalkBack announced an unnamed button); name it here
+        // explicitly so the action is operable without sight.
+        modifier = Modifier.semantics { contentDescription = label },
         icon = icon,
         text = { Text(label) },
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,

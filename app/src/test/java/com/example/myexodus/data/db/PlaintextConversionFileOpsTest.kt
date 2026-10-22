@@ -107,6 +107,52 @@ class PlaintextConversionFileOpsTest {
     }
 
     @Test
+    fun prepareForOpen_plaintext_migratesSourceAfterBackupAndBeforeDestinationBuild() {
+        seedPlaintextDatabase()
+        val original = recovery.rulesDbFile.readBytes()
+        var migrated = false
+
+        val outcome = encryption.prepareForOpen(
+            buildDestination = { temp ->
+                assertTrue("source migration must precede the destination build", migrated)
+                writeFile(temp, ByteArray(16) { 0xCD.toByte() })
+            },
+            migrateSource = {
+                migrated = true
+                assertArrayEquals(
+                    "the backup must be taken before the source is migrated",
+                    original,
+                    recovery.rulesDbBackupFile.readBytes(),
+                )
+            },
+        )
+
+        assertTrue("a plaintext source must be migrated before the copy", migrated)
+        assertEquals(ConversionOutcome.Pending, outcome) // stub destination still fails pre-swap
+    }
+
+    @Test
+    fun prepareForOpen_plaintextSourceMigrationFailure_defersAndLeavesTheFileAlone() {
+        seedPlaintextDatabase()
+        val original = recovery.rulesDbFile.readBytes()
+        var built = false
+
+        val outcome = encryption.prepareForOpen(
+            buildDestination = { built = true },
+            migrateSource = { error("migration failed") },
+        )
+
+        assertEquals(ConversionOutcome.Pending, outcome)
+        assertFalse("no destination build after a failed source migration", built)
+        assertArrayEquals(
+            "the normal plaintext open must get the file to surface the real cause",
+            original,
+            recovery.rulesDbFile.readBytes(),
+        )
+        assertFalse(recovery.rulesDbTempFile.exists())
+    }
+
+    @Test
     fun prepareForOpen_crashWindow_missingMainWithBackup_restoresIt() {
         seedPlaintextDatabase()
         val main = recovery.rulesDbFile

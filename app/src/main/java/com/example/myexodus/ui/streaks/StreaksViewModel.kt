@@ -245,6 +245,12 @@ class StreaksViewModel @Inject constructor(
                         }
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // The profile write is a second store open outside the habit repository's
+                // boundary; a throw there is the same user-visible state as a refusal.
+                _setupError.value = SetupError.STORE_UNAVAILABLE
             } finally {
                 _onboardingInFlight.value = false
             }

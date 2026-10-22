@@ -1,5 +1,6 @@
 package com.example.myexodus.streaks
 
+import android.util.Log
 import androidx.room3.withWriteTransaction
 import com.example.myexodus.accountability.activity.PartnerActivityJournal
 import com.example.myexodus.accountability.serialization.EventPayload
@@ -13,6 +14,7 @@ import com.example.myexodus.data.db.entity.PairStreakSharing
 import com.example.myexodus.data.db.entity.RecoveryStreak
 import java.util.UUID
 import kotlin.math.abs
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,7 +38,10 @@ import kotlinx.coroutines.sync.withLock
  *
  * The store is opened per operation via [AppRulesStoreFactory] (house background-component
  * pattern): when the DB is in a defined recovery state the write is refused with a defined
- * result rather than crashing, and alarm receivers therefore cannot take the app down.
+ * result rather than crashing, and alarm receivers therefore cannot take the app down. Every
+ * entry point wraps its store work in [guardingStore], so a failure that surfaces only after a
+ * successful open (I/O error, corruption mid-write) gets the same defined result instead of
+ * propagating; cancellation still propagates untouched.
  *
  * Every mutation that changes which alarms should exist (onboarding, relapse, evaluation,
  * selection) ends with [MilestoneScheduler.reconcile] — the §8 Step 4 single reconciliation
@@ -142,6 +147,23 @@ class HabitRepository(
         _loadFailed.value = false
     }
 
+    /**
+     * The public entry points' failure boundary: a store that opened can still fail mid-read
+     * or mid-write (disk I/O, corruption surfacing in a DAO call, driver failure). Those throw,
+     * and several callers are alarm receivers and widget actions where an uncaught exception
+     * takes the process down — so they are logged and mapped to the caller's defined "store
+     * unavailable" result. Cancellation is not a failure and must keep propagating.
+     */
+    private suspend fun <T> guardingStore(fallback: () -> T, block: suspend () -> T): T =
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Rules-store operation failed; returning the defined failure result", e)
+            fallback()
+        }
+
     sealed interface OnboardingResult {
         data class Ready(val state: HabitState) : OnboardingResult
 
@@ -226,63 +248,70 @@ class HabitRepository(
         }
         val db = storeFactory.open()
             ?: return OnboardingResult.Rejected(OnboardingResult.Rejected.Reason.STORE_UNAVAILABLE)
-        val anchor = when (val first = StreakTimer.firstAnchor(readings)) {
-            is FirstAnchor.Implausible -> {
-                anomalyLog.append(first.anomaly)
-                return OnboardingResult.Rejected(OnboardingResult.Rejected.Reason.IMPLAUSIBLE_CLOCK)
+        val ready = guardingStore({ OnboardingResult.Rejected(OnboardingResult.Rejected.Reason.STORE_UNAVAILABLE) }) {
+            val anchor = when (val first = StreakTimer.firstAnchor(readings)) {
+                is FirstAnchor.Implausible -> {
+                    anomalyLog.append(first.anomaly)
+                    return@guardingStore OnboardingResult.Rejected(
+                        OnboardingResult.Rejected.Reason.IMPLAUSIBLE_CLOCK,
+                    )
+                }
+
+                is FirstAnchor.Anchored -> first
             }
 
-            is FirstAnchor.Anchored -> first
+            val habitId = UUID.randomUUID().toString()
+            val streakId = UUID.randomUUID().toString()
+            // Under the evaluation mutex: the selection flag is written here and read by
+            // [refreshActive], and flag writes must be serialized with flag reads so a
+            // concurrently-running refresh can never emit a stale displayed habit last.
+            val state = requireNotNull(
+                evaluationMutex.withLock {
+                    db.withWriteTransaction<HabitState?> {
+                        // The habit the user just created is what they should see (multi-habit);
+                        // the clear+insert pair keeps "one selected row per profile" exact.
+                        db.habitProgressDao().clearSelection(profileId)
+                        db.habitProgressDao().insert(
+                            HabitProgress(
+                                progressId = habitId,
+                                profileId = profileId,
+                                targetIdentifier = targetIdentifier,
+                                currentCleanDaysStreak = 0,
+                                totalRelapses = 0,
+                                accessAttemptsCount = 0,
+                                habitDurationYears = habitDurationYears,
+                                onboardingSeverityLevel = severity.name,
+                                lastRelapseTimestamp = null,
+                                // v16/ADR #135: a new habit is shared with nobody — consent is
+                                // per (pair, habit) and lives in pair_streak_sharing; the sharing
+                                // surface is where partners are chosen ("nothing until you choose").
+                                assignedPartnershipId = null,
+                                isSelected = true,
+                            ),
+                        )
+                        db.recoveryStreakDao().insert(
+                            RecoveryStreak(
+                                streakId = streakId,
+                                habitId = habitId,
+                                recoveryStartAt = recoveryStartAt,
+                                tWallLastObserved = anchor.tWallMillis,
+                                rBootLastObserved = anchor.rBootMillis,
+                                bootCountLastObserved = anchor.bootCount,
+                                currentStreakElapsedMs = 0,
+                            ),
+                        )
+                        db.milestoneEventDao().insertAll(milestoneRows(streakId))
+                        loadState(db, habitId)
+                    }
+                },
+            )
+            publishState(state)
+            OnboardingResult.Ready(state)
         }
-
-        val habitId = UUID.randomUUID().toString()
-        val streakId = UUID.randomUUID().toString()
-        // Under the evaluation mutex: the selection flag is written here and read by
-        // [refreshActive], and flag writes must be serialized with flag reads so a
-        // concurrently-running refresh can never emit a stale displayed habit last.
-        val state = requireNotNull(
-            evaluationMutex.withLock {
-                db.withWriteTransaction<HabitState?> {
-                    // The habit the user just created is what they should see (multi-habit);
-                    // the clear+insert pair keeps "one selected row per profile" exact.
-                    db.habitProgressDao().clearSelection(profileId)
-                    db.habitProgressDao().insert(
-                        HabitProgress(
-                            progressId = habitId,
-                            profileId = profileId,
-                            targetIdentifier = targetIdentifier,
-                            currentCleanDaysStreak = 0,
-                            totalRelapses = 0,
-                            accessAttemptsCount = 0,
-                            habitDurationYears = habitDurationYears,
-                            onboardingSeverityLevel = severity.name,
-                            lastRelapseTimestamp = null,
-                            // v16/ADR #135: a new habit is shared with nobody — consent is
-                            // per (pair, habit) and lives in pair_streak_sharing; the sharing
-                            // surface is where partners are chosen ("nothing until you choose").
-                            assignedPartnershipId = null,
-                            isSelected = true,
-                        ),
-                    )
-                    db.recoveryStreakDao().insert(
-                        RecoveryStreak(
-                            streakId = streakId,
-                            habitId = habitId,
-                            recoveryStartAt = recoveryStartAt,
-                            tWallLastObserved = anchor.tWallMillis,
-                            rBootLastObserved = anchor.rBootMillis,
-                            bootCountLastObserved = anchor.bootCount,
-                            currentStreakElapsedMs = 0,
-                        ),
-                    )
-                    db.milestoneEventDao().insertAll(milestoneRows(streakId))
-                    loadState(db, habitId)
-                }
-            },
-        )
-        publishState(state)
-        scheduler.reconcile(habitId)
-        return OnboardingResult.Ready(state)
+        // Best-effort and outside the failure boundary: the habit is already durable, so a
+        // scheduling failure must not report the onboarding as unwritten.
+        if (ready is OnboardingResult.Ready) guardingStore({ }) { scheduler.reconcile(ready.state.habitId) }
+        return ready
     }
 
     /**
@@ -293,14 +322,19 @@ class HabitRepository(
      */
     suspend fun logRelapse(habitId: String, backdatedRelapseAt: Long? = null): RelapseResult {
         val db = storeFactory.open() ?: return RelapseResult.StoreUnavailable
-        val result = evaluationMutex.withLock {
-            // §6.2 rolls the persisted accumulator into the record; evaluate first so it
-            // reflects the freshest observed time, not the last foreground.
-            evaluateLocked(db, habitId, forceDisplay = true)
-            db.withWriteTransaction { relapseOnce(db, habitId, backdatedRelapseAt) }
+        val result = guardingStore({ RelapseResult.StoreUnavailable }) {
+            val written = evaluationMutex.withLock {
+                // §6.2 rolls the persisted accumulator into the record; evaluate first so it
+                // reflects the freshest observed time, not the last foreground.
+                evaluateLocked(db, habitId, forceDisplay = true)
+                db.withWriteTransaction { relapseOnce(db, habitId, backdatedRelapseAt) }
+            }
+            if (written is RelapseResult.RolledOver) publishState(written.state)
+            written
         }
-        if (result is RelapseResult.RolledOver) publishState(result.state)
-        scheduler.reconcile(habitId)
+        // Best-effort and outside the failure boundary: the write is already durable, so a
+        // scheduling failure must not report the relapse as unwritten.
+        if (result is RelapseResult.RolledOver) guardingStore({ }) { scheduler.reconcile(habitId) }
         return result
     }
 
@@ -318,30 +352,40 @@ class HabitRepository(
             _loadFailed.value = true
             return _state.value
         }
-        val profile = db.userProfileDao().getActive() ?: run {
-            publishState(null)
-            return null
-        }
-        val state = evaluationMutex.withLock {
-            val habit = db.habitProgressDao().getSelected(profile.userId)
-                ?: db.habitProgressDao().getFirstForProfile(profile.userId)
-            if (habit == null) {
+        val state = guardingStore(
+            fallback = {
+                _loadFailed.value = true
+                _state.value
+            },
+        ) {
+            val profile = db.userProfileDao().getActive() ?: run {
                 publishState(null)
-                null
-            } else {
-                evaluateLocked(db, habit.progressId, forceDisplay = true)
+                return@guardingStore null
+            }
+            evaluationMutex.withLock {
+                val habit = db.habitProgressDao().getSelected(profile.userId)
+                    ?: db.habitProgressDao().getFirstForProfile(profile.userId)
+                if (habit == null) {
+                    publishState(null)
+                    null
+                } else {
+                    evaluateLocked(db, habit.progressId, forceDisplay = true)
+                }
             }
         }
-        state?.let { scheduler.reconcile(it.habitId) }
+        // Best-effort: a background-backstop alarm miss is recovered by the next evaluation.
+        state?.let { guardingStore({ }) { scheduler.reconcile(it.habitId) } }
         return state
     }
 
     /** All habits of the active profile, display-ordered — the switcher's read model. */
     suspend fun habits(): List<HabitSummary> {
         val db = storeFactory.open() ?: return emptyList()
-        val profile = db.userProfileDao().getActive() ?: return emptyList()
-        return db.habitProgressDao().getForProfile(profile.userId)
-            .map { HabitSummary(it.progressId, it.targetIdentifier, it.isSelected) }
+        return guardingStore({ emptyList() }) {
+            val profile = db.userProfileDao().getActive() ?: return@guardingStore emptyList()
+            db.habitProgressDao().getForProfile(profile.userId)
+                .map { HabitSummary(it.progressId, it.targetIdentifier, it.isSelected) }
+        }
     }
 
     /** The sharing surface's read model (v16/ADR #135): every habit with every pair's flags
@@ -349,33 +393,36 @@ class HabitRepository(
      *  says so rather than claiming "no streaks"; an empty habit list is a real answer. */
     suspend fun sharingMatrix(): SharingMatrix? {
         val db = storeFactory.open() ?: return null
-        val profile = db.userProfileDao().getActive() ?: return SharingMatrix(emptyList(), emptyMap())
-        val streakRows = db.pairSharingDao().streakAll()
-        val habits = db.habitProgressDao().getForProfile(profile.userId).map { habit ->
-            HabitSharingItem(
-                progressId = habit.progressId,
-                label = habit.targetIdentifier,
-                perPair = streakRows
-                    .filter { it.habitProgressId == habit.progressId }
-                    .associate {
-                        it.pairId to StreakSharingFlags(
-                            shareStreak = it.shareStreak,
-                            shareRelapses = it.shareRelapses,
-                            shareMilestones = it.shareMilestones,
-                        )
-                    },
-            )
-        }
-        val profileFlags = db.pairSharingDao().profileAll()
-            .associate {
-                it.pairId to ProfileSharingFlags(
-                    it.shareCheckins,
-                    it.shareRecovery,
-                    it.shareAvailability,
-                    it.availabilityConsentPending,
+        return guardingStore({ null }) {
+            val profile = db.userProfileDao().getActive()
+                ?: return@guardingStore SharingMatrix(emptyList(), emptyMap())
+            val streakRows = db.pairSharingDao().streakAll()
+            val habits = db.habitProgressDao().getForProfile(profile.userId).map { habit ->
+                HabitSharingItem(
+                    progressId = habit.progressId,
+                    label = habit.targetIdentifier,
+                    perPair = streakRows
+                        .filter { it.habitProgressId == habit.progressId }
+                        .associate {
+                            it.pairId to StreakSharingFlags(
+                                shareStreak = it.shareStreak,
+                                shareRelapses = it.shareRelapses,
+                                shareMilestones = it.shareMilestones,
+                            )
+                        },
                 )
             }
-        return SharingMatrix(habits = habits, profile = profileFlags)
+            val profileFlags = db.pairSharingDao().profileAll()
+                .associate {
+                    it.pairId to ProfileSharingFlags(
+                        it.shareCheckins,
+                        it.shareRecovery,
+                        it.shareAvailability,
+                        it.availabilityConsentPending,
+                    )
+                }
+            SharingMatrix(habits = habits, profile = profileFlags)
+        }
     }
 
     /** Owner ask 2026-10-04 ("you have added a partner sure but you haven't shared anything
@@ -406,9 +453,9 @@ class HabitRepository(
         shareMilestones: Boolean,
     ): Boolean {
         val db = storeFactory.open() ?: return false
-        val habit = db.habitProgressDao().getById(habitProgressId) ?: return false
         val now = readings().tWallMillis
-        return runCatching {
+        return guardingStore({ false }) {
+            val habit = db.habitProgressDao().getById(habitProgressId) ?: return@guardingStore false
             db.withWriteTransaction<Unit> {
                 val before = db.pairSharingDao().streakFor(pairId, habitProgressId)
                 db.pairSharingDao().upsertStreak(
@@ -430,7 +477,8 @@ class HabitRepository(
                     )
                 }
             }
-        }.isSuccess
+            true
+        }
     }
 
     /** Full-state write of one pair's profile-level categories; watermark semantics match
@@ -449,7 +497,7 @@ class HabitRepository(
         val db = storeFactory.open() ?: return false
         val now = readings().tWallMillis
         var availabilityChanged = false
-        val written = runCatching {
+        val written = guardingStore({ false }) {
             db.withWriteTransaction<Unit> {
                 val before = db.pairSharingDao().profileFor(pairId)
                 // A first write with availability off expresses no choice — only an actual
@@ -472,7 +520,8 @@ class HabitRepository(
                     ),
                 )
             }
-        }.isSuccess
+            true
+        }
         if (written && availabilityChanged) PartnerSyncSignals.activityEmitted.tryEmit(Unit)
         return written
     }
@@ -490,15 +539,17 @@ class HabitRepository(
      */
     suspend fun selectHabit(habitId: String): HabitState? {
         val db = storeFactory.open() ?: return _state.value
-        val state = evaluationMutex.withLock {
-            val habit = db.habitProgressDao().getById(habitId) ?: return@withLock null
-            db.withWriteTransaction<Unit> {
-                db.habitProgressDao().clearSelection(habit.profileId)
-                db.habitProgressDao().markSelected(habitId)
+        val state = guardingStore({ _state.value }) {
+            evaluationMutex.withLock {
+                val habit = db.habitProgressDao().getById(habitId) ?: return@withLock null
+                db.withWriteTransaction<Unit> {
+                    db.habitProgressDao().clearSelection(habit.profileId)
+                    db.habitProgressDao().markSelected(habitId)
+                }
+                evaluateLocked(db, habitId, forceDisplay = true)
             }
-            evaluateLocked(db, habitId, forceDisplay = true)
         } ?: return _state.value
-        scheduler.reconcile(habitId)
+        guardingStore({ }) { scheduler.reconcile(habitId) }
         return state
     }
 
@@ -514,14 +565,16 @@ class HabitRepository(
             return RenameResult.InvalidName
         }
         val db = storeFactory.open() ?: return RenameResult.StoreUnavailable
-        db.habitProgressDao().getById(habitId) ?: return RenameResult.NotFound
-        db.withWriteTransaction<Unit> {
-            db.habitProgressDao().rename(habitId, trimmed)
+        return guardingStore({ RenameResult.StoreUnavailable }) {
+            db.habitProgressDao().getById(habitId) ?: return@guardingStore RenameResult.NotFound
+            db.withWriteTransaction<Unit> {
+                db.habitProgressDao().rename(habitId, trimmed)
+            }
+            val displayed = evaluationMutex.withLock {
+                if (_state.value?.habitId == habitId) loadState(db, habitId)?.also(::publishState) else _state.value
+            }
+            RenameResult.Renamed(displayed)
         }
-        val displayed = evaluationMutex.withLock {
-            if (_state.value?.habitId == habitId) loadState(db, habitId)?.also(::publishState) else _state.value
-        }
-        return RenameResult.Renamed(displayed)
     }
 
     /**
@@ -534,32 +587,36 @@ class HabitRepository(
      */
     suspend fun deleteHabit(habitId: String): DeleteResult {
         val db = storeFactory.open() ?: return DeleteResult.StoreUnavailable
-        val habit = db.habitProgressDao().getById(habitId) ?: return DeleteResult.NotFound
-        val wasDisplayed = _state.value?.habitId == habitId
-        val next = evaluationMutex.withLock {
-            scheduler.cancelFor(habitId)
-            db.withWriteTransaction<Unit> {
-                // Milestones key on streak rows (subquery), so they go first.
-                db.milestoneEventDao().deleteForHabit(habitId)
-                db.recoveryStreakDao().deleteForHabit(habitId)
-                db.pairSharingDao().deleteStreakForHabit(habitId)
-                db.habitProgressDao().delete(habit)
+        return guardingStore({ DeleteResult.StoreUnavailable }) {
+            val habit = db.habitProgressDao().getById(habitId) ?: return@guardingStore DeleteResult.NotFound
+            val wasDisplayed = _state.value?.habitId == habitId
+            val next = evaluationMutex.withLock {
+                scheduler.cancelFor(habitId)
+                db.withWriteTransaction<Unit> {
+                    // Milestones key on streak rows (subquery), so they go first.
+                    db.milestoneEventDao().deleteForHabit(habitId)
+                    db.recoveryStreakDao().deleteForHabit(habitId)
+                    db.pairSharingDao().deleteStreakForHabit(habitId)
+                    db.habitProgressDao().delete(habit)
+                }
+                if (!wasDisplayed) return@withLock _state.value
+                val profile = db.userProfileDao().getActive()
+                val fallback = profile?.let {
+                    db.habitProgressDao().getSelected(it.userId)
+                        ?: db.habitProgressDao().getFirstForProfile(it.userId)
+                }
+                if (fallback == null) {
+                    publishState(null)
+                    null
+                } else {
+                    evaluateLocked(db, fallback.progressId, forceDisplay = true)
+                }
             }
-            if (!wasDisplayed) return@withLock _state.value
-            val profile = db.userProfileDao().getActive()
-            val fallback = profile?.let {
-                db.habitProgressDao().getSelected(it.userId)
-                    ?: db.habitProgressDao().getFirstForProfile(it.userId)
-            }
-            if (fallback == null) {
-                publishState(null)
-                null
-            } else {
-                evaluateLocked(db, fallback.progressId, forceDisplay = true)
-            }
+            // Best-effort: the delete is already durable, so a scheduling failure must not
+            // report it as unwritten.
+            next?.let { guardingStore({ }) { scheduler.reconcile(it.habitId) } }
+            DeleteResult.Deleted(next)
         }
-        next?.let { scheduler.reconcile(it.habitId) }
-        return DeleteResult.Deleted(next)
     }
 
     /**
@@ -572,8 +629,12 @@ class HabitRepository(
      */
     suspend fun evaluate(habitId: String): HabitState? {
         val db = storeFactory.open() ?: return _state.value
-        val state = evaluationMutex.withLock { evaluateLocked(db, habitId, forceDisplay = false) }
-        scheduler.reconcile(habitId)
+        val state = guardingStore({ _state.value }) {
+            evaluationMutex.withLock { evaluateLocked(db, habitId, forceDisplay = false) }
+        }
+        // Best-effort: this call IS the alarm backstop, so a scheduling failure is recovered
+        // by the next evaluation.
+        guardingStore({ }) { scheduler.reconcile(habitId) }
         return state
     }
 
@@ -584,11 +645,13 @@ class HabitRepository(
      */
     suspend fun acknowledgeMilestone(habitId: String, milestoneDay: Int) {
         val db = storeFactory.open() ?: return
-        db.withWriteTransaction<Unit> {
-            val streak = db.recoveryStreakDao().getActiveStreak(habitId) ?: return@withWriteTransaction
-            db.milestoneEventDao().acknowledge(streak.streakId, milestoneDay, readings().tWallMillis)
+        guardingStore({ }) {
+            db.withWriteTransaction<Unit> {
+                val streak = db.recoveryStreakDao().getActiveStreak(habitId) ?: return@withWriteTransaction
+                db.milestoneEventDao().acknowledge(streak.streakId, milestoneDay, readings().tWallMillis)
+            }
+            loadState(db, habitId)?.let { publishState(it) }
         }
-        loadState(db, habitId)?.let { publishState(it) }
     }
 
     /**
@@ -843,5 +906,7 @@ class HabitRepository(
         const val MAX_LABEL_LENGTH = EventPayload.MAX_HABIT_LABEL_LENGTH
 
         private const val MAX_EVALUATION_ATTEMPTS = 2
+
+        private const val TAG = "MyExodusHabitRepo"
     }
 }

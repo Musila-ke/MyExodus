@@ -119,13 +119,16 @@
     <string name="home_greeting_morning">Good morning</string>
     <string name="home_greeting_afternoon">Good afternoon</string>
     <string name="home_greeting_evening">Good evening</string>
-    <string name="home_stat_best_streak">Best streak</string>
     <string name="home_stat_blocks">Blocks</string>
     <!-- "Blocked" read as a state, not a count (owner finding 2026-10-14); this is the
          all-time count of opens the block screen stopped. "Blocks" stays: the Shield tile
          beside it counts the block rules themselves. -->
     <string name="home_stat_blocked">Times blocked</string>
     <string name="home_blocks_section">Your blocks</string>
+    <!-- Owner UX report 2026-10-22: the block counts sat beside the streak count as one row,
+         inviting the reading that all three describe the same thing. The scope line travels
+         with the counts inside "Your blocks" so their owner is explicit (ADR #211). -->
+    <string name="home_blocks_scope">All blocks and blocked attempts, across this device.</string>
     <!-- Req 15 arrival surface: the partner's newest pinned message, on the user's own Home.
          The message body is partner-authored text, rendered verbatim; the label names the
          sender without naming the pair (multi-user pairs each pin independently). -->
@@ -166,6 +169,9 @@
     <string name="home_quick_actions_open">Open quick actions</string>
     <string name="home_quick_actions_close">Close quick actions</string>
     <string name="home_action_log_urge">Log an urge</string>
+    <!-- Home's confirmation makes no claim about a block: the note is habitless and rule-less,
+         and a reader with no rule at all must not be told a block is "still in place". -->
+    <string name="home_urge_saved">Urge logged — this is only a note.</string>
     <string name="home_streak_caption_complete">Milestone ladder complete — extraordinary.</string>
     <plurals name="home_streak_days_unit">
         <item quantity="one">day</item>

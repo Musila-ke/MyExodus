@@ -453,9 +453,14 @@ class EnforcementForegroundService : Service() {
             )?.let { rule to it }
         }.toMap()
         if (windows.isEmpty()) return null
+        // From midnight, not from the window start: a package that stayed foreground across
+        // the whole interruption emits no RESUMED inside the window, so a window-bounded query
+        // returns no marks and repairs nothing — exactly the era this audit exists to heal.
+        // The earlier marks only establish the state at the window start; the credit is still
+        // clipped to the window.
         val marks = foregroundMarksByPackage(
             tracked.mapTo(HashSet()) { it.blockedPackage },
-            windows.values.minOf { it.first },
+            midnightEpochMillis,
             endWallMs,
         )
         return ReconcileProbe(windows, marks, windows.values.maxOf { it.last - it.first })
@@ -551,10 +556,14 @@ class EnforcementForegroundService : Service() {
             return
         }
         val clipEnd = request.window.last + 1
+        // From midnight, not the window start — same reason as [probeUncreditedWindows]: a
+        // package foreground across the whole interruption emits no RESUMED inside the window.
+        // The sum is still clipped to [request.window].
+        val midnight = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val marks = onBinderThread<Map<String, List<UsageMark>>> {
             foregroundMarksByPackage(
                 tracked.mapTo(HashSet()) { it.blockedPackage },
-                request.window.first,
+                minOf(midnight, request.window.first),
                 clipEnd,
             )
         } ?: return

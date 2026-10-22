@@ -75,8 +75,10 @@ class WidgetActionViewModel @Inject constructor(
      * reset: §8.15's machine keeps its retained envelope so the next hold is the retry.
      */
     fun reset() {
-        _urge.value = UrgeOutcome.None
-        _relapse.value = RelapseOutcome.None
+        // In-flight is not a stale result: clearing it would re-enable dismissal while the
+        // coroutine is still running, and finishing cancels viewModelScope under the write.
+        if (_urge.value != UrgeOutcome.InFlight) _urge.value = UrgeOutcome.None
+        if (_relapse.value != RelapseOutcome.InFlight) _relapse.value = RelapseOutcome.None
     }
 
     /**

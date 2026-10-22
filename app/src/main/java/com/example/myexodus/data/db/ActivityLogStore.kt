@@ -51,25 +51,29 @@ class ActivityLogStore(
             val key = keyManager.getOrCreateKey()
             val t1 = SystemClock.uptimeMillis()
             var raw: ByteArray? = null
+            // Owned until the store takes it: a throw from the pragma/schema steps must not
+            // leave a live handle behind (open() is retried, so a leak would accumulate).
+            var opened: SQLiteDatabase? = null
             try {
                 raw = SqlCipherRawKey.passphraseFor(key)
                 val t2 = SystemClock.uptimeMillis()
                 val migrated = SqlCipherRawKey.ensureRawKeyed(path, key, raw)
-                val opened = SQLiteDatabase.openOrCreateDatabase(path, raw, null, null)
+                val handle = SQLiteDatabase.openOrCreateDatabase(path, raw, null, null)
+                opened = handle
                 // Cold-start attribution (ADR #153): keystore unwrap / raw probe / keying splits.
                 // Only elapsed milliseconds are logged; the labels avoid secret-shaped names
                 // so the no-secret-logging rule stays signal (its name filter matches text).
                 Log.i(TAG, "Activity log timings: unwrap=${t1 - t0}ms probe=${t2 - t1}ms " +
                     "open=${SystemClock.uptimeMillis() - t2}ms migrated=$migrated " +
                     "thread=${Thread.currentThread().name}")
-                val walOk = ActivityLogSchema.applyPragmas(opened)
-                ActivityLogSchema.createSchema(opened)
+                val walOk = ActivityLogSchema.applyPragmas(handle)
+                ActivityLogSchema.createSchema(handle)
                 if (!walOk) {
                     Log.e(TAG, "Activity log open: WAL not active; closing")
-                    opened.close()
                     false
                 } else {
-                    db = opened
+                    db = handle
+                    opened = null
                     rawKey = raw
                     raw = null
                     Log.i(TAG, "Activity log open: WAL confirmed")
@@ -79,6 +83,7 @@ class ActivityLogStore(
             } finally {
                 Arrays.fill(key, 0.toByte())
                 raw?.let { Arrays.fill(it, 0.toByte()) }
+                opened?.let { runCatching { it.close() } }
             }
         } catch (e: Throwable) {
             val failure = keyManager.classifyFailure(e) // classify once (2026-08-28 review)
@@ -104,18 +109,20 @@ class ActivityLogStore(
         return try {
             val freshKey = keyManager.getOrCreateKey()
             var freshRaw: ByteArray? = null
+            var opened: SQLiteDatabase? = null
             try {
                 freshRaw = SqlCipherRawKey.passphraseFor(freshKey)
-                val opened = SQLiteDatabase.openOrCreateDatabase(path, freshRaw, null, null)
-                val walOk = ActivityLogSchema.applyPragmas(opened)
-                ActivityLogSchema.createSchema(opened)
+                val handle = SQLiteDatabase.openOrCreateDatabase(path, freshRaw, null, null)
+                opened = handle
+                val walOk = ActivityLogSchema.applyPragmas(handle)
+                ActivityLogSchema.createSchema(handle)
                 // Same WAL gate as open(): a non-WAL handle would grow unboundedly (2026-08-28 review).
                 if (!walOk) {
                     Log.e(TAG, "Activity log fresh recreate: WAL not active; closing")
-                    opened.close()
                     false
                 } else {
-                    db = opened
+                    db = handle
+                    opened = null
                     rawKey = freshRaw
                     freshRaw = null
                     Log.i(TAG, "Activity log recreated fresh after failure")
@@ -124,6 +131,7 @@ class ActivityLogStore(
             } finally {
                 Arrays.fill(freshKey, 0.toByte())
                 freshRaw?.let { Arrays.fill(it, 0.toByte()) }
+                opened?.let { runCatching { it.close() } }
             }
         } catch (e: Throwable) {
             Log.e(TAG, "Activity log fresh recreate failed", e)

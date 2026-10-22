@@ -14,11 +14,12 @@ import net.zetetic.database.sqlcipher.driver.SQLCipherDriver
  *
  * Order of operations: checkpoint the plaintext source (folds any WAL into the main file so
  * the `.bak` copy and the row read see one complete database) → copy the source to `.bak` →
- * build the encrypted destination with Room at a temp path (correct schema + identity hash)
- * → copy every table's rows inside one transaction on the destination, verifying row counts
- * before commit → hand the temp file to [RecoveryManager] for the atomic swap. Any failure
- * short of the swap leaves the plaintext store untouched; the caller surfaces a pending
- * state and retries on the next launch.
+ * bring the source up to the current schema ([migrateSource]) → build the encrypted
+ * destination with Room at a temp path (correct schema + identity hash) → copy every table's
+ * rows inside one transaction on the destination, verifying row counts before commit → hand
+ * the temp file to [RecoveryManager] for the atomic swap. Any failure short of the swap
+ * leaves the plaintext store usable (the migration runs what every normal open runs anyway);
+ * the caller surfaces a pending state and retries on the next launch.
  */
 class PlaintextToEncryptedMigration(
     private val keyManager: RulesStoreKeyManager,
@@ -45,7 +46,7 @@ class PlaintextToEncryptedMigration(
         }
     }
 
-    fun run(buildDestination: (File) -> Unit): Boolean {
+    fun run(buildDestination: (File) -> Unit, migrateSource: () -> Unit = {}): Boolean {
         val source = recoveryManager.rulesDbFile
         val temp = recoveryManager.rulesDbTempFile
         recoveryManager.deleteConversionTemp()
@@ -53,6 +54,23 @@ class PlaintextToEncryptedMigration(
             AndroidSQLiteDriver().open(source.absolutePath).use { src ->
                 checkpointTruncate(src)
                 if (!recoveryManager.backupPlaintextRules()) return false
+            }
+            // A pre-encryption file can predate the current schema by any number of versions
+            // (encryption shipped at v7), and the shared-column copy cannot invent NOT NULL
+            // columns added since (v8's day anchors are one). Room migrates a file only when
+            // Room opens it, so bring the source current here — after the backup, so a
+            // migration defect can never cost the pre-migration rows. Failure defers the
+            // conversion; the plaintext open path then surfaces the underlying cause.
+            try {
+                migrateSource()
+            } catch (e: Throwable) {
+                Log.e(TAG, "Plaintext source migration failed; conversion deferred", e)
+                return false
+            }
+            AndroidSQLiteDriver().open(source.absolutePath).use { src ->
+                // The migration's open/close normally checkpoints; re-assert so the swap's
+                // sidecar delete can never drop committed migration writes.
+                checkpointTruncate(src)
                 buildDestination(temp)
                 if (!copyAllTables(src, temp)) {
                     recoveryManager.deleteConversionTemp()

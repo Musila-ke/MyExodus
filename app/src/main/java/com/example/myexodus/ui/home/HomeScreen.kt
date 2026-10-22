@@ -32,7 +32,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Shield
@@ -364,6 +363,7 @@ fun HomeScreen(
         item(key = "streak") {
             StreakHeroCard(
                 days = streakDays,
+                bestDays = habit?.let { daysFree(it.allTimeMaxElapsedMs) },
                 habitLabel = habit?.targetLabel,
                 freeSinceEpochMillis = habit?.recoveryStartAt,
                 nextMilestoneDay = nextUp?.milestoneDay,
@@ -371,14 +371,6 @@ fun HomeScreen(
                 streakResolved = streakResolved,
                 onSwitchHabit = onSwitchHabit,
                 onOpenStreaks = onOpenStreaks,
-            )
-        }
-        item(key = "stats") {
-            StatTrio(
-                bestStreakDays = habit?.let { daysFree(it.allTimeMaxElapsedMs) },
-                streakResolved = streakResolved,
-                blocks = rules?.size,
-                blocked = attemptCounts?.sumOf { it.count },
             )
         }
         // A permanent section, not a data-dependent guest: loading, empty, error, and success
@@ -423,6 +415,24 @@ fun HomeScreen(
                 if (blocksHidden) {
                     HiddenBlocksCard()
                 } else {
+                    // Owner UX report 2026-10-22: these two counts used to sit beside "Best
+                    // streak" as one trio, so three different scopes read as one. Block facts
+                    // now live inside the section that owns them, and the scope line says so
+                    // before the values are read. Zero blocks renders the empty card alone —
+                    // a 0/0 tile row above "No blocks yet" would be noise, and history is
+                    // still on Insights.
+                    val shownRules = rules
+                    if (!shownRules.isNullOrEmpty()) {
+                        Text(
+                            stringResource(R.string.home_blocks_scope),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        BlockStatsRow(
+                            blocks = shownRules.size,
+                            blocked = attemptCounts?.sumOf { it.count },
+                        )
+                    }
                     BlocksCard(
                         rules = rules,
                         countsByTarget = countsByTarget,
@@ -579,6 +589,7 @@ private data class ChipStyle(
 @Composable
 private fun StreakHeroCard(
     days: Int?,
+    bestDays: Int?,
     habitLabel: String?,
     freeSinceEpochMillis: Long?,
     nextMilestoneDay: Int?,
@@ -654,6 +665,16 @@ private fun StreakHeroCard(
             }
             Spacer(Modifier.height(4.dp))
             Text(caption, style = MaterialTheme.typography.bodyMedium)
+            // Habit-scoped like the run above it, and hidden when it equals the run — the same
+            // rule the Streaks card uses, so Home never states the same number twice.
+            if (bestDays != null && days != null && bestDays > days) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    pluralStringResource(R.plurals.streaks_best_run, bestDays, bestDays),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                )
+            }
             if (days == null && !loading) {
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onOpenStreaks) { Text(stringResource(R.string.home_streak_cta)) }
@@ -663,32 +684,16 @@ private fun StreakHeroCard(
 }
 
 /**
- * Three real counts, no invented deltas: the reference's percentage chips need history this app
- * does not keep, so the tiles carry values only. Each waits for its own source's first emission
- * (skeleton in the value slot, the same treatment the blocks card uses) instead of flashing a
- * zero. Best streak is absent — not zeroed — while no habit exists to have a best.
+ * The two rule-scoped counts, rendered inside the "Your blocks" section so their owner is the
+ * section itself. Values only — the reference's percentage chips need history this app does
+ * not keep. A null count is a source that has not emitted yet: skeleton, never a zero flash.
  */
 @Composable
-private fun StatTrio(
-    bestStreakDays: Int?,
-    streakResolved: Boolean,
-    blocks: Int?,
-    blocked: Int?,
-) {
+private fun BlockStatsRow(blocks: Int, blocked: Int?) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // Rendered while unresolved (skeleton) and once resolved with a real best; absent only
-        // when the streak is resolved and there is no habit to have a best.
-        if (bestStreakDays != null || !streakResolved) {
-            StatTile(
-                label = stringResource(R.string.home_stat_best_streak),
-                value = bestStreakDays,
-                icon = Icons.Outlined.EmojiEvents,
-                modifier = Modifier.weight(1f),
-            )
-        }
         StatTile(
             label = stringResource(R.string.home_stat_blocks),
             value = blocks,

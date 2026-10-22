@@ -78,7 +78,9 @@ class AppRulesStoreFactory(
     private fun openInternal(): AppRulesStore? {
         recoveryManager.checkOrphanedCorruptFiles()
 
-        val outcome = encryption?.prepareForOpen(::buildTempDestination) ?: ConversionOutcome.Encrypted
+        val outcome = encryption
+            ?.prepareForOpen(::migratePlaintextSource, ::buildTempDestination)
+            ?: ConversionOutcome.Encrypted
         if (outcome == ConversionOutcome.Pending) {
             // Non-destructive pending state (plan §8 Step 0): the store keeps running on the
             // plaintext database; the conversion is retried on the next launch.
@@ -179,6 +181,20 @@ class AppRulesStoreFactory(
             .addCallback(createCallback)
         if (encrypted) builder.setDriver(requireNotNull(encryption).newDriver())
         return builder.build()
+    }
+
+    /**
+     * Brings a pre-encryption plaintext file up to the current schema before conversion:
+     * Room runs migrations only when Room opens the file, and the conversion's shared-column
+     * copy cannot invent NOT NULL columns added since the source's version.
+     */
+    private fun migratePlaintextSource() {
+        val db = build(encrypted = false)
+        try {
+            runBlocking { db.restrictionRuleDao().getActiveRules() }
+        } finally {
+            db.close()
+        }
     }
 
     /**

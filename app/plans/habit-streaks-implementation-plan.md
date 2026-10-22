@@ -1,6 +1,6 @@
 # Habit Tracking & Streaks (V1 Phase 2) — Implementation Specification (Revision 2)
 
-*Revision 2026-10-17 (docs audit): §16's "whether Play Store distribution is ever planned" is closed — never (ADR #15, direct APK only); the other §16 questions are plan-time and were resolved or deferred during build, not current blockers.*
+*Revision 2026-10-17 (docs audit): §16's "whether Play Store distribution is ever planned" is closed — never (ADR #15, direct APK only); the other §16 questions are plan-time and were resolved or deferred during build, not current blockers. **Status 2026-10-22: ✅ BUILT** — habit streaks, milestones and the widget shipped (V1.md features 18–20 and ADRs #87/#104/#128/#166/#173); this file is the spec of record for intent, while the ADRs and V1.md carry shipped behavior.*
 
 ## 1. Feature Overview
 

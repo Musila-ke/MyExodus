@@ -431,11 +431,26 @@ class BlockerAccessibilityService : AccessibilityService() {
                 // AnkiDroid rendered readable around a 684x563 card (2026-09-13). The cover
                 // starts at the app's whole surface; split-screen pane coverage is the
                 // largest-window re-bound in blockOtherRestrictedWindows.
-                if (!overlay.isShown(displayId)) {
+                // A shown scene does not mean a shown RIGHT scene: a warning banner, a URL
+                // card, or another app's persistent block card can be up when a blocked app
+                // reaches the foreground (notification-shade tap inside a banner's 5 s). The
+                // card's lifetime belongs to its own target, so it must be re-rendered for the
+                // app now under it — skipping here left that app covered by the wrong card, and
+                // once the foreign card was dismissed the app was not blocked at all.
+                val shownScene = overlay.currentContent(displayId)
+                val sceneCovers = when (shownScene) {
+                    is OverlayContent.AppBlocked -> shownScene.packageName == packageName
+                    is OverlayContent.DailyLimitBlocked -> shownScene.packageName == packageName
+                    else -> false
+                }
+                if (!sceneCovers) {
                     // Recorded only when a submission follows (coverBlockedApp → overlay.show):
                     // every other decision is never submitted, and its pending entry would live
-                    // for the process lifetime (review finding #45).
-                    profiler.recordDecision(generation, detectionNanos, decisionTimeNanos)
+                    // for the process lifetime (review finding #45). A rebind is not a new
+                    // window submission, so it records nothing.
+                    if (!overlay.isShown(displayId)) {
+                        profiler.recordDecision(generation, detectionNanos, decisionTimeNanos)
+                    }
                     coverBlockedApp(generation, displayId, packageName)
                     // XOS measures the *animating* task for a moment after an app switch, so a
                     // cover shown mid-animation lands at the animation's rect with the app's
@@ -875,7 +890,7 @@ class BlockerAccessibilityService : AccessibilityService() {
             overlay.displayBounds(displayId),
             appBlockedContent(packageName),
         ) { closeBlockedApp(packageName) }
-        blockOtherRestrictedWindows(generation)
+        blockOtherRestrictedWindows(generation, packageName, displayId)
     }
 
     /** Settle re-run: re-bound the live card until the deciding package's target rect is stable
@@ -942,7 +957,11 @@ class BlockerAccessibilityService : AccessibilityService() {
         return if (target.intersect(overlay.displayBounds(displayId))) target else null
     }
 
-    private fun blockOtherRestrictedWindows(generation: Long) {
+    private fun blockOtherRestrictedWindows(
+        generation: Long,
+        foregroundPackage: String? = null,
+        foregroundDisplayId: Int? = null,
+    ) {
         val candidate = HashMap<Int, Pair<String, Rect>>()
         allWindows().forEach { w ->
             val root = runCatching { w.root }.getOrNull() ?: return@forEach
@@ -952,9 +971,21 @@ class BlockerAccessibilityService : AccessibilityService() {
             val bounds = w.boundsInScreenOrNull ?: return@forEach
             val displayId = w.displayIdOrDefault()
             val incumbent = candidate[displayId]
-            if (incumbent == null || bounds.area() > incumbent.second.area()) {
-                candidate[displayId] = pkg to bounds
+            // The deciding foreground app wins its own display: a blocked app's
+            // exit-animation window can still be the largest listed right after the task
+            // switch, and letting it win labels (and bounds) the card for an app that is no
+            // longer in front. Other displays keep the largest-window rule (split-screen /
+            // multi-display coverage).
+            val foreground = displayId == foregroundDisplayId && pkg == foregroundPackage
+            val incumbentIsForeground =
+                displayId == foregroundDisplayId && incumbent?.first == foregroundPackage
+            val better = when {
+                incumbent == null -> true
+                foreground -> !incumbentIsForeground
+                incumbentIsForeground -> false
+                else -> bounds.area() > incumbent.second.area()
             }
+            if (better) candidate[displayId] = pkg to bounds
         }
         candidate.forEach { (displayId, entry) ->
             val (pkg, windowBounds) = entry

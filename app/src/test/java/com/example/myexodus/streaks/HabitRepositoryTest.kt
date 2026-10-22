@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -262,6 +263,34 @@ class HabitRepositoryTest {
 
     private fun deleteStoreFiles(dbFile: File) {
         listOf("", "-journal", "-wal", "-shm").forEach { File(dbFile.path + it).deleteRecursively() }
+    }
+
+    /**
+     * F39-3: a store that opened successfully can still fail mid-call (closed pool, I/O,
+     * corruption surfacing in a DAO). Alarm receivers and widget actions call these entry
+     * points from background components where an uncaught exception kills the process, so
+     * each must return its defined failure result — cancellation excepted, it must propagate.
+     */
+    @Test
+    fun storeFailureAfterOpen_mapsToTheDefinedFailureResult_atEveryEntryPoint() = runBlocking {
+        seedProfile()
+        onboard()
+        val habitId = checkNotNull(repository.state.value).habitId
+        val last = repository.state.value
+        store.close() // the factory still returns its cached handle; every DAO call throws
+
+        assertEquals(HabitRepository.RelapseResult.StoreUnavailable, repository.logRelapse(habitId))
+        assertEquals(HabitRepository.RenameResult.StoreUnavailable, repository.renameHabit(habitId, "x"))
+        assertEquals(HabitRepository.DeleteResult.StoreUnavailable, repository.deleteHabit(habitId))
+        assertEquals(emptyList<HabitSummary>(), repository.habits())
+        assertNull(repository.sharingMatrix())
+        assertEquals(last, repository.evaluate(habitId))
+        assertEquals(last, repository.selectHabit(habitId))
+        assertFalse(repository.setPairStreakSharing("pair-1", habitId, true, true, true))
+        assertFalse(repository.setPairProfileSharing("pair-1", shareCheckIns = true, shareRecovery = false))
+        repository.acknowledgeMilestone(habitId, 7) // must return, not throw
+        assertEquals(last, repository.refreshActive())
+        assertTrue("a read that threw is the error state, not a pending one", repository.loadFailed.value)
     }
 
     @Test

@@ -68,6 +68,19 @@ class UrlPatternTest {
     }
 
     @Test
+    fun trailingRootDot_isDroppedOnRuleAndCandidate() {
+        // Browsers normalize "example.com." to "example.com"; a stored rule that kept the
+        // root dot could never match the address-bar text (deep review 2026-10-22).
+        val s = UrlPattern.parseStructure("https://Example.com./path")!!
+        assertEquals("example.com", s.hostUnicode)
+        assertEquals("example.com", s.hostAscii)
+        val pattern = UrlPattern.from(rule("example.com."))!!
+        assertTrue(pattern.matches(candidate("example.com")))
+        assertTrue(pattern.matches(candidate("sub.example.com.")))
+        assertNull(UrlPattern.parseStructure("."))
+    }
+
+    @Test
     fun trailingSlashOnPath_trimmed() {
         val s = UrlPattern.parseStructure("https://example.com/forum/")!!
         assertEquals("/forum", s.pathPrefix)

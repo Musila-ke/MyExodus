@@ -593,7 +593,7 @@ class DnsSinkholeVpnService : VpnService() {
         if (tcp.payloadLength > 0 && flow.connected.get()) {
             when {
                 Integer.compareUnsigned(tcp.seq, flow.ackToDevice) < 0 ->
-                    sendAck(flow, tcp.window) // device retransmit: re-ACK only, never re-forward
+                    sendAck(flow) // device retransmit: re-ACK only, never re-forward
                 Integer.compareUnsigned(tcp.seq, flow.ackToDevice) > 0 ->
                     Unit // gap: drop; the device retransmits from the lost byte
                 else -> try {
@@ -609,20 +609,20 @@ class DnsSinkholeVpnService : VpnService() {
                         ClientDataResult.Hold -> {
                             flow.ackToDevice = tcp.seq + tcp.payloadLength
                             flow.lastActivity = System.currentTimeMillis()
-                            sendAck(flow, tcp.window)
+                            sendAck(flow)
                         }
                         is ClientDataResult.Forward -> {
                             flow.socket!!.outputStream.write(r.data.bytes, 0, r.data.length)
                             r.data.release() // INV-13: the Baseline releases once the bytes are out
                             flow.ackToDevice = tcp.seq + tcp.payloadLength
                             flow.lastActivity = System.currentTimeMillis()
-                            sendAck(flow, tcp.window)
+                            sendAck(flow)
                         }
                         ClientDataResult.PassThrough -> {
                             flow.socket!!.outputStream.write(packet, tcp.payloadOffset, tcp.payloadLength)
                             flow.ackToDevice = tcp.seq + tcp.payloadLength
                             flow.lastActivity = System.currentTimeMillis()
-                            sendAck(flow, tcp.window)
+                            sendAck(flow)
                         }
                         ClientDataResult.Reset -> Unit // the Engine already RST the device
                     }
@@ -634,7 +634,7 @@ class DnsSinkholeVpnService : VpnService() {
             flow.ackToDevice = tcp.seq + tcp.payloadLength + 1 // FIN consumes a sequence number
             flow.lastActivity = System.currentTimeMillis()
             try { flow.socket!!.shutdownOutput() } catch (e: IOException) { teardown(flow); return }
-            sendAck(flow, tcp.window)
+            sendAck(flow)
         }
     }
 
@@ -700,7 +700,7 @@ class DnsSinkholeVpnService : VpnService() {
         if (BuildConfig.DEBUG) Log.i(TAG, "tcp synack key=${flow.key} seq=${flow.seqToDevice - 1} ack=${flow.ackToDevice} ok=$written hex=${synAck.take(60).joinToString("") { "%02x".format(it) }}")
     }
 
-    private fun sendAck(flow: TcpFlow, win: Int = -1) {
+    private fun sendAck(flow: TcpFlow) {
         writeTun(
             VpnPacket.buildTcpSegment(
                 src = flow.dstIp, dst = flow.deviceIp,

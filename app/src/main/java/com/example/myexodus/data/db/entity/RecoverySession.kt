@@ -53,6 +53,9 @@ data class RecoverySession(
         const val ENTRY_WIDGET = "WIDGET"
         const val ENTRY_TAB = "TAB"
 
+        /** Home's quick action writes in place, so the row records the real surface. */
+        const val ENTRY_HOME = "HOME"
+
         /** Process death leaves rows STARTED; past this age the sweep closes them (v2 M2.4). */
         const val STALE_SESSION_MS = 15 * 60 * 1000L
     }

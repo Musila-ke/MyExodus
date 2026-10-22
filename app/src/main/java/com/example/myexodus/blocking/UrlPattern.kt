@@ -133,7 +133,10 @@ data class UrlPattern(
             }
             if (host.isEmpty()) return null
 
-            val hostLower = host.lowercase(Locale.ROOT)
+            // A trailing dot is the DNS root label, and browsers drop it — an unmatchable
+            // "example.com." rule would silently enforce nothing (device review 2026-10-22).
+            val hostLower = host.lowercase(Locale.ROOT).removeSuffix(".")
+            if (hostLower.isEmpty()) return null
             val ascii = runCatching { IDN.toASCII(hostLower) }.getOrDefault(hostLower)
             val unicode = runCatching { IDN.toUnicode(ascii) }.getOrDefault(hostLower)
             // Default ports are elided by the omnibox regardless of scheme, so scheme-less

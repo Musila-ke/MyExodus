@@ -98,7 +98,7 @@ async function seedQueue(id, overrides = {}) {
 async function seedDevice(installId, uid = BOB, fields = { pushEligible: true }) {
   await db.doc(`users/${uid}/push_installations/${installId}`).set({
     provider: 'fcm',
-    token: 'tok',
+    token: `tok-${installId}`,
     platform: 'android',
     appVersion: '1.0',
     ...fields,
@@ -130,7 +130,7 @@ test('T-F19: crash before FCM — the due queue is repaired by the sweep', async
   assert.strictEqual((await nudgeOf(id)).status, 'sent');
   assert.strictEqual((await queueOf(id)).exists, false);
   assert.strictEqual(messaging.calls.length, 1);
-  assert.deepStrictEqual(messaging.calls[0].fids, ['d1']);
+  assert.deepStrictEqual(messaging.calls[0].tokens, ['tok-d1']);
 });
 
 test('T-F20: crash after FCM acceptance before finalization — expired lease reclaimed, resend tolerated', async () => {

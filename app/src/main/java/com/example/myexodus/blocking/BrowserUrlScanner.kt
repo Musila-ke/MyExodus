@@ -131,8 +131,8 @@ class BrowserUrlScanner(
                     if (BuildConfig.DEBUG) Log.d(TAG, "url scan no-op: not a page-like address '$text'")
                     return@Runnable
                 }
-                else -> engine.decideUrl(
-                    canonical,
+                else -> engine.decideUrlFor(
+                    rule,
                     System.currentTimeMillis(),
                     rule?.let { usageTodayMs(it.ruleId) },
                 )

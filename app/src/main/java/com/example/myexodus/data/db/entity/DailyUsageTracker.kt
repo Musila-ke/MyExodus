@@ -38,3 +38,10 @@ data class DailyUsageTracker(
     @ColumnInfo(name = "warning2_state") val warning2State: String,
     @ColumnInfo(name = "blocked_today") val blockedToday: Boolean,
 )
+
+/** Decision 20: the day anchor is the (local date, IANA zone) pair — any mismatch with the
+ *  device's current day resets the row, a timezone move included. Comparing the date alone
+ *  kept a traveler's pre-move usage on the same date while the engine's advisory read already
+ *  treated a zone mismatch as zero usage, so the two disagreed (deep review 2026-10-22). */
+fun DailyUsageTracker.isStaleFor(today: String, zoneId: String): Boolean =
+    localDateAnchor != today || timezoneIdAtAnchor != zoneId

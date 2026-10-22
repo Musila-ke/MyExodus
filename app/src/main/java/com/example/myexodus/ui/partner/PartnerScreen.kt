@@ -303,7 +303,13 @@ fun PartnerScreen(
         val epoch = reloadEpoch.incrementAndGet()
         val loaded = runCatching { source.load(selectedPairId = selectedPairId, nowMillis = System.currentTimeMillis()) }
             .onFailure { Log.w(TAG, "dashboard load failed", it) }
-            .getOrElse { state ?: PartnerDashboardUi.Loading }
+            .getOrElse {
+                // A failed reload keeps the last known state only while it describes the same
+                // subject; under a different selection it would be partner A's dashboard shown
+                // as partner B's (finding #57's mis-attribution, on the failure path).
+                if (keepsUnderSelection(state, selectedPairId)) state ?: PartnerDashboardUi.Loading
+                else PartnerDashboardUi.Loading
+            }
         if (epoch != reloadEpoch.get()) return
         state = loaded
         // The source falls back to the newest pairing when the stored pick is gone (unpaired,
@@ -318,18 +324,25 @@ fun PartnerScreen(
         // Owner ask 2026-10-04 ("you have added a partner... but not shared anything"): computed
         // inside reload() because this is the one refresh path every repaint routes through —
         // pulls, resume, pair switches. A failure reads as "unknown", never as a false claim.
-        sharesNothing = (state as? PartnerDashboardUi.Paired)?.let { paired ->
+        val shares = (state as? PartnerDashboardUi.Paired)?.let { paired ->
             runCatching { habitRepository.sharesNothingWith(paired.pairId) }.getOrNull()
         }
         // Plan Step 8: every repaint path (pull, resume, switch, check-now) refreshes the
         // connection reading through the client's one-call-a-minute bound, so a burst of
         // reloads can never become a callable burst. A failure clears it rather than repeating
         // a stale claim from before the silence.
-        partnerStatus = (state as? PartnerDashboardUi.Paired)?.let { paired ->
+        val status = (state as? PartnerDashboardUi.Paired)?.let { paired ->
             runCatching { onLoadPartnerStatus(paired.pairId) }
                 .onFailure { Log.w(TAG, "partner status read failed", it) }
                 .getOrNull()
         }
+        // Finding #57 covers these two reads as well: they belong to the pair this reload
+        // loaded, so a reload that lost the race to a newer one must publish neither — writing
+        // A's "nothing shared" or connection reading under B's selection is the same stale
+        // dashboard the state guard above closes.
+        if (epoch != reloadEpoch.get()) return
+        sharesNothing = shares
+        partnerStatus = status
     }
 
     /** §19.5: bring another supported user's dashboard forward — persisted, then reloaded.
@@ -2327,6 +2340,19 @@ private fun PairingEntryActions(onInvite: () -> Unit, onJoin: () -> Unit) {
  * Check now, live on the Pairing page. An unreachable pairing is deliberately not this case: it
  * has its own card, which names the cause instead of offering the network as a suspect.
  */
+/**
+ * Whether the last known state answers for [selectedPairId] — used only when a reload failed.
+ * States that name a pairing (Paired, Ended) may be kept only under their own selection; with
+ * no selection the persisted pick is absent and the screen keeps what it had. Pairing-less
+ * states describe this device, not one partner, so they are always keepable.
+ */
+private fun keepsUnderSelection(state: PartnerDashboardUi?, selectedPairId: String?): Boolean =
+    when (state) {
+        is PartnerDashboardUi.Paired -> selectedPairId == null || state.pairId == selectedPairId
+        is PartnerDashboardUi.Ended -> selectedPairId == null || state.pairId == selectedPairId
+        else -> true
+    }
+
 private fun syncNeedsAttention(state: PartnerDashboardUi.Paired): Boolean =
     !state.pairingUnreachable && (
         state.lastSyncedAtEpochMillis == null ||

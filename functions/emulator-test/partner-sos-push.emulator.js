@@ -98,7 +98,7 @@ async function seedQueue(id, overrides = {}) {
 async function seedDevice(installId, uid = BOB, fields = { pushEligible: true }) {
   await db.doc(`users/${uid}/push_installations/${installId}`).set({
     provider: 'fcm',
-    token: 'tok',
+    token: `tok-${installId}`,
     platform: 'android',
     appVersion: '1.0',
     ...fields,
@@ -133,15 +133,17 @@ test('T-F21: all targets accepted -> sent, counts updated, queue deleted atomica
   assert.ok(nudge.lastPushAtMs);
   assert.strictEqual((await queueOf(id)).exists, false);
 
-  // §4.6 message contract, asserted on the wire payload the engine built.
+  // §4.6 message contract, asserted on the wire payload the engine built. Token targeting
+  // since the 2026-10-04 deviation (see nudgeFcmMessage): the doc id remains the ledger key,
+  // the stored registration token is what FCM receives.
   const message = messaging.calls[0];
-  assert.deepStrictEqual(message.fids, ['d1']);
+  assert.deepStrictEqual(message.tokens, ['tok-d1']);
   assert.strictEqual(message.data.type, 'partner_nudge');
   assert.strictEqual(message.data.nudge_id, id);
   assert.strictEqual(message.android.priority, 'high');
   assert.strictEqual(message.android.ttl, 3_600_000);
   assert.strictEqual(message.android.restrictedPackageName, 'com.example.myexodus');
-  assert.strictEqual(message.android.notification.channelId, 'partner_nudges');
+  assert.strictEqual(message.android.notification.channelId, 'partner_nudges_v3');
   assert.strictEqual(message.android.notification.tag, 'partner_nudge');
   assert.strictEqual(message.android.notification.visibility, 'private');
   assert.strictEqual(nudgeFcmMessage(['x'], 'n').notification.title, 'Accountability Check-in');
@@ -155,10 +157,10 @@ test('the first dispatch snapshots eligible installations and freezes the target
   await seedDevice('d1');
   await seedDevice('d2');
   await seedDevice('d3', BOB, { pushEligible: false });
-  const messaging = scriptedMessaging((m) => m.fids.map(() => ok));
+  const messaging = scriptedMessaging((m) => m.tokens.map(() => ok));
 
   await engine(messaging)(PAIR, id);
-  assert.deepStrictEqual([...messaging.calls[0].fids].sort(), ['d1', 'd2']);
+  assert.deepStrictEqual([...messaging.calls[0].tokens].sort(), ['tok-d1', 'tok-d2']);
 
   // A later registration (d4) must never join this nudge; a retry re-reads the snapshot.
   const id2 = nudgeId();
@@ -167,7 +169,7 @@ test('the first dispatch snapshots eligible installations and freezes the target
   await seedDevice('d4');
   const messaging2 = scriptedMessaging(() => [ok]);
   await engine(messaging2)(PAIR, id2);
-  assert.deepStrictEqual(messaging2.calls[0].fids, ['d1']);
+  assert.deepStrictEqual(messaging2.calls[0].tokens, ['tok-d1']);
 });
 
 // --- T-F23: no eligible device ---
@@ -200,7 +202,7 @@ test('T-F22: one sent + one invalid -> partial; the invalid registration is dele
   await seedDevice('d1');
   await seedDevice('d2');
   const messaging = scriptedMessaging((m) =>
-    m.fids.map((fid) => (fid === 'd2' ? fcmError('registration-token-not-registered') : ok)),
+    m.tokens.map((tok) => (tok === 'tok-d2' ? fcmError('registration-token-not-registered') : ok)),
   );
 
   const result = await engine(messaging)(PAIR, id);
@@ -221,7 +223,7 @@ test('T-F24: all targets terminally invalid -> failed; every invalid registratio
   await seedQueue(id, { targetInstallIds: ['d1', 'd2'] });
   await seedDevice('d1');
   await seedDevice('d2');
-  const messaging = scriptedMessaging((m) => m.fids.map(() => fcmError('installation-id-not-registered')));
+  const messaging = scriptedMessaging((m) => m.tokens.map(() => fcmError('installation-id-not-registered')));
 
   const result = await engine(messaging)(PAIR, id);
   assert.strictEqual(result.outcome, 'failed');
@@ -239,7 +241,7 @@ test('a vanished or ineligible device is dropped terminally, not retried', async
 
   const result = await engine(messaging)(PAIR, id);
   assert.strictEqual(result.outcome, 'partial', 'the missing target counts as permanently unsuccessful');
-  assert.deepStrictEqual(messaging.calls[0].fids, ['d1']);
+  assert.deepStrictEqual(messaging.calls[0].tokens, ['tok-d1']);
   assert.strictEqual((await nudgeOf(id)).sentDeviceCount, 1);
 });
 

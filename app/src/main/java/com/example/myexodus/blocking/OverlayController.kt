@@ -111,11 +111,15 @@ class OverlayController(
                 current is OverlayContent.Warning -> rebindShown(displayId, bounds, content, onAttached)
                 // A banner never replaces a wall (§8 Step 10).
                 content is OverlayContent.Warning -> Unit
-                // Block → block keeps the device-verified first-wins behavior: re-bound only
-                // (the first show passes display bounds; the service's per-window pass must
-                // still land, or the cover freezes at whole-display size and swallows the
-                // allowed pane — emulator-5554 split-screen, 2026-09-14).
-                else -> refreshBounds(displayId, bounds)
+                // Block → block for the SAME scene keeps the device-verified first-wins
+                // behavior: re-bound only (the first show passes display bounds; the
+                // service's per-window pass must still land, or the cover freezes at
+                // whole-display size and swallows the allowed pane — emulator-5554
+                // split-screen, 2026-09-14). A DIFFERENT block target under the same window
+                // must rebind its content: the card names what it covers (a blocked app
+                // reached from the notification shade while another app's card is up).
+                else -> if (current == content) refreshBounds(displayId, bounds)
+                else rebindShown(displayId, bounds, content, onAttached)
             }
             return
         }
@@ -246,7 +250,11 @@ class OverlayController(
         val content = contents[displayId]
         if (shown[displayId] != true) return false
         if (content !is OverlayContent.DailyLimitBlocked && content !is OverlayContent.AppBlocked) return false
-        return views[displayId]?.debugClickDismiss() == true
+        // The wall lives in `views` only on the addView host; stock Android's accessibility
+        // host uses the Dialog path and keeps it in `dialogViews`. Reading `views` alone made
+        // every dismissal on that host a false "no standing wall" (AVD, 2026-10-22), and the
+        // leftover wall re-evicted every later launch with no decision.
+        return (views[displayId] ?: dialogViews[displayId])?.debugClickDismiss() == true
     }
 
     /** Called from the service's onDestroy; overlay windows are system-owned once the
