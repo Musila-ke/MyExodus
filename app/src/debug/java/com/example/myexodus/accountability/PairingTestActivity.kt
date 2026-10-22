@@ -21,10 +21,20 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import com.example.myexodus.accountability.crypto.AccountabilitySigner
+import com.example.myexodus.accountability.crypto.AttestationVerifier
+import com.example.myexodus.accountability.enrollment.CekDerivation
+import com.example.myexodus.accountability.enrollment.EnrollmentFlow
 import com.example.myexodus.accountability.enrollment.PairingCode
 import com.example.myexodus.accountability.enrollment.PairingFlow
 import com.example.myexodus.accountability.enrollment.PairingToken
+import com.example.myexodus.accountability.sync.PairingExchange
+import com.example.myexodus.accountability.sync.PairingRegistration
+import com.google.firebase.FirebaseApp
+import com.google.firebase.appcheck.FirebaseAppCheck
+import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.functions.FirebaseFunctions
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import dagger.hilt.android.EntryPointAccessors
@@ -40,7 +50,14 @@ import kotlinx.coroutines.launch
  * signs the transcript with its hardware-bound signing key (biometric prompt, ADR #112
  * device-credential fallback); both devices display the SAS
  * for the out-of-band comparison before the initiator signs. Covers §7 step 8 and §10
- * steps 1-5, plus the §10 step 4 revocation seam (Delete pair button).
+ * steps 1-5. The §10 step 4 revocation seam is no longer driven from here — the shipped
+ * unpair UI owns it (device-proven, ADR #114/#144), and a harness pair lives outside the
+ * production identity's enrollment graph so this activity could not act on it anyway.
+ *
+ * Identity isolation (ADR #209): every Firebase handle is on a NAMED app. The harness used
+ * to sign in through the default app, whose anonymous uid IS the user's account (§6) — every
+ * launch rotated the production identity and orphaned the live pair (2026-10-21). The default
+ * `FirebaseAuth` must never be touched here; `PairingHarnessIsolationTest` fails if it is.
  *
  * Usage: am start -n <app>/.accountability.PairingTestActivity
  */
@@ -49,6 +66,44 @@ class PairingTestActivity : FragmentActivity() {
 
     private val entryPoint: PairingTestEntryPoint by lazy {
         EntryPointAccessors.fromApplication(applicationContext, PairingTestEntryPoint::class.java)
+    }
+
+    /** The harness's own Firebase app — never the default one, whose anonymous uid is the
+     *  user's account. A second name means a second identity store and a second uid. */
+    private val harnessApp: FirebaseApp by lazy {
+        (FirebaseApp.getApps(this).firstOrNull { it.name == HARNESS_APP }
+            ?: FirebaseApp.initializeApp(this, FirebaseApp.getInstance().options, HARNESS_APP))
+            ?.also {
+                FirebaseAppCheck.getInstance(it)
+                    .installAppCheckProviderFactory(PlayIntegrityAppCheckProviderFactory.getInstance())
+            }
+            ?: error("could not initialise the $HARNESS_APP Firebase app")
+    }
+    private val harnessAuth: FirebaseAuth by lazy { FirebaseAuth.getInstance(harnessApp) }
+
+    /** Production pairing protocol over the harness's own transport + local stores; the
+     *  signing and agreement keys are the real device keystore (that is what the biometric
+     *  legs exercise). Only the enrollment row and the pairing secret are harness-local. */
+    private val pairingFlow: PairingFlow by lazy {
+        val keystore = entryPoint.keystore()
+        PairingFlow(
+            enrollmentFlow = EnrollmentFlow(AccountabilitySigner(), AttestationVerifier(), CekDerivation()),
+            enrollmentDao = InMemoryEnrollmentDao(),
+            exchange = PairingExchange(this, FirebaseFirestore.getInstance(harnessApp)),
+            registration = PairingRegistration(
+                this,
+                FirebaseFunctions.getInstance(harnessApp, PairingRegistration.REGION),
+            ),
+            secretsRepository = NoOpSecretsRepository(),
+            nowEpochMillis = System::currentTimeMillis,
+            ensureIdentityKeys = { keystore.ensureKeys() },
+            signingCertificateChain = keystore::signingCertificateChain,
+            signingPublicKey = keystore::signingPublicKey,
+            generateAgreementKey = keystore::generatePairAgreementKey,
+            agreementPublicKey = keystore::pairAgreementPublicKey,
+            agreementPrivateKey = keystore::pairAgreementPrivateKey,
+            destroyAgreementKey = keystore::destroyPairAgreementKey,
+        )
     }
     // lazy: TextView(this) in a property initializer runs in <init>, before the activity
     // context is attached — getResources() NPEs (crash caught on the X6532, 2026-08-30).
@@ -89,7 +144,7 @@ class PairingTestActivity : FragmentActivity() {
         })
         val qrImage = ImageView(this@PairingTestActivity).apply {
             adjustViewBounds = true
-            // 240px: the 720x1600 X6532 clips the Delete-pair row even at 360 (caught 2026-09-16)
+            // 240px keeps every control visible on the 720x1600 X6532 (caught 2026-09-16)
             maxHeight = 240
         }
         addView(qrImage)
@@ -145,27 +200,6 @@ class PairingTestActivity : FragmentActivity() {
             }
         })
 
-        val pairIdInput = EditText(this@PairingTestActivity).apply {
-            hint = "pair id (for Delete pair)"
-        }
-        val partnerUidInput = EditText(this@PairingTestActivity).apply {
-            hint = "partner uid (for Delete pair)"
-        }
-        addView(pairIdInput)
-        addView(partnerUidInput)
-        addView(Button(this@PairingTestActivity).apply {
-            text = "Delete pair (§10 step 4 revocation)"
-            setOnClickListener {
-                val pairId = pairIdInput.text.toString().trim()
-                val partnerUid = partnerUidInput.text.toString().trim()
-                if (pairId.isEmpty() || partnerUid.isEmpty()) {
-                    log("pair id and partner uid required")
-                    return@setOnClickListener
-                }
-                deletePair(pairId, partnerUid)
-            }
-        })
-
         val logScroll = ScrollView(this@PairingTestActivity).apply {
             addView(logView.apply {
                 gravity = Gravity.START
@@ -178,11 +212,13 @@ class PairingTestActivity : FragmentActivity() {
     }
 
     private fun signInAnonymously() {
-        // Fresh identity per tap: signInAnonymously alone reuses the current anonymous user,
-        // but the two pairing roles must hold DISTINCT uids (a real second device's shape) —
-        // otherwise the pair doc's members has one entry and PairUidResolver finds no partner.
-        FirebaseAuth.getInstance().signOut()
-        FirebaseAuth.getInstance().signInAnonymously()
+        // Fresh harness identity per tap: signInAnonymously alone reuses the current anonymous
+        // user, but the two pairing roles must hold DISTINCT uids (a real second device's
+        // shape) — otherwise the pair doc's members has one entry and PairUidResolver finds no
+        // partner. Both calls are scoped to the harness app; the default app's anonymous uid
+        // is the user's production account (§6) and must never be signed out here.
+        harnessAuth.signOut()
+        harnessAuth.signInAnonymously()
             .addOnSuccessListener { result ->
                 uid = result.user?.uid
                 log("anonymous sign-in ok: uid=$uid")
@@ -198,7 +234,7 @@ class PairingTestActivity : FragmentActivity() {
         val myUid = requireUid() ?: return
         lifecycleScope.launch {
             log("generating single-use token (10 min TTL)...")
-            val initiation = runCatching { entryPoint.pairingFlow().initiate(myUid) }
+            val initiation = runCatching { pairingFlow.initiate(myUid) }
             if (initiation.isFailure) {
                 log("initiate failed: ${initiation.exceptionOrNull()?.message}")
                 return@launch
@@ -217,7 +253,7 @@ class PairingTestActivity : FragmentActivity() {
             runCatching { File(cacheDir, QR_CACHE_FILE).writeText(text) }
             qrImage.setImageBitmap(renderQr(text))
             log("waiting for the partner's response (up to 10 min)...")
-            val await = runCatching { entryPoint.pairingFlow().awaitPartner(qr.token, PairingToken.TTL_MILLIS) }
+            val await = runCatching { pairingFlow.awaitPartner(qr.token, PairingToken.TTL_MILLIS) }
             if (await.isFailure) {
                 log("await failed: ${await.exceptionOrNull()?.message}")
                 return@launch
@@ -241,7 +277,7 @@ class PairingTestActivity : FragmentActivity() {
         signWithBiometric("Sign pairing proof as initiator") { signature ->
             lifecycleScope.launch {
                 val outcome = runCatching {
-                    entryPoint.pairingFlow().submitInitiatorSignature(await, token, myUid, signature)
+                    pairingFlow.submitInitiatorSignature(await, token, myUid, signature)
                 }
                 log("initiator outcome: ${outcome.getOrNull() ?: outcome.exceptionOrNull()}")
             }
@@ -252,7 +288,7 @@ class PairingTestActivity : FragmentActivity() {
         val myUid = requireUid() ?: return
         lifecycleScope.launch {
             log("verifying initiator identity, signing transcript + proof, responding on token...")
-            val outcome = runCatching { entryPoint.pairingFlow().complete(qrBytes, myUid, signature) }
+            val outcome = runCatching { pairingFlow.complete(qrBytes, myUid, signature) }
             log("partner outcome: ${outcome.getOrNull() ?: outcome.exceptionOrNull()}")
             (outcome.getOrNull() as? PairingFlow.Outcome.Paired)?.let {
                 log("SAS (compare with initiator): ${it.sas}")
@@ -264,22 +300,10 @@ class PairingTestActivity : FragmentActivity() {
         val myUid = requireUid() ?: return
         lifecycleScope.launch {
             log("typed code passed the local check — looking up the token document...")
-            val outcome = runCatching { entryPoint.pairingFlow().completeWithCode(code, myUid, signature) }
+            val outcome = runCatching { pairingFlow.completeWithCode(code, myUid, signature) }
             log("partner outcome (typed code): ${outcome.getOrNull() ?: outcome.exceptionOrNull()}")
             (outcome.getOrNull() as? PairingFlow.Outcome.Paired)?.let {
                 log("SAS (compare with initiator): ${it.sas}")
-            }
-        }
-    }
-
-    private fun deletePair(pairId: String, partnerUid: String) {
-        val myUid = requireUid() ?: return
-        signWithBiometric("Sign deletion request") { signature ->
-            lifecycleScope.launch {
-                val result = runCatching {
-                    entryPoint.deletion().initiate(pairId, myUid, partnerUid, signature)
-                }
-                log("deletion result: ${result.getOrNull() ?: result.exceptionOrNull()}")
             }
         }
     }
@@ -436,6 +460,10 @@ class PairingTestActivity : FragmentActivity() {
     private companion object {
         const val TAG = "MyExodusPairing"
         const val QR_CACHE_FILE = "pairing_qr.txt"
+
+        /** Deliberately distinct from PartnerTestIdentity's "partner-test": the manual
+         *  harness and the instrumented virtual partner must never share an auth store. */
+        const val HARNESS_APP = "pairing-harness"
 
         /** Arbitrary, outside androidx.biometric's own request-code range. */
         const val REQ_SCREEN_LOCK = 4711
