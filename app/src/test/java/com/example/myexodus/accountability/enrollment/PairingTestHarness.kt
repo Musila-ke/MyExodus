@@ -66,6 +66,8 @@ internal fun pairingTestFlow(
     ensureIdentityKeys: () -> AccountabilityKeyStore.GenerationResult = {
         AccountabilityKeyStore.GenerationResult.Success(strongBox = false)
     },
+    // AD-22 wipe canary: recorded so tests can prove it is minted only by a durable enrollment.
+    markPairingCompleted: () -> Unit = { },
     nowMillis: () -> Long,
 ): PairingFlow = PairingFlow(
     enrollmentFlow = pairingTestEnrollmentFlow,
@@ -81,6 +83,7 @@ internal fun pairingTestFlow(
     agreementPublicKey = { keys.agreement.public },
     agreementPrivateKey = { keys.agreement.private },
     destroyAgreementKey = destroyAgreementKey,
+    markPairingCompleted = markPairingCompleted,
 )
 
 internal fun pairingTestSigning(privateKey: PrivateKey): Signature =
@@ -113,6 +116,7 @@ internal class FakeCloud {
     var corruptPartnerResponseSignature = false
     var denyNextRespond = false
     var failNextRegistration = false
+    var failNextTokenRegistration = false
     var failNextActivationWait = false
     var tamperTranscriptHashForUid: String? = null
 
@@ -138,6 +142,10 @@ internal class FakeExchange(
 ) : PairingExchange(ApplicationProvider.getApplicationContext(), firestoreInstance()) {
 
     override suspend fun registerToken(token: PairingToken, creatorUid: String, payload: EnrollmentPayload) {
+        if (cloud.failNextTokenRegistration) {
+            cloud.failNextTokenRegistration = false
+            throw IllegalStateException("token registration denied")
+        }
         cloud.tokenDocs[FirestoreSchema.pairingTokenDocumentId(token)] =
             FakeCloud.TokenDocState(token, creatorUid, payload)
     }

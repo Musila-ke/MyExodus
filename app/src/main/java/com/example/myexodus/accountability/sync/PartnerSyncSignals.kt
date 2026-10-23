@@ -41,4 +41,14 @@ object PartnerSyncSignals {
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
+
+    /** ADR #216: a pass stopped with partner-visible rows still queued because the §8.1
+     *  signing window was cold. Only the foreground can warm it (a user-authenticated
+     *  prompt), so [runPartnerSyncPass] ticks this and the Activity answers with prompt +
+     *  re-run. Background runs tick with nobody collecting — dropped by design; the next
+     *  foreground pass re-detects the same block and ticks again. */
+    val signingNeeded = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
 }

@@ -64,6 +64,11 @@ class PairingFlow(
     // transition. Defaulted: the debug harness has no rules store to snapshot from, and the
     // emission must never be able to fail a pairing that is already durable.
     private val onEnrolled: suspend (pairId: String) -> Unit = {},
+    // AD-22: the wipe canary is minted here — only a durable enrollment proves a pairing
+    // completed. Attempt paths (start, cancel, failure) must never mint it: the ceremony's
+    // identity keys are created before the server round-trip, so an aborted attempt that set
+    // this marker would read as a wiped database on the next start (AVD-caught 2026-10-23).
+    private val markPairingCompleted: () -> Unit = {},
 ) {
 
     sealed interface Outcome {
@@ -146,9 +151,20 @@ class PairingFlow(
      * Initiator step 2 (§10 step 2): wait for the partner's response on the token document,
      * then verify the partner's material (attestation + transcript signature). Returns null
      * on timeout or a failed verification (in which case the token is deleted).
+     *
+     * [timeoutMillis] is the nominal human-facing wait, NOT the server's deadline: the token's
+     * `expiresAt` was minted from this device's clock, and the rules compare it against the
+     * server's clock. A device running fast therefore mints an expiry the server honours later
+     * than this device's own TTL would suggest — with a fixed wait the initiator declared the
+     * invitation dead while the server still accepted the partner's write (observed on the rig,
+     * 2026-10-23: creator clock +3m42s, initiator gave up 3m42s early). The wait carries a skew
+     * allowance so the rules' denial — the only clock both sides agree on — is what ends it;
+     * the allowance then only bounds a pathological clock offset. Polls that end in `Denied`
+     * mean the rules' TTL gate fired (or App Check refused the read, which already terminated
+     * the wait before this change too).
      */
     suspend fun awaitPartner(token: PairingToken, timeoutMillis: Long): InitiatorAwait? {
-        val response = exchange.pollTokenResponse(token, timeoutMillis)
+        val response = exchange.pollTokenResponse(token, timeoutMillis + CLOCK_SKEW_ALLOWANCE_MILLIS)
         if (response == null) {
             // Timeout ends the attempt: the token is dead server-side (its TTL lapses, so it
             // is deliberately not deleted), and the screen drops its token reference — no
@@ -639,6 +655,11 @@ class PairingFlow(
                 myAgreementKeyAlias = aliasOf(sessionId),
             ),
         )
+        // Post-durable, like the two writes below: the canary must never be able to fail a
+        // pairing that is already committed. A miss here re-mints on the next app start from
+        // the enrollment (AccountabilityModule's detector wiring).
+        runCatching { markPairingCompleted() }
+            .onFailure { Log.w(TAG, "pairing canary write failed for $durablePairId", it) }
         // Post-durable like the snapshot below: the enrollment row and agreement key are already
         // committed, and the vault value is derivable from them (HKDF of the CEK), so a vault
         // write failure (disk-full class) is logged and swallowed — before this guard it threw
@@ -653,11 +674,19 @@ class PairingFlow(
         return enrollmentFlow.deriveSas(sessionId, agreementPublicKey(aliasOf(sessionId)), partnerAgreementPublicKey)
     }
 
-    private companion object {
+    companion object {
         /** Same tag as the harness so one `adb logcat -s MyExodusPairing` stream captures both. */
         const val TAG = "MyExodusPairing"
 
         /** Straggler window for the partner's proof after our own registered as pending. */
         const val ACTIVATION_WAIT_MILLIS = 30_000L
+
+        /**
+         * Tolerance added to the initiator's nominal wait. `expiresAt` is minted on the creator's
+         * clock while the rules judge it on the server's; a fast creator clock lengthens the
+         * server-side window by the same offset. Wide enough for any realistically skewed phone,
+         * small enough that a broken clock cannot keep the invitation screen open indefinitely.
+         */
+        const val CLOCK_SKEW_ALLOWANCE_MILLIS = 5 * 60_000L
     }
 }

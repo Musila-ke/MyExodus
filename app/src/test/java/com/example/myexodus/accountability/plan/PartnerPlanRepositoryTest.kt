@@ -161,6 +161,121 @@ class PartnerPlanRepositoryTest {
         assertEquals("Theirs", store.partnerPlanDao().get(planId)?.title)
     }
 
+    @Test
+    fun checkedToday_readsAsDone() = runBlocking {
+        val planId = checkNotNull(repository.createPlan(null, "Daily", listOf("one")))
+        val taskId = store.partnerPlanDao().tasks(planId).single().taskId
+        assertTrue(repository.setTaskDone(planId, taskId, true))
+        assertTrue(repository.tasks(planId).single().done)
+    }
+
+    @Test
+    fun yesterdaysChecks_readAsUncheckedAndClearTheRow() = runBlocking {
+        val planId = checkNotNull(repository.createPlan(null, "Daily", listOf("one")))
+        val taskId = store.partnerPlanDao().tasks(planId).single().taskId
+        val dayStart = localDayStartMillis(System.currentTimeMillis())
+        store.partnerPlanDao().setTaskDone(planId, taskId, true, dayStart - 1)
+
+        val read = repository.tasks(planId).single()
+        assertFalse("yesterday's check is not today's answer", read.done)
+        assertNull(read.doneAtMs)
+        assertFalse(store.partnerPlanDao().tasks(planId).single().done)
+    }
+
+    @Test
+    fun dailyReset_onPairedRecipientCopy_raisesProgressForTheAuthor() = runBlocking {
+        val planId = "received-plan"
+        seedStaleDone(planId, authored = false)
+        repository.tasks(planId)
+        assertTrue(
+            "the author must learn the day rolled over",
+            checkNotNull(store.partnerPlanDao().get(planId)).pendingProgress,
+        )
+    }
+
+    @Test
+    fun dailyReset_onAuthorsDisplayCopy_neverPublishesProgress() = runBlocking {
+        val planId = checkNotNull(repository.createPlan(PAIR, "Shared", listOf("one")))
+        val taskId = store.partnerPlanDao().tasks(planId).single().taskId
+        store.partnerPlanDao().setTaskDone(
+            planId, taskId, true, localDayStartMillis(System.currentTimeMillis()) - 1,
+        )
+        repository.allTasks()
+        assertFalse(store.partnerPlanDao().tasks(planId).single().done)
+        assertFalse(
+            "progress travels recipient → author only",
+            checkNotNull(store.partnerPlanDao().get(planId)).pendingProgress,
+        )
+    }
+
+    @Test
+    fun dailyReset_onSelfPlan_staysLocal() = runBlocking {
+        val planId = checkNotNull(repository.createPlan(null, "Mine", listOf("one")))
+        val taskId = store.partnerPlanDao().tasks(planId).single().taskId
+        store.partnerPlanDao().setTaskDone(
+            planId, taskId, true, localDayStartMillis(System.currentTimeMillis()) - 1,
+        )
+        repository.allTasks()
+        assertFalse(store.partnerPlanDao().tasks(planId).single().done)
+        assertFalse(checkNotNull(store.partnerPlanDao().get(planId)).pendingProgress)
+    }
+
+    @Test
+    fun doneWithoutTimestamp_countsAsStale() = runBlocking {
+        val planId = checkNotNull(repository.createPlan(null, "Mine", listOf("one")))
+        val taskId = store.partnerPlanDao().tasks(planId).single().taskId
+        store.partnerPlanDao().setTaskDone(planId, taskId, done = true, atMs = null)
+        assertTrue(store.partnerPlanDao().tasks(planId).single().done)
+        assertFalse(repository.tasks(planId).single().done)
+    }
+
+    @Test
+    fun allTasks_resetsOnlyTheStaleDay() = runBlocking {
+        val todayPlan = checkNotNull(repository.createPlan(null, "Today", listOf("a")))
+        val stalePlan = checkNotNull(repository.createPlan(null, "Stale", listOf("b")))
+        val todayTask = store.partnerPlanDao().tasks(todayPlan).single().taskId
+        val staleTask = store.partnerPlanDao().tasks(stalePlan).single().taskId
+        repository.setTaskDone(todayPlan, todayTask, true)
+        store.partnerPlanDao().setTaskDone(
+            stalePlan, staleTask, true, localDayStartMillis(System.currentTimeMillis()) - 1,
+        )
+
+        val rows = repository.allTasks().associateBy { it.planId }
+        assertTrue(checkNotNull(rows[todayPlan]).done)
+        assertFalse(checkNotNull(rows[stalePlan]).done)
+    }
+
+    @Test
+    fun localDayStart_isCalendarMidnightInTheZone() {
+        val zone = java.time.ZoneId.of("Africa/Nairobi")
+        val noon = java.time.ZonedDateTime.of(2026, 10, 23, 12, 0, 0, 0, zone)
+            .toInstant().toEpochMilli()
+        val midnight = java.time.ZonedDateTime.of(2026, 10, 23, 0, 0, 0, 0, zone)
+            .toInstant().toEpochMilli()
+        assertEquals(midnight, localDayStartMillis(noon, zone))
+        assertEquals(midnight, localDayStartMillis(midnight, zone))
+        assertEquals(midnight, localDayStartMillis(midnight - 1, zone) + 24 * 60 * 60 * 1000L)
+    }
+
+    private suspend fun seedStaleDone(planId: String, authored: Boolean) {
+        store.partnerPlanDao().insertPlan(
+            PartnerPlan(
+                planId = planId,
+                pairId = PAIR,
+                authored = authored,
+                title = "Theirs",
+                revision = 1,
+                updatedAtMs = System.currentTimeMillis(),
+            ),
+        )
+        store.partnerPlanDao().insertTask(
+            PartnerPlanTask(planId = planId, taskId = "t1", taskOrder = 0, text = "line"),
+        )
+        store.partnerPlanDao().setTaskDone(
+            planId, "t1", done = true, atMs = localDayStartMillis(System.currentTimeMillis()) - 1,
+        )
+    }
+
     private class FakeKeyManager : DatabaseKeyManager {
         override fun getOrCreateDek(): ByteArray = ByteArray(32)
         override fun classifyFailure(e: Throwable): KeyFailure = KeyFailure.DatabaseIssue

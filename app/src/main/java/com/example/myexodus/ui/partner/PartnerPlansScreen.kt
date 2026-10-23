@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -36,6 +37,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.myexodus.R
 import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.sync.PartnerSyncSignals
@@ -105,6 +109,17 @@ fun PartnerPlansScreen(
         PartnerSyncSignals.pulledEvents.collect {
             reloadKey++
         }
+    }
+
+    // Checks reset at local midnight, and the read that normalizes them only runs on reload —
+    // a surface left composed across the boundary would keep yesterday's ticks on screen.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) reloadKey++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     BackHandler(enabled = editorTarget != null) { editorTarget = null }
@@ -367,6 +382,13 @@ private fun PlanDetail(
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (tasks.isNotEmpty()) {
+                Text(
+                    stringResource(R.string.partner_plans_daily_reset),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(
                 when {
                     plan.pairId == null -> stringResource(R.string.partner_plans_local)

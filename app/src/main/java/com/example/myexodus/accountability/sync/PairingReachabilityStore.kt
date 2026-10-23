@@ -2,6 +2,8 @@ package com.example.myexodus.accountability.sync
 
 import android.content.Context
 import androidx.core.content.edit
+import com.google.firebase.FirebaseException
+import com.google.firebase.auth.FirebaseAuthInvalidUserException
 import com.google.firebase.firestore.FirebaseFirestoreException
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -51,11 +53,35 @@ class PairingReachabilityStore @Inject constructor(
         prefs.edit { stale.forEach { remove(it) } }
     }
 
+    /**
+     * The identity was abandoned and re-minted: every pairing on the device is certainly gone,
+     * because a fresh anonymous uid is a member of none (ADR #125). Recorded here rather than
+     * raised at the sign-in site because the rotation can happen inside push registration,
+     * before any pair is known — the next sync pass marks every enrollment from this.
+     */
+    fun markIdentityRotated(atMillis: Long) = prefs.edit { putLong(KEY_ROTATED_AT, atMillis) }
+
+    fun identityRotatedAt(): Long? = prefs.getLong(KEY_ROTATED_AT, 0L).takeIf { it > 0L }
+
+    fun clearIdentityRotated() {
+        if (prefs.contains(KEY_ROTATED_AT)) prefs.edit { remove(KEY_ROTATED_AT) }
+    }
+
+    /** Marks every currently held pairing gone as of the rotation and consumes the marker. The
+     *  marker is consumed even with no enrollments — left behind, it would brand a pairing made
+     *  after the rotation as already dead. */
+    fun consumeIdentityRotation(activePairIds: Set<String>) {
+        val at = identityRotatedAt() ?: return
+        activePairIds.forEach { markDenied(it, at) }
+        clearIdentityRotated()
+    }
+
     private fun key(pairId: String) = "$KEY_PREFIX$pairId"
 
     private companion object {
         const val PREFS_NAME = "pairing_reachability"
         const val KEY_PREFIX = "denied_at_"
+        const val KEY_ROTATED_AT = "identity_rotated_at"
     }
 }
 
@@ -86,3 +112,20 @@ internal fun shouldRecordDenial(cause: Throwable?, canAttest: Boolean): Boolean 
  */
 internal fun shouldClearDenial(present: Boolean, fromCache: Boolean): Boolean =
     present && !fromCache
+
+/**
+ * True when the *identity* is dead, not the connection: the auth server rejected the refresh
+ * exchange (account deleted or disabled, credential revoked, project identity gone). The SDK
+ * keeps `currentUser` set in that state and re-fails every request forever — device-proven
+ * 2026-10-23 on the emulator rig after both auth-emulator accounts vanished: an hour of 401s, no
+ * sign-out, no re-pair card, because the only recovery path ([PairUidResolver]) never saw a
+ * PERMISSION_DENIED answer.
+ *
+ * Network failures must never qualify: rotating the uid for a captive portal would orphan every
+ * pair (ADR #125). Only the auth server's own rejection earns a new identity.
+ */
+internal fun isDeadIdentity(cause: Throwable?): Boolean = when (cause) {
+    is FirebaseAuthInvalidUserException -> true
+    is FirebaseException -> cause.message?.contains("INVALID_REFRESH_TOKEN") == true
+    else -> false
+}

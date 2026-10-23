@@ -13,6 +13,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.example.myexodus.MainActivity
 import com.example.myexodus.R
+import com.example.myexodus.notifications.NotificationTapTarget
 
 /** §8 S7.4/S7.5: [DomainUsageHost] over the app's real services. */
 class AndroidDomainUsageHost(private val context: Context) : DomainUsageHost {
@@ -79,6 +80,11 @@ class AndroidDomainUsageHost(private val context: Context) : DomainUsageHost {
                             context,
                             0,
                             Intent(context, MainActivity::class.java)
+                                // Data = PendingIntent identity (extras are not): the VPN
+                                // spike and protection alerts tap the same MainActivity from
+                                // the same request code, so without this they share one
+                                // PendingIntent and rewrite each other's tab extra.
+                                .setData(NotificationTapTarget.of("domain-usage-$id"))
                                 .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_RULES)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,

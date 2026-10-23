@@ -236,6 +236,73 @@ class PartnerNotificationsTest {
         )
     }
 
+    /** Owner warning 2026-10-23 ("we don't want collisions"): ids are `base + pairId.hashCode()`
+     *  over consecutive bases, so a pair whose hash is one higher lands exactly on the NEXT
+     *  category's id for another pair. "BB" (hash 2112) and "Ab" (hash 2113) are the smallest
+     *  such pair: request(B) and decision(A) both compute 4015. The (tag, id) key keeps both
+     *  entries alive — with the old id-only key the decision silently replaced the request. */
+    @Test
+    fun idCollisionAcrossPairsAndCategories_entriesStillCoexist() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val pairA = "BB"
+        val pairB = "Ab"
+        val requestId = PartnerNotifications.idFor(PartnerNotifications.NOTIF_APPROVAL_REQUEST, pairB)
+        val decisionId = PartnerNotifications.idFor(PartnerNotifications.NOTIF_APPROVAL_DECISION, pairA)
+        assertEquals("the rigged pair must collide on id", requestId, decisionId)
+
+        PartnerNotifications.notifyApprovalRequest(context, pairB, "Ada")
+        PartnerNotifications.notifyApprovalDecision(context, pairA, "Mama")
+
+        val posted = manager.activeNotifications
+        assertEquals(2, posted.size)
+        assertEquals(
+            setOf(
+                PartnerNotifications.partnerTag("request", pairB),
+                PartnerNotifications.partnerTag("decision", pairA),
+            ),
+            posted.map { it.tag }.toSet(),
+        )
+        assertEquals(
+            setOf(
+                context.getString(R.string.approval_request_title_named, "Ada"),
+                context.getString(R.string.approval_decision_title_named, "Mama"),
+            ),
+            posted.map { it.notification.extras.getString(Notification.EXTRA_TITLE) }.toSet(),
+        )
+    }
+
+    /** Owner warning 2026-10-23: PendingIntent identity ignores extras and every post here
+     *  shared one request code, so a later partner-event post under FLAG_UPDATE_CURRENT
+     *  rewrote the reach-out notification's tap — its nudge routing extras vanished. The data
+     *  URI now scopes each tag to its own PendingIntent; an event post must not touch the
+     *  nudge tap (nor inherit its routing). */
+    @Test
+    fun nudgeTapExtras_surviveALaterPartnerEventPost() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val nudgeId = "123e4567-e89b-42d3-a456-426614174000"
+
+        PartnerNotifications.notifyPartnerNudge(context, nudgeId)
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_STREAK_UPDATED),
+        )
+
+        val posted = manager.activeNotifications
+        assertEquals(2, posted.size)
+        val nudgeTap = shadowOf(
+            posted.first { it.tag == PartnerNudgePush.TAG }.notification.contentIntent,
+        ).savedIntent
+        assertEquals(PartnerNudgePush.TYPE_PARTNER_NUDGE, nudgeTap.getStringExtra(PartnerNudgePush.TYPE_KEY))
+        assertEquals(nudgeId, nudgeTap.getStringExtra(PartnerNudgePush.NUDGE_ID_KEY))
+        val eventTap = shadowOf(
+            posted.first { it.tag == PartnerNotifications.partnerTag("event", PAIR_ID) }
+                .notification.contentIntent,
+        ).savedIntent
+        assertNull(
+            "the partner-event tap must never inherit nudge routing",
+            eventTap.getStringExtra(PartnerNudgePush.TYPE_KEY),
+        )
+    }
+
     @Test
     fun syncStatusChannel_isLowImportance() {
         // Unit tests run the debug variant (BuildConfig.DEBUG = true), so the debug gate

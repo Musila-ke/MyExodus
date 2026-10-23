@@ -16,6 +16,7 @@ import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.PlanWire
 import com.example.myexodus.notifications.NotificationAccess
+import com.example.myexodus.notifications.NotificationTapTarget
 import com.example.myexodus.ui.partner.shortKeyId
 import java.text.DateFormat
 import java.util.Date
@@ -25,8 +26,10 @@ import java.util.Date
  * envelope was verified and appended. Every post names the partner it concerns (owner ruling
  * 2026-09-29 — a device can hold several pairs, so "your partner" is not an answer): the
  * unlocked tray copy carries the pairing label, while the lockscreen public version keeps the
- * generic copy (FR-13's redaction contract). Each pair posts under its own notification id,
- * so one partner's entry can never silently replace another's pending item. Channels are
+ * generic copy (FR-13's redaction contract). Every post is keyed by (tag, id) with the tag
+ * scoped to its category AND pair, so one partner's entry can never silently replace another's
+ * pending item — not even when their id hashes collide across categories (owner warning
+ * 2026-10-23; see [partnerTag]). Channels are
  * created lazily at post time (creation is idempotent); denied POST_NOTIFICATIONS skips
  * silently (Step 16 owns the permission flow + banner).
  */
@@ -84,10 +87,18 @@ object PartnerNotifications {
      *  self-reminders without silencing partner accountability. */
     const val CHANNEL_CHECKIN_REMINDERS = "checkin_reminders_v1"
 
-    /** Per-pair notification id (§19.5 multi-partner): base + pairId hash, so N partners'
-     *  entries coexist in the tray. A hash collision only degrades to the old
-     *  replace-in-place behavior — never a lost alert for a different pair's item. */
+    /** Legacy per-pair id (§19.5 multi-partner): base + pairId hash. Kept because posting
+     *  keys are now (tag, id) — the pair-and-category tag below is what makes entries unique.
+     *  The bare id alone collides: the bases are consecutive, so a pair whose hash is 1-3
+     *  higher than another's produced the same id for a different category (owner warning
+     *  2026-10-23). Different tags keep such entries apart. */
     internal fun idFor(base: Int, pairId: String): Int = base + pairId.hashCode()
+
+    /** Collision-free post identity: the NotificationManager key is (tag, id), so scoping the
+     *  tag by category AND pair makes two entries equal only when they are the same category
+     *  for the same pair — the one case that must replace in place. */
+    internal fun partnerTag(category: String, pairId: String): String =
+        "partner:$category:$pairId"
 
     fun ensureSyncStatusChannel(context: Context) {
         if (!BuildConfig.DEBUG) return
@@ -240,6 +251,7 @@ object PartnerNotifications {
                 context.getString(R.string.partner_event_title_named, partnerName)
             },
             namedText = richBody,
+            tag = partnerTag("event", pairId),
         )
     }
 
@@ -272,11 +284,11 @@ object PartnerNotifications {
     /** A verified disable-approval request arrived — the responder's actionable item.
      *  Plan Step 16 channel spec: `approval_requests` is HIGH importance. */
     fun notifyApprovalRequest(context: Context, pairId: String, partnerName: String) =
-        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_APPROVAL_REQUEST, pairId), R.string.approval_request_title, R.string.approval_request_text, namedTitle = context.getString(R.string.approval_request_title_named, partnerName))
+        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_APPROVAL_REQUEST, pairId), R.string.approval_request_title, R.string.approval_request_text, namedTitle = context.getString(R.string.approval_request_title_named, partnerName), tag = partnerTag("request", pairId))
 
     /** The partner answered our request — informational. */
     fun notifyApprovalDecision(context: Context, pairId: String, partnerName: String) =
-        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_APPROVAL_DECISION, pairId), R.string.approval_decision_title, R.string.approval_decision_text, namedTitle = context.getString(R.string.approval_decision_title_named, partnerName))
+        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_APPROVAL_DECISION, pairId), R.string.approval_decision_title, R.string.approval_decision_text, namedTitle = context.getString(R.string.approval_decision_title_named, partnerName), tag = partnerTag("decision", pairId))
 
     /** #16: the partner ended the partnership and this device's shared data was shredded — the
      *  responder is told who, when, and that the erase happened (owner-observed defect: the
@@ -305,6 +317,7 @@ object PartnerNotifications {
             } else {
                 context.getString(R.string.partner_ended_text_named_no_time)
             },
+            tag = partnerTag("ended", pairId),
         )
     }
 
@@ -367,9 +380,14 @@ object PartnerNotifications {
         // and the day hero live there, so that is where the partner event is visible. The
         // request code is this object's own (extras don't count toward PendingIntent
         // identity, and the shared code 0 would let this post rewrite Protection's
-        // Settings-landing extras on the same MainActivity intent).
+        // Settings-landing extras on the same MainActivity intent). Extras also don't make
+        // two intents distinct, so every partner post would otherwise share ONE PendingIntent
+        // under FLAG_UPDATE_CURRENT — a partner-event post silently stripped the nudge
+        // extras off the reach-out notification's tap (owner warning 2026-10-23). The data
+        // URI is part of identity, so each tag (category+pair, nudge, test) gets its own.
         val openAppIntent = Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .setData(NotificationTapTarget.of(tag ?: "id-$notificationId"))
             .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_HOME)
         if (pushNudgeId != null) {
             openAppIntent

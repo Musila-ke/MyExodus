@@ -173,23 +173,45 @@ class UsageAccountingEngineTest {
     @Test
     fun rollover_futureDateAnchor_resets() = runTest {
         // Decision 20: any stored-vs-current date mismatch rolls, regardless of direction.
+        // The journal has nothing for today, so the new day starts at zero + this tick.
         seedTracker(today.plusDays(1).toString(), msUsed = 5 * MIN)
         assertEquals(NoAction, engine.processUsageObservation(PKG, 2 * MIN, 10 * SEC, UsageLedgerSource.PATH_A))
         assertEquals(2 * MIN, trackerRow()!!.msUsedToday)
     }
 
     @Test
-    fun rollover_timezoneMove_sameDate_resets() = runTest {
-        // Decision 20's anchor is the (date, IANA zone) PAIR. Same date, different zone is
-        // still a new day: the row must reset and re-stamp the current zone. Was date-only,
-        // while remainingBudgetMs already treated a zone mismatch as zero usage (deep review
-        // 2026-10-22) — the two reads disagreed after a timezone move.
+    fun rollover_anchorMismatch_seedsFromTheDaysJournal_notAFreshBudget() = runTest {
+        // S49-E2-1 (device-caught): the row is anchored to another day (here, tomorrow — the
+        // state a clock round-trip leaves), while the journal says today is already spent.
+        // The roll must seed the day's journal total, or a two-tap clock change mints a
+        // fresh daily budget the journal proves was consumed.
+        seedTracker(today.plusDays(1).toString(), msUsed = 0L)
+        journalRow(wallNowMs, 30 * MIN)
+
+        assertEquals(
+            Block,
+            engine.processUsageObservation(PKG, 0L, 10 * SEC, UsageLedgerSource.PATH_A),
+        )
+        assertEquals(30 * MIN, trackerRow()!!.msUsedToday)
+    }
+
+    @Test
+    fun rollover_timezoneMove_sameDate_preservesJournaledUsage() = runTest {
+        // Decision 20's anchor is the (date, IANA zone) PAIR, so a same-date zone move still
+        // rolls — but it seeds from the journal: the day's real usage survives a trip across
+        // zones instead of handing out a fresh budget (amended 2026-10-22, S49-E2-1; the
+        // original reset-on-move is what let a clock round trip erase the day).
         val deviceZone = ZoneId.systemDefault().id
         val otherZone = if (deviceZone == "UTC") "Pacific/Kiritimati" else "UTC"
         seedTracker(today.toString(), msUsed = 5 * MIN, zoneId = otherZone)
-        assertEquals(NoAction, engine.processUsageObservation(PKG, 2 * MIN, 10 * SEC, UsageLedgerSource.PATH_A))
+        journalRow(wallNowMs, 5 * MIN)
+
+        assertEquals(
+            NoAction,
+            engine.processUsageObservation(PKG, 2 * MIN, 10 * SEC, UsageLedgerSource.PATH_A),
+        )
         val row = trackerRow()!!
-        assertEquals(2 * MIN, row.msUsedToday)
+        assertEquals(7 * MIN, row.msUsedToday)
         assertEquals(deviceZone, row.timezoneIdAtAnchor)
     }
 
@@ -700,6 +722,25 @@ class UsageAccountingEngineTest {
 
     private suspend fun trackerRow(): DailyUsageTracker? =
         db.dailyUsageTrackerDao().findByPackage(PROFILE_ID, PKG)
+
+    /** One ACCOUNTING journal row for [dayMs]'s local day — the rollover seed's raw material.
+     *  Its interval is outside every test tick's range, so §8.6's event identity cannot collide
+     *  with an observation the test itself makes. */
+    private suspend fun journalRow(dayMs: Long, ms: Long) {
+        val outcome = ledger.appendStandalone(
+            LedgerEventDraft(
+                kind = UsageLedgerKind.ACCOUNTING,
+                packageName = PKG,
+                creditedMs = ms,
+                elapsedStartMs = 900_000L,
+                elapsedEndMs = 900_000L + ms,
+                bootCount = BOOT,
+                source = UsageLedgerSource.PATH_A,
+                wallClockTsMs = dayMs,
+            ),
+        )
+        assertTrue("journal row rejected: $outcome", outcome is AppendOutcome.Written)
+    }
 
     private suspend fun seedTracker(
         anchor: String,

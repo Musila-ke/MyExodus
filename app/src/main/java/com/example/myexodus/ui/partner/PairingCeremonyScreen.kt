@@ -55,6 +55,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.TextStyle
@@ -82,6 +83,7 @@ import com.example.myexodus.ui.rememberWindowWidth
 import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.security.Signature
 import java.util.concurrent.atomic.AtomicBoolean
@@ -422,6 +424,7 @@ fun PairingCeremonyScreen(
 
             is CeremonyStep.ShowingCode -> ShowingCode(
                 code = current.code,
+                expiresAtEpochMillis = current.token.expiresAtEpochMillis,
                 copied = copied,
                 onCopy = { copied = true },
                 onCancel = {
@@ -676,12 +679,24 @@ private fun CodeBoxes(code: String, onCode: (String) -> Unit, isError: Boolean) 
 @Composable
 private fun ShowingCode(
     code: String,
+    expiresAtEpochMillis: Long,
     copied: Boolean,
     onCopy: () -> Unit,
     onCancel: () -> Unit,
 ) {
     val context = LocalContext.current
     val shareText = stringResource(R.string.partner_ceremony_share_text, code)
+    // The inviter waits alone with no view of the other phone; a live countdown is the only
+    // honest signal of how long the partner still has to act (owner report 2026-10-23).
+    var minutesLeft by remember(expiresAtEpochMillis) {
+        mutableStateOf(minutesUntil(expiresAtEpochMillis))
+    }
+    LaunchedEffect(expiresAtEpochMillis) {
+        while (true) {
+            minutesLeft = minutesUntil(expiresAtEpochMillis)
+            delay(15_000)
+        }
+    }
     CeremonyCard {
         Text(
             stringResource(R.string.partner_ceremony_code_overline),
@@ -699,7 +714,15 @@ private fun ShowingCode(
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
-            stringResource(R.string.partner_ceremony_code_validity, TTL_MINUTES),
+            if (minutesLeft > 0) {
+                pluralStringResource(
+                    R.plurals.partner_ceremony_code_validity,
+                    count = minutesLeft.toInt(),
+                    minutesLeft,
+                )
+            } else {
+                stringResource(R.string.partner_ceremony_code_expiring)
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth(),
@@ -815,6 +838,18 @@ private fun CompareSas(
                     if (joiner) R.string.partner_ceremony_sas_confirm
                     else R.string.partner_ceremony_sas_match,
                 ),
+            )
+        }
+        // The ceremony is asymmetric: after this tap one phone is waiting on a human action on
+        // the other. A bare spinner reads as a hang (owner report 2026-10-23).
+        if (working) {
+            Text(
+                stringResource(
+                    if (joiner) R.string.partner_ceremony_waiting_partner_match
+                    else R.string.partner_ceremony_waiting_activation,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         OutlinedButton(
@@ -1029,8 +1064,17 @@ private fun copyToClipboard(context: Context, code: String) {
     clipboard.setPrimaryClip(ClipData.newPlainText("MyExodus invitation code", code))
 }
 
-/** §10: TTL is [PairingToken.TTL_MILLIS]; shown as whole minutes so the copy can't drift. */
-private const val TTL_MINUTES = "10"
+/**
+ * §10: TTL is [PairingToken.TTL_MILLIS]; the countdown shows whole minutes, rounded up so
+ * "1 minute" never means "expired".
+ */
+internal fun minutesUntil(
+    expiresAtEpochMillis: Long,
+    nowEpochMillis: Long = System.currentTimeMillis(),
+): Long {
+    val remaining = expiresAtEpochMillis - nowEpochMillis
+    return if (remaining <= 0) 0 else (remaining + 59_999L) / 60_000L
+}
 
 private const val TAG = "MyExodusPairingCeremony"
 

@@ -786,6 +786,33 @@ class HabitRepositoryTest {
         assertEquals("a streak master on counts as sharing", false, repository.sharesNothingWith("pair-2"))
     }
 
+    /** ADR #135: the composer gate reads the streak master alone — profile categories
+     *  (check-ins, coaching) must not unlock a message, because the message's required
+     *  snapshot is the sender's streak and the journal's write gate refuses without one. */
+    @Test
+    fun sharesStreakWith_tracksTheStreakMasterOnly_perPair() = runBlocking {
+        seedProfile()
+        onboard()
+        val habitId = habitIdOf()
+
+        assertEquals("a fresh pair shares no streak", false, repository.sharesStreakWith("pair-1"))
+
+        assertTrue(repository.setPairProfileSharing("pair-1", shareCheckIns = true, shareRecovery = true))
+        assertEquals(
+            "profile categories alone do not unlock the composer",
+            false,
+            repository.sharesStreakWith("pair-1"),
+        )
+
+        assertTrue(
+            repository.setPairStreakSharing(
+                "pair-1", habitId, shareStreak = true, shareRelapses = false, shareMilestones = false,
+            ),
+        )
+        assertEquals(true, repository.sharesStreakWith("pair-1"))
+        assertEquals("and only for that pair", false, repository.sharesStreakWith("pair-2"))
+    }
+
     @Test
     fun renameHabit_persistsTheTrimmedLabel_andLeavesTheStreakUntouched() = runBlocking {
         seedProfile()

@@ -12,6 +12,7 @@ import androidx.core.app.NotificationManagerCompat
 import com.example.myexodus.MainActivity
 import com.example.myexodus.R
 import com.example.myexodus.notifications.NotificationAccess
+import com.example.myexodus.notifications.NotificationTapTarget
 import com.example.myexodus.ui.formatDuration
 
 /**
@@ -76,6 +77,7 @@ object ProtectionNotifications {
                         context,
                         0,
                         Intent(context, MainActivity::class.java)
+                            .setData(NotificationTapTarget.of("protection-degraded"))
                             .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_SETTINGS)
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
@@ -148,7 +150,11 @@ object ProtectionNotifications {
      * until it is answered, declined, or ages out of the freshness window.
      */
     fun outage(context: Context, largestWindowMs: Long): Notification {
+        // Data = identity: without it this shares request code 0 + a bare MainActivity intent
+        // with the VPN/domain-usage taps (Rules), so whichever posts later rewrites the other
+        // notification's tab extra (owner warning 2026-10-23).
         val openSettings = Intent(context, MainActivity::class.java)
+            .setData(NotificationTapTarget.of("protection-outage"))
             .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_SETTINGS)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val text = context.getString(

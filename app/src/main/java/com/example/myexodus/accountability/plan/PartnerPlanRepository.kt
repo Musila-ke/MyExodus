@@ -5,6 +5,8 @@ import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.PartnerPlan
 import com.example.myexodus.data.db.entity.PartnerPlanTask
+import java.time.Instant
+import java.time.ZoneId
 import java.util.UUID
 
 /** One editable checklist line: [taskId] null means a line the author just typed. */
@@ -19,6 +21,13 @@ data class PlanTaskDraft(val taskId: String?, val text: String)
  *
  * Edits bump [PartnerPlan.revision]; the recipient's checked state is matched to the revision
  * it was seen at, so a stale progress event is ignored rather than applied to a newer plan.
+ *
+ * Plans repeat daily (owner ask 2026-10-23): a check counts only for the local calendar day it
+ * was made. Every read normalizes rows whose `done_at_ms` predates today's local midnight, so
+ * the next day opens unchecked on both phones. When the copy is a paired recipient's, the
+ * reset also raises `pending_progress` — the author's view must learn the day rolled over, not
+ * keep yesterday's checks. An author's display-only copy and a self plan clear locally without
+ * publishing anything.
  */
 class PartnerPlanRepository(private val storeFactory: AppRulesStoreFactory) {
 
@@ -27,12 +36,46 @@ class PartnerPlanRepository(private val storeFactory: AppRulesStoreFactory) {
     suspend fun plans(): List<PartnerPlan>? =
         storeFactory.open()?.partnerPlanDao()?.allPlans()
 
-    suspend fun tasks(planId: String): List<PartnerPlanTask> =
-        storeFactory.open()?.partnerPlanDao()?.tasks(planId) ?: emptyList()
+    suspend fun tasks(planId: String): List<PartnerPlanTask> {
+        val store = storeFactory.open() ?: return emptyList()
+        val dao = store.partnerPlanDao()
+        var resetPairedRecipient = false
+        val rows = store.withWriteTransaction<List<PartnerPlanTask>> {
+            val dayStart = localDayStartMillis(System.currentTimeMillis())
+            if (dao.clearStaleDone(planId, dayStart) > 0) {
+                val plan = dao.get(planId)
+                if (plan != null && plan.pairId != null && !plan.authored) {
+                    dao.markProgressPending(planId)
+                    resetPairedRecipient = true
+                }
+            }
+            dao.tasks(planId)
+        }
+        if (resetPairedRecipient) PartnerSyncSignals.activityEmitted.tryEmit(Unit)
+        return rows
+    }
 
     suspend fun allTasks(): List<PartnerPlanTask> {
         val store = storeFactory.open() ?: return emptyList()
-        return store.partnerPlanDao().allTasks()
+        val dao = store.partnerPlanDao()
+        var resetPairedRecipient = false
+        val rows = store.withWriteTransaction<List<PartnerPlanTask>> {
+            val dayStart = localDayStartMillis(System.currentTimeMillis())
+            val stalePlans = dao.planIdsWithStaleDone(dayStart)
+            if (stalePlans.isNotEmpty()) {
+                dao.clearAllStaleDone(dayStart)
+                stalePlans.forEach { planId ->
+                    val plan = dao.get(planId)
+                    if (plan != null && plan.pairId != null && !plan.authored) {
+                        dao.markProgressPending(planId)
+                        resetPairedRecipient = true
+                    }
+                }
+            }
+            dao.allTasks()
+        }
+        if (resetPairedRecipient) PartnerSyncSignals.activityEmitted.tryEmit(Unit)
+        return rows
     }
 
     /** Creates a plan; [pairId] null = the user's own local plan. Returns the new plan id,
@@ -151,3 +194,13 @@ class PartnerPlanRepository(private val storeFactory: AppRulesStoreFactory) {
             .filter { it.isNotEmpty() }
             .take(PartnerPlanTask.MAX_TASKS)
 }
+
+/** First instant of [nowMs]'s local calendar day — the daily reset boundary. `atStartOfDay`
+ *  rather than midnight arithmetic so a DST gap at 00:00 lands on the real day start. */
+internal fun localDayStartMillis(nowMs: Long, zone: ZoneId = ZoneId.systemDefault()): Long =
+    Instant.ofEpochMilli(nowMs)
+        .atZone(zone)
+        .toLocalDate()
+        .atStartOfDay(zone)
+        .toInstant()
+        .toEpochMilli()

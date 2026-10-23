@@ -12,6 +12,7 @@ import java.security.PublicKey
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.security.spec.ECGenParameterSpec
+import javax.crypto.KeyGenerator
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -25,7 +26,12 @@ import javax.inject.Singleton
  * §19.5 multi-pair: from schema v12 each pairing gets its OWN agreement keypair
  * ([pairAgreementAliasOf], destroyed pair-scoped on unpair), so shredding one pair leaves the
  * rest intact. [AGREEMENT_ALIAS] remains for pre-v12 enrollments (whose records carry no
- * alias) and as the AD-22 wipe canary — it is destroyed only when the last enrollment goes.
+ * alias) and dies with the last enrollment.
+ *
+ * AD-22 wipe canary is [PAIR_CANARY_ALIAS]: minted only once a pairing is durable and deleted
+ * with the last enrollment. The identity keys cannot serve this role — the ceremony mints them
+ * before the server round-trip, so a failed, cancelled, or process-killed attempt would read as
+ * a destroyed database on the next start (AVD-caught 2026-10-23).
  *
  * StrongBox is requested first; on [StrongBoxUnavailableException] the key is retried on TEE
  * (plan §9). Attestation is only requested for the signing key (§8.1 sets the challenge
@@ -173,21 +179,44 @@ open class AccountabilityKeyStore @Inject constructor() {
         return AttestationVerifier.keySecurityLevelOf(chain[0]) == AttestationVerifier.SecurityLevel.STRONG_BOX
     }
 
+    /** AD-22 wipe canary: true once any pairing completed, false after the last unpair. */
+    fun hasPairCanary(): Boolean = keyStore.containsAlias(PAIR_CANARY_ALIAS)
+
+    /** Mints the AD-22 wipe canary; idempotent. Called after an enrollment row is durable —
+     *  never by the ceremony's attempt paths, so an aborted attempt leaves no trace the wipe
+     *  check could misread. */
+    fun ensurePairCanary() {
+        if (hasPairCanary()) return
+        val builder = KeyGenParameterSpec.Builder(
+            PAIR_CANARY_ALIAS,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setUserAuthenticationRequired(false)
+        KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+            .apply { init(builder.build()) }
+            .generateKey()
+    }
+
     /** Deletes BOTH keys — the irreversible full-wipe path (uninstalls, reset-all) — plus every
      *  per-pair agreement key (ADR #113): Identity Migration's rotation IS revocation, so the
      *  old identity's pair keys must not linger unreferenced in the keystore afterwards. */
     fun destroyAllKeys() {
         keyStore.deleteEntry(SIGNING_ALIAS)
         keyStore.deleteEntry(AGREEMENT_ALIAS)
+        keyStore.deleteEntry(PAIR_CANARY_ALIAS)
         // Collected first — deleting while enumerating the alias set is not safe.
         keyStore.aliases().toList()
             .filter { it.startsWith(PAIR_AGREEMENT_ALIAS_PREFIX) }
             .forEach { keyStore.deleteEntry(it) }
     }
 
-    /** §10 bilateral crypto-shredding: destroys only the ECDH key (FR6 — the shredding target). */
+    /** §10 bilateral crypto-shredding: destroys only the ECDH key (FR6 — the shredding target).
+     *  Only ever called once no enrollment remains, which is also when the wipe canary goes. */
     fun destroyAgreementKey() {
         keyStore.deleteEntry(AGREEMENT_ALIAS)
+        keyStore.deleteEntry(PAIR_CANARY_ALIAS)
     }
 
     /** §7.6 key rotation: fresh identity + agreement keys in one irreversible step. */
@@ -262,6 +291,10 @@ open class AccountabilityKeyStore @Inject constructor() {
     companion object {
         const val SIGNING_ALIAS = "accountability_signing_key"
         const val AGREEMENT_ALIAS = "accountability_agreement_key"
+
+        /** AD-22 wipe canary — see the class comment. A key (AES/GCM) only because the
+         *  Keystore has no marker primitive; nothing ever encrypts with it. */
+        const val PAIR_CANARY_ALIAS = "accountability_pair_canary"
 
         /** §19.5 per-pair key alias = this prefix plus the pairing session id. The session id
          *  (not the pairId) scopes it because the initiator's key must exist — and be named —

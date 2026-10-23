@@ -437,6 +437,15 @@ class HabitRepository(
                 } != true
         }
 
+    /** ADR #135: a motivational message rides the sender's own snapshot, so the journal's write
+     *  gate refuses it unless [pairId] is consented to a streak. This is the same predicate,
+     *  read ahead so the composer can say why instead of offering a send that cannot happen.
+     *  Null = the store refused to open (unknown — the caller keeps its previous answer). */
+    suspend fun sharesStreakWith(pairId: String): Boolean? =
+        sharingMatrix()?.let { matrix ->
+            matrix.habits.any { it.perPair[pairId]?.shareStreak == true }
+        }
+
     /**
      * Full-state write of one (pair, habit) streak consent; false = store unavailable or the
      * habit is gone (the pane reverts its optimistic flip). Each switch's false→true

@@ -85,6 +85,7 @@ import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
 import com.example.myexodus.accountability.sync.PartnerLiveSync
 import com.example.myexodus.accountability.sync.PartnerNudgePush
 import com.example.myexodus.accountability.sync.PartnerRolloutGate
+import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.accountability.sync.PushInstallationRegistrar
 import com.example.myexodus.accountability.sync.runPartnerSyncPass
 import com.example.myexodus.R
@@ -134,6 +135,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import java.security.Signature
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -360,6 +362,69 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    /** ADR #216: coalesces the sync heal — a prompt already owns the screen, so a signal
+     *  arriving mid-prompt (or a Check-now+signal race) must not stack a second sheet. */
+    private var signingHealInFlight = false
+
+    /** When the heal last asked for a credential. A cancelled prompt is a "not now", not an
+     *  error: the rows stay journaled, and begging on every 15-minute pass would train the
+     *  user to dismiss it. One ask per cooldown; explicit actions (Check now, Send) are never
+     *  throttled. */
+    private var lastSigningPromptAtMs = 0L
+
+    /**
+     * ADR #216 — the foreground half of partner delivery. Streak, relapse, milestone, coaching,
+     * attempt, recovery and availability events are journaled locally and signed at sync time,
+     * and the §8.1 key refuses to sign while its 900 s window is cold. Nothing wakes that
+     * window on its own: background passes must never prompt, so before this heal the queues
+     * simply stopped (`Emit.Stop`) pass after pass — rig-proven 2026-10-23 with a pending
+     * streak row and a cold signer probe. The coordinator now reports the stop, and this
+     * collector answers it with exactly what only the user can supply: one authenticated
+     * prompt, then the pass that delivers the backlog. A warm window (the common case right
+     * after an unlock) skips the prompt entirely.
+     */
+    private fun startPartnerSigningHeal() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                PartnerSyncSignals.signingNeeded.collect { healBlockedPartnerSigning() }
+            }
+        }
+    }
+
+    /**
+     * Runs the pass, and when it stops cold, warms the window and runs it once more. Returns
+     * true only when nothing partner-visible is left blocked on the signing window — the
+     * "Check now" receipt must never claim a delivery the device has not made. [forcePrompt]
+     * is the explicit Check-now path: it runs the pass first (so the common warm-window case
+     * stays one pass with no sheet), and its prompt ignores the ask-cooldown.
+     */
+    private suspend fun healBlockedPartnerSigning(forcePrompt: Boolean = false): Boolean {
+        if (signingHealInFlight) return false
+        signingHealInFlight = true
+        try {
+            if (!isOnline()) return false
+            if (forcePrompt && !runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked) {
+                return true
+            }
+            if (signingWindowWarm()) {
+                return !runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked
+            }
+            val now = System.currentTimeMillis()
+            if (!forcePrompt && now - lastSigningPromptAtMs < PARTNER_SIGNING_PROMPT_COOLDOWN_MILLIS) return false
+            lastSigningPromptAtMs = now
+            // Cancelled prompt: rows stay journaled for the next pass — nothing to undo here.
+            signWithAuthPrompt(getString(R.string.partner_sync_auth_title)) ?: return false
+            return !runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "partner signing heal failed", e)
+            return false
+        } finally {
+            signingHealInFlight = false
+        }
+    }
+
     /**
      * Owner mandate 2026-10-04 (realtime receive): while this screen is started, a Firestore
      * snapshot listener on our own mailbox rings the moment the partner's relay writes
@@ -400,6 +465,7 @@ class MainActivity : FragmentActivity() {
         requestedRecoveryEntry = intent.getStringExtra(EXTRA_RECOVERY_ENTRY)
         handlePartnerNudgeIntent(intent)
         startPartnerLiveSync()
+        startPartnerSigningHeal()
         startupTrace.lap("intents")
         enableEdgeToEdge()
         setContent {
@@ -605,14 +671,13 @@ class MainActivity : FragmentActivity() {
                             }
                         },
                         onSendTestAlert = { PartnerNotifications.notifyTestAlert(this@MainActivity) },
+                        // ADR #216: Check now is the explicit "deliver my queued updates"
+                        // request, so a cold signing window raises the prompt here instead of
+                        // returning a success receipt for a pass that sent nothing.
                         onPartnerCheckNow = {
                             isOnline() && runCatching {
-                                runPartnerSyncPass(
-                                    pushInstallationRegistrar,
-                                    partnerRolloutGate,
-                                    partnerSyncCoordinator,
-                                )
-                            }.isSuccess
+                                healBlockedPartnerSigning(forcePrompt = true)
+                            }.getOrDefault(false)
                         },
                         onRespondToApproval = { requestEventId, approve ->
                             respondToApproval(requestEventId, approve)
@@ -668,6 +733,7 @@ class MainActivity : FragmentActivity() {
                         requestedHabit = requestedHabit,
                         onHabitConsumed = { requestedHabit = null },
                         planRepository = recoveryPlanRepository,
+                        rulesRepository = rulesRepository,
                         habitRepository = habitRepository,
                         partnerPlanRepository = partnerPlanRepository,
                         sessions = recoverySessions,
@@ -1099,6 +1165,10 @@ class MainActivity : FragmentActivity() {
         /** How often [startPartnerLiveSync] re-checks its gate while visible but not yet live
          *  (no pairing yet, or the kill switch is off). */
         private const val PARTNER_LIVE_RECHECK_MILLIS = 30_000L
+
+        /** ADR #216: minimum gap between auto-raised signing prompts after a cold-window stop.
+         *  The rows survive a "not now"; a re-ask on the next pass would just train dismissal. */
+        private const val PARTNER_SIGNING_PROMPT_COOLDOWN_MILLIS = 10 * 60_000L
 
         /** Milestone notification deep link: which habit's Home to show. */
         const val EXTRA_START_HABIT = "extra_start_habit"

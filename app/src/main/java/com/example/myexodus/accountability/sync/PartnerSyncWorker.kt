@@ -65,6 +65,9 @@ suspend fun runPartnerSyncPass(
     // watermark query), yet they are exactly the passes the Partner page must react to
     // (owner-observed stale page after a partnership ended, 2026-10-01).
     if (report.pulledCount > 0 || report.unpairAdvanced) PartnerSyncSignals.pulledEvents.tryEmit(Unit)
+    // ADR #216: a cold signing window is the one pass "failure" the user alone can fix, and
+    // only from the foreground — surface it so the Activity can prompt and re-run.
+    if (report.signingBlocked) PartnerSyncSignals.signingNeeded.tryEmit(Unit)
     return report
 }
 

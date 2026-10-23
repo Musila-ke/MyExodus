@@ -212,6 +212,22 @@ class OverlayController(
         )
     }
 
+    /** Re-apply every visible card's geometry after a display configuration change (rotation,
+     *  resolution). Both window mechanisms size the window from the bounds passed at show
+     *  time; the window does not follow a later rotation, so a wall that was up across one
+     *  stayed laid out for the old orientation (S49-E3 AVD, 2026-10-23: a landscape wall
+     *  2,400 px wide on a 1,080 px portrait display, its text and Close off-screen). */
+    fun refreshDisplayBounds() {
+        shown.keys.toList().forEach { displayId ->
+            val content = contents[displayId] ?: return@forEach
+            refreshBounds(
+                displayId,
+                if (content is OverlayContent.Warning) warningBounds(displayId) else displayBounds(displayId),
+            )
+            Log.i(TAG, "display change: rebound display=$displayId content=${content::class.simpleName}")
+        }
+    }
+
     /** The warning banner occupies the top strip of the bar-free display area (§8 Step 10). */
     fun warningBounds(displayId: Int): Rect {
         val bounds = displayBounds(displayId)

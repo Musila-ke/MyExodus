@@ -57,11 +57,11 @@ object WarningState {
  * delivery credits nothing (the original already advanced the projection), and a rejected or
  * colliding insert credits nothing either — which is what keeps `tracker.msUsedToday` equal to
  * Σ ledger for its own `localDateAnchor` day, the invariant [UsageLedgerRepository.rebuildProjection]
- * restores. One deliberate exception: Decision 20's reset fires on a date OR zone change, and a
- * same-date zone move leaves the journal's day history intact while the live counter restarts at
- * zero — so there the row sits below its day total until the next day. Crediting a tick the
- * journal refused would make the projection unreconstructable, which is the whole failure this
- * feature exists to end.
+ * restores. Decision 20's rollover on a date OR zone change therefore seeds the new day's
+ * counter from the journal, not zero: a clock correction (forward, backward, or a round trip)
+ * must not mint a budget the day's own rows already consumed. Crediting a tick the journal
+ * refused would make the projection unreconstructable, which is the whole failure this feature
+ * exists to end.
  *
  * Caller contract (§6 steps 3–4): each call carries an *incremental* delta and the caller
  * restarts its session anchor after every call, so a tick is never counted twice. Authority
@@ -132,7 +132,7 @@ class UsageAccountingEngine(
             // (b) rollover first, before any evaluation (§6 step 6) — a stale row must never
             // contribute yesterday's usage to today's decision.
             val rolledOver = tracker.isStaleFor(today, zoneId)
-            if (rolledOver) tracker = tracker.rolledOverTo(today)
+            if (rolledOver) tracker = tracker.rolledOverTo(today, ledger.dayTotal(packageName, today))
 
             // (b2) day scope (user decision 2026-09-20): on a day the rule does not cover the
             // rule is inactive — nothing accrues, nothing warns, nothing blocks, so an inactive
@@ -285,7 +285,11 @@ class UsageAccountingEngine(
             val today = localDateOf(nowWallClockMs)
             val existing = trackerDao.findByPackage(profile.userId, packageName)
             val base = existing?.let {
-                if (it.isStaleFor(today, ZoneId.systemDefault().id)) it.rolledOverTo(today) else it
+                if (it.isStaleFor(today, ZoneId.systemDefault().id)) {
+                    it.rolledOverTo(today, ledger.dayTotal(packageName, today))
+                } else {
+                    it
+                }
             }
             // Inactive day scope accrues nothing (user decision 2026-09-20) — never seed into
             // it; a stale row still rolls, matching processUsageObservation's own handling.
@@ -385,7 +389,7 @@ class UsageAccountingEngine(
             val existing = trackerDao.findByPackage(profile.userId, packageName)
             var tracker = existing ?: newTracker(profile.userId, packageName, today)
             val rolledOver = tracker.isStaleFor(today, zoneId)
-            if (rolledOver) tracker = tracker.rolledOverTo(today)
+            if (rolledOver) tracker = tracker.rolledOverTo(today, ledger.dayTotal(packageName, today))
             // Same day-scope rule as every credit path (user decision 2026-09-20).
             if (!dayScopeCoversToday(rule.activeDaysOfWeek, rule.timezone)) {
                 if (rolledOver) trackerDao.update(tracker)
@@ -582,7 +586,9 @@ class UsageAccountingEngine(
             val zoneId = ZoneId.systemDefault().id
             val stale = trackerDao.getForProfile(profile.userId)
                 .filter { it.isStaleFor(today, zoneId) }
-            stale.forEach { trackerDao.update(it.rolledOverTo(today)) }
+            stale.forEach {
+                trackerDao.update(it.rolledOverTo(today, ledger.dayTotal(it.packageName, today)))
+            }
             stale.size
         }
     }
@@ -605,12 +611,16 @@ class UsageAccountingEngine(
         blockedToday = false,
     )
 
-    /** Decision 20's rollover transformation — a stale anchor (date or timezone move) resets
-     *  the row to a fresh day: zero usage, no warnings, unblocked. */
-    private fun DailyUsageTracker.rolledOverTo(today: String) = copy(
+    /** Decision 20's rollover transformation — a stale anchor (date or timezone move) rebinds
+     *  the row to the current day and seeds it with that day's journal total ([seededMs]), so
+     *  the live counter never falls below Σ ledger for its own anchor day. Warnings restart
+     *  NOT_DUE: their delivery state is per-row and cannot be recovered from the journal;
+     *  [deriveVerdict] re-derives `blockedToday` from the seeded usage, so a day the journal
+     *  says is exhausted stays exhausted after a clock correction or round trip. */
+    private fun DailyUsageTracker.rolledOverTo(today: String, seededMs: Long = 0L) = copy(
         localDateAnchor = today,
         timezoneIdAtAnchor = ZoneId.systemDefault().id,
-        msUsedToday = 0L,
+        msUsedToday = seededMs,
         warning1State = WarningState.NOT_DUE,
         warning2State = WarningState.NOT_DUE,
         blockedToday = false,

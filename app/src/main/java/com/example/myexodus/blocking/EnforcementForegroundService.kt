@@ -8,6 +8,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -1003,6 +1004,13 @@ class EnforcementForegroundService : Service() {
         val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
         registerSystemReceiver(receiver, filter)
         screenOffReceiver = receiver
+    }
+
+    /** The Path B wall is an added view with show-time bounds; a rotation would leave it laid
+     *  out for the old orientation (S49-E3). */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        usageOverlay.refreshDisplayBounds()
     }
 
     override fun onDestroy() {

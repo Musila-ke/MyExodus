@@ -287,6 +287,10 @@ fun PartnerScreen(
     // Owner ask 2026-10-04: true = paired but nothing is being shared with the active partner.
     // Null = not paired, or the store refused a read — no honest claim, so no card.
     var sharesNothing by remember { mutableStateOf<Boolean?>(null) }
+    // ADR #135: the journal refuses a message unless this pair is consented to a streak, so the
+    // Activity composer must not offer a send that is guaranteed to fail. Null = unknown (the
+    // store refused the read) — keep the composer, the gate still backstops.
+    var canEncourage by remember { mutableStateOf<Boolean?>(null) }
     // ADR #193: the hub tile's live datum; null = no honest count (store refused, or still
     // loading), which renders as the tile's description rather than a fabricated zero.
     var planHub by remember { mutableStateOf<PlanHubStatus?>(null) }
@@ -327,6 +331,10 @@ fun PartnerScreen(
         val shares = (state as? PartnerDashboardUi.Paired)?.let { paired ->
             runCatching { habitRepository.sharesNothingWith(paired.pairId) }.getOrNull()
         }
+        // ADR #135 feed for the composer: same pair, same read path, same failure semantics.
+        val canEncourageNow = (state as? PartnerDashboardUi.Paired)?.let { paired ->
+            runCatching { habitRepository.sharesStreakWith(paired.pairId) }.getOrNull()
+        }
         // Plan Step 8: every repaint path (pull, resume, switch, check-now) refreshes the
         // connection reading through the client's one-call-a-minute bound, so a burst of
         // reloads can never become a callable burst. A failure clears it rather than repeating
@@ -342,6 +350,7 @@ fun PartnerScreen(
         // dashboard the state guard above closes.
         if (epoch != reloadEpoch.get()) return
         sharesNothing = shares
+        canEncourage = canEncourageNow
         partnerStatus = status
     }
 
@@ -403,7 +412,10 @@ fun PartnerScreen(
         }
     }
 
-    LaunchedEffect(Unit) { reload() }
+    // Keyed on [view] as well: the Sharing subpage owns its own saves and there is no resume
+    // between it and this screen, so returning here must re-read — otherwise the "nothing
+    // shared" card and the composer's ADR #135 gate keep the toggles' pre-visit answer.
+    LaunchedEffect(view) { reload() }
 
     // Owner UX ruling 2026-10-01: a background pass (FCM wake, periodic, check-now elsewhere)
     // that pulled partner events repaints this page in place. The dashboard is a one-shot
@@ -591,6 +603,7 @@ fun PartnerScreen(
                 checking = checking,
                 checkFailed = checkFailed,
                 dismissing = dismissing,
+                onRePair = ceremonyEntry,
                 onCheckNow = runCheckNow,
                 onDismiss = {
                     if (!dismissing) {
@@ -631,7 +644,18 @@ fun PartnerScreen(
                         onRespond = ::respondTo,
                     )
                     VIEW_ACTIVITY -> {
-                        ComposeMessageCard(onCompose = { composing = true })
+                        // ADR #135: the message carries the sender's snapshot, so the journal
+                        // refuses it without a shared streak. Say that here — the old composer
+                        // offered a Send whose only possible outcome was "Try again".
+                        if (canEncourage == false) {
+                            EncourageNeedsSharingCard(
+                                partnerName = current.partnerLabel
+                                    ?: shortKeyId(current.partnerKeyId),
+                                onOpenSharing = { view = VIEW_SHARING },
+                            )
+                        } else {
+                            ComposeMessageCard(onCompose = { composing = true })
+                        }
                         // Owner ask 2026-10-01: the writer sees their own last message here —
                         // the mirror of the hub's "Their message to you".
                         current.sentMessageText?.let { SentMessageCard(it) }
@@ -1218,6 +1242,10 @@ private fun PartnerSummaryCard(activity: PartnerActivityUi?, chainStatus: Partne
                         stringResource(R.string.partner_summary_milestones_none)
                     },
                 )
+                StatColumn(
+                    stringResource(R.string.partner_summary_coaching_label),
+                    activity.coachingProgress.toString(),
+                )
             }
         }
         activity?.pinnedMessageText?.let { message ->
@@ -1550,6 +1578,7 @@ private fun EndedCard(
     checking: Boolean,
     checkFailed: Boolean,
     dismissing: Boolean,
+    onRePair: ((CeremonyMode) -> Unit)?,
     onCheckNow: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1621,6 +1650,15 @@ private fun EndedCard(
             TextButton(onClick = onDismiss, enabled = !dismissing) {
                 Text(stringResource(R.string.partner_unpair_dismiss))
             }
+        }
+        // The ended row's wait (server acknowledgement, or a local-only request's 7-day
+        // timeout) is never a reason this device cannot pair with someone else. Without this
+        // the card was a dead end for up to 7 days (rig, 2026-10-23).
+        if (onRePair != null) {
+            PairingEntryActions(
+                onInvite = { onRePair(CeremonyMode.INVITE) },
+                onJoin = { onRePair(CeremonyMode.JOIN) },
+            )
         }
     }
 }
@@ -1743,6 +1781,26 @@ private fun NothingSharedCard(partnerName: String, onOpenSharing: () -> Unit) {
         )
         Text(
             stringResource(R.string.partner_nothing_shared_body, partnerName),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        TextButton(onClick = onOpenSharing) {
+            Text(stringResource(R.string.partner_nothing_shared_action))
+        }
+    }
+}
+
+/** ADR #135: the composer's precondition, said where the composer would have been — the send
+ *  path journals the sender's own snapshot, so without a shared streak there is nothing the
+ *  partner may be shown and the write is refused by design. */
+@Composable
+private fun EncourageNeedsSharingCard(partnerName: String, onOpenSharing: () -> Unit) {
+    PartnerSurface {
+        Text(
+            stringResource(R.string.partner_compose_needs_sharing_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            stringResource(R.string.partner_compose_needs_sharing_body, partnerName),
             style = MaterialTheme.typography.bodyMedium,
         )
         TextButton(onClick = onOpenSharing) {

@@ -58,6 +58,26 @@ interface PartnerPlanDao {
     @Query("UPDATE partner_plan_task SET done = 0, done_at_ms = NULL WHERE plan_id = :planId")
     suspend fun clearDone(planId: String)
 
+    /** Daily plans repeat: a check made before today's local midnight is yesterday's answer. */
+    @Query(
+        "UPDATE partner_plan_task SET done = 0, done_at_ms = NULL " +
+            "WHERE plan_id = :planId AND done = 1 " +
+            "AND (done_at_ms IS NULL OR done_at_ms < :dayStartMs)",
+    )
+    suspend fun clearStaleDone(planId: String, dayStartMs: Long): Int
+
+    @Query(
+        "UPDATE partner_plan_task SET done = 0, done_at_ms = NULL " +
+            "WHERE done = 1 AND (done_at_ms IS NULL OR done_at_ms < :dayStartMs)",
+    )
+    suspend fun clearAllStaleDone(dayStartMs: Long): Int
+
+    @Query(
+        "SELECT DISTINCT plan_id FROM partner_plan_task WHERE done = 1 " +
+            "AND (done_at_ms IS NULL OR done_at_ms < :dayStartMs)",
+    )
+    suspend fun planIdsWithStaleDone(dayStartMs: Long): List<String>
+
     @Query("UPDATE partner_plan SET pending_progress = 1 WHERE plan_id = :planId AND authored = 0")
     suspend fun markProgressPending(planId: String): Int
 

@@ -30,6 +30,7 @@ import com.example.myexodus.domainusage.FlowTap
 import com.example.myexodus.domainusage.OwnedBytes
 import com.example.myexodus.domainusage.PassThroughTap
 import com.example.myexodus.domainusage.UdpAdmission
+import com.example.myexodus.notifications.NotificationTapTarget
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -914,6 +915,11 @@ class DnsSinkholeVpnService : VpnService() {
                             this,
                             0,
                             Intent(this, MainActivity::class.java)
+                                // Data = PendingIntent identity (extras are not): without
+                                // it this shares request code 0 + a bare MainActivity intent
+                                // with the protection/domain-usage taps and rewrites their
+                                // tab extra (owner warning 2026-10-23).
+                                .setData(NotificationTapTarget.of("vpn-spike"))
                                 .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_RULES)
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,

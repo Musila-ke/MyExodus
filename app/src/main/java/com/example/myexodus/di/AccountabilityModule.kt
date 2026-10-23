@@ -132,11 +132,13 @@ object AccountabilityModule {
     @Provides @Singleton
     fun provideSessionKeyManager(store: ChainStateStore): SessionKeyManager = SessionKeyManager(store)
 
-    /** §8 Step 17 (AD-22, NFR7): the app-start wipe detector. The signal is the keystore
-     *  agreement key — outside the database it must outlive, and destroyed only by the unpair
-     *  shred (before its enrollment), so key-present + enrollment-absent is never a normal end.
+    /** §8 Step 17 (AD-22, NFR7): the app-start wipe detector. The signal is the dedicated
+     *  pairing canary — minted only on a durable enrollment and destroyed with the last
+     *  unpair, so canary-present + enrollment-absent is never a normal end. (The identity
+     *  agreement key cannot serve: aborted ceremonies mint it before the server round-trip —
+     *  AVD-caught 2026-10-23.)
      *
-     *  The keystore is resolved lazily *inside* the signal lambda: it cannot be constructed on
+     *  The keystore is resolved lazily *inside* the lambdas: it cannot be constructed on
      *  every surface this provider graphs into (JVM/Robolectric, and a broken keystore on a real
      *  device), and resolving there puts any such failure inside the detector's own
      *  signal-check guard instead of at app-startup injection. */
@@ -146,8 +148,15 @@ object AccountabilityModule {
         keystore: Lazy<AccountabilityKeyStore>,
         store: ChainStateStore,
     ): LocalWipeDetector = LocalWipeDetector(
-        hasPriorPairingSignal = { keystore.get().hasAgreementKey() },
-        enrollments = db.enrollmentDao()::all,
+        hasPriorPairingSignal = { keystore.get().hasPairCanary() },
+        enrollments = {
+            // Backfill for installs paired before the canary existed (2026-10-23): a live
+            // enrollment is proof a pairing completed, so mint the marker the check keys on.
+            // Best effort — a failure simply retries on the next start.
+            db.enrollmentDao().all().also { rows ->
+                if (rows.isNotEmpty()) runCatching { keystore.get().ensurePairCanary() }
+            }
+        },
         wipeOrphanPairData = store::wipeAllPairData,
     )
 
@@ -613,6 +622,7 @@ object AccountabilityModule {
         agreementPublicKey = keystore::pairAgreementPublicKey,
         agreementPrivateKey = keystore::pairAgreementPrivateKey,
         destroyAgreementKey = keystore::destroyPairAgreementKey,
+        markPairingCompleted = keystore::ensurePairCanary,
         // Owner mandate 2026-10-04 (v16/ADR #135): a fresh pair owns no consent rows, so the
         // pair-complete snapshot it replaced is gone by construction — the catch-up snapshot
         // now fires from the sharing toggle that first makes a habit visible to the pair.
@@ -693,7 +703,9 @@ object AccountabilityModule {
             receivedSince = eventDao::receivedSince,
             approvals = { pairId -> approvalDao.recentFor(pairId, 20) },
             unpairRows = db.unpairStateDao()::all,
-            hasPriorPairingKeys = keystore::hasAgreementKey,
+            // AD-22: same signal as the startup detector — the dedicated canary, never the
+            // identity keys (an aborted ceremony mints those).
+            hasPriorPairingKeys = keystore::hasPairCanary,
             // OPD #30(b): the denied-pairing flag the resolver records, read for the re-pair card.
             pairingDeniedAt = reachability::deniedAt,
             rejectionsSince = db.outboxDao()::rejectionCountSince,
@@ -705,6 +717,7 @@ object AccountabilityModule {
                         daysFree = row.daysFree,
                         milestonesReached = decodeMilestoneDays(row.milestonesReached),
                         relapseCount = row.relapseCount,
+                        coachingProgress = row.coachingProgress,
                         lastEventOccurredAtEpochMillis =
                             row.lastEventOccurredAtMs.takeIf { row.lastSequence > 0 },
                         pinnedMessageText = row.pinnedMessageText,
@@ -795,6 +808,7 @@ object AccountabilityModule {
         },
         checkRejections = { pairId, partnerUid -> rejectionChecker.check(partnerUid, pairId) },
         pruneReachability = reachability::prune,
+        consumeIdentityRotation = reachability::consumeIdentityRotation,
         checkIn = { heartbeat.checkIn() },
         syncAvailabilityConsent = { pairId, enabled -> dms.syncConsent(pairId, enabled) },
     )

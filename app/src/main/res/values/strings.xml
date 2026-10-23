@@ -641,6 +641,7 @@
     <string name="partner_plans_for_self">Just me — stays on this phone</string>
     <string name="partner_plans_cancel">Cancel</string>
     <string name="partner_plans_progress" tools:ignore="PluralsCandidate">%1$d of %2$d done</string>
+    <string name="partner_plans_daily_reset">Checks reset each day — this plan starts fresh tomorrow.</string>
     <string name="partner_plans_from">From %1$s</string>
     <string name="partner_plans_with">With %1$s</string>
     <string name="partner_plans_unknown_partner">your partner</string>
@@ -714,6 +715,7 @@
     <string name="partner_summary_milestones_label">Milestones met</string>
     <string name="partner_summary_milestones_none">None yet</string>
     <string name="partner_summary_relapses">Relapses logged</string>
+    <string name="partner_summary_coaching_label">Coaching items</string>
     <string name="partner_summary_last_event">Last shared %1$s</string>
     <string name="partner_summary_no_events">Nothing shared yet. You\'ll see their streak here once they log something.</string>
     <string name="partner_summary_partial">Some history is missing, so these numbers may be behind.</string>
@@ -758,6 +760,10 @@
     <!-- Req 15 composer: suggestions are deliberately short and non-clinical — the user can
          always write their own, and the same 280-char bound the wire enforces applies here. -->
     <string name="partner_compose_title">Send encouragement</string>
+    <!-- ADR #135: the send path journals the sender's own snapshot, so with no shared streak
+         the write is refused by design. Said up front instead of a send that cannot land. -->
+    <string name="partner_compose_needs_sharing_title">Share a streak first</string>
+    <string name="partner_compose_needs_sharing_body">Encouragement to %1$s carries your latest progress summary, so it can only send while at least one streak is shared with them.</string>
     <string name="partner_compose_body">They\'ll see this on their home screen. Keep it short and kind.</string>
     <string name="partner_compose_action">Write a message</string>
     <string name="partner_compose_hint">Your message</string>
@@ -771,6 +777,9 @@
          this note is neutral, never red. -->
     <string name="partner_compose_queued">Saved. It will send at the next sync.</string>
     <string name="partner_compose_auth_title">Send your message</string>
+    <!-- ADR #216: the sync heal's prompt — queued streak/relapse/milestone/coaching updates
+         need the 900 s signing window warmed, and only the user can warm it. -->
+    <string name="partner_sync_auth_title">Share your updates</string>
     <!-- Owner ask 2026-10-01 (messaging UX round 2): the sender sees their own latest message
          on the Activity subpage, and a SENT send closes the sheet with this toast — naming the
          recipient, since a device can hold several pairings. -->
@@ -1006,7 +1015,13 @@
     <string name="partner_ceremony_join_cta">Continue</string>
     <string name="partner_ceremony_code_invalid">That code isn’t valid. Check each character against your partner’s screen and try again.</string>
     <string name="partner_ceremony_code_overline">Invitation code</string>
-    <string name="partner_ceremony_code_validity">Valid for %1$s minutes</string>
+    <plurals name="partner_ceremony_code_validity">
+        <item quantity="one">Valid for %1$d more minute</item>
+        <item quantity="other">Valid for %1$d more minutes</item>
+    </plurals>
+    <string name="partner_ceremony_code_expiring">Expiring now — create a new code if your partner isn’t finished.</string>
+    <string name="partner_ceremony_waiting_partner_match">Waiting for your partner to compare the code and tap “They match” on their phone. Keep this screen open.</string>
+    <string name="partner_ceremony_waiting_activation">Finishing the pairing — this takes a few seconds. Keep both screens open.</string>
     <string name="partner_ceremony_copy">Copy</string>
     <string name="partner_ceremony_share">Share</string>
     <string name="partner_ceremony_share_text">MyExodus pairing code: %1$s</string>

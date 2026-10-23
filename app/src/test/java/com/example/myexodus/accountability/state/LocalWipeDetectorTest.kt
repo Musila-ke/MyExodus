@@ -7,8 +7,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** §8 Step 17 (AD-22, NFR7): wipe detection is key-present + enrollment-absent, idempotent,
- *  and never lets a single failure take down app startup or the clear it owes. */
+/** §8 Step 17 (AD-22, NFR7): wipe detection is canary-present + enrollment-absent, idempotent,
+ *  and never lets a single failure take down app startup or the clear it owes. The canary is
+ *  minted only by a durable pairing (PairingFlow's markPairingCompleted), so an aborted
+ *  ceremony — which does mint identity keys — can never read as a wipe. */
 class LocalWipeDetectorTest {
 
     private fun enrollment() = EnrollmentRecord(
@@ -22,7 +24,7 @@ class LocalWipeDetectorTest {
     )
 
     private class Harness(
-        keyPresent: Boolean,
+        canaryPresent: Boolean,
         enrollments: List<EnrollmentRecord> = emptyList(),
         enrollmentReadThrows: Boolean = false,
         signalThrows: Boolean = false,
@@ -32,7 +34,7 @@ class LocalWipeDetectorTest {
 
         val detector = LocalWipeDetector(
             hasPriorPairingSignal = {
-                if (signalThrows) throw IllegalStateException("keystore unavailable") else keyPresent
+                if (signalThrows) throw IllegalStateException("keystore unavailable") else canaryPresent
             },
             enrollments = {
                 if (enrollmentReadThrows) throw IllegalStateException("db unopenable") else enrollments
@@ -46,7 +48,7 @@ class LocalWipeDetectorTest {
 
     @Test
     fun noKeystoreSignal_neverDetects_neverClears() = runTest {
-        val h = Harness(keyPresent = false)
+        val h = Harness(canaryPresent = false)
         assertFalse(h.detector.detect())
         assertEquals(0, h.clears)
     }
@@ -54,21 +56,21 @@ class LocalWipeDetectorTest {
     @Test
     fun liveEnrollment_wins_evenWithAStrayKey() = runTest {
         // E.g. a re-pair landed a new enrollment while an old key lingers: not a wipe.
-        val h = Harness(keyPresent = true, enrollments = listOf(enrollment()))
+        val h = Harness(canaryPresent = true, enrollments = listOf(enrollment()))
         assertFalse(h.detector.detect())
         assertEquals(0, h.clears)
     }
 
     @Test
-    fun keyPresent_noEnrollment_detectsAndClearsOrphanedData() = runTest {
-        val h = Harness(keyPresent = true, enrollments = emptyList())
+    fun canaryPresent_noEnrollment_detectsAndClearsOrphanedData() = runTest {
+        val h = Harness(canaryPresent = true, enrollments = emptyList())
         assertTrue(h.detector.detect())
         assertEquals(1, h.clears)
     }
 
     @Test
     fun unopenableDatabase_isTheWipedOrWorseCase_reportedWithoutClearing() = runTest {
-        val h = Harness(keyPresent = true, enrollmentReadThrows = true)
+        val h = Harness(canaryPresent = true, enrollmentReadThrows = true)
         assertTrue(h.detector.detect())
         // Nothing could be read to clear; the report still goes out (re-derived next start).
         assertEquals(0, h.clears)
@@ -76,14 +78,14 @@ class LocalWipeDetectorTest {
 
     @Test
     fun signalCheckFailure_neverCrashesStartup_andNeverFalselyReports() = runTest {
-        val h = Harness(keyPresent = true, signalThrows = true)
+        val h = Harness(canaryPresent = true, signalThrows = true)
         assertFalse(h.detector.detect())
         assertEquals(0, h.clears)
     }
 
     @Test
     fun clearFailure_stillReports_andReDetectsOnTheNextStart() = runTest {
-        val h = Harness(keyPresent = true, wipeThrows = true)
+        val h = Harness(canaryPresent = true, wipeThrows = true)
         assertTrue(h.detector.detect())
         assertEquals(1, h.clears)
         assertTrue(h.detector.detect())
@@ -92,9 +94,9 @@ class LocalWipeDetectorTest {
 
     @Test
     fun rePair_stopsReporting() = runTest {
-        val h = Harness(keyPresent = true)
+        val h = Harness(canaryPresent = true)
         assertTrue(h.detector.detect())
-        val rePaired = Harness(keyPresent = true, enrollments = listOf(enrollment()))
+        val rePaired = Harness(canaryPresent = true, enrollments = listOf(enrollment()))
         assertFalse(rePaired.detector.detect())
     }
 }

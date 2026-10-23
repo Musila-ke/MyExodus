@@ -11,6 +11,24 @@ pass; carried verdicts are labelled as carried.
 
 **If the session was cut (power loss), read this first, then the task list, then continue.**
 
+- **State at last update (2026-10-23 17:15): #55 CLOSED — all eight consented partner-activity
+  categories proven on the two-device rig over the real rails.** Streak update, relapse,
+  milestone day 7 (the owner-sanctioned `PartnerJourneySeedInstrumentedTest` supplies the row —
+  a real 7-day wait cannot fit a session — and the rest of the pipeline is production), message,
+  availability check-in, app-block attempt (a real Chrome launch hit `BlockerActivity`; the
+  sender chain carried `blocked:com.android.chrome` on two real attempts), recovery session (a
+  real five-phase walkthrough → `recovery:sober:completed`), and coaching-plan edit (a real
+  if-then item → the partner summary read "Coaching items 1"; count only, INV-13). Each was
+  observed in the receiver's chain and dashboard projection. The one "Paired with <old label>"
+  frame after the AVD snapshot quick-boot was investigated: no table contains that label and
+  the enrollment row carries the current pair (created 1792758571090); it is restored UI state,
+  corrected on the next render — no code change without evidence. Cleanup done: TEMP
+  `PartnerRigDiagnosticsTest.kt` and `PartnerActivityDao.journalRecent` deleted; V1.md updated
+  with the proof paragraph; vault + memory synced. **Next:** #43 close-out (full JVM +
+  `:app:lintDebug` ALONE, commit ADRs #212–#217, install the latest APK on the X6532 per the
+  owner's 2026-10-23 ask), then #60, #54, #56/#58 (owner decision due), #57, #47, the remaining
+  #49 adversarial-pairing legs with unpair LAST, #52, #53; #36 auth-blocked.
+
 - **Owner mandate #2 (2026-10-22, tasks #48–#50):** two-device, real-user scenario sweep —
   partner notifications for uninstall / permission revocation / milestones / per-rule
   partner assignment / blocked-app-or-site access, multi-partner routing (is the RIGHT
@@ -18,6 +36,65 @@ pass; carried verdicts are labelled as carried.
   cases. Auth friction (fingerprint every launch) acknowledged as its own future task.
   Verbatim mandate is stored in the vault note `Obsidian/MyExodus/MyExodus Progress.md`
   (entry dated 2026-10-22, "mandate #2").
+- **Owner report 2026-10-23 (new tasks #54–#58, added while #49 runs; OPD #38/#39):**
+  (a) **#56 per-block partner assignment** — verified today: sharing is per *pair* via
+  `PairProfileSharing.shareCheckins` (one toggle covers every block), blocked-attempt events
+  carry **no rule identity**, rule add/edit/disable/delete events do not exist, and no
+  primary-partner concept exists. Owner requires a per-block picker, lifecycle/violation
+  events routed only to that block's partner, and no cross-visibility or collisions with
+  multiple partners. Same unmet intent as OPD #33. (b) **#55 Partner Activity has been zero
+  from day one** — trace journal → per-pair consent/watermarks → mailbox → partner pull → UI
+  and prove every consented category on the rig. (c) **#57 rules/block screens cognitive-load
+  redesign** (owner: squeezed, too much text). (d) **#54 Insights period/date semantics** —
+  verified: window is today + 6 local days (not Mon–Sun) and the 7-day metered total has no
+  period label; "Screen time" is metered monitored-app/domain usage, not whole-device. Owner
+  saw Friday vs Thu/Fri bar values that did not reconcile (5m/1m vs 12h48m total). (e) **#58
+  primary-partner routing + streak partner-at-creation** — owner explicitly undecided; present
+  options before building. The #49 sweep continues first; these tasks absorb what it exposes.
+- **State at last update (2026-10-23 06:40):** #37–#42, #44–#46, #48, #50, **#51** complete;
+  **#49 in progress** — Journeys A/B/C/E PASS on AVD A. Journey D's second paired run PASS through
+  identity-death → re-pair → coaching delivery → **plan leg (D7, ADR #193)**: B checked task 1
+  of A's "Morning reset"; the encrypted `plan_progress` envelope reached A's mailbox
+  (`mailboxes/rYmVai…/messages/4830aa89-…`, createTime 01:15:56Z) and A's authored plan page
+  shows "1 of 2 done" with "Your partner checks these off". A later `drain: 0` at 04:21:58 was
+  a no-op pass — delivery had already happened, don't re-investigate. Findings S49-D3-1…3 stay
+  open. Device state at 04:30 (re-check screen first — state-first rule): A (`emulator-5554`,
+  uid rYmVai…) on the plan page; B (`emulator-5556`, uid VIQDm…) unlocked (PIN 1234, enter at
+  814,1425) on plan detail — the signing window was warm then, but emit retries are safe.
+  **Next, in order:** (1) B→A streak/milestone leg with consent — B Partner hub →
+  "Choose what to share" → enable streak sharing, create/pick a habit, run the day-7 milestone
+  recipe (ADR "Habit streaks" Verification item c: `settings put global auto_time 0`, advance
+  the clock +7 d, reboot to bump `BOOT_COUNT`, root-deliver `BOOT_COMPLETED` to
+  `MilestoneBootReceiver`), verify A mailbox doc + notification; (2) adversarial pairing legs — wrong code,
+  expired code, SAS mismatch refusal, re-join on an already-active pair; (3) destructive unpair
+  LAST (also exercises stale enrollment S49-D3-1). Then #47 stress/adversarial, #43 final
+  verify/report (delete TEMP `PartnerRigDiagnosticsTest.kt` + `PartnerDao.journalRecent`, write
+  ADR #214, full JVM suite + `:app:lintDebug` ALONE, commit, docs/vault/memory sync), #52
+  Cloud alerts, #53 runbook (#51 DONE — see the block below). #36 blocked on auth + a second
+  physical phone.
+  Uncommitted tree: composer gate (`HabitRepository.sharesStreakWith`, PartnerScreen
+  `canEncourage` + reload-on-view, strings), reachability rotation marker + 12 tests,
+  `PartnerSyncCoordinatorTest` 44 tests, DI wiring.
+- **#51 tools/skills stack — DONE 2026-10-23 06:15.** Claude Code 2.1.221. Marketplaces
+  refreshed (official + understand-anything; `thedotmack` update hung >10 min and was stopped —
+  dormant, no plugin installed from it). Plugin `understand-anything` **2.9.4 → 2.9.7** (restart
+  applies). Git skills pulled: `ecc`, `humanizer`, `make-interfaces-feel-better`, `ponytail`
+  updated; `motion-dev`, `op-fable` current; **`gstack` skipped** (dirty `package.json` +
+  untracked `package-lock.json` — resolve before pulling). 0 dangling symlinks of 31.
+  `~/.claude/CLAUDE.md` mapping fixed: removed 6 nonexistent names (`api-design-reviewer`,
+  `tdd-guide`, `senior-mobile`, `mobile-app`, `database-designer`, `sql-database-assistant`),
+  kept `review`/`simplify`/`security-review` (built-ins), added a Non-coding capabilities block.
+  Inventory + update checklist: `~/.claude/STACK.md`. **OpenMontage** cloned to
+  `~/tools/OpenMontage` (170 MB, shallow) and `make setup` run; Makefile used the active conda
+  env (`/opt/anaconda3`) rather than a repo venv — piper-tts install was still running at
+  handoff; when it exits run `make -C ~/tools/OpenMontage preflight` to confirm. MCP:
+  chrome-devtools + shadcn-ui connected; **`magic` needs the owner's 21st.dev API key**
+  (https://21st.dev/mcp).
+- **Rig lifetime caveat (2026-10-23):** the Firebase emulators run in-memory with no
+  `--import/--export-on-exit`; Auth-emulator accounts are not exported at all. If the host
+  restarts or the emulators are killed, both devices' anonymous uids hit
+  `INVALID_REFRESH_TOKEN` → identity rotation → re-pair (the D4 path, ADR #125) before any
+  partner leg. Leave the emulators running to resume the live pair.
 - **State at last update (18:05):** #37–#39, #41, #42, #45 complete. #45 close-out gates:
   lint alone 0/0/0; JVM 225 classes / 2,010 tests / 0 failures. **Matrix history:**
   - Run 1 aborted at 49 cells: `reset_scene` dismissed the wall while Gmail was still
@@ -93,14 +170,51 @@ pass; carried verdicts are labelled as carried.
 - **New finding for #47/#50 (record):** two concurrently booted API-37/34 AVDs + Firebase
   suite on this laptop starve the app's cold start into ANR. Repeat the rig run on a quieter
   host (single AVD at a time or 8+ cores), or accept longer settle + ANR re-launch loops.
-- **Next action (resume #50):** relaunch suite (Node 22 command above) → AVD A Partner →
-  Invite → read 8-char code → AVD B Partner → Join → SAS match → both sign with PIN `1234`
-  (`input text 1234` + Enter key on keyguard-style dialog) → five activity types fan-out →
-  multi-partner routing (third instance) → unpair (D4) → D5 expectation check (no
-  permission-revocation alert exists by design). Then #49 scenarios (fresh `pm clear` on the
-  AVD after the rig) → #47 stress → #43 final double check + honest report.
-  Phone leg stays BLOCKED at the signature gate (#36 auth) — never recorded as phone proof.
-  Docs/memory/trainer (#44/#40/#46) are already complete.
+- **#50 COMPLETE (2026-10-22 late) — partner-delivery matrix proven end-to-end on the local
+  two-AVD rig; task #50 marked done.** Rig: A = `emulator-5554` (API 37, clock deliberately
+  jumped to Nov 5 for day-boundary legs), B = `emulator-5556` (API 34, headless); Firebase
+  emulators under Node 22 with `ATTESTATION_STUB=1`; pair
+  `GUIjbrrcmtZeot5K2Dbo0kbH8x1i_Zh09DTLvxUVHNV03f4d7SRkXClc7` epoch 2 (A sender seen as
+  "ava", B receiver seen as "ben"). Legs and evidence:
+  - **Coaching projection delivered, no alert:** B dashboard renders "Coaching items 2"
+    (matches A's two coaching steps) and emits **no** partner alert/notification — count-only
+    by design (`PartnerActivityProjection.coachingProgress`, INV-13).
+  - **Recovery mirror delivered exactly once:** A's urge session COMPLETED (technique
+    `urge_surfing`) → `syncOnce` = `SyncReport(eventsLinked=1, drained=true, drainedCount=1)`
+    → chain `seq=15 dir=SENT payload=activity text='recovery:urge_surfing:completed'`; B
+    holds exactly one seq-15 row, the feed shows one "Paced breathing — Completed · just
+    now" row, and the tray shows one `partner_accountability_events_v1` notification ("New
+    activity from ava").
+  - **Idempotence / crash-window heal:** after a process restart the next `syncOnce` =
+    `SyncReport(eventsLinked=0, drained=true, drainedCount=0)`; the chain is unchanged (still
+    one seq 15) — no duplicate re-emission.
+  - **D5 (no permission-revocation alert):** `GET_USAGE_STATS` revoked via appops on A, a
+    sync cycle ran, B still held 15 events with no new notification. Expected: the
+    owner-named escalation alerts (permission revocation / uninstall / rule changes /
+    per-rule partner / violation) are not built. Grant restored (`appops … allow`).
+  - **D4 (unpair / revocation, bilateral erasure):** A → End partnership → confirm →
+    screen-lock PIN → A "Your data on this device has been erased / Waiting to confirm your
+    partner's device…"; B pulled → local DB `events=0, enrollments=0` and UI "Your partner
+    ended the partnership. Your data for it on this device has been erased."; A "Check now"
+    → "Your partner's device has also erased its data." **The rig pair is now destroyed; a
+    re-pair is required for any further partner legs.**
+  - **D3 (multi-partner routing):** not runnable on a two-device rig (needs a third
+    identity); covered historically 2026-09-29 (#39/#94, ADR #111) — recorded as carried,
+    never re-faked.
+  - **Finding (LOW, for #43):** the partner summary shows "Never synced yet"/"Never synced"
+    when the partner simply has shared nothing (`mailboxWatermarkTsEpochMillis` is null
+    because zero events were ever pulled) — the copy conflates "no successful pull" with
+    "no events pulled". Not changed now (ADR #124 copy grammar / owner wording decisions).
+  - **Residue, not a defect:** B's feed carries duplicate pre-fix rows (2× "reached 7 days",
+    duplicate relapses) from defects already fixed and present on that rig's chain; seq 14
+    and seq 15 each appear exactly once.
+- **Next action (resume #49):** AVD A-side fresh state (`pm clear com.example.myexodus` on
+  the AVD **only** — never the phone), then the #49 journey table below (A1–A9, B1–B5,
+  C1–C7, D1–D5, E1–E5), re-pairing A↔B where a partner leg needs it → #47 stress/adversarial
+  → #43 final double check + honest report + cleanup (delete `PartnerRigDiagnosticsTest` and
+  `PartnerActivityDao.journalRecent`, restore A's clock). Phone legs stay BLOCKED at the
+  signature gate (#36 auth) — never recorded as phone proof. Docs/memory/trainer
+  (#44/#40/#46) are already complete.
 
 ## Method
 
@@ -954,10 +1068,110 @@ fresh-user journey up to the point pairing is required, then #50 supplies the pa
 | E4 | Reboot | `adb reboot`; wait; unlock | Data intact; a11y re-binds; protection resumes |
 | E5 | Low-memory | Fill / background storm | No ANR attributable to the product (the earlier ANR traces were dex/GC) |
 
-**Results table (filled during execution)**
+**Results table (filled during execution — AVD A = `emulator-5554`, fresh `pm clear` 2026-10-22 21:5x)**
 | ID | Observed | Evidence | Verdict |
 |---|---|---|---|
-| — | — | — | — |
+| A1 | Wizard Step 1 of 5 renders on first launch; Back exits to launcher, relaunch returns to Step 1 (gate not skipped) | screenshots `/tmp/s49_home_after_setup.png` lineage; `topResumedActivity` per step | PASS |
+| A2 | All five system screens open and return granted (usage → disclosure → a11y → notifications → overlay); disclosure has no Skip; a11y enable confirmed `enabled_accessibility_services`=BlockerAccessibilityService, `accessibility_enabled=1` | `settings get secure`, per-step dumps + screenshots | PASS (denial paths exercised in A3) |
+| A4 | Gmail always-on rule saved (Rules: "Always on · Blocked now"); Gmail launch → wall "Gmail is blocked / Blocked by your MyExodus rules" + eviction; Close → launcher; relaunch → wall again | `/tmp/s49_gmail_rule_saved.png`, `/tmp/s49_gmail_blocked.png`, `/tmp/s49_gmail_blocked_again.png`; logcat `detected com.google.android.gm — launching blocker` 22:18:01.776, `block close pkg=com.google.android.gm evicted=true` 22:18:06.6, fresh wall screenshot after second launch | PASS |
+| A9 | Home empty (no habit/no blocks); Rules empty ("No app blocks yet"/"No websites blocked yet" + presets + CTAs); Streaks empty (setup form). **Recovery empty** (AVD B, fresh habit-less state): "No active block — A blocked app starts a session from the block screen", plus the risk-window strip and the Log an urge / Techniques / My plan / History / Need urgent help? spokes. Read through the accessibility tree, not a screenshot: the Recovery tab is deliberately `FLAG_SECURE` (W6/INV-11), so on-device `screencap` fails there by design — that itself confirms the privacy surface. **Insights empty** (after starting a habit on the rig so the spoke is reachable): Times blocked 0 / Overrides 0, chart copy "No blocked attempts or overrides this week.", "Screen time 0m / Today: 0m / No credited screen time this week.", Urge practice section present | `/tmp/s49_home_now.png`, `/tmp/s49_rules_empty.png`, `/tmp/s49_streaks_empty.png`; Recovery `uiautomator dump` texts (screencap rc=1, secure window); `/tmp/avdb_insights_empty.png` (0/0, both empty-chart messages) and its UI dump | PASS |
+| B1 | Habit "Smoking" created (2–5 years, Moderate, Day 1, Free since Oct 22, 7/30/90 milestones 6/29/89 away); streak started; Home reflects the habit | `/tmp/s49_habit_filled.png`, `/tmp/s49_streak_started.png`, `/tmp/s49_home_habit.png` (Home visual check pending) | PASS (Home visual verify pending) |
+| A5 | Rule 22:00–07:00 (overnight, default, current time 22:2x) → Gmail launch blocked with wall (FGS "launching blocker"); edited to 09:00–10:00 → "Not active now", Gmail WelcomeTour opens, `decide gm -> Allow` ×2; window 22:00–07:00 + Weekends-only (today Thu) → "Not active now", Gmail allowed, `decide gm -> Allow` ×2 | `/tmp/s49_window_rule_saved.png` (row: "10:00 PM–7:00 AM (overnight) · Blocked now"), `/tmp/s49_window_block.png`; `/tmp/s49_window_rule_outside.png` + logcat 22:22:51 Allow ×2; `/tmp/s49_daymask_rule.png` + 22:24:13 Allow ×2 | PASS (all three: in-window Block, out-of-window Allow, day-mask-off Allow) |
+| A6 | Gmail limit 1 min: reconcile seeded 2,845,114 ms today (47 min) → immediate "Gmail is done for today" wall on launch, no warning, eviction (`block close evicted=true`); Photos limit 1 min (0 ms today) → level-1 banner "About 1 min of today's time left" at 33,994 ms, level-2 ShowWarning at 54,611 ms, Block at 64,621 ms + wall "Photos is done for today" + eviction | `/tmp/s49_limit_immediate_wall.png`, `/tmp/s49_photos_warn1.png`, `/tmp/s49_photos_block.png`; logcat `MyExodusUsage: observe … ShowWarning(level=1, remainingMs=26006)` 22:30:11.686, `ShowWarning(level=2, remainingMs=5389)` 22:30:31.208, `Block` 22:30:41.214; `MyExodusBlocker: block close pkg=…photos evicted=true` 22:30:42.588 | PASS (level-2 banner delivered per log; level-1 banner visually captured, level-2 image timing missed the banner — noted not a failure) |
+| A7 | Website rule example.com saved "Always on · Blocked now" with VPN tunnel up (DnsSinkholeVpnService bound); Chrome → example.com: `nxdomain example.com v4 rule=policy written=true`, `MyExodusAttempts: outcome=BLOCKED rule=… target=example.com`, URL card "example.com is blocked" + "Go to a different site"; wikipedia.org → `url scan … 'wikipedia.org' -> Allow` ×3 and the page fully renders; category preset sheet reachable from the editor with 10 curated social sites, "nothing is blocked until you tap Block" | `/tmp/s49_website_block2.png`, `/tmp/s49_website_card.png`, `/tmp/s49_website_allowed3.png`, `/tmp/s49_preset_social.png`; logcat 22:33:13 `url scan 'example.com' -> Block`, 22:33:15 attempt BLOCKED, 22:33:15 `nxdomain … written=true`, 22:34:17 Allow | PASS (rule, sinkhole, attempt log, URL card, allow-other-sites, category presets) |
+| A8 | Edited Gmail rule across modes (always-on → window → limit) with each save taking effect (A5/A6); example.com rule delete → confirm dialog "stops blocking immediately", snapshot `v7: 2 app, 1 url` → `v8: 2 app, 0 url`, then example.com renders with 0 nxdomain lines | logcat `MyExodusRules: Authoritative snapshot v8: 2 app, 0 url rules` 22:37:26.998; `/tmp/s49_deleted_allows2.png`; `grep -c "nxdomain example.com"` = 0 after deletion | PASS |
+| B2 | Milestone day 7. Two clock experiments, both informative: (1) an **in-session** forward jump to Oct 30 did **not** advance the streak (monotonic `elapsedRealtime` path — anti-tamper works, logged `REBOOT_WALL_DELTA` only after a boot-count change); (2) force-stop + `boot_count` 999→1001 + clock → Nov 6 lands on the reboot-detected wall path → elapsed 610,214,609 ms (7.06 d), day-7 row achieved+sent, `MILESTONE_NOTIFICATION_POSTED`, notification posted on channel `streak_milestones` ("7 days free from Smoking" / "Your streak hit 7 days…"), in-app dialog "One week free" with ladder 7✓/30/90; Continue → acked | `streak-anomaly.log`: `REBOOT_WALL_DELTA bootCount=1001 … deltaMs=608403008 … ACCEPTED_WALL_DELTA` and `MILESTONE_NOTIFICATION_POSTED milestoneDay=7`; `streak-read` day=7 `achieved=1793959212333 sent=1793959215833 acked=1793959270852`; screenshots `/tmp/s49_b2_home_milestone.png`, `/tmp/s49_b2_notification_shade.png`, `/tmp/s49_b2_after_continue.png`; `dumpsys notification --noredact` extras | PASS (exactly one notification; ack persisted; no day-30/90 rows) |
+| B3 | Relapse from the day-7 state: Home → "Log a relapse" → confirm dialog names the streak ("Smoking") and the run it ends ("7 days"); confirm → new streak Day 1, elapsed 0, best run 7 retained, milestone ladder reset ("7-day mark — 6 days to go") | `/tmp/s49_b3_relapse_dialog.png`, `/tmp/s49_b3_after_relapse.png`, `/tmp/s49_b3_home_day1.png`; store row new streak id `1fdb8dfe` elapsed=0; Home and Streaks read the same values | PASS |
+| B4 | Insights reconcile under clock tamper: Home (all-time) 2 blocks / 4 times blocked; Insights initially showed 0 because the device clock was 15 days ahead (Nov 6) and the 4 attempts are stamped Oct 22 — outside the 7-day window, the honest semantic. Restoring the clock to Oct 22 makes Insights show **4** with the Thu bar = 4 and overrides 0, matching Home | `/tmp/s49_b4_insights.png`; after restore: Insights "Times blocked 4 / Overrides 0", chart Thu "blocked: 4, overrides: 0"; ledger audit `journal pkg=com.google.android.gm day=2026-11-06 sum=77125ms rows=3` (`src=PATH_B`). Direct `attempt_log` read is impossible by design — `myexodus_rules.db` is SQLCipher (random header confirmed on a pulled copy; key is Keystore-wrapped), so the UI two-point proof is the evidence | PASS (not a data-loss bug; window math verified both ways) |
+| B5 | Widget placed from the launcher picker (the picker's own card is the static `previewImage`, so only a placed widget counts as evidence). Real render: "DAY 1 / 6 days to a 7-day mark" — identical to Streaks; tap opens the app on the Streaks tab (it restores the last spoke, Insights — tab-state behavior, not a wrong destination). Stale path: after a synthetic boot-count change the render logged `status=UNVERIFIED days=1 checkedAgo=74973` and the widget showed "Checked 1m ago" in place of the milestone line; a foreground re-verify cleared it (`status=PROTECTED checkedAgo=null`) | `/tmp/s49_b5_home_widget.png`, `/tmp/s49_b5_stale.png`; logcat `MyExodusWidget: widget view: status=UNVERIFIED days=1 checkedAgo=74973 milestone=7` → then `status=PROTECTED days=1 checkedAgo=null milestone=7`; `dumpsys appwidget` widget id=6, provider `DesertDawnWidgetReceiver`, updatePeriodMillis=1800000 | PASS (value parity, honest stale caption, tap target) |
+| C1 | Path A wall, repeated across Gmail, Photos and YouTube: blocked app foregrounded → wall covers it with the app named and "Blocked by your MyExodus rules"; attempt row logged BLOCKED with the rule id; Close sends to launcher (evicted, not merely hidden); relaunch raises a fresh wall from a new decision | `/tmp/s49_c1_wall.png`, `/tmp/s49_c1_gmail_after8s.png`, `/tmp/s49_c1_youtube_wall.png`; logcat `detected com.google.android.youtube — launching blocker` 23:28:18.638, `MyExodusAttempts: outcome=BLOCKED rule=a389a9e0-72b7-4602-a1c9-86e6b7e05fcb target=com.google.android.youtube` 23:28:19.115, `block close … evicted=true` on earlier runs; `decide … -> Block` before each wall | PASS |
+| C3 | Override path: "Use it now" records the override (attempt OVERRIDE, cooldown-gated) and retires the rule immediately; the rule moves to Rules → Deactivated with "Resume <app>", and resuming re-arms it (proven by the next block). Log-only path: wall → "Open MyExodus Recovery" (starts the seeded 60 s friction session) → "Log an urge" → intensity 4 → "Log it" writes one recovery row and routes home; the block **stayed enforced after the log** — YouTube relaunched 37 s later was still walled (`attempt BLOCKED` 23:28:19.115) — and the rule retired exactly at the 60 s friction deadline (~23:28:20.4, snapshot v16: 3→2 app rules). That deadline is the countdown-expiry unlock path the user started by entering Recovery, not the log: the log call itself touches no rule or recovery state (`RecoveryScreen.logOnly` → `sessions.logOnly` → `onRouteHome`). Timeline: session row stamped 23:27:41.973 → +60 s ≈ 23:28:20.4 → rule out; no other writer in the window | `/tmp/s49_c3_recovery_from_wall.png`, `/tmp/s49_c3_logonly_end.png`; session `664e55c1 technique=none state=COMPLETED entry=BLOCK_SCREEN dur=0`; logcat `MyExodusAttempts … BLOCKED` 23:28:19.115 then `Authoritative snapshot v16: 2 app, 0 url rules` 23:28:20.426 and `decide … -> Allow` at 23:28:26.9; recovery row + snapshot v15 (resumed) → v16 | PASS — log itself is not a bypass; the user-started friction window still expires on schedule, which is the documented second unlock path (ADR #31/#61). Documentation nuance recorded: the earlier Req 10 device proof sampled at 28 s *inside* the window, so it never contradicted this. |
+| C2 | Path B poll with accessibility down (same run as C4): `settings get secure enabled_accessibility_services` = null, FGS log `tick 40: usage=true authority=DEGRADED_POLLING_ONLY`; Gmail under quota opened normally (no false block); once over its 1 m limit the poll detected it and raised the wall "Gmail is done for today" with eviction — Path B enforcement intact at polling latency | `/tmp/s49_c4_poll_wall.png` (wall, a11y down); logcat `MyExodusBlockerFgs: poll foreground=com.google.android.gm …`, `authority=DEGRADED_POLLING_ONLY`; Gmail welcome-tour screenshot with no wall at 62,021 ms vs 60,000 ms → wall on relaunch | PASS |
+| C4 | Permission revoked mid-use: a11y disabled → Home chip Limited immediately; after the 60 s explainer delay the banner "Protection is limited … Turn it back on" with Re-enable appears; no crash; Path B kept blocking (see C2). The banner's Re-enable opened `Settings$AccessibilitySettingsActivity`; toggling "Use MyExodus blocker" raised the Android full-control dialog; Allow restored the service (settings back to the component, `dumpsys accessibility` bound) — chip returns to **Protecting** and the banner clears; over-quota Gmail re-blocked under Path A (`authority=FULL` ticks, wall re-shown) | `/tmp/s49_c4_limited_banner.png`, `/tmp/s49_c4_now.png` (Protecting, banner gone), `/tmp/s49_c4_gmail_clean.png` (wall after re-enable); logcat `tick 40: authority=FULL`, `block close … evicted=true` + fresh wall; Settings screen dumps | PASS — **trap recorded:** repeated `uiautomator dump` served a stale tree after the re-enable (it still showed the Limited banner while the screenshot showed Protecting); the screenshot is the authoritative read. Do not trust a dump taken without a forcing UI change in this session. |
+| C5 | Process death: `am force-stop com.example.myexodus` → pid gone; relaunch → FGS re-arms immediately (`EnforcementForegroundService` `isForeground=true`, `createTime=-81ms` at the relaunch read), rules intact (Photos/Gmail 1 m limits still listed), no stale wall; over-limit Gmail blocked again after relaunch. Platform behavior confirmed separately: force-stop is a user stop and **clears the accessibility service setting** on this API 37 build (component → null/0) — the app correctly degrades to the Limited banner and Path B keeps enforcing | logcat `MyExodusBlockerFgs` ticks; `dumpsys activity services` FGS block; Rules dump; `/tmp/s49_c4_gmail_clean.png`; controlled test: `before: com.example.myexodus/…BlockerAccessibilityService` → `after-force-stop: null / enabled=0` (and again after re-enable via the UI → null) | PASS (FGS re-arm + rules intact); the a11y-setting clear is platform force-stop semantics, surfaced honestly by the app, not a product defect |
+| C6 | Rotation on the wall: MainActivity, BlockerActivity and WidgetActionActivity all declare `android:screenOrientation="portrait"` (deliberate product choice, manifest comment) — `settings put system user_rotation 1`, `cmd window user-rotation lock 1` and `emu rotate` all left `mDisplayRotation=ROTATION_0` and the wall stayed up (screenshots), so a landscape hold cannot bypass it. Split-screen focus rules are the matrix's Part C cells C-15–C-19 (all proven 2026-10-21), not re-run here | `/tmp/s49_c6_wall_portrait.png`, `/tmp/s49_c6_wall_landscape2.png`, `/tmp/s49_c6_now.png` (wall intact through the rotation attempts); `dumpsys display` rotation 0; manifest lines 80/175/235 | PASS (portrait-locked by design; no bypass; split-screen covered by the matrix) |
+| C7 | **Quota boundaries — exact limit, over limit, rollover, day split.** *At the limit:* JVM pins the equality edge — a 30 min limit goes `29:59 NoAction → 30:00 exactly Block`, and every later observation stays Block (re-arm), so the boundary is `>=`, not `>`. *Over the limit on device:* A6's 1 min Photos limit crossed 33,994 ms (level-1 warning) → 54,611 ms (level-2) → 64,621 ms (Block + wall + eviction); the matrix cells pin the engine's own edges — C-04 (limit 60,000, used 120,000 → Block; read-back `used=161278`) and C-05 (outside the window, spent quota → still Block, the owner's shape), C-06 (day mask off → Allow, on → Block), C-09 (warning thresholds), C-14 (multiple rules, independent counters). *Rollover:* post-ADR-212 the clock round-trip seeds the new day from that day's journal (2,987,783 ms) instead of minting a fresh budget — E2b's `rolledOver=true Block`, and today's steady E5 ticks are `rolledOver=false`. *Day split, no double-count:* `UsageLedgerMapper.splitAtDayBoundary` is pinned at the exact boundaries (an interval ending exactly at midnight belongs wholly to the closing day; one starting exactly at midnight wholly to the new day; a 50-day span conserves every millisecond and never goes negative), and ADR #181 fixed the one real double-count class (a day split re-opening pre-activity time) with journal/platform parity re-proven at 1,064 ms. B4's clock-tamper round trip showed the window math honestly (0 while the device clock sat 15 days ahead, then 4 on the restored day) | `UsageAccountingEngineTest.warningLifecycle_pendingRetriesThenDelivered_thenBlockAtLimit`; `UsageLedgerAdversarialTest.matrix_intervalEndingExactlyAtMidnight_belongsToTheDayItBegan`, `…StartingExactlyAtMidnight_belongsToTheNewDay`, `…fiftyDaySpan_conservesEveryMillisecond_andNeverGoesNegative`; `blocking-scenario-matrix-2026-10-20.md` cells C-04/C-05/C-06/C-09/C-14 (all PROVEN 2026-10-20/21); A6 device log `33,994 → 54,611 → 64,621 Block`; E2b `2987783ms/60000ms Block (rolledOver=true)`; B4 Insights 0→4 after clock restore | PASS |
+| E1 | Airplane mode: `cmd connectivity airplane-mode enable` (`airplane_mode_on=1`, status-bar plane icon visible) → over-limit Gmail launched → Path A wall still raised, evicted on Close, and re-blocked on relaunch; FGS ticks continue with `usage=true authority=FULL`; no crash/ANR in the window. Blocking is entirely local, so connectivity loss cannot degrade enforcement; partner sync/heartbeats are the only network-dependent work and were not exercised on this device (no live enrollment) | `/tmp/s49_e1_airplane_block.png` (plane icon + "Gmail is done for today"); logcat `event pkg=com.google.android.gm type=32`, `poll foreground=… carried=…`, `block close … evicted=true` 23:44:45.211, re-block 23:44:54–55, `tick 120: usage=true authority=FULL degradation=null`, process pid 28641 alive, zero FATAL lines | PASS |
+| E2 | **Clock ±1 day — BYPASS FOUND (S49-E2-1).** Gmail's 1 m daily limit was spent on Oct 22. Clock → Oct 23: next observation rolled the day and allowed Gmail (correct — new day). Clock → Oct 21: rolled again, allowed (new day). Clock → back to Oct 22: rolled a **third** time and the counter came up **fresh** — `observe com.google.android.gm +10077ms -> 10077ms/60000ms NoAction (rolledOver=true)` — although the usage journal still held the spent Oct 22 day. Two Settings changes defeated a daily limit. Root cause: Decision 20's rollover reset the live tracker to zero instead of seeding the new day from Σ ledger (the invariant `rebuildProjection` already restores). **Fixed** in `UsageAccountingEngine` (all four rollover sites) + ADR #212; the fix was then installed and re-proven on the device (E2b) | Pre-fix: `/tmp/s49_e2_forward_day.png` (launcher, Gmail evicted by the stale wall), `/tmp/s49_e2_forward_gmail2.png` (Gmail open on the fresh day), `/tmp/s49_e2_backward_gmail.png` (Gmail open on the rolled-back day), `/tmp/s49_e2_roundtrip_gmail.png` (Gmail open again on the spent day); logcat `observe … +0ms -> 0ms/60000ms NoAction (rolledOver=true)` 11:46:25.611, `observe … +9522ms -> 9522ms/60000ms NoAction (rolledOver=true)` 11:50:08.311, `observe … +10077ms -> 10077ms/60000ms NoAction (rolledOver=true)` 20:40:41.514 | FAIL → FIXED (ADR #212) |
+| E2b | Post-fix re-run of the same round trip on the installed build. Oct 24 (empty journal) → `observe gm +0ms -> 0ms/60000ms NoAction (rolledOver=true)` (correct: a genuinely unused day starts at zero). Clock → Oct 22 (journal holds 2,987,783 ms for the day) → `observe com.google.android.gm +14025ms -> 2987783ms/60000ms Block (rolledOver=true)` and the "Gmail is done for today" wall rendered + evicted Gmail. The seeded number is the day's own journal total, not a fresh budget — the round-trip bypass is closed | `/tmp/s49_e2_fixed_oct24_open.png` (Gmail open on the empty day), `/tmp/s49_e2_fixed_roundtrip_blocked.png` (wall after returning to the spent day); logcat 23:55:08.668 Block, subsequent ticks `rolledOver=false` and still Block; JVM `rollover_anchorMismatch_seedsFromTheDaysJournal_notAFreshBudget` + `rollover_timezoneMove_sameDate_preservesJournaledUsage`, 215 tests across `blocking.usage` + `insights`, 0 failures | PASS |
+| E3 | **Doze.** `dumpsys deviceidle force-idle` → `mForceIdle=true mState=IDLE mLightState=OVERRIDE`. FGS stayed `isForeground=true` (pid alive), a11y bound; over-limit Gmail launched under deep idle → engine blocked and the wall re-rendered on top ("Gmail is done for today"); `dumpsys deviceidle` still `mState=IDLE` while the tick reported `authority=FULL` after the a11y rebind. Midnight (Oct 23 00:00) rolled during the idle window; the persistent wall stayed until dismissed (documented contract: a wall is not self-dismissed by a day change; the next decision starts the new day). `unforce` → `mState=ACTIVE`. **Environment caveat (E-AVD-1):** after an APK replacement the enabled a11y service can sit in `Binding services:{}` with `Bound services:{}` empty — the app then honestly reports `DEGRADED_POLLING_ONLY` and Path B still enforces; toggling `enabled_accessibility_services` rebinds it (or just wait for the replacement's process restart). No app crash; rebinding is OS-owned. **Re-check `dumpsys accessibility` bound-state before trusting Path-A-only legs after any `install -r`** | `/tmp/s49_e3_gmail2.png` (wall under forced Doze); logcat `tick … authority=DEGRADED_POLLING_ONLY` → `authority changed — forcing monitoring snapshot + heartbeat` → `tick 60: usage=true authority=FULL degradation=null` (23:59:59) while `mForceIdle=true`; `observe gm +0ms -> 61000ms/60000ms Block (rolledOver=false)` (00:07:46) and `poll foreground=com.google.android.gm carried=com.google.android.gm` (23:58:35); `dumpsys accessibility` before/after the toggle | PASS |
+| E3b | **Wall across a rotation — DEFECT FOUND (S49-E3-1), fixed the same session.** Both overlay hosts size the window from the bounds passed at show time and neither re-applied them on a display configuration change; `onConfigurationChanged` logged and did nothing. A daily-limit wall that was up when the display rotated from landscape (2400 px) to portrait stayed 2400 px wide: only the left slice of the card was visible and the Close button sat off-screen — reproduced on the AVD with the wall live. **Fix:** `OverlayController.refreshDisplayBounds()` recomputes each shown card's bounds (wall = display bounds, banner = warning strip) and re-applies them through the existing per-host refresh path; wired into `BlockerAccessibilityService.onConfigurationChanged` and `EnforcementForegroundService.onConfigurationChanged`. Regression: `OverlayControllerTest.displayConfigurationChange_reBoundsAShownWallToTheNewOrientation` (Robolectric display change → dialog attributes match the portrait metrics). Device proof: after the fix the same system rotation logged `config change: newWidthDp=411` → `display change: rebound display=0 content=DailyLimitBlocked` and the portrait screenshot shows the full card with Close — the exact frame that had been cut off before. Related real-world path: `BlockerActivity` (app-block card) is portrait-locked by design (C6), so the display itself will not rotate while it is the top activity; this fix covers the overlay-hosted daily-limit wall and the Path B card, which do live across rotations | Before: `/tmp/s49_e3_wall.png` (portrait screen, landscape-laid-out card, text/Close off-screen). After: `/tmp/s49_rot_gmail.png` (complete portrait card with Close), logcat `display change: rebound display=0 content=DailyLimitBlocked` at 00:11:05.727 (also 00:08:00–00:10:43 rebinds during the emulator's auto-rotate flaps); JVM `OverlayControllerTest` 20/20 | FAIL → FIXED |
+| E4 | **Reboot.** `adb reboot` on the AVD, then unlock (secure PIN): durable state came back identical — `usage-read` after unlock returns the same rule (`enabled=true limit=60000 days=1111111 tz=Africa/Nairobi window=307..367`) and the same journal row (`used=62320 anchor=2026-10-23/Africa/Nairobi blocked=true`) as before the reboot; Rules shows Photos + Gmail and no websites. Protection resumed without an app launch: BOOT_COMPLETED was delivered (late, see caveats) and started the FGS (`isForeground=true`); after the guest additionally ANR-killed the process at 00:39:10, `START_STICKY` restarted the FGS in a new pid (6374) still foreground — two independent re-arm paths. Over-limit Gmail then blocked on first launch after unlock: `observe com.google.android.gm +0ms -> 63366ms/60000ms Block`, `+689ms -> 64055ms/60000ms Block`, wall rendered ("Gmail is done for today… Close") with eviction; the wall re-bounded to the current display after resume (`display change: rebound display=0 content=DailyLimitBlocked`). **Caveats (environment, not product):** (1) E-AVD-1 recurred — the enabled a11y service sat unbound after the reboot (`Bound services:{}`) and needed the `enabled_accessibility_services` toggle; the app reported `DEGRADED_POLLING_ONLY` and Path B kept enforcing meanwhile. (2) The booted guest was CPU-starved (pressure ~99.6%, memory pressure 0): SystemUI/launcher/GMS/inputmethod all ANR'd together, the app's own startup ANR'd twice pre-unlock and once post-unlock, and BOOT_COMPLETED sat ~10 min in the broadcast queue (`PENDING OFFLOAD`) before firing — all cleared once the guest settled; no app crash. (3) Semantics note: the Gmail rule's 05:07–06:07 window does **not** gate its daily quota — `BlockDecisionEngine` day-scopes the quota (`activeDaysOfWeek`) and treats the window as a separate schedule block, so blocking at 00:41 on a spent day is the documented contract, not a stray window match | Post-reboot `usage-read` (identical values), Rules dump; logcat `MyExodusBoot: android.intent.action.BOOT_COMPLETED received` 00:36:15, `MyExodusBlockerFgs` ticks with `isForeground=true` (pid 6374 after the restart), `MyExodusUsage: observe … Block` + `display change: rebound` 00:41:12; `/tmp/e4_gmail_block5.png` (full portrait wall); `dumpsys activity processes` ANR records + CPU-pressure readings; `dumpsys activity broadcasts` showed the delayed BootReceiver | PASS (data + two re-arm paths + enforcement); E-AVD-1 and guest starvation are AVD-environment caveats |
+| E5 | **Low-memory + background storm.** Three pressure legs on the live app: (1) *background storm* — Photos/Gmail/YouTube/Chrome launched twice in quick succession with HOME between rounds; the FGS kept ticking (`tick 100` → `tick 140`) in the same pid, the a11y deferred transient `WSC`s (`deferred WSC dropped … window=false` while the next app came forward — the documented background-window guard), and the only ANRs were the **system's** (nexuslauncher focus ANR 00:44:55, Photos JobService 00:45:09), whose traces mention `com.example.myexodus` zero times. (2) *CPU storm* — four busy loops for 45 s (load 22.14 on the 1-CPU guest); FGS ticks continued (00:45:50, 00:46:22), pid 6374 alive, no FATAL/ANR. (3) *memory* — 700 MB into the guest tmpfs dropped `MemFree` from 627 MB to **107 MB**; `am send-trim-memory … RUNNING_CRITICAL` was delivered, the app stayed alive and the FGS foreground. Over-limit Gmail launched into that state cold-started slowly: its window did not exist for the first seconds, so the a11y deferred instead of blocking blind (the correct guard), then as soon as the window appeared the accounting engine blocked (`observe com.google.android.gm +0ms -> 64055ms/60000ms Block`), evicted it (`block close … evicted=true`) and rendered the wall, which re-bounded through a rotation. Releasing the fill restored `MemFree` to 937 MB; Close dismissed the wall and a relaunch re-blocked within seconds (`observe … 64232ms/60000ms Block`, fresh wall). The launcher widget also survived the storm with its correct "DAY 1 / 6 days to a 7-day mark" render | `/tmp/e5_wall_lowmem.png` (full "Gmail is done for today" wall at 107 MB free), `/tmp/e5_reblock.png` (wall after Close + relaunch), `/tmp/e5_mem_gmail.png` (widget intact on the launcher mid-storm); logcat `MyExodusBlockerFgs tick 100…220: usage=true authority=FULL`, `MyExodusUsage observe … Block`, `block close … evicted=true`, `display change: rebound display=0 content=DailyLimitBlocked`; `for f in /data/anr/anr_2026-10-23-00-4*; grep -c com.example.myexodus` = 0; zero `FATAL EXCEPTION` / `ANR in com.example.myexodus` lines; `/proc/meminfo` before/after | PASS — no ANR attributable to the product under storm, CPU saturation, or 107 MB free; enforcement held and recovered. Latency caveat: under this pressure a cold app can take ~12 s to show a blockable window (deferred until it exists), which is by design and only reachable at extreme system pressure |
+
+**Journey D — first paired run (2026-10-23 01:3x–02:05, local rig A↔B, pair `4oZfLV6VbOg7TliGgVCHnULHkTx1_GUIjbrrcmtZeot5K2Dbo0kbH8x1i` epoch 2)**
+
+| ID | Observed | Evidence | Verdict |
+|---|---|---|---|
+| D1 | Re-pair after #50's D4: ceremony completed on both AVDs with fresh anonymous identities (A "Ava", B "ben"); both cards show an active pair; epoch 2 | Partner-tab screens on both; Firestore pair doc status=active | PASS |
+| D2 (blocked-app half) | Gmail always-on rule on B → launch → a11y `decide com.google.android.gm -> Block` → wall covers the app ("Gmail is blocked / Blocked by your MyExodus rules") → attempt journaled `outcome=BLOCKED rule=09205794-c206-4787-b128-c258ea35eba6 target=com.google.android.gm` **twice** (01:54:51.3 and 01:57:44.8). Attempt mirroring then stalled: B outbox stayed at 4 SENT because `emitPayload` silently returns `Emit.Stop` inside the cold 900 s signing window (`UserNotAuthenticatedException`). After a **real keyguard PIN unlock** (power off/on → swipe → PIN — `wm dismiss-keyguard` deposits no auth token), the next sync pass drained **7 events** at 02:01:23.977 (outbox 4 → **11 SENT**, B events=11), and A's Firestore mailbox went 4 → **11 docs**. A could not ingest them: A logs `INVALID_REFRESH_TOKEN` / Firestore `UNAUTHENTICATED` because the **Auth emulator lost its in-memory users on a suite restart** (its refresh-token secret rotates too; `accounts:query` = 0 users) while Firestore data persisted. A's received-events stayed 4 PENDING. The A-side feed row + tray notification therefore could not complete on this pairing session and are **re-run on the fresh pair below** | `/tmp/b_block_wall2.png` (wall over Gmail), `/tmp/b_bouncer.png` + `/tmp/b_unlocked.png` (credential gate), logcat `MyExodusAttempts: attempt logged: outcome=BLOCKED …` ×2, `drain: 7 event(s) delivered` 02:01:23.977; B `outbox: SENT|11`, `events=11`; A `events=4`, `enrollments=1`; A logcat `INVALID_REFRESH_TOKEN` / `UNAUTHENTICATED`; emulator `accounts:query` 0 users | **PARTIAL** — B-side journal + delivery PASS; A-side display blocked by rig auth-state loss, not by product code |
+
+**Findings from the D run (recorded for #43; not silently patched):**
+
+- **S49-D2-1 (MEDIUM, UX/operability):** with the signing key inside its 900 s time-bound window but
+  un-authenticated, every outbound partner emit is dropped silently — no log line, no UI signal. The
+  partner dashboard's "Synced … ago" caption reads only the **inbound** mailbox watermark
+  (`PartnerDashboardSource.kt:134`), so a device whose events are stuck shows a plausible caption
+  while its own journal is not being delivered. Nothing is lost (the outbox retries on the next
+  authenticated pass — proven: 7 events drained once auth landed), but the user has no way to know a
+  credential unlock is needed. Candidate fix (owner UI decision): surface "waiting for device unlock"
+  when the outbox has pending items older than one sync interval.
+- **S49-D2-2 (LOW-MEDIUM, documented behavior gap):** while APP_STOPPED degradation is active
+  (`requiresExplicitReEnable`), the FGS scan is deliberately skipped, so app launches are walled by
+  the accessibility path but **no attempt row is journaled** — the partner hears nothing about them,
+  even after re-enable (nothing is backfilled). URL-host attempts are journaled by the a11y path
+  itself and are unaffected. The first Gmail block of this run produced no row for exactly this
+  reason until the Home "Re-enable" button cleared the stop state (`re-enable requirement cleared`).
+  Evidence for the gate: `EnforcementForegroundService.kt:619` (`usageOk && !reenableRequired`) vs the
+  a11y decide path which writes no app-block attempt.
+- **Rig trap (for #53):** `uiautomator dump` binds UiAutomation, which transiently unbinds the app's
+  accessibility service — a false "Limited" banner and `authority regained` log lines appear around
+  every dump. Use `screencap` + logcat for block-path assertions on the AVDs.
+
+**Journey D — second paired run (2026-10-23 02:19–04:10, fresh identities, pair `VIQDm49…_rYmVai…` epoch 2)**
+
+Setup: the rig's Auth-emulator users were wiped again (both devices were dead identities after
+the first run's loss — the exact state OPD #30 describes), then both devices were re-paired
+through the real ceremony (invite code → SAS `45552` matched → device-credential approval on
+both). New uids: A = `rYmVai…`, B = `VIQDm…` (`GET pairings/VIQDm…_rYmVai…` = active, members
+both, epoch 2).
+
+| ID | Observed | Evidence | Verdict |
+|---|---|---|---|
+| D3 (identity death) | With both auth accounts gone, the SDK kept `currentUser` set and every authenticated call failed `INVALID_REFRESH_TOKEN` (B log 03:18:16) — the pre-#213 stall. `PairUidResolver.ensureUid()` probed the cached token, saw the definitive auth rejection (never a network failure), signed out and minted a fresh anonymous uid, and recorded the rotation marker. Both devices rendered the "Can't reach your partner" card from the recorded denial | Device logcat `INVALID_REFRESH_TOKEN`; `pairing_reachability.xml` on both devices holds `denied_at_SCpsvX…` (= the old pair) once the identity rotated; dashboard card on both AVDs | PASS |
+| D4 (re-pair after loss) | Ceremony completed on the already-populated devices: new pair active, epoch 2, card gone once the new roster row is selected. The old (dead) enrollment remains on both devices — see S49-D3-1 | Both dashes show the new pair; Firestore pair doc active | PASS |
+| D5 (coaching message, A→B) | A enabled Share this streak (+ relapses/milestones) for the new pair → composer gate cleared → "Rig sweep re-pair proud of you" sent. Delivery chain proven end-to-end: A's reconcile linked the row, the drain wrote the mailbox doc, B pulled it (`pulledCount=1`), processed it, posted the notification, and wrote the per-installation ack. B's Home hub shows "Their message to you — Rig sweep re-pair proud of you" | B notification tray: `AvaA sent you a message` / `“Rig sweep re-pair proud of you”` (channel `partner_accountability_events_v1`); B hub dump line; mailbox `VIQDm…/messages/7d60009f…` with sender `rYmVai…`; ack doc `…/acks/fCQvY3FqSKyqBg-GuwNSnp` `ackedAt 2026-10-23T01:00:28Z`; B log `pulledCount=1` 04:06:15 | PASS |
+| D6 (consent boundary, B→A) | B still shares nothing with A, so B emitted no state snapshot; A correctly shows "Nothing shared yet". No leak, no phantom event — the absence is consent, not a defect | A hub "Nothing shared yet"; B hub "Nothing shared yet — AvaA can't see your streaks…"; A mailbox (`rYmVai…`) has 0 docs | PASS |
+
+**Findings from the second D run:**
+
+- **S49-D3-1 (MEDIUM, UX/operability): the dead enrollment is never retired.** After the
+  identity rotation both devices hold the old pair `SCpsvX…` forever: the roster shows it as a
+  second row with the same partner name ("ben" ×2 on A, "AvaA" ×2 on B) and the same "Paired
+  Oct 23, 2026" caption, the sync report reports `uidsResolved=false` on every pass, and every
+  pass logs a rules `PERMISSION_DENIED` for it. The card only disappears by selecting the new
+  row; the stale row stays and its `denied_at_*` flag can only be pruned by an explicit unpair.
+  User impact: a permanently failing pair is indistinguishable from a live one in the roster,
+  and the "Sync" health line can never read fully green. Candidate fix (owner UI decision):
+  the unreachable card offers "Remove this pairing" (local retirement — the server document is
+  already inaccessible), and/or re-pairing offers to retire the superseded enrollment.
+- **S49-D3-2 (LOW, UX): identical roster captions.** Two pairings with the same partner name
+  render identical rows (name + "Paired <date>"), so the user cannot tell which is live before
+  tapping. Part of the same fix as D3-1.
+- **S49-D3-3 (LOW, log hygiene): already-acked messages re-acked on every wake replay.**
+  Re-delivery of an already-processed message correctly hits the create-only ack rule and is
+  read as "already done", but it is logged at WARN as `ack retry failed … PERMISSION_DENIED`
+  even though the first ack exists (verified in Firestore). Harmless; consider DEBUG level or
+  "already acked" wording so a healthy rig does not look like a rules failure.
+
+**Cloud Monitoring alert review (owner request, 2026-10-22 night)**
+
+- **Firing now:** 40 `Cloud Functions error rate > 5% (15m)` incidents (each listed twice — the policy has two conditions, so one incident sends two notifications), 17 of them on 2026-10-22; 6 `dispatch sweep not running` (2026-10-16/17, before the R-03 fix); 1 `registerPairing 429` (2026-10-15, test load). The `relay gave up` policy is disabled.
+- **Culprit metrics:** `submitHeartbeat` 53 errored executions and `readPartnerStatus` 17 in 24 h; `dmsDeadlineWorker` 1, `setAvailabilityConsent` 1.
+- **Root cause:** callable logs show `verifications {app: INVALID, auth: VALID}`, `Failed to validate AppCheck token … Decoding App Check token failed`, HTTP 401, `userAgent okhttp/4.12.0`, remote IP equal to this host's public IP. The paired **physical phone's debug build** has no registered App Check debug token (the console lists only four old emulator tokens; the fresh AVD generated `6da36980…`, exchange fails 403 "App attestation failed"), so Firebase's local interceptor substitutes a placeholder token and every callable is rejected before reaching our handler. The client is correct: `PartnerSyncCoordinator.syncOnce` early-returns before `checkIn()` when there are no enrollments (file line 154), so the unpaired AVD cannot be the caller; the AVD's own debug token is unregistered but it makes no live callables.
+- **Impact:** the PA heartbeat/availability path is silently degraded on the debug phone (auth still valid; no crash). Release builds use Play Integrity, so this is a debug-build operational gap, not a shipped-code defect.
+- **Fix:** register the phone's debug token when it is back on adb (read it from `DebugAppCheckProvider` logcat or set one explicitly), or stop background PA sync on a debug build with no token; add the release SHA-1 when release signing starts. Alert tuning (dedupe the policy's two conditions) is optional noise reduction, not the root fix.
+- **Final re-check:** task #52 re-queries `/alerts` + the error metrics after all work is done to see whether the sweep produced new incidents.
 
 ## Appendix — delta file inventory (path list)
 

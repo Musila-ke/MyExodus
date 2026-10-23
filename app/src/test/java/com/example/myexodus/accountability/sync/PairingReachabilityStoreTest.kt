@@ -2,7 +2,10 @@ package com.example.myexodus.accountability.sync
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.google.firebase.FirebaseException
+import com.google.firebase.auth.FirebaseAuthInvalidUserException
 import com.google.firebase.firestore.FirebaseFirestoreException
+import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -65,6 +68,39 @@ class PairingReachabilityStoreTest {
     }
 
     @Test
+    fun theRotationMarkerOutlivesTheProcess_andPruneDoesNotEatIt() {
+        store().markIdentityRotated(5_000L)
+        // Prune only owns the denial keys — the marker belongs to the next sync pass.
+        store().prune(emptySet())
+
+        assertEquals(5_000L, store().identityRotatedAt())
+    }
+
+    @Test
+    fun consumeIdentityRotation_marksEveryHeldPairingAsOfTheRotation_andClearsTheMarker() {
+        val store = store()
+        store.markIdentityRotated(5_000L)
+
+        store.consumeIdentityRotation(setOf("pair-1", "pair-2"))
+
+        assertEquals(5_000L, store.deniedAt("pair-1"))
+        assertEquals(5_000L, store.deniedAt("pair-2"))
+        assertNull(store.identityRotatedAt())
+    }
+
+    @Test
+    fun consumeIdentityRotation_withNoPairingsStillClearsTheMarker() {
+        // A pairing made after the rotation is a live one; a stale marker would brand it dead.
+        val store = store()
+        store.markIdentityRotated(5_000L)
+
+        store.consumeIdentityRotation(emptySet())
+
+        assertNull(store.identityRotatedAt())
+        assertNull(store.deniedAt("pair-1"))
+    }
+
+    @Test
     fun theFlagOutlivesTheProcessThatRecordedIt() {
         store().markDenied("pair-1", 1_000L)
 
@@ -111,5 +147,29 @@ class PairingReachabilityStoreTest {
         // An offline pass served from cache must not blink the card off.
         assertFalse(shouldClearDenial(present = true, fromCache = true))
         assertFalse(shouldClearDenial(present = false, fromCache = false))
+    }
+
+    @Test
+    fun onlyAnAuthRejectionIsADeadIdentity() {
+        assertTrue(
+            isDeadIdentity(
+                FirebaseAuthInvalidUserException(
+                    "ERROR_USER_TOKEN_EXPIRED",
+                    "The user's credential is no longer valid.",
+                ),
+            ),
+        )
+        // Identity Toolkit's raw refresh refusal reaches the app as a plain FirebaseException.
+        assertTrue(
+            isDeadIdentity(
+                FirebaseException("An internal error has occurred. [ INVALID_REFRESH_TOKEN ]"),
+            ),
+        )
+
+        // A connection that cannot answer is not an identity that is gone: rotating here would
+        // orphan every pair for a captive portal (ADR #125).
+        assertFalse(isDeadIdentity(FirebaseException("A network error has occurred.")))
+        assertFalse(isDeadIdentity(IOException("offline")))
+        assertFalse(isDeadIdentity(null))
     }
 }

@@ -3,6 +3,7 @@ package com.example.myexodus.accountability.enrollment
 import com.example.myexodus.accountability.sync.FirestoreSchema
 import java.util.Random
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -320,6 +321,59 @@ class PairingAdversarialTest {
             partnerFlow.finishJoin(ready.preparation, "uid-b", pairingTestSigning(partner.signing.private)),
         )
         assertTrue("no pair may exist from a denied response", cloud.pairings.isEmpty())
+    }
+
+    // Row 11: the owner-observed stall (2026-10-23). The initiator's clock runs fast, so the
+    // `expiresAt` it mints is honoured by the rules later than its own TTL suggests. A fixed
+    // TTL wait declared the invitation dead while the server still accepted the partner's
+    // write. The wait must be ended by the rules' denial (the only clock both sides agree
+    // on), not by the skewed client's duration.
+    @Test
+    fun fastCreatorClock_partnerRespondingAfterNominalTtl_stillPairs() = runTest {
+        val t0 = 1_700_000_000_000L
+        val skew = 4 * 60_000L
+        val cloud = FakeCloud()
+        val initiator = DeviceKeys()
+        val partner = DeviceKeys()
+        val serverClock = { t0 + testScheduler.currentTime }
+        val fastDeviceClock = { serverClock() + skew }
+        val initiatorFlow = pairingTestFlow(
+            initiator, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets(),
+            exchangeNowMillis = serverClock,
+            nowMillis = fastDeviceClock,
+        )
+        val partnerFlow = pairingTestFlow(
+            partner, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets(),
+            exchangeNowMillis = serverClock,
+            nowMillis = serverClock,
+        )
+        val initiation = initiatorFlow.initiate("uid-a")
+        assertEquals(
+            "the creator's clock also stretches the server-side window by the same offset",
+            t0 + skew + PairingToken.TTL_MILLIS,
+            initiation.token.expiresAtEpochMillis,
+        )
+
+        val partnerJob = async {
+            delay(PairingToken.TTL_MILLIS + 60_000L)
+            partnerFlow.complete(initiation.qrBytes, "uid-b", pairingTestSigning(partner.signing.private))
+        }
+        val await = checkNotNull(
+            initiatorFlow.awaitPartner(initiation.token, PairingToken.TTL_MILLIS),
+        ) { "a fixed TTL wait would have ended the poll before the partner acted" }
+        assertTrue(
+            "the partner must have acted after the nominal TTL, at ${testScheduler.currentTime}",
+            testScheduler.currentTime > PairingToken.TTL_MILLIS,
+        )
+
+        val durablePairId = EnrollmentTranscript.durablePairIdOf("uid-a", "uid-b")
+        assertEquals(
+            PairingFlow.Outcome.Paired(durablePairId, await.sas),
+            initiatorFlow.submitInitiatorSignature(
+                await, initiation.token, "uid-a", pairingTestSigning(initiator.signing.private),
+            ),
+        )
+        assertEquals(PairingFlow.Outcome.Paired(durablePairId, await.sas), partnerJob.await())
     }
 
     // Row 10: a seeded stream of ceremonies over a random uid-pairing matrix — the durable pair

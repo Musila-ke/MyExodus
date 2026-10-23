@@ -61,6 +61,21 @@ class PairingFailureCopyTest {
         )
     }
 
+    /**
+     * The inviter's live countdown (owner report 2026-10-23): whole minutes, rounded up so a
+     * live code never reads "0 minutes", and 0 exactly at/after the deadline.
+     */
+    @Test
+    fun invitationCountdownRoundsUpAndStopsAtZero() {
+        val deadline = 1_000_000_000_000L
+        assertEquals(10L, minutesUntil(deadline, deadline - 10 * 60_000L))
+        assertEquals(10L, minutesUntil(deadline, deadline - 9 * 60_000L - 1))
+        assertEquals(9L, minutesUntil(deadline, deadline - 9 * 60_000L))
+        assertEquals(1L, minutesUntil(deadline, deadline - 1))
+        assertEquals(0L, minutesUntil(deadline, deadline))
+        assertEquals(0L, minutesUntil(deadline, deadline + 5_000L))
+    }
+
     @Test
     fun identityRejectionsMapToVerifyCopy() {
         assertEquals(

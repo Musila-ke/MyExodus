@@ -112,6 +112,12 @@ class ChainStateStore(
     suspend fun hasEvent(pairId: String, senderKeyId: String, eventId: String): Boolean =
         db.chainEventDao().getByEventId(pairId, senderKeyId, eventId) != null
 
+    /** The sequence [eventId] already occupies on this sender's chain, if any. Activity
+     *  reconcile heals a crash between append and its link write through this: the event
+     *  exists but the link table does not, and re-signing would deliver it twice. */
+    suspend fun sequenceForEvent(pairId: String, senderKeyId: String, eventId: String): Long? =
+        db.chainEventDao().getByEventId(pairId, senderKeyId, eventId)?.sequence
+
     /** This sender's own chain head: the last local event's sequence + hash (single-row read). */
     suspend fun localHead(pairId: String, senderKeyId: String): ChainHead? =
         db.chainHeadDao().get(pairId, senderKeyId)

@@ -19,6 +19,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowDisplayManager
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
 
@@ -96,6 +97,32 @@ class OverlayControllerTest {
         assertEquals(1000, attributes.y)
         controller.hide(gen, displayId = 0)
         assertFalse(controller.isShown(0))
+    }
+
+    @Test
+    fun displayConfigurationChange_reBoundsAShownWallToTheNewOrientation() {
+        val gen = advance()
+        controller.show(
+            gen,
+            displayId = 0,
+            bounds = Rect(0, 0, 2400, 1080),
+            content = OverlayContent.DailyLimitBlocked("com.google.android.gm"),
+        )
+        assertEquals(2400, dialog(0).window!!.attributes.width)
+
+        ShadowDisplayManager.changeDisplay(0, "w1080dp-h2400dp-port")
+        val portrait = controller.displayBounds(0)
+        assertTrue("expected a portrait display", portrait.height() > portrait.width())
+
+        controller.refreshDisplayBounds()
+
+        // Regression (S49-E3, AVD 2026-10-23): a wall kept its landscape show-time width on
+        // a portrait display — text and controls sat off-screen until the next rotation.
+        val attributes = dialog(0).window!!.attributes
+        assertEquals(portrait.width(), attributes.width)
+        assertEquals(portrait.height(), attributes.height)
+        assertEquals(portrait.left, attributes.x)
+        assertEquals(portrait.top, attributes.y)
     }
 
     @Suppress("UNCHECKED_CAST")

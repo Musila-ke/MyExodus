@@ -85,6 +85,73 @@ class PairingFlowTest {
     }
 
     /**
+     * AD-22 (device-caught 2026-10-23): the wipe canary may only be minted by a durable
+     * enrollment. `initiate` mints the identity keys before its server call, so the canary
+     * cannot be the identity key — a failed invitation would otherwise read as a destroyed
+     * database on the next app start ("Pairing data was lost" on a device that never paired).
+     */
+    @Test
+    fun failedInvitation_neverMintsTheWipeCanary() = runTest {
+        val cloud = FakeCloud()
+        val keys = DeviceKeys()
+        var marked = 0
+        val flow = flow(keys, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets(), markPairingCompleted = { marked++ }) {
+            1_700_000_000_000L
+        }
+
+        cloud.failNextTokenRegistration = true
+        assertTrue(runCatching { flow.initiate("uid-a") }.isFailure)
+        assertEquals(0, marked)
+    }
+
+    @Test
+    fun cancelledInvitation_neverMintsTheWipeCanary() = runTest {
+        val cloud = FakeCloud()
+        val keys = DeviceKeys()
+        var marked = 0
+        val flow = flow(keys, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets(), markPairingCompleted = { marked++ }) {
+            1_700_000_000_000L
+        }
+
+        val initiation = flow.initiate("uid-a")
+        flow.cancel(initiation.token)
+        assertEquals(0, marked)
+        assertTrue("the cancelled code must die with it", cloud.tokenDocs.isEmpty())
+    }
+
+    @Test
+    fun durablePairing_mintsTheWipeCanary_onceOnEachSide() = runTest {
+        var nowEpochMillis = 1_700_000_000_000L
+        val cloud = FakeCloud()
+        val initiator = DeviceKeys()
+        val partner = DeviceKeys()
+        var initiatorMarked = 0
+        var partnerMarked = 0
+        val initiatorFlow = flow(
+            initiator, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets(),
+            markPairingCompleted = { initiatorMarked++ },
+        ) { nowEpochMillis }
+        val partnerFlow = flow(
+            partner, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets(),
+            markPairingCompleted = { partnerMarked++ },
+        ) { nowEpochMillis }
+
+        val initiation = initiatorFlow.initiate("uid-a")
+        val partnerJob = async {
+            partnerFlow.complete(initiation.qrBytes, "uid-b", signing(partner.signing.private))
+        }
+        val await = checkNotNull(initiatorFlow.awaitPartner(initiation.token, 30_000))
+        assertTrue(
+            initiatorFlow.submitInitiatorSignature(await, initiation.token, "uid-a", signing(initiator.signing.private))
+                is PairingFlow.Outcome.Paired,
+        )
+        assertTrue(partnerJob.await() is PairingFlow.Outcome.Paired)
+
+        assertEquals(1, initiatorMarked)
+        assertEquals(1, partnerMarked)
+    }
+
+    /**
      * §19.5 (ADR #106): each pairing owns its agreement key — generated under a session-scoped
      * alias at the start of the attempt and recorded on the enrollment — so a later unpair
      * shreds exactly one pair and every CEK derivation resolves the same key.
@@ -804,6 +871,7 @@ class PairingFlowTest {
         ensureIdentityKeys: () -> AccountabilityKeyStore.GenerationResult = {
             AccountabilityKeyStore.GenerationResult.Success(strongBox = false)
         },
+        markPairingCompleted: () -> Unit = { },
         nowMillis: () -> Long,
     ): PairingFlow = pairingTestFlow(
         keys, cloud, scheduler, dao, secrets,
@@ -811,6 +879,7 @@ class PairingFlowTest {
         generateAgreementKey = generateAgreementKey,
         destroyAgreementKey = destroyAgreementKey,
         ensureIdentityKeys = ensureIdentityKeys,
+        markPairingCompleted = markPairingCompleted,
     )
 
     private fun signing(privateKey: PrivateKey): Signature = pairingTestSigning(privateKey)

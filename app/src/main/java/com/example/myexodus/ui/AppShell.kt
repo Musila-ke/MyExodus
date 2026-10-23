@@ -200,6 +200,8 @@ fun AppShell(
     requestedHabit: String? = null,
     onHabitConsumed: () -> Unit = {},
     planRepository: RecoveryPlanRepository,
+    /** Settings → Coaching plan: the editor resolves the active profile through this. */
+    rulesRepository: RulesRepository,
     /** Owner mandate 2026-10-04: the Settings sharing pane's per-streak consent writes. */
     habitRepository: HabitRepository,
     /** ADR #193: partner plans, reached from the Partner hub. */
@@ -474,6 +476,7 @@ fun AppShell(
                         widgetSettings = widgetSettings,
                         onWidgetSettingsChanged = onWidgetSettingsChanged,
                         planRepository = planRepository,
+                        rulesRepository = rulesRepository,
                         recoveryPrefs = prefs,
                         domainUsageEngine = domainUsageEngine,
                         accountingOutageSource = accountingOutage,

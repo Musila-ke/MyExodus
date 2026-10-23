@@ -59,17 +59,32 @@ class PartnerJourneySeedInstrumentedTest {
         val enrollment = ep.enrollmentDao().getByPairId(pairId)
             ?: error("no enrollment for pair=$pairId (uidA=$uidA uidB=$uidB) — wrong partnerUid?")
 
+        // v16/ADR #135: the reconcile filter joins the row to its habit's consent slice —
+        // a row without habit_progress_id matches no branch and would never deliver. Seed
+        // through the pair's real consented habit so everything stays production-shaped.
+        val sharing = store.pairSharingDao().streakForPair(pairId)
+            .firstOrNull { it.shareStreak && it.shareMilestones }
+            ?: error("no habit with shared streak+milestones for pair=$pairId — enable both toggles first")
+        val habit = store.habitProgressDao().getById(sharing.habitProgressId)
+            ?: error("consented habit ${sharing.habitProgressId} does not exist")
+        val streak = store.recoveryStreakDao().getActiveStreak(habit.progressId)
+        val achieved = streak?.let { store.milestoneEventDao().getForStreak(it.streakId) }
+            ?.filter { it.achievedAt != null }?.map { it.milestoneDay }?.sorted().orEmpty()
+
         val now = System.currentTimeMillis()
         store.partnerActivityDao().insertJournal(
             PartnerActivityOutbox(
                 eventId = UUID.randomUUID().toString(),
                 kind = EventPayload.TYPE_MILESTONE_REACHED,
+                habitProgressId = habit.progressId,
                 targetPairId = pairId,
                 text = "",
                 occurredAtMs = now,
                 daysFree = 7,
-                relapseCount = 0,
-                milestonesReached = encodeMilestoneDays(listOf(7)),
+                relapseCount = habit.totalRelapses,
+                milestonesReached = encodeMilestoneDays((achieved + 7).distinct().sorted()),
+                habitLabel = habit.targetIdentifier.take(EventPayload.MAX_HABIT_LABEL_LENGTH),
+                milestoneDay = 7,
                 coachingProgress = 0,
                 protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
                 schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,

@@ -33,6 +33,7 @@ import com.example.myexodus.data.db.entity.decodeMilestoneDays
 import com.example.myexodus.recovery.RecoveryMirror
 import com.example.myexodus.streaks.StreakTimer
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -44,15 +45,19 @@ import kotlinx.coroutines.sync.withLock
  * on an enforcement path).
  *
  * Per run: create chain events for attempts not yet linked (reconcile — heals the §6
- * attempt-first/cross-DB ordering, cold signing window, or a crash between event creation
- * and the link write), advance the Step 11 chain-repair protocol (escalations + due
- * SyncRequests, before the drain so a fresh request ships this pass — the responder side
- * runs inline in the pull's handler), drain the outbox into the partner's mailbox, pull
- * this device's own mailbox. Steps are independent — a drain failure never skips the pull.
+ * attempt-first/cross-DB ordering, cold signing window, or — for activity and monitoring
+ * rows, whose wire ids anchor them — a crash between event creation and the link write),
+ * advance the Step 11 chain-repair protocol (escalations + due SyncRequests, before the
+ * drain so a fresh request ships this pass — the responder side runs inline in the pull's
+ * handler), drain the outbox into the partner's mailbox, pull this device's own mailbox.
+ * Steps are independent — a drain failure never skips the pull. Passes are serialized
+ * ([syncMutex]); only one reconcile ever runs at a time.
  *
- * Signing is best-effort: the biometric auth window (NFR4, 900s) gates [AccountabilitySigner];
- * when it is cold the events stay unlinked and the next run with a warm window delivers them.
- * No biometric prompt is ever shown from background work.
+ * Signing is gated by the biometric auth window (NFR4, 900s): when it is cold the events stay
+ * unlinked, and the pass reports [SyncReport.signingBlocked]. No prompt is ever raised from
+ * background work — the foreground owns the heal (ADR #216): it raises the signing prompt and
+ * re-runs the pass. Without that heal a cold window never became warm on its own, so queued
+ * partner-visible rows sat undelivered indefinitely (rig-proven 2026-10-23).
  */
 class PartnerSyncCoordinator(
     private val enrollmentDao: EnrollmentDao,
@@ -82,6 +87,8 @@ class PartnerSyncCoordinator(
     private val checkRejections: suspend (pairId: String, partnerUid: String) -> Int = { _, _ -> 0 },
     /** OPD #30: drop reachability flags for pairings this device no longer holds. */
     private val pruneReachability: (activePairIds: Set<String>) -> Unit = {},
+    /** OPD #30: a recorded identity rotation marks every held pairing as gone. */
+    private val consumeIdentityRotation: (activePairIds: Set<String>) -> Unit = {},
     /** Step 7 WorkManager fallback (§4.7): the pass is the 15-minute cadence, so the heartbeat
      *  rides every paired run. It runs only while paired — no relationship, nothing to report —
      *  and the client enforces its own 15-minute window. */
@@ -112,7 +119,26 @@ class PartnerSyncCoordinator(
          *  card — re-read on it; without it a shred on device B left B's page showing the
          *  erased data until the next manual navigation (owner-observed 2026-10-01). */
         val unpairAdvanced: Boolean = false,
+        /** This pass stopped reconcile on a cold §8.1 signing window with partner-visible
+         *  rows still queued (ADR #216). Only a user-authenticated prompt can warm the key,
+         *  and background work may never raise one — so the foreground owns the heal: the
+         *  pass reports the block and callers with an Activity prompt + re-run. Without this
+         *  flag the report read `eventsLinked=0` and every caller treated the queue as
+         *  drained, which is exactly how partner Activity stayed empty while rows piled up
+         *  (rig-proven 2026-10-23: pendingForPair=1, drained=true, nothing sent). */
+        val signingBlocked: Boolean = false,
     )
+
+    /** Reconcile's own tally: rows linked this pass, and whether it had to stop early because
+     *  the signing key refused a cold window (the stop leaves the remaining rows pending). */
+    private data class ReconcileOutcome(val linked: Int, val coldWindow: Boolean)
+
+    /** Pass-level mutual exclusion: the periodic worker, an FCM wake, a foreground sync and an
+     *  activity-emitted signal can all call [syncOnce] at once, and reconcile's pending read is
+     *  a snapshot — two passes that both saw the same unlinked rows would each sign a copy.
+     *  Device-proven duplicate partner alerts (2026-10-22 rig): one milestone row became three
+     *  chain events, one message row two. Serializing makes every later pass read post-link. */
+    private val syncMutex = Mutex()
 
     /** [wakeMessageId] carries the FCM wake's own message id (null on periodic/deleted-messages
      *  runs): the pull handles it first so an out-of-order arrival cannot be missed by the
@@ -122,8 +148,15 @@ class PartnerSyncCoordinator(
      *  users), and every one of them syncs — the single-enrollment `firstOrNull()` this loop
      *  replaced was OPD #15's "second pairing silently half-works" gap. Per-pair steps are
      *  independent; one pair's failure never skips another's. The report aggregates the pass
-     *  (counters summed, [SyncReport.uidsResolved] true only when every pair resolved). */
-    suspend fun syncOnce(wakeMessageId: String? = null): SyncReport {
+     *  (counters summed, [SyncReport.uidsResolved] true only when every pair resolved).
+     *
+     *  Serialized by [syncMutex]: overlapping triggers queue behind the running pass instead of
+     *  reconciling from the same pre-link snapshot. */
+    suspend fun syncOnce(wakeMessageId: String? = null): SyncReport = syncMutex.withLock {
+        syncOnceLocked(wakeMessageId)
+    }
+
+    private suspend fun syncOnceLocked(wakeMessageId: String?): SyncReport {
         val unpairAdvanced = runCatching { resumeUnpairs() }
             .onFailure { Log.w(TAG, "unpair resume failed", it) }
             .getOrDefault(false)
@@ -135,6 +168,12 @@ class PartnerSyncCoordinator(
             .onFailure { Log.w(TAG, "activity sweep failed", it) }
         runCatching { pruneReachability(enrolledPairIds) }
             .onFailure { Log.w(TAG, "reachability prune failed", it) }
+        // A rotated identity is a member of no pairing, so every enrollment is certainly gone —
+        // marked here, not at the sign-in site, because push registration can rotate before the
+        // pairs are known. Runs with no enrollments too: a marker left behind would brand a
+        // pairing made after the rotation.
+        runCatching { consumeIdentityRotation(enrolledPairIds) }
+            .onFailure { Log.w(TAG, "identity rotation marking failed", it) }
         if (enrollments.isEmpty()) {
             // Unpaired: attempts stay local (§6 attempt log is the record) — but the unpair's
             // own tail (ack poll, confirmation) still ran above and must reach the UI.
@@ -161,6 +200,7 @@ class PartnerSyncCoordinator(
                 rotatedKeyEpoch = one.rotatedKeyEpoch ?: report.rotatedKeyEpoch,
                 rejectionsFound = report.rejectionsFound + one.rejectionsFound,
                 unpairAdvanced = report.unpairAdvanced || one.unpairAdvanced,
+                signingBlocked = report.signingBlocked || one.signingBlocked,
             )
         }
         return report.copy(uidsResolved = resolved == enrollments.size)
@@ -197,7 +237,11 @@ class PartnerSyncCoordinator(
             .getOrNull()
         if (rotated != null) Log.i(TAG, "session key rotated to epoch $rotated")
 
-        val linked = reconcileEvents(enrollment.pairId, enrollment.createdAtEpochMillis, enrollment.mySenderKeyId)
+        val reconcile = reconcileEvents(
+            enrollment.pairId,
+            enrollment.createdAtEpochMillis,
+            enrollment.mySenderKeyId,
+        )
 
         // Step 11 before the drain: a request created now is delivered by this same pass.
         val repairs = runCatching { repairPass(enrollment.pairId) }
@@ -234,7 +278,7 @@ class PartnerSyncCoordinator(
         return SyncReport(
             enrolled = true,
             uidsResolved = true,
-            eventsLinked = linked,
+            eventsLinked = reconcile.linked,
             drained = drained,
             drainedCount = drainedCount,
             pulledCount = pulled?.appended ?: 0,
@@ -246,6 +290,7 @@ class PartnerSyncCoordinator(
             // in the pull path): the UI must repaint onto the termination card even though
             // pulledCount stays 0 on the deletion wake path (owner-observed 2026-10-01).
             unpairAdvanced = pulled?.deletionRequested == true,
+            signingBlocked = reconcile.coldWindow,
         )
     }
 
@@ -273,8 +318,8 @@ class PartnerSyncCoordinator(
      *  only while this pair shares availability and floored at that switch's enable watermark.
      *  The chain itself is the link ([ChainStateStore.hasEvent]), so there is no link write —
      *  a crash between append and here is healed as a Duplicate on the next pass. */
-    private suspend fun reconcileEvents(pairId: String, sinceMs: Long, senderKeyId: String): Int {
-        val store = storeFactory.open() ?: return 0
+    private suspend fun reconcileEvents(pairId: String, sinceMs: Long, senderKeyId: String): ReconcileOutcome {
+        val store = storeFactory.open() ?: return ReconcileOutcome(0, coldWindow = false)
         val sharingDao = store.pairSharingDao()
         val streakConsent = sharingDao.streakForPair(pairId)
         val consentByHabit = streakConsent.associateBy { it.habitProgressId }
@@ -287,7 +332,7 @@ class PartnerSyncCoordinator(
                 when (val emit = emitActivity(pairId, "attempt ${attempt.id}", eventText(attempt))) {
                     is Emit.Created -> { attempts.linkEvent(attempt.id, pairId, emit.sequence); linked++ }
                     Emit.Duplicate, Emit.Skip -> Unit
-                    Emit.Stop -> return linked
+                    Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
                 }
             }
         }
@@ -298,7 +343,7 @@ class PartnerSyncCoordinator(
                 when (val emit = emitActivity(pairId, "session ${session.id}", RecoveryMirror.text(session.technique, session.state))) {
                     is Emit.Created -> { sessions.linkEvent(session.id, pairId, emit.sequence); linked++ }
                     Emit.Duplicate, Emit.Skip -> Unit
-                    Emit.Stop -> return linked
+                    Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
                 }
             }
         }
@@ -310,6 +355,15 @@ class PartnerSyncCoordinator(
             .mapNotNull { store.habitProgressDao().getById(it.habitProgressId) }
             .sortedBy { it.targetIdentifier.lowercase() }
         for (row in activity.pendingForPair(pairId, sinceMs, RECONCILE_BATCH)) {
+            // Crash-window heal: the row's event is already on the chain but its link write
+            // never landed. Re-signing would append a SECOND copy under a new sequence, and
+            // the receiver has no per-activity dedupe — it would show the alert twice.
+            val chainedSequence = chain.sequenceForEvent(pairId, senderKeyId, row.eventId)
+            if (chainedSequence != null) {
+                activity.linkEvent(row.eventId, pairId, chainedSequence)
+                linked++
+                continue
+            }
             val payload = payloadFor(store, row, consentByHabit[row.habitProgressId], profileConsent, visibleHabits)
             if (payload == null) {
                 // Structurally undeliverable for this pair (its anchor vanished between the
@@ -322,7 +376,7 @@ class PartnerSyncCoordinator(
             when (val emit = emitPayload(pairId, "activity ${row.eventId}", payload)) {
                 is Emit.Created -> { activity.linkEvent(row.eventId, pairId, emit.sequence); linked++ }
                 Emit.Duplicate, Emit.Skip -> Unit
-                Emit.Stop -> return linked
+                Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
             }
         }
         // Plans (ADR #193): the plan rows ARE the outbox. A pending flag marks "this pair owes
@@ -339,7 +393,7 @@ class PartnerSyncCoordinator(
                     linked++
                 }
                 Emit.Skip -> Unit
-                Emit.Stop -> return linked
+                Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
             }
         }
         for (plan in plans.pendingProgressForPair(pairId, RECONCILE_BATCH)) {
@@ -350,7 +404,7 @@ class PartnerSyncCoordinator(
                     linked++
                 }
                 Emit.Skip -> Unit
-                Emit.Stop -> return linked
+                Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
             }
         }
         if (profileConsent?.shareAvailability == true) {
@@ -366,11 +420,11 @@ class PartnerSyncCoordinator(
                     // so it owes nothing further.
                     is Emit.Created -> linked++
                     Emit.Duplicate, Emit.Skip -> Unit
-                    Emit.Stop -> return linked
+                    Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
                 }
             }
         }
-        return linked
+        return ReconcileOutcome(linked, coldWindow = false)
     }
 
     /** The author's whole plan at its current revision; task ids stay stable across edits so
@@ -675,14 +729,34 @@ class PairUidResolver(
     suspend fun ensureUid(): String? = SIGN_IN_LOCK.withLock {
         AppCheckInstaller.install(appContext)
         val auth = FirebaseAuth.getInstance()
-        val user = auth.currentUser
-            ?: runCatching { auth.signInAnonymously().await() }
-                .onFailure { Log.w(TAG, "anonymous sign-in failed", it) }
-                .getOrNull()
-                ?.user
+        var user = auth.currentUser ?: signIn(auth)
+        // A dead refresh token leaves `currentUser` set while every authenticated call fails
+        // forever — the SDK never signs itself out of that state, so nothing recovers and the
+        // OPD #30 card never earns its verdict (device-proven 2026-10-23: both emulator auth
+        // accounts vanished; an hour of 401s, no rotation). The probe is a cached-token read on
+        // the happy path; only a definitive auth rejection rotates the identity, never a
+        // network failure (ADR #125). The fresh uid is a member of no existing pairing, so the
+        // rotation is recorded for [PartnerSyncCoordinator] to raise the re-pair card from —
+        // certain loss, no attestation check needed.
+        if (user != null && identityRejected(user)) {
+            Log.w(TAG, "identity abandoned by the server — minting a new anonymous uid")
+            auth.signOut()
+            user = signIn(auth)
+            if (user != null) reachability.markIdentityRotated(System.currentTimeMillis())
+        }
         if (user == null) Log.w(TAG, "no uid — sign-in unavailable")
         user?.uid
     }
+
+    private suspend fun signIn(auth: FirebaseAuth): FirebaseUser? = runCatching {
+        auth.signInAnonymously().await()
+    }
+        .onFailure { Log.w(TAG, "anonymous sign-in failed", it) }
+        .getOrNull()
+        ?.user
+
+    private suspend fun identityRejected(user: FirebaseUser): Boolean =
+        isDeadIdentity(runCatching { user.getIdToken(false).await() }.exceptionOrNull())
 
     suspend fun resolve(pairId: String): Pair<String, String>? {
         val uid = ensureUid() ?: return null

@@ -46,10 +46,15 @@ import java.security.PrivateKey
 import java.security.PublicKey
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -97,6 +102,9 @@ class PartnerSyncCoordinatorTest {
     private var rejectionsToReport = 0
     private val stepOrder = mutableListOf<String>()
     private val reachabilityPrunes = mutableListOf<Set<String>>()
+
+    /** OPD #30: the enrolled set each pass offered to the identity-rotation consumer. */
+    private val identityRotations = mutableListOf<Set<String>>()
 
     /** Step 8: every availability-consent convergence this pass attempted. */
     private val consentCalls = mutableListOf<Pair<String, Boolean>>()
@@ -192,6 +200,10 @@ class PartnerSyncCoordinatorTest {
     @Test
     fun coldWindow_defersEventCreationButStillDrains() = runTest {
         enroll()
+        // Consented queue on purpose: without it the attempt is filtered by the consent gate
+        // before signing is ever attempted, and the test would pass without exercising the
+        // cold window at all (the 2026-10-23 rig found exactly that shape of false green).
+        seedConsent(shareCheckins = true)
         recorder.recordBlocked("r-1", "com.a")
         coordinator = coordinator(coldSigner())
 
@@ -201,6 +213,22 @@ class PartnerSyncCoordinatorTest {
         assertEquals("cold window: attempt stays pending, delivered next run", 1, pending(pairId).size)
         assertTrue("drain is independent of the signing window", report.drained)
         assertEquals(3, report.pulledCount)
+        // ADR #216: the caller must be able to tell "nothing to send" from "stopped at the
+        // signing gate" — before this flag the report was indistinguishable and every caller
+        // read the queue as drained (rig-proven zero Activity, 2026-10-23).
+        assertTrue("the stop reason rides the report", report.signingBlocked)
+    }
+
+    @Test
+    fun warmWindow_reportsNoSigningBlock() = runTest {
+        enroll()
+        seedConsent(shareCheckins = true)
+        recorder.recordBlocked("r-1", "com.a")
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(1, report.eventsLinked)
+        assertFalse(report.signingBlocked)
     }
 
     @Test
@@ -537,6 +565,7 @@ class PartnerSyncCoordinatorTest {
         assertEquals(0, report.eventsLinked)
         assertEquals(1, factory.open()!!.partnerActivityDao().pendingForPair(pairId, sinceMs = 0L, limit = 10).size)
         assertNull(factory.open()!!.partnerActivityDao().linkSequence("ev-cold", pairId))
+        assertTrue("activity rows stopped at the gate report the block (ADR #216)", report.signingBlocked)
     }
 
     /**
@@ -645,6 +674,60 @@ class PartnerSyncCoordinatorTest {
         assertNull("orphan projection pruned", dao.projection("pair-gone"))
     }
 
+    /**
+     * Device-proven 2026-10-22 (rig): the milestone row became THREE chain events because
+     * several triggers (worker, wake, foreground, activity signal) ran reconcile from the same
+     * pre-link snapshot. Passes are now serialized, so the second pass reads post-link.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun overlappingPasses_serialize_soTheSameRowIsNeverSignedTwice() = runTest {
+        enroll()
+        seedConsent(shareStreak = true)
+        insertActivity(eventId = "ev-race", kind = EventPayload.TYPE_STREAK_UPDATED, habitProgressId = TEST_HABIT_ID)
+        val gate = CompletableDeferred<Unit>()
+        coordinator = coordinator(warmSigner(), drainGate = gate)
+
+        val first = launch { coordinator.syncOnce() }
+        advanceUntilIdle() // first pass is parked in its drain, past reconcile
+        val second = async { coordinator.syncOnce() }
+        advanceUntilIdle() // second pass parks on the pass mutex
+        gate.complete(Unit)
+        first.join()
+        second.await()
+
+        assertEquals("one row, one signed event", 1, store.chainFor(pairId).size)
+        assertEquals(1L, factory.open()!!.partnerActivityDao().linkSequence("ev-race", pairId))
+    }
+
+    /**
+     * The reconcile docstring promises a crash between event creation and the link write heals
+     * as a duplicate. For activity rows it could not: the re-sign produced a new envelope under
+     * a new sequence, so the receiver (no per-activity dedupe) showed the alert twice. The wire
+     * id anchors the existing chain row, so the heal is a relink.
+     */
+    @Test
+    fun crashBetweenAppendAndLink_isHealedByRelinking_notByASecondEvent() = runTest {
+        enroll()
+        seedConsent(shareStreak = true)
+        insertActivity(eventId = "ev-heal", kind = EventPayload.TYPE_STREAK_UPDATED, habitProgressId = TEST_HABIT_ID)
+        val signature = Signature.getInstance("SHA256withECDSA").apply { initSign(mySigning.private) }
+        assertTrue(
+            eventCreator(warmSigner()).create(
+                pairId,
+                EventPayload(type = EventPayload.TYPE_STREAK_UPDATED, text = ""),
+                signature,
+                eventId = "ev-heal",
+            ) is EventCreator.CreateResult.Created,
+        )
+
+        val report = coordinator.syncOnce()
+
+        assertEquals("the orphan is linked, not re-signed", 1, report.eventsLinked)
+        assertEquals("the chain still holds exactly one copy", 1, store.chainFor(pairId).size)
+        assertEquals(1L, factory.open()!!.partnerActivityDao().linkSequence("ev-heal", pairId))
+    }
+
     /** The gone pair's rows are pruned even when the unpair was the *last* one — the sweep
      *  deliberately runs before the empty-enrollment early return. */
     @Test
@@ -676,6 +759,25 @@ class PartnerSyncCoordinatorTest {
         coordinator.syncOnce()
 
         assertEquals(setOf<String>(), reachabilityPrunes.single())
+    }
+
+    @Test
+    fun identityRotation_isConsumedWithExactlyTheEnrolledPairIds() = runTest {
+        enroll()
+        enroll(pairId = "pair-two")
+
+        coordinator.syncOnce()
+
+        assertEquals(setOf(pairId, "pair-two"), identityRotations.single())
+    }
+
+    @Test
+    fun identityRotation_stillConsumesTheMarkerWithNoEnrollmentLeft() = runTest {
+        // The marker must never survive an unpaired pass: left behind, it would brand the next
+        // pairing — made after the rotation — as already dead.
+        coordinator.syncOnce()
+
+        assertEquals(setOf<String>(), identityRotations.single())
     }
 
     // ---- Step 7: the monitoring-snapshot queue (§8.9 / §7 Step 7) ----
@@ -1073,26 +1175,19 @@ class PartnerSyncCoordinatorTest {
         pullResult: FirestoreMailboxReceiver.PullResult = FirestoreMailboxReceiver.PullResult(appended = 3),
         resumeUnpairs: suspend () -> Boolean = { false },
         drainThrowsFor: String? = null,
+        drainGate: CompletableDeferred<Unit>? = null,
         checkIn: suspend () -> Unit = {},
         syncConsent: suspend (String, Boolean) -> Boolean = { _, _ -> true },
     ) = PartnerSyncCoordinator(
         enrollmentDao = db.enrollmentDao(),
         storeFactory = factory,
-        creator = EventCreator(
-            store = store,
-            enrollmentDao = db.enrollmentDao(),
-            cekDerivation = cekDerivation,
-            eventCipher = cipher,
-            signer = signer,
-            epochStore = IdentityEpochStore(db.identityEpochDao()),
-            agreementPrivateKey = { myAgreement.private },
-            sessionKeyManager = SessionKeyManager(store),
-        ),
+        creator = eventCreator(signer),
         chain = store,
         signer = signer,
         resolveUids = { pId -> uids[pId] },
         drainOutbox = { pId, authorUid, partnerUid ->
             stepOrder += "drain"
+            drainGate?.await()
             if (pId == drainThrowsFor) throw IllegalStateException("disk full")
             drainCalls += Triple(pId, authorUid, partnerUid)
             drain
@@ -1109,6 +1204,7 @@ class PartnerSyncCoordinatorTest {
         },
         repairPass = { repairCalls++; 2 },
         pruneReachability = { reachabilityPrunes += it },
+        consumeIdentityRotation = { identityRotations += it },
         resumeUnpairs = resumeUnpairs,
         checkIn = checkIn,
         syncAvailabilityConsent = { pId, enabled ->
@@ -1134,6 +1230,17 @@ class PartnerSyncCoordinatorTest {
             ),
         )
     }
+
+    private fun eventCreator(signer: AccountabilitySigner) = EventCreator(
+        store = store,
+        enrollmentDao = db.enrollmentDao(),
+        cekDerivation = cekDerivation,
+        eventCipher = cipher,
+        signer = signer,
+        epochStore = IdentityEpochStore(db.identityEpochDao()),
+        agreementPrivateKey = { myAgreement.private },
+        sessionKeyManager = SessionKeyManager(store),
+    )
 
     private fun warmSigner() = SignerFake(privateKey = mySigning.private)
 

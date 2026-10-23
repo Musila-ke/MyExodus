@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BugReport
+import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Schedule
@@ -43,6 +44,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.R
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
+import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.usage.AccountingOutage
 import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.domainusage.DomainUsageEngine
@@ -57,6 +59,7 @@ import com.example.myexodus.settings.requestBatteryExemption
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.ui.BrandMark
 import com.example.myexodus.ui.WindowWidth
+import com.example.myexodus.ui.recovery.CoachingPlanScreen
 import com.example.myexodus.ui.recovery.RecoveryPrefs
 import com.example.myexodus.ui.recovery.RiskWindowsScreen
 import com.example.myexodus.ui.rememberWindowWidth
@@ -79,6 +82,8 @@ fun SettingsScreen(
     widgetSettings: WidgetSettings,
     onWidgetSettingsChanged: () -> Unit,
     planRepository: RecoveryPlanRepository,
+    /** The coaching editor resolves the active profile through this (Req 20 / v3 W3). */
+    rulesRepository: RulesRepository,
     recoveryPrefs: RecoveryPrefs,
     domainUsageEngine: DomainUsageEngine,
     accountingOutageSource: AccountingOutageSource,
@@ -150,6 +155,13 @@ fun SettingsScreen(
                 modifier = modifier,
             )
         }
+        PANE_COACHING_PLAN -> CoachingPlanScreen(
+            planRepository = planRepository,
+            rulesRepository = rulesRepository,
+            prefs = recoveryPrefs,
+            onBack = { pane = null },
+            modifier = modifier,
+        )
         PANE_RISK_WINDOWS -> RiskWindowsScreen(
             planRepository = planRepository,
             prefs = recoveryPrefs,
@@ -175,6 +187,7 @@ fun SettingsScreen(
 }
 
 private const val PANE_PROTECTION = "protection"
+private const val PANE_COACHING_PLAN = "coaching_plan"
 private const val PANE_RISK_WINDOWS = "risk_windows"
 private const val PANE_ABOUT = "about"
 
@@ -263,6 +276,14 @@ private fun SettingsIndex(
                         discreet = enabled
                         onWidgetSettingsChanged()
                     },
+                )
+
+                RowDivider()
+                IndexRow(
+                    icon = Icons.Outlined.Checklist,
+                    title = stringResource(R.string.recovery_plan_editor_title),
+                    subtitle = stringResource(R.string.recovery_plan_editor_intro),
+                    onClick = { onOpenPane(PANE_COACHING_PLAN) },
                 )
 
                 RowDivider()

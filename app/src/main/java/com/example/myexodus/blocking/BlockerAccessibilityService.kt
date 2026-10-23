@@ -118,6 +118,9 @@ class BlockerAccessibilityService : AccessibilityService() {
         if (BuildConfig.DEBUG) {
             Log.i(TAG, "config change: newWidthDp=${newConfig.screenWidthDp} serviceWidthDp=${resources.configuration.screenWidthDp}")
         }
+        // A shown wall keeps its show-time window geometry; follow the rotation so the
+        // card does not stay laid out for the old orientation (S49-E3).
+        overlay.refreshDisplayBounds()
     }
 
     override fun onServiceConnected() {
