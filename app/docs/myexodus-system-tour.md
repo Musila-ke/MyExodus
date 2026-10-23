@@ -266,10 +266,12 @@ FCM.
   the backstop (ADR #145); the update also runs on protection changes. The 10-child Glance cap
   is a hard constraint. Circle content includes a relapse circle (v2.2) and the streak never
   renders 0 (ADR #128).
-- **Insights** (`insights/`): last seven **local** days, one bounded store pass over attempt log,
-  usage ledger day totals (credit kinds only), recovery sessions and habit records. Colour is
-  never the only encoding; empty sections say so; store failure renders Unavailable with retry,
-  never zeros. It is local-only and transmits nothing. ADR #210.
+- **Insights** (`insights/`): last seven **local** days (today + the 6 before it, stated on the
+  page), one bounded store pass over attempt log, usage ledger day totals (credit kinds only),
+  recovery sessions and habit records. The usage card is "Time in limited apps" — the ledger
+  credits only apps with a daily limit; website-limit usage lives in `domainusage/` and is not
+  shown here. Colour is never the only encoding; empty sections say so; store failure renders
+  Unavailable with retry, never zeros. It is local-only and transmits nothing. ADR #210, #218.
 
 ---
 

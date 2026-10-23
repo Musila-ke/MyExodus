@@ -1004,6 +1004,7 @@
     <string name="partner_ceremony_title_join">Join a partnership</string>
     <string name="partner_ceremony_back_title_compare">Compare the code</string>
     <string name="partner_ceremony_back_title_failed">Pairing didn’t finish</string>
+    <string name="partner_ceremony_back_title_paired">You’re paired</string>
     <string name="partner_ceremony_sign_title">Approve pairing</string>
     <string name="partner_ceremony_name_label">Your name</string>
     <string name="partner_ceremony_name_helper">Shown to your partner so they know who they’re supporting.</string>
@@ -1181,7 +1182,7 @@
 
     <!-- Insights (owner task #22): last-7-days reading of the local journals -->
     <string name="insights_title">Insights</string>
-    <string name="insights_subtitle">What MyExodus counted on this phone over the last 7 days.</string>
+    <string name="insights_subtitle">What MyExodus counted on this phone — today and the 6 days before it.</string>
     <string name="insights_loading">Reading your journals…</string>
     <string name="insights_unavailable_title">Your journals won\'t open right now</string>
     <string name="insights_unavailable_body">The encrypted database didn\'t open, so there\'s nothing honest to show. Your data is safe — try again.</string>
@@ -1190,29 +1191,30 @@
     <string name="insights_empty_body">Once blocking, screen time, urge practice, or a streak records something, it shows up here. Nothing leaves this phone.</string>
     <string name="insights_blocked_label">Times blocked</string>
     <string name="insights_overrides_label">Overrides</string>
-    <string name="insights_stat_caption">Last 7 days</string>
+    <string name="insights_stat_caption">Last 7 days, ending today</string>
     <string name="insights_blocks_title">Blocked and overridden</string>
     <string name="insights_blocks_caption">One bar per day — blocked attempts on top, overrides below.</string>
-    <string name="insights_blocks_empty">No blocked attempts or overrides this week.</string>
+    <string name="insights_blocks_empty">No blocked attempts or overrides in the last 7 days.</string>
     <string name="insights_legend_blocked">Blocked</string>
     <string name="insights_legend_overrides">Overrides</string>
-    <string name="insights_usage_title">Screen time</string>
-    <string name="insights_usage_caption">Today: %1$s</string>
-    <string name="insights_usage_empty">No credited screen time this week.</string>
+    <string name="insights_usage_title">Time in limited apps</string>
+    <string name="insights_usage_caption">Total for today and the 6 days before it. Today: %1$s.</string>
+    <string name="insights_usage_empty">No counted time in limited apps in the last 7 days.</string>
     <string name="insights_time_where_title">Where the time went</string>
+    <string name="insights_time_where_caption">Apps with a daily limit, today and the 6 days before it.</string>
     <string name="insights_most_blocked_title">What you tried most</string>
     <string name="insights_recovery_title">Urge practice</string>
     <string name="insights_recovery_completed">Techniques completed</string>
     <string name="insights_recovery_logged">Urges logged only</string>
     <string name="insights_recovery_abandoned">Sessions abandoned</string>
     <string name="insights_recovery_interrupted">Sessions interrupted</string>
-    <string name="insights_recovery_empty">No urge sessions this week.</string>
+    <string name="insights_recovery_empty">No urge sessions in the last 7 days.</string>
     <string name="insights_habits_title">Every streak</string>
     <string name="insights_habits_empty">No streaks yet.</string>
     <string name="insights_habit_no_best">No best run yet</string>
     <string name="insights_attempt_bar_description">%1$s — blocked: %2$d, overrides: %3$d</string>
     <string name="insights_attempt_bar_none">%1$s — nothing counted</string>
-    <string name="insights_usage_bar_description">%1$s — %2$s counted</string>
+    <string name="insights_usage_bar_description">%1$s — %2$s in limited apps</string>
     <plurals name="insights_recovery_all_time">
         <item quantity="one">%d urge session recorded in total</item>
         <item quantity="other">%d urge sessions recorded in total</item>

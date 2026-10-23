@@ -43,6 +43,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -389,6 +390,10 @@ fun PairingCeremonyScreen(
                 when (step) {
                     is CeremonyStep.Failed -> R.string.partner_ceremony_back_title_failed
                     is CeremonyStep.Compare -> R.string.partner_ceremony_back_title_compare
+                    // Owner report 2026-10-23: after success the header still read "Invite a
+                    // partner" above a card saying "You're paired". The row names the screen;
+                    // once paired, that name is the outcome, not the entry point.
+                    is CeremonyStep.Paired -> R.string.partner_ceremony_back_title_paired
                     else -> if (mode == CeremonyMode.INVITE) {
                         R.string.partner_ceremony_title_invite
                     } else {
@@ -689,7 +694,7 @@ private fun ShowingCode(
     // The inviter waits alone with no view of the other phone; a live countdown is the only
     // honest signal of how long the partner still has to act (owner report 2026-10-23).
     var minutesLeft by remember(expiresAtEpochMillis) {
-        mutableStateOf(minutesUntil(expiresAtEpochMillis))
+        mutableLongStateOf(minutesUntil(expiresAtEpochMillis))
     }
     LaunchedEffect(expiresAtEpochMillis) {
         while (true) {

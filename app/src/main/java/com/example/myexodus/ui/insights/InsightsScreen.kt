@@ -173,7 +173,10 @@ private fun ReadyContent(snapshot: InsightsSnapshot, habit: HabitState?) {
     }
 
     if (snapshot.topPackages.isNotEmpty()) {
-        SectionCard(title = stringResource(R.string.insights_time_where_title)) {
+        SectionCard(
+            title = stringResource(R.string.insights_time_where_title),
+            caption = stringResource(R.string.insights_time_where_caption),
+        ) {
             val max = snapshot.topPackages.first().creditedMs
             for (pkg in snapshot.topPackages) {
                 PackageRow(pkg, max)

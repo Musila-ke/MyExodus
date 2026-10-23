@@ -952,8 +952,16 @@ object AccountabilityModule {
             },
             ack = { recipientUid, messageId ->
                 PushInstallationRegistrar.installationIdOf()?.let { installationId ->
-                    FirestoreSchema.mailboxAckDocument(firestore, recipientUid, messageId, installationId)
-                        .set(FirestoreSchema.mailboxAckData()).await()
+                    try {
+                        FirestoreSchema.mailboxAckDocument(firestore, recipientUid, messageId, installationId)
+                            .set(FirestoreSchema.mailboxAckData()).await()
+                    } catch (e: FirebaseFirestoreException) {
+                        // The ack rule is create-only (AD-18b). A denial therefore usually means
+                        // the ack already exists — the processed-but-unacked crash window's
+                        // re-delivery — and is "done", not a failure (S49-D3-3). Real transport
+                        // errors still propagate to the caller's best-effort log.
+                        if (e.code != FirebaseFirestoreException.Code.PERMISSION_DENIED) throw e
+                    }
                 }
             },
             // Step 13: approval messages own their notifications (ApprovalFlow posts them with

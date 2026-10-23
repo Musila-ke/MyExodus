@@ -11,7 +11,7 @@ pass; carried verdicts are labelled as carried.
 
 **If the session was cut (power loss), read this first, then the task list, then continue.**
 
-- **State at last update (2026-10-23 17:15): #55 CLOSED — all eight consented partner-activity
+- **State at last update (2026-10-23 late): #55 CLOSED — all eight consented partner-activity
   categories proven on the two-device rig over the real rails.** Streak update, relapse,
   milestone day 7 (the owner-sanctioned `PartnerJourneySeedInstrumentedTest` supplies the row —
   a real 7-day wait cannot fit a session — and the rest of the pipeline is production), message,
@@ -24,10 +24,16 @@ pass; carried verdicts are labelled as carried.
   the enrollment row carries the current pair (created 1792758571090); it is restored UI state,
   corrected on the next render — no code change without evidence. Cleanup done: TEMP
   `PartnerRigDiagnosticsTest.kt` and `PartnerActivityDao.journalRecent` deleted; V1.md updated
-  with the proof paragraph; vault + memory synced. **Next:** #43 close-out (full JVM +
-  `:app:lintDebug` ALONE, commit ADRs #212–#217, install the latest APK on the X6532 per the
-  owner's 2026-10-23 ask), then #60, #54, #56/#58 (owner decision due), #57, #47, the remaining
-  #49 adversarial-pairing legs with unpair LAST, #52, #53; #36 auth-blocked.
+  with the proof paragraph; vault + memory synced. **Update 2026-10-23 late:** #54 CLOSED
+  (Insights period/date semantics, ADR #218), #59 CLOSED (pairing clock-skew stall, ADR #215),
+  #60 CLOSED (plan-fidelity matrix incl. the new plan-publish notification test — see the #60
+  section below), **#47 CLOSED** (stress/adversarial evidence map — see the #47 section below),
+  **#52/#53 CLOSED** (monitoring re-check; two-device runbook), and S49-D3-3 FIXED (ack replay
+  is read as "already acked"). The ceremony header after success now names the outcome instead
+  of "Invite a partner" (owner report, fixed). **Next:** #43 close-out (full JVM +
+  `:app:lintDebug` ALONE, commit, rebuild + `install -r` the latest APK on the X6532), close
+  #49's ledger against the runbook routing (S49-D3-1/2 → OPD #40; adversarial-pairing device
+  legs blocked), then #56/#58 (owner decision due), #57; #36 auth-blocked.
 
 - **Owner mandate #2 (2026-10-22, tasks #48–#50):** two-device, real-user scenario sweep —
   partner notifications for uninstall / permission revocation / milestones / per-rule
@@ -1007,7 +1013,7 @@ and a block/override attempt emits none of them; there is no per-attempt partner
 partial). These are the escalation feature's scope, not bugs to patch silently inside this test
 pass.
 
-## #49 — Full real-user scenario sweep (owner mandate #2)
+## #49 — Full real-user scenario sweep (owner mandate #2) (complete — see close-out)
 
 Runs on the sanctioned API-37 AVD (`emulator-5554`) **after** the 84-cell matrix, starting from
 a wiped install (`pm clear com.example.myexodus`, never uninstall). Every scenario records its
@@ -1163,6 +1169,26 @@ both, epoch 2).
   read as "already done", but it is logged at WARN as `ack retry failed … PERMISSION_DENIED`
   even though the first ack exists (verified in Firestore). Harmless; consider DEBUG level or
   "already acked" wording so a healthy rig does not look like a rules failure.
+  **FIXED 2026-10-23:** the DI ack lambda now treats a create-only-rule `PERMISSION_DENIED` as
+  "already acked" (the same reading the drainer already used at lines 524-530) and only real
+  transport errors reach the handler's WARN. No retry behaviour changed; the 30-day cap still
+  bounds cleanup.
+
+**#49 close-out (2026-10-23).** Journeys A, B, C and E are PASS on the AVD with per-scenario
+evidence in the results table above (A1–A9, B1–B5, C1–C7, E1–E5); Journey D is PASS through two
+paired runs on the local rig, including the negative consent boundary (D6: nothing shared →
+nothing received) and the re-pair/delivery chain (D4/D5/D7). Findings closed by this sweep:
+**S49-E2-1** (clock round-trip defeated a daily limit — fixed in `UsageAccountingEngine` + ADR
+#212, re-proven on device), **S49-E3-1** (wall stayed landscape-wide after rotation — fixed in
+`OverlayController.refreshDisplayBounds`, device re-proven), plus **S49-D3-3** above. The VPN
+UDP-truncation and screen-off self-heal fixes (ADRs #186/#187) are device-proven in their own
+commits; they are not re-labelled as #49 findings here.
+**S49-D3-1/D3-2** (dead enrollment / identical roster captions) are a UX decision touching the
+shred/ack protocol — escalated to OPD #40 rather than changed silently. Adversarial pairing on
+real devices, real-FCM delivery and the pair-consuming bilateral unpair are PHYSICAL legs with
+no path on this rig (hardware attestation wall re-confirmed against the X6532 today); they are
+written out as legs 1–6 of `app/docs/blocked-two-device-runbook.md` and remain BLOCKED, never
+inferred from a JVM test.
 
 **Cloud Monitoring alert review (owner request, 2026-10-22 night)**
 
@@ -1171,7 +1197,120 @@ both, epoch 2).
 - **Root cause:** callable logs show `verifications {app: INVALID, auth: VALID}`, `Failed to validate AppCheck token … Decoding App Check token failed`, HTTP 401, `userAgent okhttp/4.12.0`, remote IP equal to this host's public IP. The paired **physical phone's debug build** has no registered App Check debug token (the console lists only four old emulator tokens; the fresh AVD generated `6da36980…`, exchange fails 403 "App attestation failed"), so Firebase's local interceptor substitutes a placeholder token and every callable is rejected before reaching our handler. The client is correct: `PartnerSyncCoordinator.syncOnce` early-returns before `checkIn()` when there are no enrollments (file line 154), so the unpaired AVD cannot be the caller; the AVD's own debug token is unregistered but it makes no live callables.
 - **Impact:** the PA heartbeat/availability path is silently degraded on the debug phone (auth still valid; no crash). Release builds use Play Integrity, so this is a debug-build operational gap, not a shipped-code defect.
 - **Fix:** register the phone's debug token when it is back on adb (read it from `DebugAppCheckProvider` logcat or set one explicitly), or stop background PA sync on a debug build with no token; add the release SHA-1 when release signing starts. Alert tuning (dedupe the policy's two conditions) is optional noise reduction, not the root fix.
-- **Final re-check:** task #52 re-queries `/alerts` + the error metrics after all work is done to see whether the sweep produced new incidents.
+- **Final re-check (2026-10-23, task #52):** 59 incidents listed, **57 CLOSED, 2 OPEN** —
+  both are the two conditions of the same policy, opened together at 16:03:29Z on 2026-10-23.
+  The error metrics behind them: **16 errors total in the 15:55–16:05Z window**, all on the same
+  two callables as the earlier diagnosis — `readPartnerStatus` 12, `submitHeartbeat` 4 — and
+  **zero errors after 16:05Z**. The two callables are the App Check-facing path; on the physical
+  X6532 the stored App Check token now shows `provider=play_integrity` with a fresh
+  `receivedAt` (16:16:55Z), and the failing window predates it. No new product defect: this is
+  the known debug-build attestation operational gap, and the R-03 pinned `ok` series is what
+  closes these incidents on the next successful observation (or the autoClose+24 h path).
+  The duplicate incident per event is the policy's two conditions — noise reduction only, not
+  a second fault ([gcp-api-recipe] alert semantics).
+
+## #60 — Plan fidelity: recent features incl. partner notifications (complete)
+
+**Mandate (owner, 2026-10-23).** "After we enter the code, the other device doesn't advance
+its page… do a plan fidelity check for all the features that we've built recently, including
+the notifying partners of certain issues like milestones, revocations, updates in coaching
+plans, deletion of coaching plans… everything." The check is code-first: each item is traced
+from its emitter through the journal/consent gate, the pair transport, the mailbox dispatch
+and the notification surface, then matched to the plan/ADR that specified it and to the
+test/device evidence that proves it. Deletion of coaching plans does not exist in the model
+(`PlanWire` has exactly `plan_published` and `plan_progress`; the owner acknowledged this),
+so it is recorded as not applicable rather than invented.
+
+| # | Feature | Plan / ADR requirement | Code path | Evidence | Verdict |
+|---|---|---|---|---|---|
+| 1 | Other device advances after code entry | ADR #215: poll outlives the creator's clock by 5 min; the server's `Denied` is the authority; every wait names whose phone owes the next tap | `PairingFlow.awaitPartner` + `PairingCeremonyScreen` + `PartnerScreen` EndedCard | `PairingAdversarialTest` row 11 mutation-proven; `PairingFlowTest` 32/0; `PairingFailureCopyTest` 6/0; two-AVD device run (creator 223 s fast, joiner accepted at T0+660 s, both advanced to the same SAS 51399 and "You're paired") | PASS — fixed under #59 |
+| 2 | Milestone notification | §4.6 / ADR #134: streak name, day count, when; generic lockscreen (FR-13) | `HabitRepository.kt:777` → `PartnerActivityJournal` (consent gate) → mailbox → `PartnerNotifications.notifyPartnerEvent` rich branch | `HabitRepositoryTest` journal row; `PartnerActivityJournalTest`; `PartnerNotificationsTest.milestone…`; rig 2026-10-23: day-7 seed → chain seq 3/4 → receiver "Days free 7 days, Milestones met 7" | PASS |
+| 3 | Relapse notification | ADR #134 copy contract | `HabitRepository.kt:847` → journal → mailbox → rich branch | `PartnerNotificationsTest` relapse v2 + wire-v1 degradation; rig: chain seq 2, receiver "Relapses logged 1" | PASS |
+| 4 | Streak update notification | §4.6 aggregate share | `HabitRepository.kt:484/741` → journal → mailbox → generic named copy | `PartnerSyncCoordinatorTest` streak case; rig: chain seq 1, receiver "Days free 1 day · Last shared 27m ago" | PASS |
+| 5 | Coaching step update | INV-13: count-only projection; the step text never leaves the author's device | `RecoveryPlanRepository.kt:107/122/132` → journal (gated on `shareRecovery`) → mailbox → generic copy; partner summary renders "Coaching items N" | `RecoveryPlanRepositoryTest` emitter; `PartnerActivityJournalTest` consent rows; rig: real if-then item → "Coaching items 1" | PASS — generic copy is the design, not a gap |
+| 6 | Partner plan published / edited | ADR #193 §6: alerts with the plan title, `onlyAlertOnce = false` so an edit re-alerts; `plan_progress` filtered out of the tray | `PlanWire.TYPE_PLAN_PUBLISHED` → `AccountabilityModule` notify lambda → `PartnerNotifications` plan branch | `PartnerPlanReceiverTest` 9; `PartnerPlanRepositoryTest` 7; `PlanWireCodecTest` 6; **new** `PartnerNotificationsTest.planPublished_namesThePlanTitle_andReAlertsOnEdit` (title/body, re-alert flag, generic public copy); two-device `plan_progress` delivery via the D7 rig leg (2026-10-23 01:15:56Z, "1 of 2 done") | PASS |
+| 7 | Plan progress | ADR #193 §3/§4: honored only at the author's matching revision; silent convergence signal | `PartnerPlanReceiver` applies at the held revision; `AccountabilityModule` filters it out of the tray | `PartnerPlanReceiverTest.progress…` rows | PASS (silent by design) |
+| 8 | Plan deletion | Not implemented — no deletion type exists | — | `PlanPayload.kt` defines only published/progress; ADR #193 honest limits | N/A (acknowledged) |
+| 9 | Partnership ended (unpair) | ADR #114 / deletion composition: capture the name before the shred, shred, then notify "ended when / erased" | `AccountabilityModule.onDeletionRequest` → `PartnerNotifications.notifyPartnershipEnded` | `PartnerNotificationsTest` ended-copy test; rig D4: bilateral erasure with both devices' ended states | PASS |
+| 10 | SOS nudge | SOS §8.17/FR-20: `partner_nudge` renders immediately from FCM, no Firestore read | `PartnerMessagingService` → `notifyPartnerNudge` | `PartnerNotificationsTest` nudge copy, tap extras, denied-permission no-op; `PartnerMessagingService` invalid-id refusal | PASS |
+| 11 | Approval request/decision | Step 16: own channel, own tag, approval not an event | `notifyApprovalRequest/Decision` | `PartnerNotificationsTest` 25 incl. cross-pair hash-collision test; ADR #217 | PASS |
+| 12 | Permission revocation / uninstall / rule-change alerts | Not part of the shipped partner-accountability contract; the escalation surface is the separately-noted next feature (`project_partner_accountability_escalation.md`, #56-#adjacent) | Monitoring-state events update the partner card snapshot; no tray alert | §8.4 / D5 rig run (2026-10-22): revocation left the event count unchanged, confirming no alert path | NOT BUILT — scoped as a future feature, not silently missing |
+| 13 | Notification identity/collisions | ADR #217: (tag, id) for entries, data URI for tap identity, channels audited distinct | `PartnerNotifications`/`NotificationTapTarget` | `PartnerNotificationsTest` collision pair; `StreakNotificationsTest`; `ProtectionNotificationsTest` | PASS |
+
+**Two-phone status (honest).** Production pairing with an emulator is impossible by design —
+`AttestationVerifier.kt:37` rejects `SecurityLevel.SOFTWARE` and the server pins Google
+hardware roots. Re-attempted today against the physical X6532: the phone rejected the AVD with
+"The other phone's security identity didn't pass verification." (expected; not an app defect).
+All two-device evidence above therefore comes from the sanctioned local rig (two AVDs +
+Firebase emulators, `ATTESTATION_STUB=1`, `PartnerTestKeys`) or the X6532 in single-device
+mode; a production-attestation two-phone leg remains blocked on a second physical phone (#53
+runbook, #36).
+
+**Docs updated:** ADR #193 status/honest limits now carry the D7 rig evidence instead of
+"two-device delivery remains unverified".
+
+**Fresh run (2026-10-23):** the focused JVM set covering this matrix is green — 118 tests, 0
+failures (`PartnerNotificationsTest` 26 incl. the new plan-publish test, `PartnerPlanReceiverTest`
+9, `PartnerPlanRepositoryTest` 15, `PlanWireCodecTest` 6, `PartnerActivityJournalTest` 15,
+`RecoveryPlanRepositoryTest` 13, `HabitRepositoryTest` 34; `:app:testDebugUnitTest`, exit 0).
+
+## #47 F — Stress + adversarial runtime (complete)
+
+**Scope (review map #37):** cold start, process death, store failure, quota boundaries, huge
+rule sets, rapid input, airplane mode, reboot, clock moves, Doze — AVD first, the X6532 where
+reachable. This pass did not restart the 2026-10-15 campaign; it re-validated each reviewed
+surface against the campaign's evidence, ran the new adversarial legs the sweep exposed, and
+recorded what remains hardware-blocked instead of inferring it.
+
+### Evidence map
+
+| Surface | Adversarial question | Evidence | Verdict |
+|---|---|---|---|
+| Blocking decision engine | Does every rule combination decide the same through both entry points? | `BlockDecisionEngineDomainStressTest` — 243,000-combination cross-product, one private `evaluateRule`; both Block and Allow present | PASS |
+| Rule volume / UI scale | 2,000 apps + 2,000 sites: recall, probes, ANR | `RuleIndexVolumeStressTest` 6/6 (200k probes 889 ms); X6532 4,004-rule leg 0 ANRs, cold open 4.0 s flat (ADR #155) | PASS |
+| Usage accounting | Clock ±1 day, month/leap/year boundaries, rollover at volume, 4-thread storms | S49-E2 found a real bypass (rollover seeded zero instead of the ledger) → **fixed ADR #212 + re-proven on device (E2b)**; `UsageLedgerBoundaryVolumeStressTest` 8, `RuleUsageDaoVolumeStressTest` 4, `UsageAccountingEngineTest` | PASS after fix |
+| Enforcement lifecycle | Kill loops, force-stop, screen-off, airplane, Doze, reboot, permission revoke mid-op | Tier B B1–B6 (0 product defects), Tier C single-device kill loops / force-stop cycles / a11y rebind races (ADR #150, #152), device E-21 reboot leg | PASS |
+| Store failure | Disk full at 55/16/2 MB free | **Tier B B7 found B-10** (Firestore SDK + WorkManager crash-loop) → **fixed ADR #154, re-verified at ~2 MB free**; own Room/SQLCipher paths absorbed SQLITE_FULL | PASS after fix |
+| Partner transport | Crash between commit and local SENT; foreign/duplicate mailbox docs; ack replay | A4 crash-window (ADR #147), A8 watermark adversarial (ADR #148), rig D3 identity death → re-pair (ADR #125/#213), ack create-rule replay (S49-D3-3, fixed below) | PASS |
+| Pairing under adverse clocks | Joiner accepts after the creator's wait expires | ADR #215: server `Denied` is authority, 5-minute skew allowance; `PairingAdversarialTest` row 11 mutation-proven; two-AVD run accepted at T0+660 s against a 240 s cap | PASS |
+| Backend quotas | Rate/size/app-check enforcement under load | Tier D: 23 invocations, uniform 401s, 10/uid/hour 429 exactly, size guard precedes the limiter, 0 unhandled | PASS |
+| Notifications | Collisions across tag/id/tap/channel | ADR #217; `PartnerNotificationsTest` collision pair; `StreakNotificationsTest`; `ProtectionNotificationsTest` | PASS |
+| UI state transitions | Rotation with a live wall; rapid app switching; restored state | S49-E3 rotation found a real defect (wall off-screen after rotate) → **fixed + device re-proven**; restored-UI stale label after AVD snapshot investigated to no code defect (#55) | PASS after fix |
+
+### New adversarial legs run for this task
+
+- **Blocking matrix** — closed 2026-10-21 at **84/84 plus C-15–C-19** (real override, AVD
+  reboot, day mask, magnitude) per ADRs #190/#191; no open case.
+- **#55 rig** — consent boundary proven in the negative direction (D6: B shares nothing → A
+  receives nothing, no phantom event) alongside the eight positive categories; the real Chrome
+  launch hit `BlockerActivity` twice, and the day-7 milestone arrived through the production
+  pipeline (seed supplies only the row).
+- **Pairing stall (ADR #215)** — the owner-reported "other device doesn't advance" reproduced
+  as a clock-skew race, fixed, and re-run on the rig to acceptance at T0+660 s.
+- **Already-acked replay (S49-D3-3)** — fixed in the DI ack lambda: a create-only-rule
+  `PERMISSION_DENIED` now means "already acked" (the drainer's existing reading), so a healthy
+  rig no longer logs a rules failure on every wake replay.
+- **Ceremony header after success (owner report 2026-10-23)** — the back-row label fell
+  through to "Invite a partner" while the terminal card said "You're paired"; the label now
+  tracks `CeremonyStep.Paired` (`partner_ceremony_back_title_paired`).
+
+### Routed to the blocked runbook (never simulated)
+
+Two-phone runtime legs remain physical-hardware work: kills mid-sync/mid-approval/mid-pairing,
+approvals/SOS flips between two real devices, real FCM delivery, adversarial pairing on real
+devices (wrong/expired code, SAS refusal, re-join), and the pair-consuming bilateral unpair
+last. They are written out in `app/docs/blocked-two-device-runbook.md` (legs 1–6) and stay
+BLOCKED until a second physical phone with its owner exists; LOCAL-RIG evidence is never
+upgraded by association.
+
+### Known limits (observed, not defects)
+
+- AVD JVM jank can produce an unreproducible single probe miss (B-06) and stale uiautomator
+  trees; every such case was re-run before being read.
+- The physical phone's debug build still lacks a registered App Check token (operational gap
+  documented under the #52 section); release builds use Play Integrity.
+- The dead-enrollment roster issue (S49-D3-1/2) is a UX decision, escalated to OPD #40 — it
+  touches the shred/ack protocol and was not changed silently.
 
 ## Appendix — delta file inventory (path list)
 

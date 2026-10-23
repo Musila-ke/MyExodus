@@ -1,6 +1,7 @@
 package com.example.myexodus.notifications
 
 import android.net.Uri
+import androidx.core.net.toUri
 
 /**
  * Tap-intent identity for every notification surface. PendingIntent identity is (request
@@ -17,11 +18,11 @@ import android.net.Uri
  */
 object NotificationTapTarget {
 
-    private fun uri(key: String): Uri = Uri.parse("myexodus://notification/${Uri.encode(key)}")
+    private fun uri(key: String): Uri = "myexodus://notification/${Uri.encode(key)}".toUri()
 
     /** A singleton surface's tap target (protection, VPN, domain usage). */
     fun of(key: String): Uri = uri(key)
 
     /** Multi-habit surfaces carry the exact habit in identity, never in extras alone. */
-    fun habit(habitId: String): Uri = Uri.parse("myexodus://habit/${Uri.encode(habitId)}")
+    fun habit(habitId: String): Uri = "myexodus://habit/${Uri.encode(habitId)}".toUri()
 }

@@ -10,6 +10,8 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.R
 import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.PlanBody
+import com.example.myexodus.accountability.serialization.PlanWire
 import java.text.DateFormat
 import java.util.Date
 import org.junit.Assert.assertEquals
@@ -619,11 +621,50 @@ class PartnerNotificationsTest {
         )
     }
 
+    /** ADR #193 §6: a new or edited plan is the one plan event worth an alert. It names the
+     *  plan's own title, and unlike an activity burst it alerts again on an edit
+     *  (`onlyAlertOnce = false`) while the lockscreen keeps the generic public copy. */
+    @Test
+    fun planPublished_namesThePlanTitle_andReAlertsOnEdit() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val plan = PlanBody(
+            planId = "plan-1",
+            title = "Evening wind-down",
+            revision = 2,
+            updatedAtMs = OCCURRED_AT,
+        )
+
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME,
+            payload(PlanWire.TYPE_PLAN_PUBLISHED, text = "", plan = plan),
+        )
+
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_plan_title_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(R.string.partner_plan_body_named, "Evening wind-down"),
+            notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+        assertEquals(
+            "a plan edit must alert again",
+            0,
+            notification.flags and Notification.FLAG_ONLY_ALERT_ONCE,
+        )
+        assertEquals(
+            context.getString(R.string.partner_event_title),
+            notification.publicVersion!!.extras.getString(Notification.EXTRA_TITLE),
+        )
+    }
+
     private fun payload(
         type: String,
         text: String = "streak:7",
         stateAfter: ActivityStateAfter? = null,
-    ) = EventPayload(type = type, text = text, stateAfter = stateAfter)
+        plan: PlanBody? = null,
+    ) = EventPayload(type = type, text = text, stateAfter = stateAfter, plan = plan)
 
     private companion object {
         const val PAIR_ID = "pair-alpha"

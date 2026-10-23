@@ -129,6 +129,28 @@ class InsightsRepositoryTest {
         assertFalse(snapshot.isEmpty)
     }
 
+    /** Owner report 2026-10-23 (#54): the usage card's total must be exactly the sum of the
+     *  seven bars it renders, and "today" must be the last bar — anything else reads as a
+     *  contradiction on screen. Also pins the rolling window's oldest edge: a row on the
+     *  seventh day counts, the day before it does not. */
+    @Test
+    fun load_usageTotalsReconcileWithTheRenderedBars() = runTest {
+        val store = factory.open()!!
+        store.usageLedgerDao().apply {
+            insert(ledger("first-day", UsageLedgerKind.ACCOUNTING, "com.instagram.android", "2026-10-16", 300_000))
+            insert(ledger("before-window", UsageLedgerKind.ACCOUNTING, "com.instagram.android", "2026-10-15", 7_200_000))
+            insert(ledger("today", UsageLedgerKind.ACCOUNTING, "com.youtube", "2026-10-22", 60_000))
+        }
+
+        val snapshot = repository.load(now, zone)!!
+
+        assertEquals(7, snapshot.days.size)
+        assertEquals(snapshot.days.sumOf { it.creditedMs }, snapshot.screenTimeTotalMs)
+        assertEquals(360_000L, snapshot.screenTimeTotalMs)
+        assertEquals(snapshot.days.last().creditedMs, snapshot.screenTimeTodayMs)
+        assertEquals(60_000L, snapshot.screenTimeTodayMs)
+    }
+
     @Test
     fun load_emptyStore_isHonestlyEmpty() = runTest {
         val snapshot = repository.load(now, zone)!!
