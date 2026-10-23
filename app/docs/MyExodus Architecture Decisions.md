@@ -5,7 +5,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Change control:** Every revision to an Accepted ADR must be marked inline as "Revision [date]: ..." (as this document now does), or recorded as a new ADR that supersedes the old one ("Supersedes ADR#X"). Editing an ADR in place without a marker silently invalidates downstream work — this was the root cause of the ADR#8 error surviving an earlier revision pass (2026-08-24 audit, "silent ADR revision" pattern).
 
-**ADR \#1 Title: Mobile Client Technology Stack (Native Kotlin vs. Cross-Platform)**
+## #1 — Mobile Client Technology Stack (Native Kotlin vs. Cross-Platform)
 
 **Status:** Accepted  
 **Evidence:** Android Accessibility Service documentation; Google Play Policy on Unused Permissions.  
@@ -14,7 +14,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** We are explicitly giving up the development speed and simplicity of writing a single, cross-platform codebase (React Native) that works on both platforms. We accept the cost of building purely for Android in V1 and eventually having to maintain a second, separate codebase (Swift) for iOS in V2.  
 **Consequences:** The core blocking engine is technically feasible and can natively integrate with the OS to hit the unified interception latency target on Android: <1000 ms end-to-end (p99) with overlay draw <100 ms (p99) once triggered — see the Domain Invariant in the V1 spec. (Revision 2026-08-24: replaces the earlier "<200ms" figure, which contradicted the V1 spec's <1000 ms end-to-end target; the feasibility spike validates the final number.) As a solo developer with a tight 3-to-6 month timeline, development must be strictly focused on the Android Client Subsystem for V1, while the iOS subsystem is officially deferred to V2.
 
-**ADR \#11 Title: Trusted Telemetry & Server-Observed Event Projections**
+## #11 — Trusted Telemetry & Server-Observed Event Projections
 
 **Status:** Accepted  
 **Evidence:** CQRS/Event Sourcing architectural patterns for data integrity; Google Play Developer Policy on data manipulation; Server-side projection patterns.  
@@ -23,7 +23,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** The dashboard cannot show real-time projections until the client syncs events to the server.  
 **Consequences:** We ensure the "source of truth" for streaks and clean days is tamper-evident and server-observed, preserving the integrity of accountability partnerships. (Deletion semantics, revision 2026-08-24: "tamper-evident" applies while data is retained; a data subject's Right to Deletion is honored via per-user server-side crypto-shredding — see V1 spec Req 29.)
 
-**ADR \#2 Title: Data Ownership and Local Storage (Offline-First Architecture)**  
+## #2 — Data Ownership and Local Storage (Offline-First Architecture)
 **Status:** Accepted  
 **Context:** The application has two non-negotiable domain invariants that dictate how data must be handled: The 100% Offline Rule (active restriction periods must be enforced completely even when the device has zero network connectivity) and The Encryption Mandate (sensitive user data, specifically "urge logs", must always be encrypted at rest). Because of these rules, the app cannot rely on a cloud database as its primary source of truth, as a network drop would break the core blocking engine. Furthermore, as a solo developer with a tight budget, the architecture must lean toward simple, "boring" technology rather than complex custom setups.  
 **Decision:** The application will use an Offline-First Architecture. The local device will be the authoritative owner of the data. We will use a local SQLite database (via Android Room) to store the RestrictionRule, DailyUsageTracker, and HabitProgress tables, ensuring the background blocking service can instantly read rules offline. We will use SQLCipher to encrypt all highly sensitive behavioral data (urge logs, bypass attempts) at rest on the local device. (Correction, 2026-08-24: EncryptedSharedPreferences is NOT an alternative here — it encrypts flat key-value pairs and cannot back the relational schema with joins and queries that RestrictionRule, DailyUsageTracker, and HabitProgress require. SQLCipher encrypts the entire SQLite database; that is the only option for this use case.) A cloud backend (e.g., Firebase) will act only as a replica/relay to sync this data up to the accountability partner when a network connection is available.  
@@ -32,14 +32,14 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Source-of-Truth Note:** *The backend server computes and projects authoritative metrics (streaks, milestones) for partnership transparency, while the mobile client is responsible for enforcing local real-time restrictions regardless of sync status.*
 
-**ADR \#3 Title: The Backend Server & Cloud Sync Strategy (Event-Driven Relay)**  
+## #3 — The Backend Server & Cloud Sync Strategy (Event-Driven Relay)
 **Status:** Accepted  
 **Context:** Because ADR \#2 established an Offline-First Architecture, the local SQLite database on the Android device is the primary owner of the data. However, the system must still route "relapse alerts" and "bypass attempts" to accountability partners, and populate the partner's usage analytics dashboard. Furthermore, we must stay within a strict 9,000 KES budget and accommodate a solo developer's capacity. We need a way to get offline events to the cloud securely without running an expensive, complex custom server.  
 **Decision:** The application will use a Serverless Cloud Backend (e.g., Firebase) acting purely as an asynchronous sync relay and notification router. When offline, the mobile app will queue events (like a bypassed block or an incremented streak) locally. When the device regains internet connectivity, a background sync engine will push these queued events to the cloud as a single batch. The cloud backend will then automatically route push notifications to the assigned\_partnership\_id (enforcing granular consent) and update the partner's read-only replica of the dashboard.  
 **Trade-off Accepted:** We are explicitly giving up the simplicity of immediate, real-time data. We accept the engineering cost of building an "eventual consistency" sync queue (handling what happens if a user is offline for 3 days and suddenly uploads a batch of relapses) in exchange for keeping server costs near zero and maintaining 100% offline blocking capability.  
 **Consequences:** Accountability partners will see data with "eventual consistency" (it updates only when the restricted user's phone connects to the internet). The architecture easily fits the 9,000 KES budget constraint, as serverless databases charge only for what you sync. The cloud serves as a tamper-evident record of the user's behavioral data, providing a secondary layer of security if they attempt to modify their local database. (Clarification, 2026-08-24: "tamper-evident" means alteration is detectable — it does not mean un-deletable. Kenya's DPA grants a Right to Deletion; the server-side deletion semantics are specified in V1 spec Req 29: per-user server-side encryption keys are shredded on a deletion request, making raw events unrecoverable, while anonymized aggregates may remain.)
 
-**ADR \#4 Title: Client Presentation and Data Architecture (MVVM Layered Presentation)**
+## #4 — Client Presentation and Data Architecture (MVVM Layered Presentation)
 
 **Status:** Accepted  
 **Context:** The client application must manage complex, reactive background operations (AccessibilityService, local VPN, and WorkManager schedules) while presenting a highly responsive, low-latency block screen overlay. To maintain high velocity as a solo developer with a tight timeline, we must cleanly separate our UI layers from our persistent business rules and network synchronization.  
@@ -50,7 +50,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** Writing formal ViewModels introduces small structural boilerplate files up front compared to direct, rapid scripting (like running database queries directly inside an Activity class). We accept this tiny setup cost to secure the massive benefits of modularity and testing.  
 **Consequences:** The codebase is robust, highly maintainable, and prevents tight coupling. Views can be safely updated or redesigned without risking regressions in our sensitive background blocking and data logging services.
 
-**ADR \#5 Title: Declarative UI and Dependency Injection**
+## #5 — Declarative UI and Dependency Injection
 
 **Status:** Accepted  
 **Context:** To ensure the core blocking engine successfully hits our visual interception targets, the developer needs a modern development environment that minimizes standard layout boilerplate, makes state synchronization easy, and ensures clean lifecycle initialization without manual constructors.  
@@ -58,7 +58,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** Adopting modern Jetpack Compose and Hilt requires a small learning curve compared to legacy XML structures. However, this is heavily offset by the vast amount of modern developer documentation and the dramatic reduction in code length.  
 **Consequences:** UI layout code is written directly in Kotlin, reducing the number of file types we must track. Hilt will automatically manage the creation, sharing, and teardown of crucial database instances (like our encrypted Room SQLite tables) across background services and ViewModels, preventing memory leaks and simplifying testing.
 
-**ADR \#6 Title: Optional Device Administration & Uninstall Resilience (Direct-Distribution Only)**
+## #6 — Optional Device Administration & Uninstall Resilience (Direct-Distribution Only)
 
 **Context:** Preventing a user from simply uninstalling the application during an active relapse window is a critical non-functional requirement for habit recovery. While Android's Device Administrator API natively blocks uninstallation, Google Play Store policies strictly penalize consumer-facing apps that leverage both Accessibility Services and Device Administration APIs simultaneously, labeling it a security risk. The original architecture split builds into playRelease/directRelease to isolate that risk. **This constraint no longer exists: the project will NOT be published on Google Play (ADR#15, decision 2026-08-24) — all distribution is direct APK. The playRelease flavor is removed; there is no Play-compliant build to protect.**  
 **Decision (Revision 2026-08-24, supersedes the flavor split):** All builds use the same uninstall-resistance stack:  
@@ -68,7 +68,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** There is no Play-compliance reason to withhold uninstall-resistance mechanisms anymore; the remaining trade-off is user agency vs. resilience. Users can revoke permissions at any time; we accept the risk that technical users bypass these safeguards.  
 **Consequences:** All distributions carry maximum uninstall resilience. The disclosure UX that Play would have required (in-app accessibility justification, persistent foreground-service notification) is still good practice and retained, but no store reviewer enforces it. The Play rejection/takedown risk identified in the V1 audit (finding C3) is moot because no Play submission exists. If a Play release is ever reconsidered, this ADR must be re-opened before submission.
 
-**ADR \#7 Title: Self-Defense & Interception Escape Hatches**
+## #7 — Self-Defense & Interception Escape Hatches
 
 **Status:** Accepted  
 **Context:** The system must prevent locking the user out of their recovery tools, even when the device is locked down or blocked. Furthermore, we must prevent the "Self-Blocking" loophole where a user blocks MyExodus, rendering the entire system unusable and the device permanently bricked.  
@@ -76,7 +76,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** We accept that having a visible "Open Recovery Tools" button on block overlays introduces a tempting distraction. We mitigate this by ensuring that launching the app only displays local, offline recovery resources, scripture cards, and urge logs—they cannot access general system settings or unblocked applications from this recovery space.  
 **Consequences:** This guarantees the client app cannot block itself: the code allow-list and the SQLite CHECK constraint reject the app's own package as a block target, with a unit test covering the rejection path (Revision 2026-08-24: the previous "bulletproof... safe haven" wording was not falsifiable — it is now stated as a testable guarantee). The recovery dashboard remains reachable from every block overlay via the Interception Escape Hatch (V1 spec Req 25), and that reachability is covered by the FSM transition tests in the V1 testing strategy.
 
-**ADR \#8 Title: Nairobi-Hosted Virtual Private Server (VPS) for Data Residency**
+## #8 — Nairobi-Hosted Virtual Private Server (VPS) for Data Residency
 
 **Status: Pending — BLOCKED pending legal review of Section 50 and budget reconciliation.**  
 **Context:** The V1 spec's Backend Compliance Strategy (audited version) states the system uses Firebase only "without requiring a custom Nairobi VPS replica," while this ADR previously claimed a Nairobi serving copy is mandatory under Kenya's DPA. These positions contradict each other. The audit (2026-08-24) could not verify the legal claim that the DPA requires a mirrored local serving copy — the correct reading of Section 50 is an open legal question, not a settled requirement. Separately, the ~600 KES/month VPS cost over a 6-month build (~3,600 KES) would consume ~40% of the 9,000 KES total budget before any other cost (Revision 2026-08-24: the earlier "76%" figure included Google Play registration, which is no longer budgeted — see ADR#15; the VPS alone still contradicts the "negligible cost" framing).  
@@ -85,7 +85,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted (if ever built):** Maintaining a secondary sync endpoint adds slight network complexity to the mobile sync queue, offset by residency compliance. The "~600 KES/month" figure (Angani / Kenya Web Experts) is unverified pricing and must be replaced with a written quote before acceptance.  
 **Consequences:** If rejected (the recommended path), V1 stays Firebase-only within the 9,000 KES budget. If counsel later identifies a binding requirement, this ADR is re-opened with a proper decision. Do not implement until the counsel review concludes.
 
-**ADR \#9 Title: Hardware-Backed Dynamic Database Encryption**
+## #9 — Hardware-Backed Dynamic Database Encryption
 
 **Status:** Accepted  
 **Evidence:** Android Keystore System API documentation; SQLCipher security best practices.  
@@ -95,7 +95,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** Increased complexity in the account migration and recovery flow: the user must remember their recovery phrase; losing it after a device change means local history cannot be restored (accepted — this mirrors the inherent trade-off of hardware-bound keys).  
 **Consequences:** We maintain high-grade security for local data. While hardware-backed protection significantly raises the bar, recovery on new devices requires the recovery-phrase migration workflow described above, which must be covered by a tested end-to-end migration test before release (V1 testing strategy).
 
-**ADR \#10 Title: Secure Direct-APK Update Verification Subsystem**
+## #10 — Secure Direct-APK Update Verification Subsystem
 
 **Status:** Accepted  
 **Context:** With no Play Store distribution (ADR#15), **every** MyExodus update is a direct APK download — there is no store-mediated signature verification for any user. To protect the software supply chain, we must prevent attackers from hosting a malicious or modified version of MyExodus.apk on a hijacked distribution URL, and we must ensure update integrity across certificate rotations. (Consolidated 2026-08-24, audit C1: two interleaved versions of this ADR existed; this is the authoritative one — the earlier "trusted signing lineage" wording described the same decision.)  
@@ -106,7 +106,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Update-channel & trust practice (Revision 2026-08-24, follows the ADR-log audit):** This ADR is the app's OTA mechanism — native Kotlin has no EAS/CodePush-style bundle updates, so every code change ships as a new signed APK via this flow. Implementation specifics: (1) the update check is a periodic WorkManager job (e.g., daily) hitting the signed manifest URL — no always-on daemon; (2) Firebase Remote Config covers non-code changes (feature flags, copy, rule defaults) so those never require an APK; (3) AV false-positive practice: never ship a debug-signed release, keep the permanent release key stable, upload each release APK to VirusTotal, and use each vendor's false-positive report page if it flags us; (4) Android 13+ shows an "unknown app" screen on fresh sideloads (unavoidable, no Play distribution) — onboarding must walk users through it; same-signature updates install without that friction, which is why users must always update in place via this flow, never re-download the APK. **(Revision 2026-10-17, owner direction — ADR #171):** the update channel is GitHub Releases for both development and production builds, and Firebase Remote Config is retired; item (2) no longer applies (nothing is remote-configured today), and the signed-manifest + APK-certificate verification contract in the Decision above is unchanged.
 
-**ADR \#12 Title: Confidence-Level Tamper Model**
+## #12 — Confidence-Level Tamper Model
 
 **Status:** Accepted  
 **Context:** The blocking engine must detect when enforcement is silently failing — not just when a user bypasses a block, but when they disable permissions, roll back the clock, or kill the service. The V1 spec defines confidence levels for tamper detection (Req 23, Epic 2 Step 7), but this decision had no ADR of its own. (Added 2026-08-24, audit L2.)
@@ -114,7 +114,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** Some signals (package-presence scans, clock checks) cost battery and can produce false positives; we accept occasional misclassification over silent enforcement failure — this is the pre-mortem item "silent enforcement failure" made observable.
 **Consequences:** Enforcement failures are visible to the partner instead of silent; the confidence score drives alert severity. The disambiguation and scoring logic is covered by unit tests in the V1 testing strategy.
 
-**ADR \#13 Title: Observability & Crash Reporting**
+## #13 — Observability & Crash Reporting
 
 **Status:** Accepted  
 **Context:** V1's Step 12 (post-release monitoring) requires crash reporting and usage monitoring, but no ADR recorded the tooling choice. A solo developer cannot operate a self-hosted observability backend on the 9,000 KES budget. (Added 2026-08-24, audit Missing Research 2.)
@@ -122,7 +122,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** Crashlytics offers no session replay or fine-grained tracing; the marginal debugging value does not justify operating a custom pipeline for a solo developer.
 **Consequences:** Crashes and ANRs appear in the Firebase console with de-identified metadata; user content never leaves the device via telemetry; crash-free rate is tracked against the Step 12 release gate.
 
-**ADR \#14 Title: CI/CD & Release Automation**
+## #14 — CI/CD & Release Automation
 
 **Status:** Accepted  
 **Context:** The plan requires automated checks on every change (lint, unit tests), and directRelease updates demand reproducible builds, but no ADR recorded the pipeline or the signing model. (Added 2026-08-24, audit Missing Research 3.)
@@ -130,7 +130,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** A manual signing/upload step on each release; acceptable because releases are infrequent and putting the release key into CI would contradict ADR#10's offline-key rule.
 **Consequences:** Every change is verified by lint + unit tests before merge; release integrity rests on offline key discipline, not CI infrastructure; the pipeline fits the 9,000 KES budget (GitHub Actions free tier).
 
-**ADR \#15 Title: Distribution Strategy — Direct APK Only (No Google Play)**
+## #15 — Distribution Strategy — Direct APK Only (No Google Play)
 
 **Status:** Accepted  
 **Context:** The original plan budgeted Google Play registration (~3,250 KES) and designed a playRelease flavor to satisfy Play Store policy. **Project decision (2026-08-24): the app will NOT be published on Google Play.** The project may ship different flavors or variants of the app (product variants), but none is a Play-distributed build — and no Play submission is planned for this project at all.  
@@ -138,7 +138,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** We give up Play's convenience (store updates, review-driven trust signals, payment infrastructure) in exchange for full control of enforcement mechanisms, no store rejection/takedown risk, and no registration fee. We accept that users must enable "install unknown apps" for sideloading, which adds onboarding friction and shifts trust onto the signed-APK verification in ADR#10.  
 **Consequences:** The ~3,250 KES Play registration is freed from the V1 budget (V1 spec Budget Ceiling, revision 2026-08-24). ADR#10's signature verification is no longer a niche feature — it is the app's only update-integrity gate, and its Release-Signing-Key Runbook is load-bearing for every user. ADR#6's Settings Shield + opt-in Device Admin apply to all builds. If a Play release is ever reconsidered, ADR#6 and ADR#15 must be re-opened before submission, and the V1 feasibility section's Play-policy gates (Play Store Policy Validation spike, Accessibility Approvals risk item) would reactivate.  
 
-**ADR \#16 Title: Secure Persistence Layer (SQLCipher + Keystore-Wrapped DEK)**
+## #16 — Secure Persistence Layer (SQLCipher + Keystore-Wrapped DEK)
 
 **Status:** Accepted  
 **Context:** V1 requires all on-device persistence to be encrypted (V1 Req 20 area; secure-persistence implementation plan, 2026-08-25). The database must remain readable only with a device-local key, and a compromised host machine must not be able to extract data from a stolen database file alone. No plaintext database has ever shipped, so plaintext-to-encrypted migration is dead code for this install base.
@@ -146,7 +146,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** Keystore KEK means a wiped/relocated Keystore (factory reset, some OEM transfers) makes existing data unrecoverable — accepted, and it is the entire point of the threat model (offline extraction of device or storage). Message-based busy detection (getErrorCode() is API 30+; minSdk 24).
 **Consequences:** Database files are unreadable without the on-device key; a fresh install creates a new DEK. The recovery UI surfaces key loss, corruption, and recoverable-data states instead of crashing. DomainEvent ledger is append-only at the DAO layer for sync idempotency by (installation_id, event_id).
 
-**ADR \#18 Title: Accountability-Partner Protocol (E2EE, plan `accountability-partner-protocol-implementation-plan.md`)**
+## #18 — Accountability-Partner Protocol (E2EE, plan `accountability-partner-protocol-implementation-plan.md`)
 
 **Status:** Accepted; implementation complete 2026-08-29 (phases 1-6; unit suite green, lint zero). Remaining: §12 device matrix, Firestore rules deployment + App Check enforcement (§18, user step).
 **Context:** V1 §16's partner dashboard/alerting needs an event channel that a malicious relay cannot read, forge, or reorder. The plan replaces the dormant `StrictModeManager` stub's partner path with a full protocol: dual hardware-backed P-256 keys, transcript-bound SAS enrollment, hash-chained signed+encrypted events, Firestore mailbox + animated QR offline sync, bilateral crypto-shredding. The event payload set is exactly `activity` + `deletion_request` — nothing else (this is transport, not product features).
@@ -158,7 +158,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **2026-08-29 review-fix revision (36-file senior review):** (1) App Check provider install moved to app startup — `AppCheckInstaller.install()` in `MyExodusApp.onCreate`, before ANY Firestore op (mailbox pull and backfill responder never route through `drainOutbox`); console registration done (Play Integrity API enabled via serviceusage REST after the console's enable was 400ing on unaccepted ToS; debug SHA-256 `67:0F:0F:36:…` registered, PLAY_RECOGNIZED/LICENSED unchecked for sideloads, monitor mode; release-keystore fingerprint registration deferred to dev→production, ADR #10). (2) Attestation trust store now pins BOTH Google Hardware Attestation roots — Root 1 (serial E8FA196314D2FA18, 2016-2026) and Root 2 (serial 3505A0A2FDCC51E4, 2018-2028); modern devices (incl. the X6532, Android 14) chain to Root 2, which was previously untrusted and would have blocked enrollment. PKIX anchors are exempt from validity-date checks (JDK-verified empirically 2026-08-29), so Root 1's 2026-05-24 expiry is harmless. `validateChain` takes injectable anchors (default = both Google roots) so the PKIX path is unit-tested with a synthetic openssl chain (previously only mocked). (3) `AccountabilityKeyStore.generateKeys` now cleans either single-key partial state before regenerating (retry previously died on `KeyExistsException`). (4) `EventCreator` serializes read-sequence→append under a Mutex (concurrent creates could fork the chain). (5) `Envelope.decodeSigned` rejects unsupported envelope versions instead of ignoring them. (6) Robolectric unit tests boot the plain `Application` by default (robolectric.properties) — the real app's App Check startup install requires a FirebaseApp that unit tests don't have; `AppCheckInstaller.install()` skips with a warning in that environment (production is unaffected: `FirebaseInitProvider` always runs first). The one test that needs the real app (`BlockerAccessibilityServiceConstructionTest`, Hilt-injected service) pins `@Config(application = MyExodusApp::class)`.
 
-**ADR \#17 Title: Enhanced Mode Blocking Engine (AccessibilityService)**
+## #17 — Enhanced Mode Blocking Engine (AccessibilityService)
 
 **Status:** Accepted; implementation complete 2026-08-26 (unit suite 93/93); on-device §12 verification matrix pending. Five-axis review pass 2026-08-28 (see addendum); unit suite 97/97.
 **Context:** V1's UsageStats-based detection cannot see in-app navigation or block specific URLs, and V1's Design directly conflicts with the Accessibility API policy — but this build is not Play-distributed (ADR#15). The full spec lives in `app/plans/myexodus-enhanced-mode.implementation-plan.md` (its own Decisions 1–15). This ADR records the decisions that shape the shipped code and the deviations found while implementing.
@@ -167,7 +167,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** URL extraction depends on stable browser view IDs (documented capability limitation, silent no-op on lookup failure — plan §8 Step 7, §14, §16). In-app master switch is read per event via warm SharedPreferences (in-memory after first access; no DB I/O on the hot path, plan §11). Strict Mode countdown starts at enable-time (plan §8 Step 11's "24-hour cooldown before Enhanced Mode can be disabled" — the enable-time reading; the alternative disable-attempt reading is a 3-line change if preferred).
 **Consequences:** The blocking engine is fail-open everywhere it cannot decide, never crash-loops, and the overlay can never appear over emergency surfaces on the tested matrix (empirically validated per §12, not formally guaranteed). Health alerts are eventual (~15 min worst case, immediate while the process is alive). AAPM-active devices (Android 17.2+ / API 36+) get an unsupported-configuration screen — the accessibility grant auto-revokes and is not re-granted while AAPM stays on; no workaround is offered (Decision 7/8). Remaining work: the §12 device matrix (life-safety, tapjacking, latency, freezer, multi-window, browser URL, AAPM) on Infinix XOS + two other OEMs, and the §16 accountability-partner protocol (feature flag only in v1). **Review-pass addendum (2026-08-28, five-axis review of all Enhanced Mode files):** per-bind `ForegroundStateMachine` + `OverlayController` moved out of the DI graph (the plan's §12 note records service-scoped recreation; the graph had provided @Singleton copies that would survive a Hiber disconnect); WSC decisions gated on `window.isActive`/`rootInActiveWindow` so background interactive windows (IME/bubbles/PiP) can no longer Allow-hide the overlay over a restricted foreground app; URL scans skipped while the app-level decision is Block; per-window root sweep only on a new block transition; `RulesSnapshotPublisher` concurrency reworked from racy AtomicBoolean single-flight to a `Mutex`; `DatabaseMigration` fixed (log key was zeroed before the row-count verification reopened the encrypted DB — migration could never have completed — and NULL `time_range_*` no longer coerced to 0); app open now primes the Room 3 schema before the migration runs; the two Keystore-wrapped-DEK managers consolidated into one shared class; XOS dialer `com.sh.smart.caller` added to the OEM fallback list; engine time-window evaluation uses one Calendar per decision; overlay show-skip diagnostic is debug-only. Verified: 97/97 unit tests, assembleDebug, androidTest compilation. On-device re-verification of the functional suite is required when the phone is next connected (WSC gate + scoping change the event path). **Device-verification addendum (2026-08-28, final APK, Infinix X6532/XOS):** the post-review code re-ran the full §12 script green — functional PASS (life-safety ×3 with user-assisted unlock, tapjacking PASS, browser URL cycle), freezer survival PASS, latency PASS (detection p99 8ms, submission p99 33ms, **presentation p99 91ms — first back-to-back PASS**), multi-window self-skip as designed. The re-run surfaced and fixed two real show-vanish bugs the review missed: (1) recycled `AccessibilityWindowInfo` getters throw `IllegalStateException`, which accessibility dispatch swallows — a throwing read killed the event mid-pipeline after `decide` logged (the 2026-08-28 latency "show vanish"); all window reads now go through runCatching fallbacks (`displayIdOrDefault`, `boundsInScreenOrNull`, `isActiveForeground`); (2) emergency exclusion hid the overlay for ANY protected-package event — XOS's `com.sh.smart.caller` emits background null-window flaps (winType=-1, never in the live list) that tore down the overlay over the still-restricted foreground app, which never re-showed (~50% functional flakiness); the emergency hide is now gated on `isActiveForeground` (same rule as the WSC decide gate). Screen-off now hides the overlay deterministically via `ACTION_SCREEN_OFF` (XOS keyguard WSC arrives up to ~6s late — the locked-state harness race, fixed 2026-08-28). After these fixes: 90 consecutive latency cycles across three runs with zero vanish failures, functional 2/2 back-to-back, and this run's full-suite green. **Presentation-p99 device finding (supersedes the §12 note):** the overlay's first frame is deferred by XOS WMS when the window is added mid-transition — the presentation p99 was 227/162/185ms in 3/3 back-to-back runs but 67/81ms standalone and now **91ms back-to-back on the final code** (1/4 back-to-back PASS): a flaky first-frame scheduling property of this device, not deterministic to run order, and not gamed — total detection→overlay p99 ≈132ms remains ≪ the 1000ms §2 budget. WorkManager on-demand init: manifest now removes `androidx.startup.InitializationProvider` (MyExodusApp is a `Configuration.Provider`; the default initializer would have bypassed the Hilt worker factory — real bug caught by lint). Lint: **zero findings** (3 errors + 22 warnings fixed; 4 reminder-class suppressions in lint.xml documented in-file); Kotlin compile warnings zero. Room 3.0.1→3.0.2 (fixes a @Transaction deadlock + closed-DB crash on the SQLCipher driver path), lockfile regenerated + Trivy clean. **Split-migration addendum (2026-10-17, exhaustive review sweep):** `DatabaseMigration`'s `habit_progress` copy still named the three global consent columns (`share_access_attempts`/`share_relapses`/`share_milestones`) that v16 physically dropped (ADR #135). On any install still holding a pre-split `myexodus.db`, the INSERT failed with "no such column", `runOnceIfNeeded` preserved the legacy file and retried forever — the migration could never finish, non-destructively but permanently. The copy now names only the v16 columns; the legacy consent flags are deliberately not seeded ("nothing until you choose"). Regression: the existing emulator-only `DatabaseMigrationInstrumentedTest` seeds a genuine pre-split store with the v15 consent columns and asserts the split completes; it failed on the old spec and passes on the fixed one.
 
-**ADR \#19 Title: VPN PoC Spike (Slice 3) — Hard-Gate Relaxation & Sinkhole Decisions**
+## #19 — VPN PoC Spike (Slice 3) — Hard-Gate Relaxation & Sinkhole Decisions
 
 **Status:** Accepted; spike complete 2026-08-29 — three consecutive ALL=PASS runs on the Infinix X6532 (runs 16/17/18).
 **Context:** Plan `myexodus-app-blocking-core-implementation-plan (1).md` §7 step 3 / §8.4 requires a minimal full-tunnel VPN spike (routes 0.0.0.0/0 + ::/0, NXDOMAIN for blocked domains, HTTPS must work, IPv6 sinkhole, Private DNS detection, stop restores connectivity). The plan's hard gate (line 333): the spike must pass on **two physical devices** before the DNS engine build (Slice 4) begins. The project has exactly one physical device (Infinix X6532, XOS/Android 14) and no emulator (a spike validating real TUN/netd behavior on a device; emulator adds no OEM signal). Per developer decision 2026-08-29, the gate is relaxed for this project.
@@ -176,7 +176,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** Single-device validation cannot prove OEM-agnostic behavior; the relaxation trades that proof for progress (no second device exists). Mitigation: the fixes are in-app correctness bugs (ISN stability, ACK flag), not workarounds for XOS quirks, so the portability risk of the *sinkhole itself* is unchanged by the bug fixes.
 **Consequences:** Slice 4 (DNS-Block Engine) is unblocked. `scripts/dns-sinkhole-device-test.sh` + `VpnSpikeActivity` remain as the regression harness for the sinkhole; re-run before Slice 4 acceptance and again when a second device is available. Private DNS note: with VPN active, Android's Private DNS (DoT) is bypassed for the VPN's own traffic by design (VpnService owns the connection); the spike detects and reports the configured mode (`privateDnsMode`) rather than blocking it — the DNS-block engine inherits this behavior and the Access-VPN interplay is handled by the Accessibility side (V1 Open Research Question 3 resolution: local VPN is now **prototyped and passing**, not just an alternative).
 
-**ADR \#20 Title: DNS-Block Engine (Slice 4) — Policy-Backed Blocklist, Health Machine, Migration Fix**
+## #20 — DNS-Block Engine (Slice 4) — Policy-Backed Blocklist, Health Machine, Migration Fix
 
 **Status:** Accepted; implementation complete 2026-08-29 — device spike run 20 ALL=PASS (7/7 gates) on the Infinix X6532.
 **Context:** Plan §7 step 5 + §8.4 build the production DNS-Block Engine on the validated spike (ADR#19): the engine must load its blocklist from Room (plan §6 — both engines observe `PolicyVersion` via Flow and reload their in-memory snapshot), report health honestly ("do not conflate 'VPN interface up' with 'filtering functioning'"), and handle `onRevoke` without a rebind loop.
@@ -185,7 +185,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** DNS-layer enforcement is domain-only: no time-window/daily-limit evaluation at the DNS layer and no path-level blocking (documented ceilings in `DomainBlocklist`'s doc comment). A blocked domain returns local NXDOMAIN with an echoed question (rcode=3); everything else forwards upstream.
 **Consequences:** The DNS-Block Engine satisfies plan §7 step 5 + §8.4 + §6 on the single available device. Remaining per §12: re-run the spike when a second physical device is available (per ADR#19's re-applied gate). The spike harness now seeds real policy (profile + WEBSITE rules in Room) so the regression harness exercises the production policy path.
 
-**ADR \#21 Title: Direct Boot Split (Slice 5) — DE Snapshot, Locked-Boot Receiver, Pre-Unlock Crash Class**
+## #21 — Direct Boot Split (Slice 5) — DE Snapshot, Locked-Boot Receiver, Pre-Unlock Crash Class
 
 **Status:** Accepted; implementation complete 2026-08-30 — device-verified across 6 reboot cycles on the Infinix X6532.
 **Context:** Plan §8.5 + §9 (reboot mid rule-activation, DE/Room divergence) require: enforcement restored from a Device-Protected-Storage snapshot before the user's first unlock; the snapshot holding only package IDs/domains + active time windows (no keys, no partner identity — Decision 14); versioned-cache semantics (`policyVersion` + checksum, temp-file-plus-atomic-rename, Room authoritative on reconciliation). Boot-time verification on a real locked device (§8.5's own "verify boot-time behavior") is required because this is a startup path no unit test can cover.
@@ -195,7 +195,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** A broadcast-receiver process pre-unlock holds enforcement for only ~35s before the freezer trims it — acceptable because the plan's contract is "restore the minimal schedule at boot", and a pre-unlock user cannot launch apps (keyguard) — the first real enforcement need post-dates the app's next process start post-unlock. The App Check startup-install guarantee has one edge: a process surviving pre-unlock→post-unlock could run a mailbox pull without drainOutbox and without App Check installed — deferred (workers typically run in fresh post-unlock processes; documented in code).
 **Consequences:** Plan §8.5 + §9 (reboot mid-activation, DE/Room divergence) are satisfied on the single available device. The compileSdk-37-stub workaround list grows by one (`getDeviceProtectedStorageContext` → two-step idiom; ADR #17's adaptation pattern). Next per plan order: §8.6 secrets storage (Slice 6).
 
-**ADR \#22 Title: Secrets Storage (Slice 6) — DataStore + Tink Vault, Decision 12 Remediation**
+## #22 — Secrets Storage (Slice 6) — DataStore + Tink Vault, Decision 12 Remediation
 
 **Status:** Accepted; implementation complete 2026-08-30 — unit suite green (new secrets tests + IdentityEpoch migration suite), lint zero.
 **Context:** Plan §8.6 stores the pairing key + escape code (Decision 11: the secrets set is exactly these two) behind a Tink AEAD DataStore; Decision 12 bans EncryptedSharedPreferences/security-crypto (Tink is the forward direction, §17 AC#8: a plaintext dump of Device-Protected Storage yields nothing). §12 requires the Keystore-loss path — ciphertext on disk, Keystore master key gone — to surface as a recoverable corrupted state, not a crash or lockout. While auditing the existing codebase for Decision 12 compliance, `IdentityEpochStore` was found on `EncryptedSharedPreferences`/`MasterKey` (security-crypto) — a violation the original plan audit missed — and migrated to Room (accountability DB v3, `identity_epoch` table).
@@ -204,7 +204,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** The whole secrets file is one AEAD blob — reads decrypt the entire vault, which is fine at this size (two byte fields). Corrupted state replaces the vault contents with empty preferences (flag set first, so the UI can react); this is a deliberate self-heal, not data loss — master-key loss already made the plaintext unrecoverable. alpha10 pin is deliberate (Decision 12's "Tink is the forward direction"); the corruption-handler contract is alpha10-specific (datastore-tink was absent in stable 1.1.x).
 **Consequences:** Plan §8.6 + Decision 11 + Decision 12 + §9 + §12 (Keystore-loss) + §17 AC#8 are satisfied; security-crypto is fully removed from the graph. The pairing (Slice 7) and escape-code flows get their storage layer; the CORRUPTED status is their recovery hook. Remaining per §12: the on-device Keystore-loss drill (device settings → clear credentials, re-pair) when the V1 recovery UI lands. Next per plan order: §8.7 pairing (Slice 7).
 
-**ADR \#23 Title: Partner Pairing Protocol (Slice 7) — Token-Ride Payload, Null-Resource Rules, SET-Encoded Purpose, Biometric Two-Path**
+## #23 — Partner Pairing Protocol (Slice 7) — Token-Ride Payload, Null-Resource Rules, SET-Encoded Purpose, Biometric Two-Path
 
 **Status:** Accepted; implementation complete 2026-08-30 — full §10 round trip paired both roles on the Infinix X6532 (SAS agreed 91762 both sides) and §10 step 4 revocation returned Deleted.
 **Context:** Plan §7 step 8 + §10 steps 1-5 require: single-use time-limited pairing token in a QR; the token exchanged for device-identity registration through the Firebase relay; token invalidated after first use/expiry; either party can revoke; re-pairing needs a fresh token. §6.1 adds the transcript-bound SAS: both devices sign T and exchange signatures before the CEK derivation. The on-device harness (PairingTestActivity, debug) is the §12 verification vehicle — and it caught three real production defects the JVM suite could not.
@@ -214,7 +214,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Revision 2026-08-30 (V1 pairing auth & multi-device resolution, researched against developer.android.com):** (1) **Signing-gate chain for users without biometrics.** Devices with a PIN/pattern/password but no biometrics pair via the device credential: API 30+ `setAllowedAuthenticators(BIOMETRIC_STRONG or DEVICE_CREDENTIAL)` + `BiometricManager.canAuthenticate(same combo)` (returns SUCCESS when either exists); API 26–29 (post-Slice-10 minSdk floor) cannot express DEVICE_CREDENTIAL in `setAllowedAuthenticators` — gate on `KeyguardManager.isDeviceSecure()` and use the legacy `setDeviceCredentialAllowed(true)` path (kept out of the current code until the V1 pairing UI lands; the Slice 7 two-path CryptoObject prompt pattern stays the template). (2) **Devices with neither biometrics nor a device lock** (`isDeviceSecure() == false`): `BiometricPrompt` answers `ERROR_NO_DEVICE_CREDENTIAL`/`ERROR_NO_BIOMETRICS`; the app cannot force a lock and must not invent an app-level password — pairing is gated on the enrollment intent (`Settings.ACTION_BIOMETRIC_ENROLL` with `EXTRA_BIOMETRIC_AUTHENTICATORS_ALLOWED`, per the official fallback docs) and a clear "set a screen lock to pair" screen. Rationale: an unsecured device cannot meaningfully anchor the attested-enrollment security posture (§10), and app-level PINs are a second password system that dilutes the partner-accountability threat model (Rejected for V1). The escape hatch (override/recovery friction) stays biometric-free — a no-auth user is never locked out of the phone, only out of pairing. (3) **Multi-device operation.** Enforcement is per-device and fully local (each device's engines read its own Room snapshot; the FGS/overlay/DNS blockers never depend on the peer); pairing connects only the accountability layer through the Firebase relay (token exchange, transcript signatures, partner alerts via the Slice 9 outbox). Both pairing roles were exercised on-device against the real relay in this ADR's Verification; the honest residual gaps are real two-device concurrency, a camera QR scan, and the outbox round trip — scheduled for Slice 11 (§12 matrix; emulator stands in earlier if needed).
 **Consequences:** Plan §7 step 8 + §10 steps 1-5 + §6.1 + NFR4 satisfied on the single available device. ADR #22's SecretsRepository now stores the derived pairing key; the enrollment record (mirror, both sides) is persisted. Next per plan order: §8.5-adjacent foreground service (Slice 8).
 
-**ADR \#24 Title: App-Block Foreground Service (Slice 8) — specialUse FGS Poll Loop, Time-Bounded Ticks, §8.2 Degraded States**
+## #24 — App-Block Foreground Service (Slice 8) — specialUse FGS Poll Loop, Time-Bounded Ticks, §8.2 Degraded States
 
 **Status:** Accepted; implementation complete + on-device verified 2026-08-30 (plan §8.1–8.3; plan doc checked periodically throughout — no drift).
 **Context:** The plan's §8.1–8.3 require app blocking that works WITHOUT the accessibility overlay (Enhanced Mode remains optional, doubling as the transient bridge while BlockerActivity starts). Detection must be poll-based — no push API exists for foreground changes. §8.2 requires permission/stop degradation to be a visible, explicit-re-enable state, checked on the service's OWN cycle, never only on MainActivity.onResume. §8.3's recovery state machine (RecoveryStateStore, RecoveryCountdownTracker) existed from Slice 2 with zero callers — BlockerActivity is its first consumer.
@@ -223,7 +223,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** Poll cadence caps detection latency at ~1.5s+ (plus tick cost) — no instant-block claim (plan §8.1 fixed-interval design; overlay mode, when also enabled, covers the transient). A wedged thread is abandoned per mutation — bounded thread churn, acceptable on the 10s timeout. Single-device (XOS) verification; the OEM matrix (Samsung/Xiaomi, Task-Manager Stop UI variations, wedge-prone builds) is the §12 run scheduled for Slice 11. API 30+ guard on the Stop detection means pre-30 devices have no Task-Manager Stop surface — no APP_STOPPED path there by design (API-gated per the all-OS mandate).
 **Consequences:** Manifest gained `PACKAGE_USAGE_STATS` (tools:ignore), `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE` + specialUse property; `ForegroundBlockerService` (poll loop, degraded states, alert notifications) + `BlockerActivity` (recovery/override/unlock) live in `blocking/`. V1 UI later surfaces the degraded banner + re-enable affordance already used by MainActivity's banner. Next per plan: Slice 9 (attempt log §6 + partner outbox).
 
-**ADR \#25 Title: Attempt Log + Partner Outbox Wiring (Slice 9) — Attempt-First Ordering, Worker-Side Event Creation, Uid-Never-Persisted**
+## #25 — Attempt Log + Partner Outbox Wiring (Slice 9) — Attempt-First Ordering, Worker-Side Event Creation, Uid-Never-Persisted
 
 **Status:** Accepted; implementation complete + on-device verified 2026-08-30 (plan §6 + §14; plan doc checked periodically throughout — no drift).
 **Context:** Plan §6: every enforced block and forced override is recorded durably ("attempt log table"), and partner notification rides a transactional outbox with idempotency keys — "neither a missed notification nor a duplicate is silently possible by design" (plan line 246). Plan line 80: WorkManager only for ≥15-minute housekeeping, never inline on enforcement paths. The local source of truth is "the client-side attempt log (Room) plus the transactional outbox delivery-status field" (line 290). Logical-flow decision (user-driven review): only blocks and overrides reach the partner — degraded/protection-health states, countdown starts, and rule expiry are local states by design (§8.2 alerts are for the user's own protection status; a Task-Manager Stop is an accepted limitation per plan line 8, not a notified event).
@@ -232,7 +232,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** Cross-DB atomicity is impossible → a crash between event creation and the link write lets the next run create a second event for the same attempt (visible duplicate, never silent — documented deviation from the plan's same-transaction ideal). A cold auth window defers delivery up to 15 min (NFR4's gating is deliberate; the FGS tick's inline `runBlocking` insert adds a few ms to the enforcement path, bounded by the 10s tick timeout). Two-device outbox round trip (real partner mailbox receipt + backfill) is scheduled for Slice 11's §12 matrix with the pairing harness.
 **Consequences:** Plan §6 (attempt log + partner notification), §14 (outbox housekeeping), line 80 (worker cadence), lines 246/278/290 satisfied. `attempt_log` + v4 migration land in AppRulesStore; `PartnerSyncCoordinator`/`PairUidResolver`/`PartnerSyncWorker` land in `accountability/sync/`. The event is the partner's future UI surface ("blocked:com.instagram.android" decrypts on their device). Next per plan order: Slice 10 (minSdk floor/flavors), then Slice 11 (§12 device matrix + two-device verification).
 
-**ADR \#26 Title: Minimum SDK Floor API 26 (Slice 10) — Plan §3 Floor Declared, Pre-O Guards Pruned, Flavors Confirmed Absent**
+## #26 — Minimum SDK Floor API 26 (Slice 10) — Plan §3 Floor Declared, Pre-O Guards Pruned, Flavors Confirmed Absent
 
 **Status:** Accepted; implementation complete + verified 2026-08-31 (plan §3 line 35, §12 lines 282-286; plan doc checked periodically throughout — no drift).
 **Context:** Plan §3 declares the minimum supported Android version as API 26 (Android 8.0) — "the floor where UsageStatsManager and modern background-execution restrictions are both present and well-documented; devices below this are out of scope for V1" — and line 286 requires the floor declared in minSdk. Lines 282-283 define two build flavors (Play + APK) with the application ID replaced before the first signed build; ADR #15 already removed the flavor split (the project will NOT be published on Google Play — direct APK only), so no flavor structure exists or is added here.
@@ -241,7 +241,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** API 24/25 (Android 7.x, ~1-2% of active devices per current share) are now out of scope per plan §3 — the floor is a product decision pending the §16 analytics confirmation (flagged, not overridden). The `DnsSinkholeVpnService` spike keeps its `SDK_INT < 28` private-DNS branch (26/27 devices still need it).
 **Consequences:** Plan §3 + line 286 satisfied; §314's confirmation item remains OPEN for the user's product call. compileSdk 37 / targetSdk 36 unchanged. Next per plan order: Slice 11 (§12 device matrix + full verification — two-device pairing, camera QR, FGS latency, Task-Manager Stop, OEM matrix).
 
-**ADR \#27 Title: Slice 11 Device Matrix & Full Verification — Harness Root-Cause Fixes, Emulator Abandoned for One-Device Two-Role, Two Production Defects Caught On-Device**
+## #27 — Slice 11 Device Matrix & Full Verification — Harness Root-Cause Fixes, Emulator Abandoned for One-Device Two-Role, Two Production Defects Caught On-Device
 
 **Status:** Accepted; implementation complete + verified 2026-08-31 (plan §11 + §12; plan doc checked periodically throughout — no drift).
 **Context:** Plan §11 requires p50/p95/p99 latency measured on a low-tier AND a mid-tier physical device before any number is claimed; §12 requires the device matrix (permission-state, recovery state-machine, VPN, overlay/Activity, Task-Manager Stop, reboot, migration, Keystore-loss, outbox/idempotency, two-device pair operation). The project has ONE physical device (Infinix X6532/XOS, budget tier). The standing directive: make do with one device while still proving multi-device operation. The Android emulator was attempted as the second instance and ABANDONED after 4+ hours: the guest (same low-tier host) crash-restarted system_server repeatedly (watchdog deaths, mount/activity/package services flapping, boot_completed never landed) — the user's warning that it was too weak proved accurate. The replacement: one-device two-role through the real Firestore relay (same semantic as ADR #23's accepted trade-off — the protocol's device-to-device interaction is only through the relay).
@@ -250,7 +250,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** One physical device bounds what §11/§12 can prove — mid-tier latency, OEM matrix, and true two-device concurrency wait for a second physical device; the ADR #19/#20 two-device gates stay re-applicable. The harness's self-launch token refresh, the warm-signing-window button, and the sync suite are debug-only scaffolding — production code was touched only by the two defect fixes above (signer provider chain, pull query shape). One-device two-role proves the protocol's relay semantics but not simultaneous peers; the emulator was never a credible second device on this host.
 **Consequences:** Plan §11 (latency with real device data, one tier) + §12 (all automated items; two-device round trip via one-device two-role) + §17 AC items verified on-device. Remaining per plan: §12 Play self-check (moot — no Play distribution), OEM matrix (needs 2 more physical devices — user's call), §16/§314 minSdk analytics confirmation (user product call, flagged in ADR #26), App Check enforcement (§18, user console step). Next: Slice 11 closeout → V1 UI workstream (research + color scheme first).
 
-**ADR \#28 Title: Full-Project Review Pass (2026-08-31) — Protocol Hardening, Blocking-Path Fixes, Rules Tombstone**
+## #28 — Full-Project Review Pass (2026-08-31) — Protocol Hardening, Blocking-Path Fixes, Rules Tombstone
 
 **Status:** Accepted; implementation complete + verified 2026-08-31 (pre-V1-UI full-project code review; five-axis review per `code-review-and-quality`, cross-checked against every accepted ADR and the plan decision tables).
 **Context:** Before the V1 UI workstream starts, the entire project was reviewed end to end (correctness/readability/architecture/security/performance) with the question "will this break live, or in 6 months". The review produced 13 fixes across three subsystems plus four flagged product decisions below. Every fix is a root-cause repair of a real defect or an accepted-plan invariant that the code had drifted from — none is speculative hardening.
@@ -259,7 +259,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** (a) Tombstone write is best-effort — a relay failure at that instant leaves the pre-tombstone gap until the next deletion attempt; accepted because the gap is only exploitable by a former member deliberately re-creating the doc (the app never does). (b) Below API 33, non-WSC events assume the default display (correct on every single-display device, which is the whole supported fleet). (c) `attempt_log` (ADR #25) remains plain-FBE in `myexodus_rules.db` — **FLAGGED for the user**: V1 Epic 2 Step 10 mandates SQLCipher for behavioral data, and `ActivityLogStore` (the only SQLCipher behavioral store) is currently dead code; encrypting attempt_log or routing attempts through ActivityLogStore is a product decision (flagged, not silently changed).
 **Consequences:** The protocol's §8.4/§9/§10 invariants (pair-domain key separation, outbox-drained shredding, quota-bounded pulls, revocation-proof mailbox) now match the plan's intent under hostile conditions. Remaining flagged product decisions from the review (not fixed, user's call): clock roll-forward allows a bypass via daily-limit reset (device clock is user-controlled — mitigation would need server time or TrustedClock, out of V1 scope), partner is not notified on key rotation (rotation is local-recovery only, per §10), App Check enforcement is still a user console step (§18), and the multi-pair coordinator is designed but single-pair per device (§8.4). Next: V1 UI workstream (research award-winning UIs + ask color scheme first, per standing rule).
 
-**ADR \#29 Title: Blocking Overlay as an Interactive Pause Card — Interception Escape Hatch Realised, Attempt Logging on URL Blocks, NFR-S10 Touch Filter**
+## #29 — Blocking Overlay as an Interactive Pause Card — Interception Escape Hatch Realised, Attempt Logging on URL Blocks, NFR-S10 Touch Filter
 
 **Status:** Accepted; implementation complete 2026-09-13 (user-directed; V1-doc conformance on the shipped URL block path).
 **Context:** ADR #7 accepted a visible "Open Recovery Tools" button on block overlays as a deliberate trade-off and asserted that "the recovery dashboard remains reachable from every block overlay via the Interception Escape Hatch (V1 spec Req 25)". The shipped overlay did not have it: `OverlayController` drew a full-screen opaque scrim with a single message line and zero interactive elements. A user who landed on a blocked URL was therefore in a dead end — the page behind was unreadable and untouched, and the only ways out were home/back out of the browser or disabling the blocker in Settings. The V1 doc's glossary defines the Interception Escape Hatch as "a dedicated link embedded directly into the active blocking overlays allowing instant, single-tap navigation back to the local MyExodus recovery dashboard", State 2 Path A names the button "Open MyExodus Recovery", and the NFRs require "a maximum of 1 tap for the user to access recovery resources from the active block screen" and `setFilterTouchesWhenObscured(true)` on all block overlays (NFR-S10). Two further gaps surfaced in the same pass: URL blocks never recorded an attempt, though State 2 requires `access_attempts_count` to increment on intercept; and the scrim's alpha (0xEE) left the blocked page faintly readable. A user question drove the fix — "what if the user comes back to the browser and genuinely wants a different site?" — and the user chose, from presented options, an **interactive overlay card** over relaunching the block Activity.
@@ -268,7 +268,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** (a) "Go to a different site" is a one-tap exit from the blocked page rather than a wall the user must back out of — it trades some friction for the dead-end removal the user asked for, and it does not weaken enforcement (the block still applies to the site; only the page changes). (b) Recovery is reachable in one tap, which is exactly what ADR #7's accepted trade-off ("a tempting distraction") already priced in. (c) The card's buttons are a third place that starts a recovery session (block screen, Recovery tab, overlay) — accepted because all three call the same `RecoveryStateStore`, so there is still one session and one set of rules. (d) Copy is English-only, matching the rest of the app; no duration is printed, keeping the 60s-vs-"3-to-5-minute" discrepancy unexposed to users.
 **Consequences:** ADR #7's escape-hatch reachability is now real on the URL path rather than assumed; the app-window path is exempt by design and that exemption is stated in the ADR rather than left implicit — **superseded the same day by ADR #32** (the app cover now shows the same card, so no surface is exempt). Req 9's attempt data is now complete across both block types, which is what the Home screen's per-rule attempt counts surface — and what the partner alert thresholds (Req 6) will read. V1 doc State 2 carries an implementation-status note mirroring this; plan v2 records the work as deviation 5 (UI Phase 1.5, explicitly not part of its three pages). Device verification complete on X6532 (2026-09-13). Next: the remaining V1 UI Phase 1 pages' follow-ups (streaks, partner UI) per the vault workstream note.
 
-**ADR \#30 Title: Device-Test Sweep on the URL Pause Card — Scan-Decides Allow Path, Page-Like Omnibox Rule, Bar-Free Card Bounds, Display-Sized Cover, Runtime Browser-Toolbar Discovery**
+## #30 — Device-Test Sweep on the URL Pause Card — Scan-Decides Allow Path, Page-Like Omnibox Rule, Bar-Free Card Bounds, Display-Sized Cover, Runtime Browser-Toolbar Discovery
 
 **Status:** Accepted; implementation complete + device-verified 2026-09-13 (same-day sweep following ADR #29's device testing; every fix is a root-cause repair of a device-caught defect, none speculative).
 **Context:** ADR #29 shipped the URL pause card with a ~2-of-5 non-persistence caveat. The same-day device-testing sweep on the X6532 root-caused it and surfaced four adjacent defects, all caught with the card live. (1) **The non-persistence:** a browser window-state-changed event (page load, tab switch) carries no URL evidence, decided Allow, and hid the card with no re-scan — device-reproduced 8/8 before the fix. (2) **Omnibox false Allows:** the scanner decided on non-page address-bar text — mid-typing fragments ("ex") and the omnibox's own hint ("Search or type URL") canonicalize to a dotless host that matches nothing, yet Allow lifted the card over a still-blocked page. (3) **Nav-bar touch loss:** a full-display card drew above the navigation bar and swallowed its touches, so Home/Back stopped working with the card up — directly contradicting the card's own hint ("Home and back always work"). (4) **Sub-window-sized cover:** a cold launch can fire the blocked app's sub-window (loading/transient dialog) before its main window; the already-shown gate then froze the cover at that sub-window's size — AnkiDroid rendered readable around a 684×563 card. (5) **Package allowlist (user-raised the same day):** real devices carry arbitrary browsers; an allowlist can only ever cover browsers someone listed.
@@ -277,7 +277,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** (a) The re-ask costs one probe per browser WSC while a card is up (memoized; failed probes retried every 10 s) — accepted so evidence, not arrival order, decides. (b) A dotless, schemeless real address is not scanned — the omnibox adds the scheme on navigation and real web addresses carry a dot, so actual page loads stay page-like; a logged no-op, never a hidden card. (c) The card does not cover the system bars — that is the point (their touches never route through the cover, and the State 2 Path B guarantee holds). (d) A browser whose toolbar is absent at first probe (fullscreen video, first paint) is unscanned for up to the 10 s retry window — bounded, and it cannot stay invisible for the process lifetime.
 **Consequences:** ADR #29's persistence caveat is closed with a root cause rather than a retry; URL blocking has one decider (the scan) end to end; the card can no longer contradict its own hint; the per-browser maintenance burden is retired for conventional toolbars. V1 doc's pause-card bullet mirrors this; plan v2 deviation 5's amendment records it; enhanced-mode plan Step 7 carries the code-side revision.
 
-**ADR \#31 Title: Block Screen Parity — BlockerActivity Is the URL Pause Card's Twin; the Recovery Tab Owns Every Unlock**
+## #31 — Block Screen Parity — BlockerActivity Is the URL Pause Card's Twin; the Recovery Tab Owns Every Unlock
 
 **Status:** Accepted; implementation complete + device-verified 2026-09-13 (user-directed: one block language across app and URL blocks).
 **Context:** The app block screen (blocking-core plan §8.1) carried its own block design, including its own countdown/override flow on the screen, while the URL path had just shipped the pause card (ADR #29/#30). Two surfaces, two languages for the same event; the user directed one: the block screen becomes the card's twin and the Recovery tab owns the friction UI for both block types. A device-caught bypass rode the same pass: a completed recovery session row was never consumed, so after a rule re-arm the next blocker launch found the spent session (`remaining == 0`) and auto-unlocked the rule instantly — zero friction (the blocker flashed and vanished; the rule expired again, device-reproduced).
@@ -286,7 +286,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** (a) The block screen loses its in-screen countdown — seeing the timer costs a tab it no longer opens by itself — accepted: one recovery flow, one implementation, and the screen's single action lands exactly where the timer lives (user-directed). (b) Back is swallowed while Home is free — the exit is the keyguard-safe route, matching the blocking-core plan's §10 escape-hatch invariant, and the hint copy states it rather than hiding it.
 **Consequences:** The app-block surface now speaks the URL card's language (title, message, single escape); the countdown has one home, so the "two timers" divergence class cannot exist; every unlock runs through one `unlockRule` call site, making the consumed-session invariant auditable in one place. V1 doc's Req 13 status + recovery bullets mirror this.
 
-**ADR \#32 Title: App-Window Cover Becomes the Card — Same Block Language on the Instant Bridge, Recovery Action Without the FGS**
+## #32 — App-Window Cover Becomes the Card — Same Block Language on the Instant Bridge, Recovery Action Without the FGS
 
 **Status:** Accepted; implementation complete + device-verified 2026-09-13 (user-directed the same day as ADR #31: one block language across app and URL blocks, on every surface).
 **Context:** ADR #31 made the app block screen the URL pause card's twin, but the accessibility cover — the instant overlay shown the moment a restricted app's window appears, and the whole wall while the foreground service is not running — still rendered ADR #29's action-free message ("the card stays a wall"). That exemption predated the one-language direction and failed exactly where it mattered most: when the FGS is down (cold start before the poll arms, killed service), the cover is the only surface the user ever sees — AnkiDroid's rule was live and the FGS-down wall named nothing and offered nothing, while the block screen one poll later spoke the card language.
@@ -295,7 +295,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** (a) The cover offers the recovery action on a surface that can appear over any restricted app — ADR #7's accepted "tempting distraction" trade, applied uniformly by user direction. (b) A rule deleted between decide and show leaves the cover actionless rather than stale-actioned — the card states truth without a dead button. (c) The two surfaces keep different hint copy by design — each names its real escape (Back passes through on the cover, is swallowed on the activity); one language, honest mechanics.
 **Consequences:** The app-block language is identical on the instant cover and the block screen, and the FGS-down case — previously a message-only wall with no way to recovery — now carries the escape hatch; ADR #29's action-free exemption is fully superseded (ADR #29's Decision point 1 and Consequences carry the annotation). V1 doc's pause-card bullet updated; plan v2 deviation 5's amendment records the change. The cover's card is the first surface where the recovery action is reachable while the FGS is down, closing the last "no path to recovery from a live block" gap.
 
-**ADR \#33 Title: Second Full-Project Review Pass (2026-09-13) — Gate 2.5 Tool Sweep, Production Room-Builder Migration Registration, Firestore Index Wiring, Full Device Re-Run Under Stress**
+## #33 — Second Full-Project Review Pass (2026-09-13) — Gate 2.5 Tool Sweep, Production Room-Builder Migration Registration, Firestore Index Wiring, Full Device Re-Run Under Stress
 
 **Status:** Accepted; two production fixes implemented + device-verified 2026-09-13 (second full-project pass after ADR #28; same review axis "will this break live, or in 6 months", plus the full Gate 2.5 tool sweep and a complete device matrix re-run with stress).
 **Context:** Standing directive: re-read all docs/plans, review the entire project, run every verification tool the workflow doc names, then device-test everything on the X6532/XOS including stress runs, and cross-check the docs for what remains. Both production defects found were divergences between a test/config path and the production path — structurally invisible to the unit suite because the tests exercised the half that was correct.
@@ -304,7 +304,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 **Trade-off Accepted:** (a) Coverage is invisible in SonarQube until JaCoCo is wired into the scan — accepted this pass; wiring it is tooling work, and the unit suite is the coverage evidence meanwhile. (b) The delete-result-ignored Sonar findings are false positives (Compose `remember`/`derivedStateOf` result-discard shapes) — triaged individually rather than silenced via rule exclusions, so the scan keeps reporting them. (c) multiwindow stays a skip-branch until a manual split-screen session is run. (d) LOW findings left as-is: unused `keystore` param on `provideIdentityMigration`, stacked KDoc in `FirestoreSchema`, hardcoded strings in `EnhancedModeScreen`, residual `LatencyProfiler`, an unused local at `VpnPacket.kt:242`, `RecoveryPolicyDao` declared abstract class rather than interface. (e) The VPN `private_dns` gate accepts the disclosed DoT bypass (policy enforces on DNS; an app using its own DoT resolver behaves as with any VPN-less network) — unchanged from the earlier spike, restated here so the acceptance is on record.
 **Consequences:** Both real defects were invisible to tests by construction — the test path registered the migration and the config path never ran; the standing lessons: when a Room schema version bumps, verify every builder that opens that database (test AND production), and when a Firestore index is required, verify it on the server, not just in the JSON file. `firebase.json` and `di/AccountabilityModule.kt` are the entire production diff of this pass. Remaining known items unchanged: OEM matrix (needs more physical devices — user's call), App Check enforcement (§18, user console step), V1 Phase 2 (M3 Habit Tracking & Streaks) plan pending.
 
-**ADR \#34 Title: Emulator Sweep (Medium_Phone, stock API 36) — Cover Hand-Off Root-Cause, One-Screen Cover Restyle, Dialog Decor Fix**
+## #34 — Emulator Sweep (Medium_Phone, stock API 36) — Cover Hand-Off Root-Cause, One-Screen Cover Restyle, Dialog Decor Fix
 
 **Status:** Accepted; implementation complete + emulator-verified 2026-09-13 (user-directed restyle: one visible pause screen).
 
@@ -316,7 +316,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Consequences:** The cover hand-off no longer depends on the activity's WSC arriving with a live window id; the emulator joins the X6532 as a verified platform for this path. Outstanding from this sweep (user-visible, scheduled): **split-screen test** — abandoned on this emulator (the host is a 2015 dual-core Mac: guest transitions take seconds and `am start --windowingMode` cannot force a live pairing; user will test on another emulator); **website/URL blocking test on the emulator** — not started (Chrome `com.android.chrome` is present; still needs a URL rule + browser-toolbar discovery exercise on this platform). **Both outstanding items were subsequently resolved or moved — see ADR #35 (URL test DONE; split-screen moved to Lean_API34).** Emulator environment notes for future sessions: `-no-snapshot-save` was passed (cold boot ~15–20 min on this host; drop the flag to keep snapshots); reinstall drops the a11y binding (re-set `enabled_accessibility_services`); system ANR storms at boot need `settings put global hide_error_dialogs 1`; latency on this host: detection ~1.6s / submission ~0.4s / presentation ~2–3s, BlockerActivity "Displayed" ~+4s.
 
-**ADR \#35 Title: Emulator URL Test Complete + Two Defects Fixed — Dialog Window-Animation Ordering (Invisible Card), Room 3.0.2 → 3.0.3 (Process Death at Friction-Timer Completion)**
+## #35 — Emulator URL Test Complete + Two Defects Fixed — Dialog Window-Animation Ordering (Invisible Card), Room 3.0.2 → 3.0.3 (Process Death at Friction-Timer Completion)
 
 **Status:** Accepted; both fixes implemented + emulator-verified 2026-09-13 (same session as ADR #34's sweep, Medium_Phone/API 36).
 
@@ -330,7 +330,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Consequences:** The URL blocking path is now emulator-verified end to end, including the recovery escape from the URL card and friction-timer completion — the two legs that ran only on X6532 before. ADR #34's outstanding list is down to **split-screen, moved to Lean_API34 (landscape; user-directed, Medium_Phone shut down first)**. Pattern for future dependency bumps: Room patch releases can carry concurrency fixes the unit suite cannot surface (Robolectric rarely reproduces connection-pool contention), so the emulator/device completion flows are the real regression net for timer/completion write paths.
 
-**ADR \#36 Title: Emulator Split-Screen Pass (emulator-5554, stock API 36, portrait) — Pane-Bounded Cover, Allow-Branch Bypass, Harness Passive Mode**
+## #36 — Emulator Split-Screen Pass (emulator-5554, stock API 36, portrait) — Pane-Bounded Cover, Allow-Branch Bypass, Harness Passive Mode
 
 **Status:** Implemented + unit-verified; on-device end-to-end harness run **PASS** (2026-09-14, emulator-5554, portrait) including the allowed-pane-poke regression. The landscape path never became usable on this image (user-directed to portrait).
 
@@ -342,7 +342,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Consequences:** Multi-window app-block coverage is implemented and end-to-end verified on the emulator. Known gap, not yet addressed: URL cards still show at `displayBounds` (whole display) in a split — the pane-clamp was applied to the app-block path only; URL-card multi-window coverage is a separate follow-up. The WM dismantle behavior means every bring-to-front of a pane task in future suites must go through the Recents formation path (or a manual host dance), and the harness host dance rules in Decision (4) are emulator-specific — re-check on other OEMs.
 
-**ADR \#37 Title: Habit Tracking & Streaks (V1 Phase 2 / Milestone 3) — Wall-Clock-First Streak Engine, Reboot-Consistent Milestone Alarms, Encrypted-Store Seam, Streaks UI**
+## #37 — Habit Tracking & Streaks (V1 Phase 2 / Milestone 3) — Wall-Clock-First Streak Engine, Reboot-Consistent Milestone Alarms, Encrypted-Store Seam, Streaks UI
 
 **Status:** Accepted; implementation complete (plan Steps 0–5, `app/plans/habit-streaks-implementation-plan.md`), JVM suite 418 green + lint zero, and **device-verified on both devices** 2026-09-14 (emulator-5554 stock API 34 + X6532/XOS 14) including the +7-day forward-time milestone leg. No product defects were found by the device pass — its findings were all environment mechanics (below), a first for this project's device sweeps.
 
@@ -356,7 +356,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Consequences:** The habit loop (Req 11/12/18) is functionally complete and device-verified; V1.md Req 11/12 statuses updated the same day. Environment mechanics future sessions must know: emulator real `BOOT_COMPLETED` may be unusable on slow hosts (offload queue) — root-deliver to the receiver, and rely on XOS/real devices for real-delivery evidence; an emulator cold app start here takes ~25–50 s before first StateFlow emission (a first UI dump can legitimately read the empty state — the anomaly log is the ground truth that evaluation ran). Next: **multi-habit UI workstream** (users realistically track >5 habits — switcher design is a bottom-sheet picker, `LIMIT 1`/no-`ORDER BY` resolution retired), then ADR-recorded files await user commit.
 
-**ADR \#38 Title: Multi-Habit UI (Streak Workstream Follow-Up) — Persisted Selection (Schema v7), Display-vs-Alarm Gating, Shared Switcher Sheet, Load-Honesty Flag**
+## #38 — Multi-Habit UI (Streak Workstream Follow-Up) — Persisted Selection (Schema v7), Display-vs-Alarm Gating, Shared Switcher Sheet, Load-Honesty Flag
 
 **Status:** Accepted; implemented; JVM 422 green + lint zero; device-verified on the X6532 (XOS 14) 2026-09-14 (switcher flow, persistence across force-stop, load honesty, MIGRATION_6_7 instrumented test). Follow-up to ADR #37 §7's queued single-habit limitation.
 
@@ -370,7 +370,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Consequences:** Multiple habits are first-class and fully usable: each carries its own streak, timeline, milestones, and alarms; switching is explicit, instant, and persistent; background habit alarms never hijack the displayed state. No habit delete/rename feature exists yet — the X6532 currently carries test habits ("Instagram", "Betting apps") created during validation, removable only by clearing app data until a delete feature ships (flagged to the user). The retired nondeterminism (`LIMIT 1`, no `ORDER BY`) is fully closed by the v7 resolution rule.
 
-**ADR \#39 Title: Daily Usage Limits End-to-End (V1 Req 4/5) — Single-Transaction Accounting Engine, Two Detection Paths Under One Authority, Overlay-As-The-Block, and the Expiry Contract**
+## #39 — Daily Usage Limits End-to-End (V1 Req 4/5) — Single-Transaction Accounting Engine, Two Detection Paths Under One Authority, Overlay-As-The-Block, and the Expiry Contract
 
 **Status:** Accepted; implemented (plan v2 Steps 1–11); device-verified on the X6532 (XOS 14) and the stock-Android emulator; gate green 2026-09-16 (487 JVM tests / 0 failures, lint zero). Authoritative spec: `app/plans/daily-usage-limit-enforcement-implementation-plan-v2.md` — this ADR records the decision set, the plan holds the detail.
 
@@ -386,7 +386,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#40 Title: Home-Screen Widget (V1 Req 36) — Materialized Snapshot, Three-Valued Honesty, and a Composition That Observes Instead of Re-Renders**
+## #40 — Home-Screen Widget (V1 Req 36) — Materialized Snapshot, Three-Valued Honesty, and a Composition That Observes Instead of Re-Renders
 
 **Status:** Accepted; implemented 2026-09-16. Authoritative spec: `app/plans/desert-dawn-widget-phase6-full-spec.md` — this ADR records the decisions, the deviations, and what the plan asked for that the platform does not actually allow.
 
@@ -402,7 +402,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#41 Title: Partner Pillar v2 Pairing Registration — Token-as-Transport Rendezvous, Server-Authoritative `/pairings`, and the Two-Id Model**
+## #41 — Partner Pillar v2 Pairing Registration — Token-as-Transport Rendezvous, Server-Authoritative `/pairings`, and the Two-Id Model
 
 **Status:** Accepted; implemented 2026-09-18 (client + Cloud Function + tests). The v2 rules file (Step 1, amended in Step 3 with the token single-use gate) is **written but not deployed** — deployment follows the client migration (Steps 9/10) and is a user step; the `registerPairing` function deploy (`firebase deploy --only functions`, Blaze) is likewise pending. Authoritative spec: `app/plans/partner-pillar-implementation-plan-v2.md` (§7 Steps 1–3, §8 Step 3, AD-02/AD-17a/b/AD-20a). Adopts wholesale by plan authority — safe because no pairing UI has ever shipped, so no production pairs exist and there is no data to migrate.
 
@@ -418,7 +418,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#42 Title: AD-23's SOS Per-Pair Threshold Dropped — the Mailbox Relay Stays Content-Blind; Volume Windows Are the Server-Side Enforcement**
+## #42 — AD-23's SOS Per-Pair Threshold Dropped — the Mailbox Relay Stays Content-Blind; Volume Windows Are the Server-Side Enforcement
 
 **Status:** Accepted (user ruling 2026-09-18); implemented in `functions/relay.js` + `functions/relay-logic.js`. Deviates from the plan's AD-23 text (which names 5 SOS events per pair per hour as the third threshold).
 
@@ -436,7 +436,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#43 Title: HMS/Huawei Push Rail Dropped — GMS-Only Push Scope by User Ruling**
+## #43 — HMS/Huawei Push Rail Dropped — GMS-Only Push Scope by User Ruling
 
 **Status:** Accepted (user ruling 2026-09-18, "we dont build for huawei it sounds like a hustle"); nothing implemented. Deviates from plan FR5 (partially unmet), §7 item 8, §8 Step 7, NFR6, AD-21, AD-04's `HmsPushTransport` half, and §17's HMS acceptance criterion + §12's Huawei device-matrix row.
 
@@ -452,7 +452,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#44 Title: Mailbox Receive-Path Semantics — In-Transaction Dedup, Ack-on-Consumed, Marker-Free Deleted-Messages Reconciliation**
+## #44 — Mailbox Receive-Path Semantics — In-Transaction Dedup, Ack-on-Consumed, Marker-Free Deleted-Messages Reconciliation
 
 **Status:** Accepted; implemented 2026-09-18 (client). Deviates from the plan's §8 "Step 9" pseudo-code at three points (marker placement, ack gating, `onDeletedMessages` flag) — each deviation is visible in the code and pinned by tests. Cross-step contract for Steps 11 (chain repair), 14 (unpair), 19 (monitoring). Authoritative spec: `app/plans/partner-pillar-implementation-plan-v2.md` §6 step 7, §8 Step 9, §9 rows 2–3, AD-10b, AD-11b, AD-18b.
 
@@ -466,7 +466,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Consequences:** Steps 11 and 19 now have a stable three-way contract: acks = consumed (any outcome), `processed_events` = incorporated-or-held (Appended/Duplicate/Gap), chain rows = applied state. Step 11's repair builds on the Gap branch: the held row is already in the chain table (PENDING_GAP) and already marked, so the repair request is an *addition* to the Gap outcome, not a rework; the existing `gapSequences`/`expireGaps` (7-day pending window) stay the local half. **Revision 2026-09-18 (Step 11):** the `expireGaps`/7-day-window clause is superseded — Step 11 (ADR #45) deleted `expireGaps` (it had zero production callers) and replaced the local 7-day terminal with AD-08's 30-day staged repair. Step 14's unpair needs no new clearing — `deletePairData` already removes chain rows, outbox, and (via the same transaction discipline) can extend to `processed_events` if the pair is ever re-created with recycled message ids (it cannot today: message ids are per-event UUIDs). If the wire format ever gains a protocol-version field, the `PROTOCOL_MISMATCH` branch lands in `MailboxMessageHandler` with the other envelope gatekeepers.
 
-**ADR \#45 Title: Chain Repair Protocol (AD-08 staged) — Repair-Request-as-Ordinary-Event, Anchor-Proof Responder, and the v1 Backfill Retirement**
+## #45 — Chain Repair Protocol (AD-08 staged) — Repair-Request-as-Ordinary-Event, Anchor-Proof Responder, and the v1 Backfill Retirement
 
 **Status:** Accepted; implemented 2026-09-18 (client; unit-verified). Supersedes the `expireGaps`/7-day-pending-window half of ADR #44's Consequences. Authoritative spec: `app/plans/partner-pillar-implementation-plan-v2.md` §7 item 11, §8 Step 10 (five points), AD-08/AD-08b (lines 176/178), §9 rows 456–458, §12 lines 524–525, §14 line 574, acceptance 625–626.
 
@@ -482,7 +482,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#46 Title: The Virtual-Partner Harness — §12's On-Device Round Trip Without a Second Attesting Device**
+## #46 — The Virtual-Partner Harness — §12's On-Device Round Trip Without a Second Attesting Device
 
 **Status:** Accepted; implemented 2026-09-18 (debug/androidTest sources only; no production code changed). Covers §12's "Chain repair" instrumented row, temporary-gap branch — the first on-device exercise of the full v2 pipeline. Exercises the deployed v2 rules + functions (relay, registerPairing) end to end. Authoritative spec: `app/plans/partner-pillar-implementation-plan-v2.md` §12 (instrumented + device-matrix rows), §13 (deploy gate), §7 items 3/7/9/10/11.
 
@@ -498,7 +498,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#47 Title: Partner Dashboard UI (Step 12) — Local-Only Read Model, Production Re-Decode of Stored Envelopes, and the Sixth Tab**
+## #47 — Partner Dashboard UI (Step 12) — Local-Only Read Model, Production Re-Decode of Stored Envelopes, and the Sixth Tab
 
 **Status:** Accepted; implemented 2026-09-18 (client; JVM suite + on-device leg green). Authoritative spec: plan v2 §7 item 12, FR3 (§9 rows 457–458 and 468, §11 line 502, acceptance line 631), AD-05.
 
@@ -514,7 +514,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#48 Title: Approval UI + Epoch-Bound State Machine (Step 13) — Canonical Request Derivation, Server-Anchored Expiry, and the Two-Sided CAS**
+## #48 — Approval UI + Epoch-Bound State Machine (Step 13) — Canonical Request Derivation, Server-Anchored Expiry, and the Two-Sided CAS
 
 **Status:** Accepted; implemented 2026-09-18 (client; unit-verified). Authoritative spec: `app/plans/partner-pillar-implementation-plan-v2.md` §7 item 13, §8 Step 12 (states + exactly-once guard), §6 line 240 (badge before approve/reject), §9 row 459, §10 line 624, §11 line 333 (response fields), AD-07, AD-16, AD-23 (line 224, context only).
 
@@ -532,7 +532,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#49 Title: Unpair Protocol + UI (Step 14) — Journal-First Ordering, Ack-as-Evidence, and Two Rules Amendments**
+## #49 — Unpair Protocol + UI (Step 14) — Journal-First Ordering, Ack-as-Evidence, and Two Rules Amendments
 
 **Status:** Accepted; implemented 2026-09-19 (client + rules; JVM- and rules-emulator-verified). The two `firestore.rules` amendments were emulator-verified 2026-09-19 and **deployed 2026-09-19** (user approved; gate re-run 19/19 immediately before — task #33 closed). Authoritative spec: plan v2 §7 item 14 (line 261), §8 unpair protocol UI copy (line 429), AD-13a/b (lines 194–196), FR4 (line 51), §9 row 460, §12 line 526, §17 line 655, §10, AD-18b.
 
@@ -548,7 +548,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#50 Title: Session Key Rotation (Step 15) — CEK-Layered Per-Epoch Derivation, Absent-at-Zero `ke` Wire Field, and the Receive Policy as the Honest "Discard"**
+## #50 — Session Key Rotation (Step 15) — CEK-Layered Per-Epoch Derivation, Absent-at-Zero `ke` Wire Field, and the Receive Policy as the Honest "Discard"
 
 **Status:** Accepted; implemented 2026-09-19 (client; JVM-verified). Authoritative spec: plan v2 §7 item 15 (line 262), §8 Step 14 (lines 431–433), AD-12 (line 192), AD-08 (line 176), §8 Step 9 receive pseudocode (lines 393–406), §12 line 514, §17 lines 634–635, §10.
 
@@ -564,7 +564,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#51 Title: Notification Permission Flow + Channels (Step 16) — Banner-as-Rationale, Session-Scoped Requestability, and Creation-Time Channel Enumeration**
+## #51 — Notification Permission Flow + Channels (Step 16) — Banner-as-Rationale, Session-Scoped Requestability, and Creation-Time Channel Enumeration
 
 **Status:** Accepted; implemented 2026-09-19 (client; JVM- and device-verified). Authoritative spec: plan v2 §7 item 16 (line 263), §8 Step 16 (lines 434–436), §10 error table (line 462), §12 line 523, §14 line 579, §17 line 631.
 
@@ -580,7 +580,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#52 Title: Local-Data-Wipe Detection (Step 17) — the Agreement Key as the Out-of-DB Prior-Pairing Signal, Idempotent Re-Derivation, and the Card Instead of a Recovery Flow**
+## #52 — Local-Data-Wipe Detection (Step 17) — the Agreement Key as the Out-of-DB Prior-Pairing Signal, Idempotent Re-Derivation, and the Card Instead of a Recovery Flow
 
 **Status:** Accepted; implemented 2026-09-19 (client; JVM- and device-verified). Authoritative spec: plan v2 §7 item 17 (line 264), §8 Step 17 (lines 438–439), AD-22 (line 222), NFR7 (line 61), §9 error table (line 465), §12 line 522, §14 line 580, §17 line 637.
 
@@ -596,7 +596,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#53 Title: Server-Side Rate Limiting (Step 18) — Counter Extraction for Call-Count Proof, and the Author-Read Rail That Makes a Rejection Observable to Its Sender**
+## #53 — Server-Side Rate Limiting (Step 18) — Counter Extraction for Call-Count Proof, and the Author-Read Rail That Makes a Rejection Observable to Its Sender
 
 **Status:** Accepted; implemented 2026-09-19 (server + client + rules; JVM/function/rules-emulator-verified; rules deployed 2026-09-19 — user approved the amendment, task #33 closed). Authoritative spec: plan v2 §7 item 18 (line 265), §8 Step 18 (lines 441–442), AD-23 (line 224), §9 error table (line 461), §11 line 503, §12 line 541, §17 line 638.
 
@@ -612,7 +612,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#54 Title: Monitoring & Alerting Wiring (Step 19) — Client Buckets on the Existing Crash rail, Server Log Fields, and the Console Configuration Split Out With Its Blocker Named**
+## #54 — Monitoring & Alerting Wiring (Step 19) — Client Buckets on the Existing Crash rail, Server Log Fields, and the Console Configuration Split Out With Its Blocker Named
 
 **Context:** §7 line 266 is one line — "Monitoring/alerting wiring." — with **no §8 detailed step and no §12 tests**; the binding contract is §14's eleven metric bullets (lines 570-580), §17 line 639 (budget alert + `maxInstances` "configured and verified to fire/enforce in staging"), and §18 line 649 (dashboards live with one day of staging data). Three v2 realities bound what "wiring" can mean. (1) **No staging environment exists in this project** — single-user pre-release; §17/§18's staging clauses have no target, so they are met-on-production or explicitly deferred, never pretended. (2) **The GCP configuration half is console work** (alert policies, log-based metrics, dashboards, budget alert) — not code; it can be documented but not implemented from here, and its budget figure depends on OQ-5 (an unanswered product/finance decision) while gcloud is not even installed locally. (3) **The client telemetry rail already exists** — `CrashReporting.nonFatal` (one `NonFatalEvent` class for issue grouping, Decision-12 metadata-only contract, opt-out honored, best-effort) — so Step 19's client half is *emitting the §14 events on it*, not building a rail.
 
@@ -624,7 +624,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#55 Title: Full Test Suite (Step 20) — Closing the §12 Gaps with an Extracted Dispatch Module, the Instrumented Migration Leg Run on Both Devices, and the In-Process-Bootstrap Gate the Device Run Forced**
+## #55 — Full Test Suite (Step 20) — Closing the §12 Gaps with an Extracted Dispatch Module, the Instrumented Migration Leg Run on Both Devices, and the In-Process-Bootstrap Gate the Device Run Forced
 
 **Status:** Accepted; implemented 2026-09-19 (client + functions + harness; JVM/node/rules-emulator/device-verified). Authoritative spec: plan v2 §7 item 20 (line 267 "Full test suite (Section 12) before rollout"), §12 (lines 507-541), §17 line 634 (MigrationTestHelper + interrupted migration), §17 line 635 (rotation thresholds), ADR #50 (the §17 line-634 mapping note), ADR #43 (HMS dropped).
 
@@ -640,7 +640,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 ---
 
-**ADR \#56 Title: Push-Registration Rollout Gate (Plan v2 §13 line 564) — Remote Config, Kill-Switch Semantics, Default On**
+## #56 — Push-Registration Rollout Gate (Plan v2 §13 line 564) — Remote Config, Kill-Switch Semantics, Default On
 
 **Status:** Accepted; implemented 2026-09-19 (client; JVM-verified). Task #28. Authoritative spec: plan v2 §13 line 564 ("Staged client rollout: `push_installations` registration is gated behind a feature flag, independent of app-store release cadence"). **Revision 2026-10-17 (owner direction, superseded in mechanism by ADR #171):** Firebase Remote Config is to be removed entirely and GitHub Releases becomes the development/production APK channel. The gate's remaining single key still functions until the scheduled removal; the removal shape and the lost kill-switch capability are recorded in #171.
 
@@ -654,7 +654,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Consequences:** Plan v2 §13's rollout-gate line is satisfied with one console-editable key. Invariant for future work: registration must only ever be reached through `runPartnerSyncPass` (the single gate point) — a future direct `registrar.register()` call site bypasses the flag. The flag is read-only from the client; halting the rail takes effect within one sync pass per device (≤15 min foreground, longer when the app never runs — the honest latency bound).
 
-**ADR \#57 Title: App Check Enforcement Activation (Task #21, Plan v2 §13 line 560 / §17 line 620) — Binary Project-Wide Enforcement, the Amended AD-03b, the Callable's `enforceAppCheck`, and the Debug-Token Path That Keeps the Emulator Matrix Running**
+## #57 — App Check Enforcement Activation (Task #21, Plan v2 §13 line 560 / §17 line 620) — Binary Project-Wide Enforcement, the Amended AD-03b, the Callable's `enforceAppCheck`, and the Debug-Token Path That Keeps the Emulator Matrix Running
 
 **Status:** Accepted; activated in production 2026-09-19 by owner ruling ("enforce both levers"). Task #21.
 
@@ -668,7 +668,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Consequences:** Plan v2 §13 line 560's monitor→enforce arc is complete; §17 line 620 is re-read as: rejection half verified on the emulator (no-token run), acceptance half realized as the registered debug-token path (the AD-03b no-GMS acceptance half is void, annotated in the plan). The deployment record is amended in `MyExodus Build & Dependencies.md`. Invariant for future work: any new instrumented test that touches Firestore must call `AppCheckTestSupport.useDebugProviderIfRequested(...)` and be run with the debug secret on non-attesting devices.
 
-**ADR \#58 Title: Approval-Flow Device Leg (Task #32 — Extending the ADR #46 Harness, and the DI Migration-List Gap the Leg Caught: 9→10)**
+## #58 — Approval-Flow Device Leg (Task #32 — Extending the ADR #46 Harness, and the DI Migration-List Gap the Leg Caught: 9→10)
 
 **Status:** Accepted; implemented + device-verified 2026-09-19 on the X6532 (task #32). Authority: ADR #48 (Consequences: "The ADR #46 harness is the template to extend with an approval leg when a second attesting identity is available"), plan v2 §7 item 13 (line 260 "Approval UI + epoch-bound state machine"), §8 Step 12 (lines 422-425), §6 line 240 (badge-before-respond).
 
@@ -682,7 +682,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Consequences:** The ADR #46 harness now has a *receive* half for the virtual partner (`PartnerTestIdentity.receiver()`), so future device legs that need B to ingest A's traffic (unpair's terminal ack, rotation-epoch traffic, bilateral deletion) no longer need hand-wired transport. Migration registration is single-sourced; any future schema bump must extend `ALL_MIGRATIONS`, and the JVM guard fails loudly if it does not. Recorded honestly: the approval flow's *JVM* acceptance (plan §17 line 626) was already met — this leg adds wire evidence and is the reason a **real upgrade-blocking defect** was found before shipping.
 
-**ADR \#59 Title: UI/UX Audit Pass (Plan `ui-ux-improvement-session.md`, 2026-09-19) — One Token System Across Every Surface, the Authority Signal as the Single Status Source, and the Four Root Causes the Screenshot Pass Uncovered**
+## #59 — UI/UX Audit Pass (Plan `ui-ux-improvement-session.md`, 2026-09-19) — One Token System Across Every Surface, the Authority Signal as the Single Status Source, and the Four Root Causes the Screenshot Pass Uncovered
 
 **Status:** Accepted; implemented + device-verified 2026-09-19 on the X6532 (task #39). Authority: plan `app/plans/ui-ux-improvement-session.md` findings 1–22 (+23/#24 found during the pass); user mandate 2026-09-19 (all five scope additions, incl. color consistency and logical coherence); ADR #47 (nav labels), ADR #48 (partner semantics untouched).
 
@@ -696,7 +696,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Consequences:** A visual pass can no longer leak baseline M3 colors — every role the surfaces use is defined in one palette, and the block surfaces (outside Composition) read the same constants. Status surfaces have exactly one source of truth per instant, so the chip/banner/row triad cannot contradict. The two infinite-recurrence classes (undefined color slots; change-gated publishers skipping reconciliation) now have named root causes and devices-level evidence. Future UI passes inherit the audit's method (screenshot every surface × state, both themes, on-device) and the plan's findings table as the checklist.
 
-**ADR \#60 Title: Leaf Logo Brand Identity (2026-09-19) — Keyed-Alpha Icon Pipeline, White-Field Adaptive Icon, and a Brand Plate for Night Mode**
+## #60 — Leaf Logo Brand Identity (2026-09-19) — Keyed-Alpha Icon Pipeline, White-Field Adaptive Icon, and a Brand Plate for Night Mode
 
 **Status:** Accepted; implemented 2026-09-19. Authority: user-supplied brand masters (`assets/brand/myexodus-logo-master.jpeg` 1024² white-field, `myexodus-logo-on-black.jpeg` 500²); user decision 2026-09-19 (white icon field, "use them anywhere that applies — be critical"). Supersedes the Desert Dawn vector mark (`ic_launcher_foreground.xml`'s sun/horizon) as the app's identity.
 
@@ -710,7 +710,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Consequences:** The brand has one source of truth (`assets/brand/` masters + `scripts/GenerateIcons.java`) and every surface derives from it, so a future brand tweak is one run, not eleven hand-edited files. The ADR #59 "known limitation" about API 24/25 rasters still showing the template robot is retired by this change. Icon geometry decisions (safe-circle diagonal, plate rationale) are recorded here rather than inferred from PNGs.
 
-**ADR \#61 Title: Recovery Resource UI (2026-09-19, plan v3) — Extend-the-Tab Intervention, Effort-Tiered Offline Catalog, Log ≠ Bypass, and the v9 Recovery Rail**
+## #61 — Recovery Resource UI (2026-09-19, plan v3) — Extend-the-Tab Intervention, Effort-Tiered Offline Catalog, Log ≠ Bypass, and the v9 Recovery Rail
 
 **Status:** Accepted; implemented + device-verified 2026-09-19 (task #35; JVM 721/0/0/0, `:app:assembleDebug` PASS, instrumented migration 8→9, X6532 + emulator-5554 device legs). Authority: `app/plans/myexodus-recovery-resource-ui-implementation-plan-v3.md` (W1–W8; v2 archived, audited line-by-line in v3 §6); V1 doc Req 8/10/13/19/20 + Task 3.1, State 3. Retires the Phase-1 note "the vault workstream note's 'recovery resources' has no spec anywhere and is not built" and the Phase-1 deviation (3) (composed-surface `FLAG_SECURE`).
 
@@ -732,7 +732,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Consequences:** Req 8/19/20 + Task 3.1 are built and the recovery surface now matches the V1 doc's State 3 (corrected to the shipped engine the same day). Every willpower decision is derived at read time from one pure evaluator — there is no cached window state to invalidate, and the persistence layer only stores the windows themselves. The unlock invariant is unchanged and now explicitly documented: two call sites, and an urge log is not one of them. The mirror extended the activity vocabulary without touching rules or the payload format, so the partner stack's deployment surface stayed closed. The v9 rail follows the same migration-list contract as every previous step, with a guard test so a future migration cannot repeat the ADR #58 class of defect.
 
-**ADR \#62 Title: Third Full-Project Review Pass (2026-09-19) — Gate 2.5 Sweep on a Fresh SonarQube, Opengrep False-Positive Fix, and the Full Test Re-Run After Recovery UI**
+## #62 — Third Full-Project Review Pass (2026-09-19) — Gate 2.5 Sweep on a Fresh SonarQube, Opengrep False-Positive Fix, and the Full Test Re-Run After Recovery UI
 
 **Status:** Accepted 2026-09-19. Review + tooling pass, no production-code behavior changes (one script fixed: the opengrep ruleset). Verification in progress at write time — updated below as each leg completed.
 
@@ -746,7 +746,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Consequences:** The Gate 2.5 baseline is re-established on a fresh SonarQube DB (the previous instance's H2 data lives in `/private/tmp` and does not survive cleanup — the scan is reproducible from the recipe, the trend line is not). The opengrep ruleset is stricter now (literals excluded, expressions still flagged), so any future `Log.*(TAG, token)` call is still an error. No code changes were needed by the review; the pass's output is evidence plus one ruleset fix and the recorded tooling recipe.
 
-**ADR \#63 Title: Main-Thread Database Access (2026-09-19) — a Plain App Resume Could ANR on the Store Lock; Every UI Path Now Dispatches DB Work Off `Dispatchers.Main`**
+## #63 — Main-Thread Database Access (2026-09-19) — a Plain App Resume Could ANR on the Store Lock; Every UI Path Now Dispatches DB Work Off `Dispatchers.Main`
 
 **Status:** Accepted; implemented, compiled, and device-re-verified 2026-09-19 (task #9). Production-code behavior change (dispatchers only — no logic, schema, or contract change).
 
@@ -760,7 +760,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Consequences:** The resume path can no longer ANR on the store lock, and neither can any screen-level tap. This also removes a category of a11y event loss under load, which matters beyond the harness: a stalled main thread silently degrades blocking responsiveness on the device. The harness lesson is recorded with it — an intermittent "no overlay" on device is a symptom that must be traced through the ANR/a11y logs before being called flaky.
 
-**ADR \#64 Title: Path A Liveness Is the In-Process Service Instance, Not the Platform's Client-Side Enabled List (2026-09-19) — Input Hardening, and the Measurement Trap That Mimicked a Frozen-Status Defect**
+## #64 — Path A Liveness Is the In-Process Service Instance, Not the Platform's Client-Side Enabled List (2026-09-19) — Input Hardening, and the Measurement Trap That Mimicked a Frozen-Status Defect
 
 **Status:** Accepted; implemented 2026-09-19 (task #10 audit; landed in task #9's scope). Production-code behavior change (input derivation only). JVM-verified and device-verified post-fix — but the defect that triggered the investigation is **not confirmed**, and the change is recorded as hardening, not as a shipped-defect fix (see Verification).
 
@@ -774,7 +774,7 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Consequences:** The authority input now matches §8 Step 6's own wording; the enabled→disabled alert can no longer fire off a list read that contradicts a live instance; the widget (`ProtectionSnapshotWriter`) derives from the same flow and inherits the same input. Recorded measurement trap, now standing device knowledge: **on XOS, `uiautomator dump` is not a trustworthy read of the current screen while an accessibility service is active — verify UI state with `screencap` and read the image.** A large share of this audit's investigation followed a "frozen chip" that existed only in the dump's stale node tree. Also recorded: an OEM's client-side accessibility list is not ground truth for liveness in this app — the in-process instance is — worth applying to any future consumer of `getEnabledAccessibilityServiceList`.
 
-**ADR \#65 Title: Task-#10 Scenario-Audit Fix Batch (2026-09-19) — the FGS Start-Foreground Contract, Rotation Recreation, the Website-Field IME, the Cold-Start Blocks Flash, and an Honest Check-Now Gate**
+## #65 — Task-#10 Scenario-Audit Fix Batch (2026-09-19) — the FGS Start-Foreground Contract, Rotation Recreation, the Website-Field IME, the Cold-Start Blocks Flash, and an Honest Check-Now Gate
 
 **Status:** Accepted; implemented, JVM-green, and device-re-verified 2026-09-19 (task #10 scenario audit, legs #12–#17). One production-crash-class fix (item 1), one platform-behavior fix (item 2), three smaller correctness/presentation fixes (items 3–5). Three audit observations are recorded as notes, not fixes (below).
 
@@ -802,7 +802,7 @@ Also fixed with a JVM pin (adb cannot type emoji — `input text` is ASCII-only)
 
 **Consequences:** The FGS crash class is closed at the single shared start site (MainActivity resume, EnhancedModeScreen toggle, BootReceiver all route through `EnforcementForegroundService.start()`); the app can no longer be killed by merely foregrounding it while protection is on. Recorded for the plan-fidelity sweep: the enforcement plan v2 §8.2's startup/recompute story is unchanged — this fix is contract plumbing beneath it, and no plan text needed amendment. Remaining audit legs: unpair-mid-session is testable — a live test pair (`dcee1e380ead…`, Since 2026-09-19) exists on the device — but unpairing mutates shared state (the pair is a test artifact; re-pairing needs the second device), so it awaits a user ruling; two-device both-roles stays blocked on a second biometric device; the device-clock flip for date rollover stays unrun (no root) with the rollover math JVM-covered instead (streak days are duration-based — midnight/DST-immune by construction; daily-limit day anchors roll on local-date/timezone change, `UsageAccountingEngineTest`).
 
-**ADR \#66 Title: App Check Debug Seam + the Emulator Two-Device Rig (Task #18, 2026-09-20) — the `-testing` Artifact That Broke Every Debug Run, the AVD That Failed Because Its GPU Was Off, and the Attestation Boundary Confirmed by Two Emulators**
+## #66 — App Check Debug Seam + the Emulator Two-Device Rig (Task #18, 2026-09-20) — the `-testing` Artifact That Broke Every Debug Run, the AVD That Failed Because Its GPU Was Off, and the Attestation Boundary Confirmed by Two Emulators
 
 **Status:** Accepted; implemented and verified on both AVDs 2026-09-20 (task #18). One production seam added (`AppCheckInstaller.factoryOverride`), one debug-only provider, one dependency correction, one AVD config fix. The pairing leg of task #14 is closed as **structurally blocked**, with device evidence (below).
 
@@ -831,7 +831,7 @@ Also fixed with a JVM pin (adb cannot type emoji — `input text` is ASCII-only)
 
 **Consequences:** The two-device emulator rig is usable for every scenario leg that does not require a *pair*; the pairing leg stays on the ADR #46 virtual-partner harness (a second TEE identity on the X6532), which remains the only route to a real cross-identity pairing round-trip. Task #14 is therefore blocked by design, not by setup, and the residual coverage gap is stated precisely: distinct physical keystores. **Do not add an attestation waiver without a product ruling on plan §16 item 2** — the code now reads as if this were settled, and it is not.
 
-**ADR \#67 Title: Unpair and Approval Respond Could Never Raise the Biometric Prompt (Task #19, 2026-09-20) — a Main-Thread Contract Violated on a Background Dispatcher, Hidden by a Swallowed Exception**
+## #67 — Unpair and Approval Respond Could Never Raise the Biometric Prompt (Task #19, 2026-09-20) — a Main-Thread Contract Violated on a Background Dispatcher, Hidden by a Swallowed Exception
 
 **Status:** Accepted; fixed and device-verified on the X6532 2026-09-20 (task #19). Three code changes: the prompt's thread affinity, a tri-state unpair outcome, and logging on the previously silent failure paths. No plan requirement was contradicted — one plan line was corrected (below).
 
@@ -865,7 +865,7 @@ Also fixed with a JVM pin (adb cannot type emoji — `input text` is ASCII-only)
 
 ---
 
-**ADR \#68 Title: The Block-Mode Matrix and Rule-Level Day Scope (2026-09-20) — the Editor Could Not Express "Daily Limit Only", and Days Now Scope the Whole Rule**
+## #68 — The Block-Mode Matrix and Rule-Level Day Scope (2026-09-20) — the Editor Could Not Express "Daily Limit Only", and Days Now Scope the Whole Rule
 
 **Status:** Accepted; implemented + JVM-verified + emulator-verified 2026-09-20. No plan requirement was contradicted; the change implements a gap the plan left open (the editor's mechanism composition) and records the semantics the user settled by ruling.
 
@@ -891,7 +891,7 @@ Also fixed with a JVM pin (adb cannot type emoji — `input text` is ASCII-only)
 
 ---
 
-**ADR \#69 Title: The Form's Input Domain Is Part of the Scenario Space (2026-09-20) — a 30-Hour Daily Limit Saved, and a Rejected Save the User Could Not See**
+## #69 — The Form's Input Domain Is Part of the Scenario Space (2026-09-20) — a 30-Hour Daily Limit Saved, and a Rejected Save the User Could Not See
 
 **Status:** Accepted; implemented + JVM-verified + emulator-verified 2026-09-20. Four defects fixed; the one semantic fork the original draft left "open for a ruling" (overnight day ownership) was ruled by the user the same day and is Decision 5 below — code changed, tests re-pinned, device-walked.
 
@@ -917,7 +917,7 @@ Also fixed with a JVM pin (adb cannot type emoji — `input text` is ASCII-only)
 
 **Consequences:** Rule semantics now have one definition each: the overnight window means the same thing on the enforcement path, the rule row, and the recovery risk-window evaluator, so no user-visible claim can disagree with the engine about a wall-clock window (new pattern entry: `app/docs/engineering-patterns-reference.md` §1, "a rule concept must mean one thing, in every engine that evaluates it"). The quota and always-on gates deliberately keep the current-day reading — a quota is metered per calendar day, so its day scope is the day the usage is counted on (`dayScopeCoversToday`, ADR #68). Every editor-reachable rule can now fire or expire as the row claims. New pattern entry: `app/docs/engineering-patterns-reference.md` §1, "the input domain is part of the finite-state space" — the ADR #68 matrix pinned *which combinations exist* and missed *which values are impossible*, which is exactly how a 30-hour limit got through a matrix that looked complete. The `toggleDay` guard living in the pure function (not the click handler) is the same lesson §1 already carries: a rule that can never fire should be unrepresentable, and the place to make it unrepresentable is the shared function both editors route through.
 
-**ADR \#70 Title: The Metering Baseline Is Dual-Stack, and the Plan's IPv4-Only Contract Item Is Inapplicable (Domain Usage Metering S0, 2026-09-20) — Two Baseline Findings Ruled by the User, Plus the S1 Static-Check Substitution**
+## #70 — The Metering Baseline Is Dual-Stack, and the Plan's IPv4-Only Contract Item Is Inapplicable (Domain Usage Metering S0, 2026-09-20) — Two Baseline Findings Ruled by the User, Plus the S1 Static-Check Substitution
 
 **Status:** Accepted; both rulings made by the user 2026-09-20 before any feature code (plan §8 S0.2 STOP list). S1 static checks implemented and JVM-verified the same day.
 
@@ -935,7 +935,7 @@ Also fixed with a JVM pin (adb cannot type emoji — `input text` is ASCII-only)
 
 **Consequences:** The first ruling's dual-stack consequence reached S8 concretely: §6.10's UDP-drop ICMP Port-Unreachable is implemented for **both** families (RFC 4443 type 1 code 4 for v6 with the pseudo-header checksum, alongside the plan's RFC 792 v4 form) — an IPv4-only nudge would leave exhausted-rule IPv6 datagrams silently dropped, defeating the nudge's own fast-fallback purpose on half the traffic (`domainusage-implementation-log.md`, S8 deviation 1). The plan's §16 item 5 NAT64 reasoning still holds as a *cost* of the AAAA-NODATA measure (host-specific, rule-enabled only) but its IPv4-only *benefit* claim is void here. Any feature code that assumes IPv4-only inputs must use the existing 16-byte/`isV6` forms instead — the plan's own 16-byte `DnsObservationStore` keys already match. The S0 gate closed with these two rulings recorded, and S1 (package, clocks, mode flag, CI checks, PSL pinning) landed against them: `app/docs/domainusage-implementation-log.md` carries the per-step record, including the S1.2 `WallClock.today(zone)` signature — the plan's `today()` no-arg wording would re-read `ZoneId.systemDefault()` per call and so break §4.8's anchored-zone rule for the sake of a signature shape.
 
-**ADR \#71 Title: A Limit-Governed Website Rule Leaves the Policy Blocklist — the Usage Shaper Owns Its DNS Answer (Domain Usage Metering S10 finding, 2026-09-21)**
+## #71 — A Limit-Governed Website Rule Leaves the Policy Blocklist — the Usage Shaper Owns Its DNS Answer (Domain Usage Metering S10 finding, 2026-09-21)
 
 **Status:** Accepted; fix + JVM tests landed, device-verified on the X6532 the same day.
 
@@ -952,7 +952,7 @@ Also fixed with a JVM pin (adb cannot type emoji — `input text` is ASCII-only)
 
 **Consequences:** The S0 "one authority per query" composition is intact (blocklist first, then shaper); what changed is *which* rules the blocklist holds. `DomainBlocklist`'s class doc now carries both the metered-rule exclusion and the surviving window ceiling. The §12.2 matrix was re-run on the patched build, and the fix unblocked the legs whose rules are limit-governed.
 
-**ADR \#72 Title: The DNS Observation Store Is Family-Symmetric — AAAA Answers Are Recorded, Closing a Silent Fail-Open for Every IPv6 Flow (Domain Usage Metering S10 finding, 2026-09-21)**
+## #72 — The DNS Observation Store Is Family-Symmetric — AAAA Answers Are Recorded, Closing a Silent Fail-Open for Every IPv6 Flow (Domain Usage Metering S10 finding, 2026-09-21)
 
 **Status:** Accepted; fix + JVM tests landed, device-verified on the X6532 the same day.
 
@@ -970,7 +970,7 @@ The defect is invisible on an IPv4-only client: every flow that matters has an A
 
 ---
 
-**ADR \#73 Title: The Enforcement Stack Is One Process, So Accounting Gaps Are Repaired From the Platform's Own Record (Daily-limit diagnosis, 2026-09-22)**
+## #73 — The Enforcement Stack Is One Process, So Accounting Gaps Are Repaired From the Platform's Own Record (Daily-limit diagnosis, 2026-09-22)
 
 **Status:** Accepted; D1/D3 built, JVM-tested (12 new tests) and device-verified on the X6532 the same day. D2 (a local accounting journal) remains unbuilt — see the plan's §8.
 
@@ -986,7 +986,7 @@ The defect is invisible on an IPv4-only client: every flow that matters has an A
 
 ---
 
-**ADR \#74 Title: The Bottom Navigation Bar Is a Floating Notched Slab — Desert Dawn Port of the Reference Study, and Six Always-On Labels Supersede ADR #47's Selected-Only Consequence (2026-09-22)**
+## #74 — The Bottom Navigation Bar Is a Floating Notched Slab — Desert Dawn Port of the Reference Study, and Six Always-On Labels Supersede ADR #47's Selected-Only Consequence (2026-09-22)
 
 **Status:** Accepted; user-approved 2026-09-22 (design chosen from the supplied reference folder, two sign-off questions answered), built and device-verified on the X6532 the same day in both themes at both extreme tabs.
 
@@ -1009,7 +1009,7 @@ Two facts about that reference decided most of the implementation. **(1) Its pal
 
 ---
 
-**ADR \#75 Title: The Type Scale Steps by Window Class, Not by Screen — One Theme-Level Decision Plus a Source Guard for Screens Not Yet Written (User standing rule, 2026-09-22)**
+## #75 — The Type Scale Steps by Window Class, Not by Screen — One Theme-Level Decision Plus a Source Guard for Screens Not Yet Written (User standing rule, 2026-09-22)
 
 **Status:** Accepted; user-mandated 2026-09-22 ("i also hope that all features pages etc etc text even can adjust size based on screen size" · "the scaking is for all pages even future ones"), built, JVM-tested (`ScaledTypographyTest`, `NoLiteralTypeSizeTest`), device-verified at COMPACT on the X6532.
 
@@ -1031,7 +1031,7 @@ The trap that decided the shape of this ADR: a step applied in `Theme.kt` reache
 
 ---
 
-**ADR \#76 Title: The Home Dashboard Takes the Reference's Structure — Date/Greeting Header, Three-Tile Stat Row, 90-Day Milestone Grid — and Refuses Its Deltas, Charts and Always-On CTA for Lack of Data (2026-09-22)**
+## #76 — The Home Dashboard Takes the Reference's Structure — Date/Greeting Header, Three-Tile Stat Row, 90-Day Milestone Grid — and Refuses Its Deltas, Charts and Always-On CTA for Lack of Data (2026-09-22)
 
 **Status:** Accepted; user-approved 2026-09-22 in two rounds (structure, then the header anchor), built, JVM-tested, device-verified on the X6532 at 360dp in dark (loaded and pre-first-emission loading states). The light-theme re-capture and the MEDIUM/EXPANDED passes were interrupted by an incoming call on the test device and are **pending**, not done.
 
@@ -1054,7 +1054,7 @@ The binding constraint turned out to be the data contract, not the design. `Habi
 
 ---
 
-**ADR \#77 Title: The Recovery Page Splits into a Hub Plus Icon+Label Subpages — One Suggested Technique Leads, Reference Material Moves Behind Tiles, the Crisis Path Never Does (2026-09-22)**
+## #77 — The Recovery Page Splits into a Hub Plus Icon+Label Subpages — One Suggested Technique Leads, Reference Material Moves Behind Tiles, the Crisis Path Never Does (2026-09-22)
 
 **Status:** Accepted; user-approved 2026-09-22 (scope "Recovery now, Partner next"; hub keeps one recommended technique), built, JVM suite green (**1040 / 0 / 0 / 0**). **Device-verified 2026-09-22.** The gate this line carried — "an `install -r` would invalidate the battery day-log" — was false and is retired rather than restated: the sampler is a detached device-side shell loop at `/data/local/tmp/battery-day-log.sh`, so package replacement never touched it, and the thing it measures was already down (every log row `vpn=STOPPED`, FGS `isForeground=false`). Recovery hub confirmed on the X6532 at 360dp COMPACT dark: 5 in-page targets ("Paced breathing", "Log an urge", the Techniques/My plan/History 3-up sharing one y, "Need urgent help?") — the hub keeps the crisis path and the one live action, exactly as designed.
 
@@ -1075,7 +1075,7 @@ The binding constraint turned out to be the data contract, not the design. `Habi
 
 ---
 
-**ADR \#78 Title: The Partner Tab Splits into a Lean Hub Plus Requests · Activity · Pairing — the Hub Answers Only "Does Anything Need Me?", and a Degraded Sync Still Comes Back to It (2026-09-22)**
+## #78 — The Partner Tab Splits into a Lean Hub Plus Requests · Activity · Pairing — the Hub Answers Only "Does Anything Need Me?", and a Degraded Sync Still Comes Back to It (2026-09-22)
 
 **Status:** Accepted; user-approved 2026-09-22 (option "Lean hub"; the notifications banner stays on the hub in every state), built, JVM suite green (**1040 / 0 / 0 / 0**). **Device-verified 2026-09-22** — the "pending" gate this line used to carry was false: the battery sampler is a detached device-side shell loop, so an `install -r` never touched it, and the services it was said to protect were already down (`vpn=STOPPED`, FGS `isForeground=false`). Installed over wireless adb in 9.4s with grants surviving. Partner hub confirmed live on the X6532: 4 in-page targets — "Check now" plus the Activity/Pairing/Requests tiles — in the degraded branch that keeps `SyncCard`. See the plan's §Device pass.
 
@@ -1100,7 +1100,7 @@ The binding constraint turned out to be the data contract, not the design. `Habi
 
 ---
 
-**ADR \#79 Title: Streaks Reaches the Four-Week Timeline Through a Row, Not Inline — and the Same Row Retires SettingsScreen's Private Duplicate (2026-09-22)**
+## #79 — Streaks Reaches the Four-Week Timeline Through a Row, Not Inline — and the Same Row Retires SettingsScreen's Private Duplicate (2026-09-22)
 
 **Status:** Accepted; user-approved 2026-09-22 (page pick "Streaks"; the card's fate: "Move behind a spoke"), built, JVM suite green (**1040 / 0 / 0 / 0**). **Device-verified 2026-09-22** on the X6532 at 360dp COMPACT in dark: the hub, the `VIEW_TIMELINE` spoke (full timeline card, "You are here" on Week 1, four bars on **taupe** tracks — finding #9's fix holds, no purple, Decision 12's disclaimer present) and the back route. The battery-day-log gate this line used to carry was false; see ADR #78's status for why, and the plan's §Device pass.
 
@@ -1129,7 +1129,7 @@ So the screen's real problem was not its structure but its **weight**: the four-
 
 ---
 
-**ADR \#80 Title: INV-11 Closes Where a Comment Said It Already Had — the Coaching Editor, the Risk Windows and the History Each Own Their `SecureSurface` (2026-09-22)**
+## #80 — INV-11 Closes Where a Comment Said It Already Had — the Coaching Editor, the Risk Windows and the History Each Own Their `SecureSurface` (2026-09-22)
 
 **Status:** Accepted; built and device-verified 2026-09-22 on the X6532. JVM suite green (**1040 / 0 / 0 / 0** at the time of the build; **1051 / 0 / 0 / 0** across 135 classes with this session's other work).
 
@@ -1154,7 +1154,7 @@ Both exposed surfaces are **mental-health content reachable from the Settings ta
 
 ---
 
-**ADR \#81 Title: History Says What It Counts — the "Completed / Ended Early" Switch Becomes Three Buckets and an Honest Range, Because Neither Word Was One a User Would Ask With (2026-09-22)**
+## #81 — History Says What It Counts — the "Completed / Ended Early" Switch Becomes Three Buckets and an Honest Range, Because Neither Word Was One a User Would Ask With (2026-09-22)
 
 **Status:** Accepted; user-approved 2026-09-22 (option "Three-way, no switch"), built, JVM-tested (`HistorySummaryTest`), device-verified on the X6532 at 360dp COMPACT.
 
@@ -1179,7 +1179,7 @@ Both exposed surfaces are **mental-health content reachable from the Settings ta
 
 ---
 
-**ADR \#82 Title: Settings Becomes an Index — One Row Per Thing, the Six Permission Rows Move Behind "Protection", and About Finally Exists to Carry the Disclaimer Three Documents Already Claimed Had Shipped (2026-09-23)**
+## #82 — Settings Becomes an Index — One Row Per Thing, the Six Permission Rows Move Behind "Protection", and About Finally Exists to Carry the Disclaimer Three Documents Already Claimed Had Shipped (2026-09-23)
 
 **Status:** Accepted; user-approved 2026-09-23 (option "Index + Protection subpage"), built, JVM suite green (**1051 / 0 / 0 / 0** across 135 classes), device-verified on the X6532 at 360dp COMPACT in both themes.
 
@@ -1207,7 +1207,7 @@ The reference is `13.12.54` (settings list: icon + label + chevron rows, grouped
 
 ---
 
-**ADR \#83 Title: The Rules Sweep — Every Switch Names Its Own Block, the Editor Takes the Shared Header, and a Rule Row Shows the App's Real Icon (2026-09-23)**
+## #83 — The Rules Sweep — Every Switch Names Its Own Block, the Editor Takes the Shared Header, and a Rule Row Shows the App's Real Icon (2026-09-23)
 
 **Status:** Accepted; user-approved 2026-09-23 ("All 7 findings + real icons", "Yes, use BackRow"), built, JVM suite green (**1052 / 0 / 0 / 0** across 136 classes — the +1 class is the new guard), device-verified on the X6532 at 360dp COMPACT.
 
@@ -1232,7 +1232,7 @@ The reference pick was `9edc905b` (a transaction list: section header → rows s
 
 **Consequences:** The Rules list and its editor account for themselves to a screen reader, the editor's way out matches every other subpage, and every app row carries its real mark. What is **not** covered, stated plainly: (i) the banner's *"Dismiss"* string could not be device-verified — triggering a failed rule write on the device needs a write that fails for a reason the UI can reach, and it is a literal string change with no branch behind it; (ii) `getApplicationIcon` is main-thread work done once per rule and is **not** cached across scroll recycling — the same ceiling `AppPicker` has always had, and a list long enough for it to matter wants a shared bitmap cache, not a bigger mark; (iii) the mark's decorative `contentDescription = null` is deliberate (the target's name is always text beside it) and `AppPicker`'s previous `contentDescription = label` was removed with it — that is a change to the picker's announcement, taken as a fix rather than a regression, since it double-announced the label that sits beside it. Device evidence (X6532, 360dp COMPACT, wireless adb): the list with real icons for `Instagram`/`Bolt`/the test fixture and globe glyphs for three website rules, dividers inset to the text, add buttons reading **Add app** / **Add website**; the a11y dump showing six distinct switch names where there had been six identical ones; the editor opening on the `BackRow` header (*"Edit block"*) with all three mechanism switches named in the dump as *"Block all day"* / *"On a schedule"* / *"Limit daily use"*.
 
-**ADR \#84 Title: The Partner Sweep — the Hub Names the Partner, the Cards Recover Their Hierarchy, and Every Tile Carries Its Own Answer (2026-09-23)**
+## #84 — The Partner Sweep — the Hub Names the Partner, the Cards Recover Their Hierarchy, and Every Tile Carries Its Own Answer (2026-09-23)
 
 **Status:** Implemented and device-verified. Owner sign-off 2026-09-23: **"All 5 findings"**, **"Yes — live second line"**, and the reference choice delegated (*"pick whichever u think is the better option ui ux wise"*). JVM suite **1052 tests / 0 failures / 0 errors / 0 skipped across 136 classes**. Verified on the X6532 (360dp COMPACT, wireless adb) in **both themes**.
 
@@ -1269,7 +1269,7 @@ The reference pick is **`13.14.48`** (a sports-booking app), chosen because it i
 
 ---
 
-**ADR \#85 Title: The Streaks Sweep — the Ladder Folds Into the Hero, the Label Row Stops Being Two Copies, and the Tab Fits One Screen (2026-09-23)**
+## #85 — The Streaks Sweep — the Ladder Folds Into the Hero, the Label Row Stops Being Two Copies, and the Tab Fits One Screen (2026-09-23)
 
 **Status:** Accepted; implemented 2026-09-23, device-verified on the X6532 (dark + light). Signed off by the owner before any code changed: ladder handling **"Fold it into the hero"**, string conversion **"Composable chrome only"**. Reference pick delegated ("pick whichever u think is the better option ui ux wise" was the Partner ruling; this pass applied the same latitude). JVM **1054/0/0/0 across 137 classes** (1052 + the new 2-test guard).
 
@@ -1303,7 +1303,7 @@ Two source facts reframed both findings. First, **Home's `StreakHeroCard` is a n
 
 ---
 
-**ADR \#86 Title: The Warning Banner and the Block Walls Get One Language, and the Overlay Learns the Window Class (2026-09-27)**
+## #86 — The Warning Banner and the Block Walls Get One Language, and the Overlay Learns the Window Class (2026-09-27)
 
 **Status:** Accepted; implemented and device-verified on the X6532 (dark + light + the 800dp MEDIUM class). UI sweep task #4 — the limit-warning and block-overlay surfaces (`BlockOverlayView`'s four states: `AppBlocked`, `UrlBlocked`, `DailyLimitBlocked`, `Warning` L1/L2 — plus `BlockerActivity`, the activity-hosted block screen). §8 Step 10's model is untouched: capped top strip, generic copy, 5 s auto-dismiss, no package painted on the banner.
 
@@ -1332,7 +1332,7 @@ Device evidence (X6532, wireless adb): level-1 banner dark + light + 800dp (card
 
 ---
 
-**ADR \#87 Title: The Widget Becomes Four Compositions and the Store Becomes a Cache With a Proof — the Preset a Launcher Matches Is the Size It Reports, the Flagged Void Becomes a Band, and a Process That Has Not Read Yet Carries Instead of Answering (2026-09-27)**
+## #87 — The Widget Becomes Four Compositions and the Store Becomes a Cache With a Proof — the Preset a Launcher Matches Is the Size It Reports, the Flagged Void Becomes a Band, and a Process That Has Not Read Yet Carries Instead of Answering (2026-09-27)
 
 **Status:** Accepted; implemented and device-verified on the X6532 (dark) and the AOSP emulator (light + dark). UI sweep task #1 — the widget's render variants plus the owner-reported "No streak yet" flicker. The snapshot/writer/freshness triad (ADR #40) stands; this ADR changes what a cell renders and what the writer publishes when the repository has not read yet.
 
@@ -1362,7 +1362,7 @@ Measured while fixing #3/#4, and the reason both are sizing facts and not layout
 
 Device evidence (X6532 dark; emulator AOSP light + dark): TALL 2-row "Day 7" + "NEXT MILESTONE · Day 30 in 23d" + gold band at 7/30 + "Tools ›", with `widget publish: … carried=true days=7 refresh=false write=false` proving the carry across a process start; 1-row COMPACT sentence form "Day 30 in 23 days"; NARROW discreet ("No streak yet" + "Tools ›") and non-discreet ("Not protected" chip + "Manage urge ›") in light and dark, centered. Emulator widget prefs restored to their original `discreet_mode=true` and night mode back to light in the same command chains.
 
-**ADR \#88 Title: The Recovery Spokes Read Like the Reference — the Sheet Opens Whole, the History Row Stamps Its Day, and the Walkthrough Walks a Rail (2026-09-27)**
+## #88 — The Recovery Spokes Read Like the Reference — the Sheet Opens Whole, the History Row Stamps Its Day, and the Walkthrough Walks a Rail (2026-09-27)
 
 **Status:** Accepted; implemented and device-verified (emulator forced to 360×640dp, then re-verified at its native 411×731dp; X6532 360×800dp for the sheet). UI sweep task #27 — the four spokes the Recovery hub routes to (`TechniqueRunner`, `SessionHistoryScreen`, `UrgeLogSheet`, plus the two sheets' anchor defect found on the way). The hub itself was swept under ADR #77; this ADR covers what the tiles land on. The log ≠ bypass ruling (ADR #61) and the privacy invariant (ADR #80) are untouched.
 
@@ -1393,7 +1393,7 @@ Also recorded, so the next audit does not re-open it: `uiautomator`'s `NAF="true
 
 **Verification:** JVM — `HistoryStampTest` (7 cases: same day + time; yesterday; 23:59 vs 00:01 boundary; "Sep 25" two days back; year-qualified "Dec 30, 2025"; New Year's Eve still "Yesterday" on Jan 1; zone honoured — 22:30 UTC is next-day 00:30 at UTC+02:00). Full unit suite **1082/0/0/0**. Device (emulator 360×640dp + native; X6532 360×800dp, a11y tree — `screencap` is 0 bytes by design on this tab): the urge sheet whole on **both** devices — all ten chips on-chip-first dump (rows at y1134/y1302), buttons at y1608–1752 with the bottom inset clear, chips 7 and 10 independently confirmed on the phone; a bare log written ("Logged, no technique · Today · 6:35 PM · Intensity 7/10"), then a full walkthrough completed (eyebrow "Phase 1..5 of 5", body under the current phase only, empty if-then state rendering) and logged with intensity skipped ("Completed · 1m 6s", no intensity line), then a second run stopped ("Stopped · 0m 10s") — History then read Urges logged **3** with buckets **1 / 1 / 1**, and the one-time no-lock banner consumed itself after the first visit; `BulletLine` rendered live from a plan item (glyph node x42–63, text x84); the walkthrough's Done path opened the log sheet and the Stop path returned to the hub with no sheet. The emulator's forced density was reset to 420 in the last chain that touched it; test-created emulator data (3 recovery rows, 1 plan item) is left on the disposable emulator deliberately.
 
-**ADR \#89 Title: The Settings Spokes Read Like the Index — Two Dead-Grey Switches Get Their Reason, and the Editors' "Unnamed" Buttons Were Named All Along (a Raw-Dump Misread, Corrected) (2026-09-27)**
+## #89 — The Settings Spokes Read Like the Index — Two Dead-Grey Switches Get Their Reason, and the Editors' "Unnamed" Buttons Were Named All Along (a Raw-Dump Misread, Corrected) (2026-09-27)
 
 **Status:** Accepted; implemented and device-verified (X6532). UI sweep task #3 — the spokes of the Settings index: the Protection subpage, the Enhanced Mode and Strict Mode switches, About, and the two editors the index routes to (Coaching plan, Risk windows). ADR #82 designed the index; ADR #80 put the editors behind `SecureSurface()`. This ADR covers what the rows open, and corrects one of its predecessor's findings.
 
@@ -1417,7 +1417,7 @@ Also recorded, so the next audit does not re-open it: `uiautomator`'s `NAF="true
 
 ---
 
-**ADR \#90 Title: The Subpage Rule's Mechanical Half Becomes a Test — One Straggler Fixed, One Was Dead Code, and the Guards That Already Stood Are Named (2026-09-27)**
+## #90 — The Subpage Rule's Mechanical Half Becomes a Test — One Straggler Fixed, One Was Dead Code, and the Guards That Already Stood Are Named (2026-09-27)
 
 **Context:** plan task #29 asks for cross-cutting guard tests over three rules introduced during the UI sweep. Two of the three already exist from earlier steps of this same session (working tree, not yet committed — "exists and runs green" is the claim, not "released"): `NoLiteralTypeSizeTest` (a literal `fontSize`/`lineHeight` outside `ui/theme/` opts a screen out of the window-size type step — ADR #75) and `ScaledTypographyTest` (every role scales, stays `sp`, 1.0f is identity — the same ADR); `SecureSurfacesTest`'s source scan with the exemption-liveness assert (every recovery screen declares its own `SecureSurface` — ADR #80). The third rule — the owner's 2026-09-22 subpage ruling ("dense pages get subpages, never a page for one trivial control") — had only its judgement half unenforceable; its mechanical half ("a pane you can enter offers the same way out") was convention-only. Enumerating `onBack:` declarations against `BackRow(` renderers found exactly two offenders: `RulesScreen.EditorUnavailable` (a bare `TextButton` with the string `editor_back`) and `ComingSoonScreen`. Writing the guard then exposed that the second offender does not exist at runtime: `AppShell` is composed only with a non-null store (`MainActivity` gates on `usable && rulesStore != null`) and all six tabs are enumerated, so `ComingSoonScreen`'s two call sites — `store == null` and the `when`'s `else` — were both dead branches.
 
@@ -1434,7 +1434,7 @@ Also recorded, so the next audit does not re-open it: `uiautomator`'s `NAF="true
 
 **Verification:** JVM full suite **1084/0/0/0** (1082 before this ADR; the two new tests included), `PaneBackAffordanceTest` run standalone green first. Device on the X6532 (physical; `uiautomator` a11y tree): the `EditorUnavailable` pane was reached deterministically — the editor was opened from the Rules list, the app was backgrounded via `am start -a android.settings.SETTINGS`, the process was killed with `run-as … kill -9 <pid>` (NOT force-stop), and the task was brought back; the pane rendered the shared `BackRow` (arrow `content-desc="Back"` at `[40,112][88,160]`, label "Edit block" at `[112,110][704,162]`, body at `[32,216][688,289]`), self-healed into the real editor once the rules Flow emitted (~2–3s — the pane is the load-window state, not a stuck one), and its back arrow landed on the Rules list. Shell leg: tab switching Home→Rules→Home with the clamped index intact; the deleted placeholder had no visible effect by construction (unreachable). Restore, same chain: an earlier cold-start used `am force-stop`, which on XOS clears `enabled_accessibility_services` — the grant was re-cycled dummy→real with the app alive (`dumpsys accessibility`: service **Bound** again), the Task-Manager-stop banner that force-stop raised was cleared through the app's own Re-enable (chip back to "Limited", its pre-existing state), 141 stale `/sdcard/*.xml` dumps from earlier sessions were removed along with this pass's own dumps, and the app was left on Home.
 
-**ADR \#91 Title: The Shell Stops Speaking in Literals — the Guard Finds the Copy Class Alive in Six Files the Per-Page Audits Had Passed, the Wizard's Two Backs Agree, and the Once-Per-Install Screen Gets Its First Device Sight (2026-09-27)**
+## #91 — The Shell Stops Speaking in Literals — the Guard Finds the Copy Class Alive in Six Files the Per-Page Audits Had Passed, the Wizard's Two Backs Agree, and the Once-Per-Install Screen Gets Its First Device Sight (2026-09-27)
 
 **Context:** the shell + onboarding sweep (session task #6; no reference pick — the deliverable is mechanical, the same standing as ADR #90). Three threads converged:
 
@@ -1457,7 +1457,7 @@ Also recorded, so the next audit does not re-open it: `uiautomator`'s `NAF="true
 
 **Verification:** JVM — guard run standalone green after the fix round, then full suite **1085/0/0/0** (1084 before this ADR; `LiteralCopyGuardTest` is the +1). Device, X6532 (physical; `uiautomator` a11y tree — the wizard and shell are not FLAG_SECURE surfaces): `install -r` (app data preserved), then the harness walked end to end. Step 1 rendered "Set up protection / Step 1 of 5 / Usage access / Granted / Next" with **no** Back at step 0 and **no** Skip when granted (both correct by the step's own conditions); step 2 "What MyExodus sees" with Back + Continue and no Skip (disclosure is the one unskippable step); steps 3–5 ("Accessibility service", "Notifications", "Display over other apps") each "Granted" on the fully-configured phone — **system BACK from step 2 landed on step 1 with the harness still resumed** (`topResumedActivity` = `SetupHarnessActivity`, the new `BackHandler`); system BACK at step 0 finished the harness (platform default, `topResumedActivity` = the under-app); the on-screen Back tap also landed on step 1; Done on step 5 finished the harness. `dumpsys accessibility` after the whole walk: the blocker service still **Bound** (the install did not disturb the grant). Shell leg: all six tab labels render from resources on Home; `am start … --es extra_start_tab Recovery` (delivered to the top-most instance) switched to the Recovery hub — the protocol values survive the `NavKeys` refactor. Restore, same chain: this pass's `/sdcard/*.xml` dumps removed (`ls` confirms none remain), app left on Home.
 
-**ADR \#92 Title: The Nav Bar's Icons Catch Up With Its Height — 24→28dp for the Ring the Bubble Was Always Sized For, a Refusal of a Bigger Bubble, and the Overdue ADR #74 Revision Note (2026-09-27)**
+## #92 — The Nav Bar's Icons Catch Up With Its Height — 24→28dp for the Ring the Bubble Was Always Sized For, a Refusal of a Bigger Bubble, and the Overdue ADR #74 Revision Note (2026-09-27)
 
 **Context:** task #11 ("larger icons + labels, no crowding"), the last of the sweep's per-page passes. Measured live on the X6532 before any code changed (360dp, fontScale 1.0, dark): item pitch **105.5px = 52.7dp**; the widest label, "Recovery" in the guard's active (semibold 11sp, zero-tracking) style, renders **97px = 48.5dp** — so all six labels clear the 4dp guard by **4.2dp**. Icons were 24dp in the 36dp bubble: a 6dp ring, in a bar that has grown taller than ADR #74's shipped geometry, so the icon floated in a disc with more air than Material ever gives it. The label half of the ask is measured shut: at 12sp "Recovery" measures ≈52.9dp against the 52.7dp pitch, which flips the bar to selected-only labels; buying the width back would take dropping the semibold-active treatment *and* shaving the slab margin — a treatment change the owner declined in the sign-off question (2026-09-27: chose "Icons only → 28dp"). Growing the bubble instead is refused by ADR #74's own arithmetic: radius 18→21dp pushes `notchSpan` 24.2→27.2dp, hence the end inset to 17.4dp and pitch down to 51.5dp — the six labels fall off the bar to pay for it. One debt is coincident: **ADR #74's text no longer matched the code it governs** — it declares a 70dp slab, 12dp margins and 10sp labels; today's file reads 78dp, 8dp and 11sp (the user's 2026-09-27 "the nav labels read too small" was answered in code, and later passes moved the geometry). No revision marker was ever recorded, which the doc's own change-control rule forbids; this ADR supplies it.
 
@@ -1475,7 +1475,7 @@ Also recorded, so the next audit does not re-open it: `uiautomator`'s `NAF="true
 
 **Verification:** JVM full suite **1085/0/0/0** (no test change; the guard set is untouched). Device, X6532 (physical, dark theme — the device's current setting): `install -r`, app relaunched, then both extreme tabs captured by screencap and reviewed as cropped close-ups. Settings (rightmost, the notch's worst corner case): six icons at even pitch, the bubble overhanging the top-right with its notch fully inside the straight top edge, all six labels rendered, active "Settings" semibold; Home (leftmost): same on the left. The a11y dump reconfirmed the six label nodes after the change. This pass's `/sdcard` dumps removed in the same chain; app left on Home.
 
-**ADR \#93 Title: Covering Is Not Stopping — Every Block Now Closes the App, the Wall Waits for the User's Own Close, and the Plan's Touch-Modal Clause Is Corrected by Measurement (2026-09-27)**
+## #93 — Covering Is Not Stopping — Every Block Now Closes the App, the Wall Waits for the User's Own Close, and the Plan's Touch-Modal Clause Is Corrected by Measurement (2026-09-27)
 
 **Context:** two user reports against the daily-limit wall, both reproduced on the X6532 before any code changed:
 
@@ -1498,7 +1498,7 @@ A third defect surfaced during the same work: the *retirement path*. `evictBehin
 
 **Verification:** JVM full suite **1093/0/0/0** (1085 before this ADR; the eight additions include `OverlayControllerTest.wall_dismissesFromItsOwnCloseAction_onTheEvictingHostOnly`, the flipped `FLAG_NOT_TOUCH_MODAL` assertions in `flagsForContent_perModel`, and `BlockOverlayViewTest.dailyWall_closeAction_dismissesAndNeverSurvivesARebind` / `dailyLimitBlocked_withoutAnEvictingHost_hasNoActions_showsTheHintOnly`). Device, X6532 (physical): the wall rendered and persisted beyond 40 s; the physical Home/Back/Recents bar stayed live over it (NotificationShade swipe + Home tap, both above); Instagram re-launched under the live wall logged `block close pkg=com.instagram.android evicted=true` and landed on the launcher; the Close tap produced 0 MyExodus windows, top = launcher, no app flash; `dumpsys audio` focus stack empty and no resumed app after the close. **Path B leg, same device, same day** (the a11y component removed from `enabled_accessibility_services` so Path B held authority — XOS zeroed the companion `accessibility_enabled` flag on its own when the list went invalid; both restored afterward through the dummy→real re-grant cycle): with a 60 s Instagram limit seeded, the bare-addView wall rendered full-screen over the still-resumed Instagram (`topResumedActivity=com.instagram.android`, screencap reviewed), carrying **no** Close action and a live nav bar; one `KEYCODE_HOME` — the user's own close — produced `MyExodusOverlay: hidden display=0` followed immediately by `MyExodusBlockerFgs: wall close pkg=com.instagram.android`, `topResumedActivity` back to the launcher, no MyExodus overlay window left, and `dumpsys audio` focus stack empty. Instagram's `pidof` survived (the service-holding ceiling above, identical on both paths). Device state restored in the same chain: tracker back to `used=731716, limit=7200000, w1/w2=NOT_DUE, blocked=false`, rule back to `limit=7200000 days=1111111 tz=Africa/Nairobi`, a11y component rebound with `accessibility_enabled=1`, app left on Home.
 
-**ADR \#94 Title: The Journal Behind the Number — Schema v11 Lands, the Outage It Reports Is One the User Can Actually Fix, and a 3.8 GB Phone Says 225 Bytes a Row (2026-09-28)**
+## #94 — The Journal Behind the Number — Schema v11 Lands, the Outage It Reports Is One the User Can Actually Fix, and a 3.8 GB Phone Says 225 Bytes a Row (2026-09-28)
 
 **Context:** the daily-limit undercount complaint class ("Instagram 3h42m, our number lower, the warning late") has one shared root: under schema v10 the only usage record was a per-day *scalar* on `daily_usage_tracker`, rewritten in place. There is no history, no interval, no way to audit a disagreement with the platform's own number, no record of when observation was dead — a scalar can only be believed or doubted. The usage-ledger plan (`app/plans/usage-ledger-implementation-plan.md.html`) replaces it with a durable append-only journal (§8), a projection that is a *derived view* of that journal (§8.3), gap diagnostics with a user-facing repair path (§8.7), and retention (§8.8). Steps 1–15 are implemented; this ADR is the close-out, and it carries the §11 numbers measured on the low-end device rather than deferring the DoD's performance line.
 
