@@ -85,7 +85,12 @@ class DegradationCopyTest {
 
     @Test
     fun readinessGap_isAnyEssentialMissing() {
-        val all = BlockingReadiness(usageAccess = true, overlayGranted = true, websiteConsentMissing = false)
+        val all = BlockingReadiness(
+            usageAccess = true,
+            overlayGranted = true,
+            websiteConsentMissing = false,
+            accessibilityEnabledByPlatform = true,
+        )
         assertFalse(all.essentialGap)
         assertTrue(all.copy(usageAccess = false).essentialGap)
         assertTrue(all.copy(overlayGranted = false).essentialGap)
@@ -94,7 +99,12 @@ class DegradationCopyTest {
 
     @Test
     fun fullAuthority_isLimitedWhileAnyEssentialIsMissing() {
-        val all = BlockingReadiness(usageAccess = true, overlayGranted = true, websiteConsentMissing = false)
+        val all = BlockingReadiness(
+            usageAccess = true,
+            overlayGranted = true,
+            websiteConsentMissing = false,
+            accessibilityEnabledByPlatform = true,
+        )
         assertFalse(
             "a complete install reads Protecting",
             limitedBeyondAuthority(ProtectionAuthority.FULL, all),
@@ -111,8 +121,18 @@ class DegradationCopyTest {
 
     @Test
     fun usageAndOverlayFixes_belongToTheFullAuthorityOnly() {
-        val usageGap = BlockingReadiness(usageAccess = false, overlayGranted = true, websiteConsentMissing = false)
-        val overlayGap = BlockingReadiness(usageAccess = true, overlayGranted = false, websiteConsentMissing = false)
+        val usageGap = BlockingReadiness(
+            usageAccess = false,
+            overlayGranted = true,
+            websiteConsentMissing = false,
+            accessibilityEnabledByPlatform = true,
+        )
+        val overlayGap = BlockingReadiness(
+            usageAccess = true,
+            overlayGranted = false,
+            websiteConsentMissing = false,
+            accessibilityEnabledByPlatform = true,
+        )
         assertTrue(showUsageFix(ProtectionAuthority.FULL, usageGap))
         assertFalse(showUsageFix(ProtectionAuthority.FULL, overlayGap))
         assertTrue(showOverlayFix(ProtectionAuthority.FULL, overlayGap))
@@ -165,6 +185,74 @@ class DegradationCopyTest {
                     ProtectionAuthority.DEGRADED_POLLING_ONLY,
                     degradation,
                     persistent = true,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun pollingOnly_settlesImmediatelyOnlyWhenTheEnabledListProvesTheServiceCannotBind() {
+        // Owner report 2026-10-23: an absent enabled-list entry means no rebind can complete,
+        // so the cause must show without waiting out the window.
+        assertTrue(
+            pollingOnlySettled(
+                ProtectionAuthority.DEGRADED_POLLING_ONLY,
+                degradation = null,
+                accessibilityEnabledByPlatform = false,
+                rebindWindowElapsed = false,
+            ),
+        )
+        // Listed but not connected: this is the flappy rebind the grace exists for.
+        assertFalse(
+            pollingOnlySettled(
+                ProtectionAuthority.DEGRADED_POLLING_ONLY,
+                degradation = null,
+                accessibilityEnabledByPlatform = true,
+                rebindWindowElapsed = false,
+            ),
+        )
+        // Not read yet (first frames) is not proof either way.
+        assertFalse(
+            pollingOnlySettled(
+                ProtectionAuthority.DEGRADED_POLLING_ONLY,
+                degradation = null,
+                accessibilityEnabledByPlatform = null,
+                rebindWindowElapsed = false,
+            ),
+        )
+        // Listed and the window passed without a bind: also a real gap.
+        assertTrue(
+            pollingOnlySettled(
+                ProtectionAuthority.DEGRADED_POLLING_ONLY,
+                degradation = null,
+                accessibilityEnabledByPlatform = true,
+                rebindWindowElapsed = true,
+            ),
+        )
+        // Other authorities and visible degradations read their own state, never this row.
+        for (authority in listOf(
+            ProtectionAuthority.FULL,
+            ProtectionAuthority.DEGRADED_NO_DETECTION,
+            null,
+        )) {
+            assertFalse(
+                "authority=$authority",
+                pollingOnlySettled(
+                    authority,
+                    degradation = null,
+                    accessibilityEnabledByPlatform = false,
+                    rebindWindowElapsed = true,
+                ),
+            )
+        }
+        for (degradation in ProtectionDegradation.entries) {
+            assertFalse(
+                "degradation=$degradation",
+                pollingOnlySettled(
+                    ProtectionAuthority.DEGRADED_POLLING_ONLY,
+                    degradation,
+                    accessibilityEnabledByPlatform = false,
+                    rebindWindowElapsed = true,
                 ),
             )
         }

@@ -135,18 +135,21 @@ test('T-F21: all targets accepted -> sent, counts updated, queue deleted atomica
 
   // §4.6 message contract, asserted on the wire payload the engine built. Token targeting
   // since the 2026-10-04 deviation (see nudgeFcmMessage): the doc id remains the ledger key,
-  // the stored registration token is what FCM receives.
+  // the stored registration token is what FCM receives. D16 (2026-10-23): data-only, carrying
+  // the pair id the receiving phone resolves to its local partner label — no notification
+  // block, no generic copy on the wire.
   const message = messaging.calls[0];
   assert.deepStrictEqual(message.tokens, ['tok-d1']);
   assert.strictEqual(message.data.type, 'partner_nudge');
   assert.strictEqual(message.data.nudge_id, id);
+  assert.strictEqual(message.data.pair_id, PAIR);
   assert.strictEqual(message.android.priority, 'high');
   assert.strictEqual(message.android.ttl, 3_600_000);
   assert.strictEqual(message.android.restrictedPackageName, 'com.example.myexodus');
-  assert.strictEqual(message.android.notification.channelId, 'partner_nudges_v3');
-  assert.strictEqual(message.android.notification.tag, 'partner_nudge');
-  assert.strictEqual(message.android.notification.visibility, 'private');
-  assert.strictEqual(nudgeFcmMessage(['x'], 'n').notification.title, 'Accountability Check-in');
+  assert.strictEqual(message.notification, undefined);
+  assert.strictEqual(message.android.notification, undefined);
+  // A missing pair id (hand-written queue doc) degrades to the generic copy on the client.
+  assert.strictEqual(nudgeFcmMessage(['x'], 'n', undefined).data.pair_id, undefined);
 });
 
 test('the first dispatch snapshots eligible installations and freezes the target set', async () => {

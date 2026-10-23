@@ -445,6 +445,37 @@ class PartnerNotificationsTest {
         assertEquals(Notification.VISIBILITY_PRIVATE, posted.notification.visibility)
     }
 
+    /** D16 (owner ruling 2026-10-23): the unlocked receipt names the sender from this phone's
+     *  own pairing label; the lockscreen public version stays generic (FR-13), title and body. */
+    @Test
+    fun partnerNudge_namesTheSender_unlocked_lockscreenStaysGeneric() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val nudgeId = "123e4567-e89b-42d3-a456-426614174000"
+
+        PartnerNotifications.notifyPartnerNudge(context, nudgeId, PARTNER_NAME)
+
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_nudge_title),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(R.string.partner_nudge_text_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+        val publicVersion = notification.publicVersion
+        assertTrue("lockscreen renders the generic public copy", publicVersion != null)
+        assertEquals(
+            context.getString(R.string.partner_nudge_title),
+            publicVersion!!.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            "the partner's name never reaches the lockscreen (FR-13)",
+            context.getString(R.string.partner_nudge_text),
+            publicVersion.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
     /** §8.18 parity: the foreground post's tap carries the same launcher extras the
      *  background system path delivers, so MainActivity's routing is identical. */
     @Test

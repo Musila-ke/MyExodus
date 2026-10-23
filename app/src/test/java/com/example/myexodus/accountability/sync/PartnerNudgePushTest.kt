@@ -34,6 +34,30 @@ class PartnerNudgePushTest {
         assertNull("uuid v1", PartnerNudgePush.validNudgeId("123e4567-e89b-12d3-a456-426614174000"))
     }
 
+    /** D16: the push carries the pair id so the receiving phone names its own label; the
+     *  durable shape is `<uidA>_<uidB>` (AD-02), exactly one underscore. */
+    @Test
+    fun validPairId_acceptsTheDurableShape() {
+        val uidPair = "abcdefghijklmnopqrstuvwx1234_zyxwvutsrqponmlkjihgfedc4321"
+        assertEquals(uidPair, PartnerNudgePush.validPairId(uidPair))
+        assertEquals("alice-uid_bob-uid", PartnerNudgePush.validPairId("alice-uid_bob-uid"))
+    }
+
+    /** A malformed or hostile pair id must only ever cost the name (generic copy), never reach
+     *  the local lookup with an arbitrary string. */
+    @Test
+    fun validPairId_rejectsMalformedOrOversized() {
+        assertNull("absent", PartnerNudgePush.validPairId(null))
+        assertNull("blank", PartnerNudgePush.validPairId(""))
+        assertNull("no separator", PartnerNudgePush.validPairId("pairalpha"))
+        assertNull("two separators", PartnerNudgePush.validPairId("a_b_c"))
+        assertNull("empty side", PartnerNudgePush.validPairId("_b"))
+        assertNull("empty side", PartnerNudgePush.validPairId("a_"))
+        assertNull("space", PartnerNudgePush.validPairId("a b_c"))
+        assertNull("slash (path shape)", PartnerNudgePush.validPairId("a]/[b"))
+        assertNull("oversized side", PartnerNudgePush.validPairId("a".repeat(129) + "_b"))
+    }
+
     @Test
     fun consumeLauncherNudge_stripsBothExtras_andReturnsTheId() {
         val intent = launcherIntent().putExtra(PartnerNudgePush.NUDGE_ID_KEY, nudgeId)

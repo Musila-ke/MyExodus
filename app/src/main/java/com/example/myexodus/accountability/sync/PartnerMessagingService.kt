@@ -1,13 +1,17 @@
 package com.example.myexodus.accountability.sync
 
+import android.util.Log
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import dagger.hilt.android.AndroidEntryPoint
-import android.util.Log
+import javax.inject.Inject
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Plan §8 Step 7 / Step 9 (client side) / AD-11: the FCM receiver. Every push is a generic
@@ -17,10 +21,12 @@ import android.util.Log
  * everything downstream. A wake with no messageId still runs the pass, which is how in-app
  * sync stays current when a visible notification is muted or never shown.
  *
- * The one exception (SOS §8.17/FR-20): a `partner_nudge` push IS rendered here, as a generic
- * local notification posted immediately — the payload carries no content to protect, and a
- * foreground nudge must alert now, not at the next work run. The card itself still comes
- * from Firestore via Home's listener.
+ * The one exception (SOS §8.17/FR-20): a `partner_nudge` push IS rendered here as a local
+ * notification posted immediately — the payload carries no content to protect, and a nudge
+ * must alert now, not at the next work run. Since D16 (owner ruling 2026-10-23) the push is
+ * data-only and carries the pair id; this phone resolves its own pairing label for that pair
+ * and names the sender, keeping the generic copy when no label resolves. The card itself
+ * still comes from Firestore via Home's listener.
  *
  * All other callbacks enqueue the same one-time partner-sync work rather than doing work
  * inline: the service's execution window is short and the FCM wake is only a latency
@@ -33,18 +39,27 @@ import android.util.Log
 @AndroidEntryPoint
 class PartnerMessagingService : FirebaseMessagingService() {
 
+    // Field injection never runs for the directly constructed service in the instrumented
+    // test seam; partnerNameFor() treats that as "no local label" and posts the generic copy.
+    @Inject lateinit var enrollmentDao: EnrollmentDao
+
     override fun onMessageReceived(message: RemoteMessage) {
-        // SOS §8.17/§6.7: a partner_nudge push is rendered here and now — a generic local
+        // SOS §8.17/§6.7: a partner_nudge push is rendered here and now — one local
         // notification, nothing else: no Firestore reads, no decryption, no network from this
-        // callback (the Home listener renders the card independently). An invalid nudge_id is
-        // ignored, never posted, never synced.
+        // callback (the Home listener renders the card independently). The only read is the
+        // bounded local-label lookup below (D16). An invalid nudge_id is ignored, never
+        // posted, never synced; an unusable pair id only costs the name.
         if (message.data[PartnerNudgePush.TYPE_KEY] == PartnerNudgePush.TYPE_PARTNER_NUDGE) {
             val nudgeId = PartnerNudgePush.validNudgeId(message.data[PartnerNudgePush.NUDGE_ID_KEY])
             if (nudgeId == null) {
                 Log.w(TAG, "partner_nudge push without a valid nudge_id — ignored")
             } else {
-                Log.i(TAG, "nudge push — posting check-in notification")
-                PartnerNotifications.notifyPartnerNudge(this, nudgeId)
+                val partnerName = partnerNameFor(
+                    PartnerNudgePush.validPairId(message.data[PartnerNudgePush.PAIR_ID_KEY]),
+                )
+                // The label itself is never logged (telemetry hygiene: no uids, names, pairs).
+                Log.i(TAG, "nudge push — posting " + if (partnerName != null) "named" else "generic")
+                PartnerNotifications.notifyPartnerNudge(this, nudgeId, partnerName)
             }
             return
         }
@@ -81,6 +96,18 @@ class PartnerMessagingService : FirebaseMessagingService() {
         enqueueSync(null)
     }
 
+    /** D16: this phone's own name for the pair — a single-row local read, bounded so a busy or
+     *  broken DB can never hold the FCM callback open. Null on every failure path (no pair
+     *  row, uninitialized test seam, storage error): the post keeps the generic copy. */
+    private fun partnerNameFor(pairId: String?): String? {
+        if (pairId == null || !::enrollmentDao.isInitialized) return null
+        return runCatching {
+            runBlocking {
+                withTimeoutOrNull(LABEL_LOOKUP_TIMEOUT_MS) { enrollmentDao.getByPairId(pairId) }
+            }
+        }.getOrNull()?.let(::displayNameOf)
+    }
+
     private fun enqueueSync(messageId: String?) {
         val data = messageId?.let { workDataOf(PARTNER_WAKE_MESSAGE_ID to it) }
         val request = OneTimeWorkRequestBuilder<PartnerSyncWorker>()
@@ -94,5 +121,6 @@ class PartnerMessagingService : FirebaseMessagingService() {
         // Distinct from the periodic work's name ("partner-sync" in MyExodusApp): sharing a
         // unique name would let KEEP suppress the wake while periodic work is enqueued.
         const val WAKE_WORK_NAME = "partner-sync-wake"
+        const val LABEL_LOOKUP_TIMEOUT_MS = 1_000L
     }
 }

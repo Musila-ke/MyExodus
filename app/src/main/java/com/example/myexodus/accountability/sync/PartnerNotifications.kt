@@ -321,13 +321,15 @@ object PartnerNotifications {
         )
     }
 
-    /** SOS §8.17/FR-20: the foreground FCM receipt posts immediately — generic copy only
-     *  (FR-19), the Step 7 channel, and the fixed FR-19 tag so a follow-up nudge replaces the
-     *  tray entry (one replaceable entry by design). The tap carries the same launcher extras
-     *  the background system path delivers, so §8.18's routing is identical for both. HIGH
-     *  matches the channel's created importance: this call is also the background-wake
-     *  lazy-create path (§8.17), so it must never land below HIGH. */
-    fun notifyPartnerNudge(context: Context, nudgeId: String) =
+    /** SOS §8.17/FR-20: the FCM receipt posts immediately, the Step 7 channel, and the fixed
+     *  FR-19 tag so a follow-up nudge replaces the tray entry (one replaceable entry by
+     *  design). D16 (owner ruling 2026-10-23): the unlocked copy names the sender when the
+     *  receiving phone can resolve one from its own pairing label; a null name keeps the
+     *  generic copy, which is also the lockscreen public version either way (FR-13). The tap
+     *  carries the launcher extras so §8.18 routing is identical for every delivery path. HIGH
+     *  matches the channel's created importance: this call is also the cold-start lazy-create
+     *  path (§8.17), so it must never land below HIGH. */
+    fun notifyPartnerNudge(context: Context, nudgeId: String, partnerName: String? = null) =
         post(
             context,
             CHANNEL_PARTNER_NUDGES,
@@ -336,6 +338,9 @@ object PartnerNotifications {
             NOTIF_PARTNER_NUDGE,
             R.string.partner_nudge_title,
             R.string.partner_nudge_text,
+            namedText = partnerName?.let {
+                context.getString(R.string.partner_nudge_text_named, it)
+            },
             tag = PartnerNudgePush.TAG,
             pushNudgeId = nudgeId,
         )

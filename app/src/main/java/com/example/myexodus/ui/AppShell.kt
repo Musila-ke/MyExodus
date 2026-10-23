@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -33,6 +35,7 @@ import androidx.compose.material.icons.outlined.Settings as SettingsOutlined
 import androidx.compose.material.icons.outlined.Shield as ShieldOutlined
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -96,6 +99,7 @@ import com.example.myexodus.ui.home.NudgeInboxViewModel
 import com.example.myexodus.ui.home.SosViewModel
 import com.example.myexodus.ui.partner.PairingCeremonyDeps
 import com.example.myexodus.ui.partner.PartnerDashboardSource
+import com.example.myexodus.ui.partner.ReachOutTarget
 import com.example.myexodus.ui.partner.PartnerScreen
 import com.example.myexodus.ui.partner.PartnerSelection
 import com.example.myexodus.ui.partner.UnpairOutcome
@@ -247,16 +251,18 @@ fun AppShell(
     // card's sender names and the FAB's FR-1 active-pair gate. Pairs only change on the
     // Partner tab, so each Home entry is the freshness boundary.
     var partnerNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-    // Owner mandate 2026-10-04 (Q4): who the Reach-out will actually go to — the §19.5 target
-    // the sender resolves at tap time, read in the same Home-entry pass as the roster above.
-    var sosTargetName by remember { mutableStateOf<String?>(null) }
+    // Owner mandate 2026-10-04 (Q4) + owner ruling 2026-10-23: the Reach-out recipient list —
+    // the §19.5 target first (the pre-picker default), every other live partner after it. The
+    // dialog picks exactly one; nothing fans out.
+    var sosTargets by remember { mutableStateOf<List<ReachOutTarget>>(emptyList()) }
     LaunchedEffect(contentTab) {
         if (contentTab == 0) {
             partnerNames = withContext(Dispatchers.IO) {
                 runCatching { partnerSource.partnerDisplayNames() }.getOrDefault(emptyMap())
             }
-            sosTargetName = withContext(Dispatchers.IO) {
-                runCatching { partnerSource.targetPartnerName(partnerSelection.selectedPairId) }.getOrNull()
+            sosTargets = withContext(Dispatchers.IO) {
+                runCatching { partnerSource.reachOutTargets(partnerSelection.selectedPairId) }
+                    .getOrDefault(emptyList())
             }
         }
     }
@@ -495,8 +501,9 @@ fun AppShell(
     // this supersedes FR-2's "no confirmation dialog": one extra tap beats an accidental send.
     if (sosConfirmOpen) {
         SosConfirmDialog(
-            targetName = sosTargetName,
-            onSend = { msg -> sosConfirmOpen = false; sos.onTap(msg) },
+            targets = sosTargets,
+            initialPairId = sosTargets.firstOrNull()?.pairId,
+            onSend = { msg, pairId -> sosConfirmOpen = false; sos.onTap(msg, pairId) },
             onDismiss = { sosConfirmOpen = false },
         )
     }
@@ -584,30 +591,59 @@ fun AppShell(
 
 /**
  * FAB rev (owner mandate 2026-10-04, Q4): the reach-out confirmation. Names the partner the
- * send will reach (§19.5 target; falls back to the generic title when no name resolves), and
- * carries the message — prefilled with the default, fully editable, capped at the envelope's
- * char bound; a cleared field sends the v1 no-text nudge. Extracted from AppShell so the
- * §12.3 device leg can render it in isolation (NudgeDialogInstrumentedTest).
+ * send will reach (§19.5 target first; falls back to the generic title when no name resolves),
+ * and carries the message — prefilled with the default, fully editable, capped at the
+ * envelope's char bound; a cleared field sends the v1 no-text nudge.
+ *
+ * Owner ruling 2026-10-23 (per-subject routing): with more than one live partner the dialog
+ * also asks who gets it — one explicit recipient per send, never a fan-out. The default is
+ * the §19.5 target the single-partner flow always used, so that flow is unchanged. Extracted
+ * from AppShell so the §12.3 device leg can render it in isolation (NudgeDialogInstrumentedTest).
  */
 @Composable
 internal fun SosConfirmDialog(
-    targetName: String?,
-    onSend: (String?) -> Unit,
+    targets: List<ReachOutTarget>,
+    initialPairId: String?,
+    onSend: (String?, String?) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val defaultMessage = stringResource(R.string.sos_default_message)
     var message by remember { mutableStateOf(defaultMessage) }
+    var selectedPairId by remember(targets, initialPairId) {
+        mutableStateOf(initialPairId ?: targets.firstOrNull()?.pairId)
+    }
+    val selectedName = targets.firstOrNull { it.pairId == selectedPairId }?.name
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                targetName?.let { stringResource(R.string.sos_confirm_title_named, it) }
+                selectedName?.let { stringResource(R.string.sos_confirm_title_named, it) }
                     ?: stringResource(R.string.sos_confirm_title),
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
                 Text(stringResource(R.string.sos_reach_out_body))
+                if (targets.size > 1) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            stringResource(R.string.sos_target_label),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        targets.forEach { target ->
+                            FilterChip(
+                                selected = target.pairId == selectedPairId,
+                                onClick = { selectedPairId = target.pairId },
+                                label = { Text(target.name) },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
                 OutlinedTextField(
                     value = message,
                     onValueChange = { message = it.take(NudgeEnvelope.MAX_TEXT_CHARS) },
@@ -626,7 +662,11 @@ internal fun SosConfirmDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSend(message.trim().takeIf { it.isNotEmpty() }) }) {
+            TextButton(
+                onClick = {
+                    onSend(message.trim().takeIf { it.isNotEmpty() }, selectedPairId)
+                },
+            ) {
                 Text(stringResource(R.string.sos_confirm_send))
             }
         },

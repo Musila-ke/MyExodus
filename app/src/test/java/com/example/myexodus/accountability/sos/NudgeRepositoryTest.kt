@@ -277,6 +277,33 @@ class NudgeRepositoryTest {
     }
 
     @Test
+    fun explicitRecipient_isUsedVerbatim_evenWhenTheDefaultWouldDiffer() = runTest {
+        val h = Harness().apply {
+            enrollments = listOf(enrollment("pair-old", 100), enrollment("pair-new", 200))
+            selected = "pair-new"
+        }
+
+        assertEquals(
+            NudgeRepository.SendResult.Accepted,
+            h.repository.sendNew("n1", targetPairId = "pair-old"),
+        )
+        assertEquals("pair-old", h.calls.single()["pairId"])
+    }
+
+    @Test
+    fun explicitRecipientThatIsGone_isUnavailable_neverRedirected() = runTest {
+        val h = Harness().apply {
+            enrollments = listOf(enrollment("pair-new", 200))
+        }
+
+        assertEquals(
+            NudgeRepository.SendResult.Unavailable,
+            h.repository.sendNew("n1", targetPairId = "pair-gone"),
+        )
+        assertTrue("no silent redirect to another partner", h.calls.isEmpty())
+    }
+
+    @Test
     fun noActivePair_isUnavailable_withNoCall() = runTest {
         val h = Harness().apply { enrollments = emptyList() }
         assertEquals(NudgeRepository.SendResult.Unavailable, h.repository.sendNew("n1"))

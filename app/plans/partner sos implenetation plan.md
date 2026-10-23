@@ -68,9 +68,9 @@ There is no sender-facing `Delivered`, `Displayed`, `Seen`, or `Acknowledged` st
 | FR-16 | After acknowledgment, the client cancels notifications on the `partner_nudges` channel. |
 | FR-17 | Each partner device has an installation registration. The server attempts push to all installation records that are eligible at the time the nudge's first dispatch claim snapshots its targets. |
 | FR-18 | Android devices without Google Play services are supported for app-open Firestore synchronization only and do not receive FCM push. |
-| FR-19 | The system notification uses channel `partner_nudges`, default importance, private lock-screen visibility, generic English text, and fixed Android tag `partner_nudge`. **Rev 2026-10-04 (owner mandate):** the channel id is `partner_nudges_v3` at **IMPORTANCE_HIGH** — DEFAULT was device-verified as tray-only (no heads-up banner), Android cannot raise an existing channel's importance in place, and the app can even silently LOWER its own channel (the pre-fix post path dented `_v2` 4→3 on every foreground receipt, device-confirmed on both rig devices) — so a versioned id takes HIGH and every prior id (`partner_nudges`, `partner_nudges_v2`) is deleted at startup; the post path creates a channel only when missing (recorded as D14 in the mapping doc). Channel-id mentions in FR-12/FR-16 and Step 7/10/11 text read `partner_nudges_v3` accordingly; fixed tag `partner_nudge`, private visibility, generic text unchanged. |
+| FR-19 | The system notification uses channel `partner_nudges`, default importance, private lock-screen visibility, generic English text, and fixed Android tag `partner_nudge`. **Rev 2026-10-04 (owner mandate):** the channel id is `partner_nudges_v3` at **IMPORTANCE_HIGH** — DEFAULT was device-verified as tray-only (no heads-up banner), Android cannot raise an existing channel's importance in place, and the app can even silently LOWER its own channel (the pre-fix post path dented `_v2` 4→3 on every foreground receipt, device-confirmed on both rig devices) — so a versioned id takes HIGH and every prior id (`partner_nudges`, `partner_nudges_v2`) is deleted at startup; the post path creates a channel only when missing (recorded as D14 in the mapping doc). Channel-id mentions in FR-12/FR-16 and Step 7/10/11 text read `partner_nudges_v3` accordingly; fixed tag `partner_nudge`. **Rev 2026-10-23 (owner ruling — mapping D16):** the push is data-only carrying `pair_id`; the client names the sender from its local pairing label, and the generic text above remains the lockscreen public copy and the no-label fallback. |
 | FR-20 | Foreground FCM receipt must result in a locally posted notification. The existing `FirebaseMessagingService` must not simply return for `partner_nudge`. |
-| FR-21 | Background notification+data delivery uses the normal Android system notification path. The data payload is `type=partner_nudge` and `nudge_id=<UUID>`. |
+| FR-21 | **Rev 2026-10-23 (mapping D16):** the push is data-only on every delivery path — FCM hands it to `onMessageReceived` in foreground and background alike, and the client posts the tray entry. The data payload is `type=partner_nudge`, `nudge_id=<UUID>` and `pair_id=<uidA>_<uidB>`. |
 | FR-22 | The feature is disabled by either the client Remote Config flag or the authoritative server kill switch. The server kill switch is checked on every `sendNudge` request and is not cached. |
 | FR-23 | The existing mailbox relay is not used by Partner SOS. Partner SOS uses the dedicated callable ingress and nudge collections defined here. |
 | FR-24 | The existing accountability envelope format is reused. No second encryption implementation is created. |
@@ -403,33 +403,38 @@ Use the Firebase Admin Node.js SDK FID-based multicast API.
 The logical message is:
 
 ```text
-notification:
-  title = "Accountability Check-in"
-  body  = "Your partner reached out — check in when you can."
-
 data:
-  type    = "partner_nudge"
+  type     = "partner_nudge"
   nudge_id = <UUIDv4>
+  pair_id  = <uidA>_<uidB>          // AD-02 durable pair id — local label lookup key
 
 android:
   priority = "high"
-  ttl = 3600000                    // Admin SDK object: milliseconds
+  ttl = 3600000                     // Admin SDK object: milliseconds
   restrictedPackageName = <applicationId>
-  notification:
-    channelId = "partner_nudges"
-    tag = "partner_nudge"
-    visibility = "private"
 ```
+
+**Rev 2026-10-23 (owner ruling — D16 in the mapping):** the message is data-only; the
+notification block is gone. The owner requires the recipient to see *who* reached out, the
+server stores no names, and only the receiving phone knows its own pairing label — so the push
+carries `pair_id` and the client resolves the name at post time. Trade-off, accepted: FCM can
+no longer render the tray entry itself while the app process is dead; `onMessageReceived`
+posts it under high priority, and a force-stopped app still shows the nudge card from
+Firestore the next time it opens. The generic copy survives as the lockscreen public version
+and the no-label fallback. Channel, tag, visibility and copy now live in the client (AD-12 rev).
 
 Do not include:
 
 - ciphertext;
-- pair ID;
 - sender UID;
 - recipient UID;
 - event plaintext;
 - APNs configuration;
 - `collapse_key`.
+
+`pair_id` is relationship metadata, never content: it reveals that a pairing exists — the same
+scope both pair members already see in Firestore — never what was shared. The server neither
+stores nor receives a display name.
 
 FCM notification messages are collapsible by FCM transport semantics, while Android `tag` controls replacement of the displayed notification. These are separate mechanisms and must not be conflated.
 
@@ -455,7 +460,7 @@ Official references:
 9. **Use FID-targeted FCM sends;** current Firebase Admin SDK documentation recommends FIDs while token-targeting APIs are deprecated.  
 10. **Snapshot target installations on first dispatch;** a nudge must not unexpectedly fan out to devices registered after the nudge was accepted.  
 11. **Retry at the queue level rather than doing multiple FCM retries inside one function invocation;** this keeps leases simple and makes crash recovery deterministic.  
-12. **Use high-priority hybrid notification+data FCM;** the notification payload enables system-level tray display while data provides a deterministic nudge identifier.  
+12. **Use high-priority data-only FCM (rev 2026-10-23, D16);** the client posts the tray entry so it can name the sender from `pair_id` — a notification payload would render a name-less system copy, and the server holds no labels.  
 13. **Post a local notification when the app is foregrounded;** Firebase delivers notification+data to `onMessageReceived()` in the foreground.  
 14. **Keep Firestore as the in-app source of truth;** FCM only signals the partner that a nudge exists.  
 15. **Use `partner_nudge` as a fixed Android notification tag;** the active-pair-per-user constraint makes one replaceable tray entry sufficient.  
@@ -467,7 +472,7 @@ Official references:
 21. **Use Firestore TTL only for cleanup;** correctness never depends on TTL execution timing.  
 22. **Use no new backend database or queue product;** the expected V1 volume does not justify Cloud Tasks or Redis.  
 23. **Keep the feature online-only;** this eliminates offline burst flushing and gives the sender an honest `Not sent` result.  
-24. **Use generic notification text and no plaintext payload data beyond `type` and `nudge_id`;** the recipient must not see sensitive habit information on the lock screen.  
+24. **Use generic lockscreen text and no plaintext payload data beyond `type`, `nudge_id` and `pair_id` (rev 2026-10-23, D16);** the unlocked copy names the sender from the local pairing label, while the lock screen keeps the generic copy — no habit information ever rides the push.  
 25. **Use Node 22+ and current Admin SDK FID APIs;** this matches the current supported Firebase Admin runtime and messaging API direction.  
 
 ---
@@ -615,8 +620,11 @@ Queue records older than 7 days are expired by TTL. Any remaining queue older th
 
 When the app is foregrounded and `FirebaseMessagingService.onMessageReceived()` receives `type=partner_nudge`:
 
-1. Validate that `nudge_id` is present and has UUIDv4 syntax.
-2. Build/post the generic local notification immediately using channel `partner_nudges` and tag `partner_nudge`.
+1. Validate that `nudge_id` is present and has UUIDv4 syntax; validate `pair_id` against the
+   `<uidA>_<uidB>` shape (an unusable pair id costs only the name).
+2. Resolve this phone's pairing label for `pair_id` with one bounded local read (D16), then
+   build/post the local notification immediately using channel `partner_nudges` and tag
+   `partner_nudge` — named copy when a label resolves, the generic copy otherwise.
 3. Do not decrypt the payload in the FCM callback.
 4. Do not perform a network request from `onMessageReceived()`.
 5. Do not mutate Firestore from the callback.
@@ -632,18 +640,23 @@ Official reference:
 
 ### 6.8 Recipient background/killed receive
 
-When the app is backgrounded:
+When the app is backgrounded or its process was killed:
 
-1. FCM displays the notification using the notification payload.
-2. The user taps the notification.
-3. Android launches the app launcher intent.
-4. `MainActivity` checks for `type=partner_nudge` and `nudge_id`.
-5. Navigate to Home.
-6. Home attaches the Firestore listener.
-7. The listener loads the current nudge document.
-8. The app decrypts the Firestore envelope with the existing envelope helper and identical AAD construction.
-9. The notification is not used as the source of truth for content.
-10. Remove the handled intent extras after navigation.
+1. FCM delivers the data-only message to `FirebaseMessagingService.onMessageReceived()`.
+2. The client validates the payload, resolves the local label, and posts the tray entry —
+   the same path as §6.7 (D16 rev).
+3. The user taps the notification.
+4. Android launches the app launcher intent.
+5. `MainActivity` checks for `type=partner_nudge` and `nudge_id`.
+6. Navigate to Home.
+7. Home attaches the Firestore listener.
+8. The listener loads the current nudge document.
+9. The app decrypts the Firestore envelope with the existing envelope helper and identical AAD construction.
+10. The notification is not used as the source of truth for content.
+11. Remove the handled intent extras after navigation.
+
+A force-stopped app receives no FCM messages at all; its next open renders the nudge card
+from Firestore — the card, never the tray entry, is the source of truth (§8.15).
 
 ### 6.9 Recipient card and acknowledgment
 
@@ -1295,13 +1308,16 @@ In the existing `FirebaseMessagingService`:
 
 ```text
 if data.type == partner_nudge:
-    postPartnerNudgeNotification(nudgeId)
+    validate nudge_id (UUIDv4) and pair_id (<uidA>_<uidB> shape)
+    partnerName = this phone's pairing label for pair_id (bounded local read; null on any miss)
+    postPartnerNudgeNotification(nudgeId, partnerName)   // generic copy when null
     return
 ```
 
 The notification must be posted immediately.
 
 Do not perform Firestore reads, decryption or network synchronization in the FCM callback.
+The pair-id label lookup is the only read, it is local, single-row and time-bounded (D16).
 
 Existing message types continue through their current paths unchanged.
 
@@ -2068,9 +2084,9 @@ Official documentation used to close platform details:
 20. After four failed dispatch claims, the queue is terminally finalized and deleted.
 21. No-eligible-device results retain the nudge for in-app synchronization.
 22. Push failure does not delete the underlying nudge.
-23. Foreground `partner_nudge` FCM reception posts a local notification immediately.
-24. Background `partner_nudge` FCM reception shows the generic system notification.
-25. The notification uses `partner_nudges` channel, private visibility, default importance and fixed tag `partner_nudge`.
+23. Foreground `partner_nudge` data reception posts a local notification immediately.
+24. Background `partner_nudge` data reception reaches `onMessageReceived` and posts the local notification (named when the pair resolves, generic otherwise).
+25. The notification uses `partner_nudges_v3` channel, private visibility, HIGH importance (D14) and fixed tag `partner_nudge`; the lockscreen public version stays generic.
 26. A repeated nudge replaces the existing partner notification instead of creating a second feature notification entry.
 27. Opening the app shows the most recent unacknowledged non-suppressed nudge from Firestore.
 28. The in-app card remains correct even when the FCM notification is absent.
@@ -2078,6 +2094,7 @@ Official documentation used to close platform details:
 30. Acknowledgment cancels the active Partner SOS notification.
 31. Notification-off banner appears when app notifications are disabled.
 32. Muting the channel does not cause the app-level notification-off banner to appear.
+33. The receiving phone names the sender from its own pairing label when the push's `pair_id` resolves, and falls back to the generic copy with no row (D16).
 33. Non-GMS devices do not crash and can display the nudge card when the app is opened.
 34. Direct client writes to nudge, queue, rate-state and config paths are denied.
 35. Sender cannot read recipient nudge documents.
@@ -2109,10 +2126,11 @@ Official documentation used to close platform details:
 - [ ] `pushNudge` implements lease acquisition, target snapshot, FID multicast, per-device result handling and bounded retries.
 - [ ] `resumePendingNudges` repairs stalled queue records without relying on global nudge scans.
 - [ ] Device registry uses Firebase Installation IDs as document IDs and maintains `pushEligible` freshness.
-- [ ] Android notification channel `partner_nudges` exists before notification posting.
+- [ ] Android notification channel `partner_nudges_v3` exists before notification posting.
 - [ ] `POST_NOTIFICATIONS` flow is implemented for API 33+.
-- [ ] Foreground FCM `partner_nudge` messages generate local notifications immediately.
-- [ ] Background FCM `partner_nudge` messages use the generic system notification flow.
+- [ ] Foreground FCM `partner_nudge` data messages generate local notifications immediately.
+- [ ] Background FCM `partner_nudge` data messages reach `onMessageReceived` and post the tray entry (generic lockscreen copy).
+- [ ] The nudge notification names the sender from the local pairing label when `pair_id` resolves (D16).
 - [ ] MainActivity handles Partner SOS notification intents safely.
 - [ ] Home Firestore listener renders the current non-suppressed unacknowledged nudge.
 - [ ] Acknowledgment updates only `ackedAt` and cancels the corresponding notification.

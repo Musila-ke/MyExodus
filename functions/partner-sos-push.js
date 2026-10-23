@@ -24,16 +24,11 @@ const {
 
 const REGION = 'us-central1';
 
-// §4.6 FCM message contract, verbatim. The generic copy and the two data keys are the
-// complete plaintext on the wire — no ciphertext, no pair/uid, no habit information.
+// §4.6 FCM message contract, revised 2026-10-23 (owner ruling — mapping D16): the message is
+// data-only and carries `pair_id` so the receiving phone resolves its own local partner label
+// and names the sender. The server never stores names; the data keys are the complete
+// plaintext on the wire — no ciphertext, no uid, no habit information.
 const ANDROID_PACKAGE = 'com.example.myexodus'; // §3.4 mapping (applicationId)
-const NOTIFICATION_TITLE = 'Accountability Check-in';
-const NOTIFICATION_BODY = 'Your partner reached out — check in when you can.';
-// `_v3`: Android cannot raise an existing channel's importance in place, and an app can even
-// silently LOWER its own channel (device-confirmed 2026-10-04 — the pre-fix client dented v2
-// 4→3 on foreground receipts), so a dented id is retired and a fresh one takes HIGH.
-const CHANNEL_ID = 'partner_nudges_v3';
-const NOTIFICATION_TAG = 'partner_nudge';
 const FCM_TTL_MS = 3_600_000;
 
 // Deviation from the plan's FID-targeted send, flagged 2026-10-04: FCM FID targeting only
@@ -41,20 +36,22 @@ const FCM_TTL_MS = 3_600_000;
 // with this app's legacy getToken() path every FID send returns installation-id-not-registered
 // on the rig while the same installations' full registration tokens deliver. Token targeting
 // is still supported during FCM's deprecation window; revisit when the client migrates.
-function nudgeFcmMessage(tokens, nudgeId) {
+// Data-only on purpose: a system-posted notification block cannot carry a per-recipient name
+// (the server holds no labels), and the owner ruled 2026-10-23 that the name must appear. The
+// client resolves it from `pair_id` against its own enrollment row and posts under the fixed
+// FR-19 tag. Trade-off, documented as D16: a notification block would let FCM render even
+// when the app process is dead; data-only processing runs in onMessageReceived instead (high
+// priority). A suppressed/force-stopped app still recovers the nudge from Firestore on open.
+function nudgeFcmMessage(tokens, nudgeId, pairId) {
+  const data = { type: 'partner_nudge', nudge_id: nudgeId };
+  if (typeof pairId === 'string' && pairId.length > 0) data.pair_id = pairId;
   return {
     tokens,
-    notification: { title: NOTIFICATION_TITLE, body: NOTIFICATION_BODY },
-    data: { type: 'partner_nudge', nudge_id: nudgeId },
+    data,
     android: {
       priority: 'high',
       ttl: FCM_TTL_MS,
       restrictedPackageName: ANDROID_PACKAGE,
-      notification: {
-        channelId: CHANNEL_ID,
-        tag: NOTIFICATION_TAG,
-        visibility: 'private',
-      },
     },
   };
 }
@@ -277,7 +274,7 @@ function createPushNudge({ db, messaging, now = () => Date.now(), rand = Math.ra
       const batch = sendable.slice(i, i + FCM_FID_BATCH_MAX);
       try {
         const response = await messaging.sendEachForMulticast(
-          nudgeFcmMessage(batch.map((t) => t.snap.get('token')), nudgeId),
+          nudgeFcmMessage(batch.map((t) => t.snap.get('token')), nudgeId, pairId),
         );
         response.responses.forEach((result, idx) => {
           if (result.success) {

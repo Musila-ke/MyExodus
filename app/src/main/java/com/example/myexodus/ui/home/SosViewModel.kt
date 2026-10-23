@@ -60,10 +60,11 @@ class SosViewModel @Inject constructor(
 
     /**
      * The single tap path (FAB rev: the dialog's Send — confirmation precedes this call).
-     * [message] is the dialog's edited text for a fresh attempt; a retry ignores it entirely
-     * and replays the retained envelope verbatim (the original text is already sealed in it).
+     * [message] is the dialog's edited text and [targetPairId] the explicitly chosen recipient
+     * (owner ruling 2026-10-23); null recipients keep the §19.5 default. A retry ignores both
+     * and replays the retained envelope verbatim — its recipient is already sealed in it.
      */
-    fun onTap(message: String? = null) {
+    fun onTap(message: String? = null, targetPairId: String? = null) {
         val current = _state.value
         val retained = pending
         val allowed = current == SosSendState.Idle ||
@@ -76,7 +77,7 @@ class SosViewModel @Inject constructor(
             val result = if (retained != null) {
                 repository.resend(retained)
             } else {
-                repository.sendNew(UUID.randomUUID().toString(), message)
+                repository.sendNew(UUID.randomUUID().toString(), message, targetPairId)
             }
             apply(result)
         }

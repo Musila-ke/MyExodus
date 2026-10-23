@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import com.example.myexodus.accountability.crypto.AccountabilityKeyStore
+import com.example.myexodus.blocking.BlockerAccessibilityService
 import com.example.myexodus.blocking.OverlayController
 import com.example.myexodus.blocking.hasUsageAccess
 import com.example.myexodus.notifications.NotificationAccess
@@ -76,6 +77,50 @@ private fun integrityStatus(): IntegrityStatus = runCatching {
 }.getOrElse { IntegrityStatus.FAILED }
 
 fun accessibilitySettingsIntent(): Intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+
+/**
+ * Whether the platform says the blocker service is enabled: it names it in the enabled list
+ * AND the accessibility master switch is not off (owner report 2026-10-23).
+ * [com.example.myexodus.blocking.ProtectionStatusMonitor] deliberately does not use the list
+ * for liveness — it flaps on OEM builds — but an absent entry or a cleared master switch is
+ * the opposite signal: the service cannot bind at all, so a polling-only state is a real gap
+ * whose cause must be shown immediately rather than after the post-start rebind grace.
+ * Unreadable reads as absent, matching the ProtectionChecks rule (undeterminable = needing
+ * attention).
+ */
+fun isBlockerAccessibilityEnabled(context: Context): Boolean = runCatching {
+    val resolver = context.contentResolver
+    // XOS clears the master switch after an uncaught service crash while the enabled list
+    // keeps our entry (device-captured 2026-10-23: master "0", listed, Bound services {}),
+    // so list membership alone would keep claiming enabled. An absent value is NOT off —
+    // some OEM builds do not write it — which keeps the list as the fallback signal.
+    if (Settings.Secure.getString(resolver, Settings.Secure.ACCESSIBILITY_ENABLED) == "0") {
+        return@runCatching false
+    }
+    enabledAccessibilityServicesContain(
+        setting = Settings.Secure.getString(
+            resolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+        ),
+        packageName = context.packageName,
+        className = BlockerAccessibilityService::class.java.name,
+    )
+}.getOrDefault(false)
+
+/**
+ * Pure parse of [Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES] — colon-separated
+ * `package/class` entries, where the class may be flattened short or fully qualified.
+ */
+internal fun enabledAccessibilityServicesContain(
+    setting: String?,
+    packageName: String,
+    className: String,
+): Boolean = setting.orEmpty()
+    .split(':')
+    .any { entry ->
+        val component = ComponentName.unflattenFromString(entry) ?: return@any false
+        component.packageName == packageName && component.className == className
+    }
 
 fun usageAccessSettingsIntent(): Intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
 

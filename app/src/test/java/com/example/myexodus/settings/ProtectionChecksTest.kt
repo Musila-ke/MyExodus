@@ -4,7 +4,9 @@ import android.Manifest
 import android.app.Application
 import android.app.NotificationManager
 import android.content.Context
+import android.provider.Settings
 import androidx.test.core.app.ApplicationProvider
+import com.example.myexodus.blocking.BlockerAccessibilityService
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -49,5 +51,70 @@ class ProtectionChecksTest {
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
 
         assertTrue(notificationsGranted(context))
+    }
+
+    @Test
+    fun enabledAccessibilityList_matchesShortAndFullyQualifiedForms() {
+        val pkg = context.packageName
+        val cls = BlockerAccessibilityService::class.java.name
+
+        assertTrue(enabledAccessibilityServicesContain("$pkg/.blocking.BlockerAccessibilityService", pkg, cls))
+        assertTrue(enabledAccessibilityServicesContain("$pkg/$cls", pkg, cls))
+        assertTrue(
+            "a service in the middle of the list still counts",
+            enabledAccessibilityServicesContain("other.pkg/OtherService:$pkg/$cls:third.pkg/Third", pkg, cls),
+        )
+        assertFalse("absent", enabledAccessibilityServicesContain(null, pkg, cls))
+        assertFalse("empty", enabledAccessibilityServicesContain("", pkg, cls))
+        assertFalse(
+            "a different service in our package is not ours",
+            enabledAccessibilityServicesContain("$pkg/.blocking.OtherService", pkg, cls),
+        )
+        assertFalse(
+            "the same class name in another package is not ours",
+            enabledAccessibilityServicesContain("other.pkg/$cls", pkg, cls),
+        )
+    }
+
+    @Test
+    fun isBlockerAccessibilityEnabled_readsThePlatformList() {
+        Settings.Secure.putString(
+            context.contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+            null,
+        )
+        assertFalse("no list entry means the service cannot bind", isBlockerAccessibilityEnabled(context))
+
+        Settings.Secure.putString(
+            context.contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+            "${context.packageName}/${BlockerAccessibilityService::class.java.name}",
+        )
+        assertTrue(isBlockerAccessibilityEnabled(context))
+    }
+
+    @Test
+    fun isBlockerAccessibilityEnabled_masterSwitchOffWinsOverAListedService() {
+        Settings.Secure.putString(
+            context.contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+            "${context.packageName}/${BlockerAccessibilityService::class.java.name}",
+        )
+        Settings.Secure.putString(
+            context.contentResolver,
+            Settings.Secure.ACCESSIBILITY_ENABLED,
+            "0",
+        )
+        assertFalse(
+            "XOS clears the master switch after a crash while the list keeps the entry — the platform says nothing can bind",
+            isBlockerAccessibilityEnabled(context),
+        )
+
+        Settings.Secure.putString(
+            context.contentResolver,
+            Settings.Secure.ACCESSIBILITY_ENABLED,
+            "1",
+        )
+        assertTrue(isBlockerAccessibilityEnabled(context))
     }
 }

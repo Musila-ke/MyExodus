@@ -555,4 +555,32 @@ class PartnerDashboardSourceTest {
             source(enrollments = listOf(enrollment(label = null))).source.targetPartnerName(),
         )
     }
+
+    @Test
+    fun reachOutTargets_putsTheTargetFirst_andListsEveryPartnerOnce() = runTest {
+        val recording = source(
+            enrollments = listOf(
+                enrollment(pairId = "pair-old", createdAt = 100L, label = "Alex"),
+                enrollment(pairId = "pair-new", createdAt = 200L, label = "Sam"),
+            ),
+        )
+
+        assertEquals(
+            "the default choice is exactly the pre-picker §19.5 target",
+            listOf(ReachOutTarget("pair-new", "Sam"), ReachOutTarget("pair-old", "Alex")),
+            recording.source.reachOutTargets(),
+        )
+        assertEquals(
+            "a live pick moves to the front; the rest stay newest-first",
+            listOf(ReachOutTarget("pair-old", "Alex"), ReachOutTarget("pair-new", "Sam")),
+            recording.source.reachOutTargets("pair-old"),
+        )
+        assertEquals(
+            "a stale pick degrades to the newest target, never to nothing",
+            listOf(ReachOutTarget("pair-new", "Sam"), ReachOutTarget("pair-old", "Alex")),
+            recording.source.reachOutTargets("pair-gone"),
+        )
+        assertEquals(emptyList<ReachOutTarget>(), source(enrollments = emptyList()).source.reachOutTargets())
+        assertEquals(emptyList<ReachOutTarget>(), source(enrollmentsThrow = true).source.reachOutTargets())
+    }
 }

@@ -43,10 +43,16 @@ class NudgeRepository(
     }
 
     /** A fresh attempt: [nudgeId] is minted by the ViewModel (§6.1 step 2, UUIDv4). [message]
-     *  is the owner-written optional text (FAB dialog); null/blank seals the v1 constant. */
-    suspend fun sendNew(nudgeId: String, message: String? = null): SendResult {
+     *  is the owner-written optional text (FAB dialog); null/blank seals the v1 constant.
+     *  [targetPairId] is the dialog's explicit recipient (owner ruling 2026-10-23: SOS names
+     *  one partner, never fan-out); null = the §19.5 default the pre-picker flow used. */
+    suspend fun sendNew(
+        nudgeId: String,
+        message: String? = null,
+        targetPairId: String? = null,
+    ): SendResult {
         if (!validatedNetwork()) return SendResult.NotSentOffline
-        val enrollment = runCatching { resolveTargetPair() }.getOrNull()
+        val enrollment = runCatching { resolveTargetPair(targetPairId) }.getOrNull()
             ?: return SendResult.Unavailable
         val uid = runCatching { ensureUid() }.getOrNull() ?: return SendResult.Unavailable
         val cek = runCatching { deriveCek(enrollment) }.getOrNull() ?: return SendResult.Unavailable
@@ -64,7 +70,10 @@ class NudgeRepository(
         return call(pending)
     }
 
-    private suspend fun resolveTargetPair(): EnrollmentRecord? {
+    private suspend fun resolveTargetPair(targetPairId: String?): EnrollmentRecord? {
+        // An explicit recipient that is no longer live is a clean refusal — never a silent
+        // redirect to a different partner (D8: a stale pick can only refuse, never misdeliver).
+        if (targetPairId != null) return enrollments().firstOrNull { it.pairId == targetPairId }
         // The shared §19.5 rule (EnrollmentTargeting): pick when live, else newest. The server
         // re-verifies membership either way.
         return enrollments().targetEnrollment(selectedPairId())

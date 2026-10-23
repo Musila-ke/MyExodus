@@ -43,8 +43,8 @@ import org.junit.runner.RunWith
  *
  * The receive path is driven through the production [PartnerMessagingService.onMessageReceived]
  * with a crafted data-only [RemoteMessage] — the exact entry FCM invokes. The payload is
- * data-only by design (AD-11/§8.17: never a notification block, never content), so foreground
- * and background delivery land in the same callback; the "system notification" of the second
+ * data-only by design (AD-11/§8.17; D16 adds `pair_id` for local naming), so foreground and
+ * background delivery land in the same callback; the "system notification" of the second
  * bullet is the tray entry this code posts, and the two bullets pin the foreground/background
  * variants separately because their preconditions differ: a foreground receipt happens with the
  * process — and startup's channel creation — already in place, while a background wake can post
@@ -219,9 +219,13 @@ class NudgeNotificationInstrumentedTest {
         return service
     }
 
+    // A valid pair id rides along (D16) but the directly constructed service has no injected
+    // enrollment DAO, so these legs pin the generic-fallback copy. The named path is proven
+    // on-device through the real Hilt-created service (see the D16 device leg in the mapping).
     private fun nudgeMessage(nudgeId: String) = RemoteMessage.Builder("test")
         .addData(PartnerNudgePush.TYPE_KEY, PartnerNudgePush.TYPE_PARTNER_NUDGE)
         .addData(PartnerNudgePush.NUDGE_ID_KEY, nudgeId)
+        .addData(PartnerNudgePush.PAIR_ID_KEY, "alice-uid_bob-uid")
         .build()
 
     // --- tray + launcher state --------------------------------------------------------------

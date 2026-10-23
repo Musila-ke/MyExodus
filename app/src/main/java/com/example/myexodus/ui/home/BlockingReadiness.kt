@@ -4,6 +4,7 @@ import android.content.Context
 import com.example.myexodus.blocking.OverlayController
 import com.example.myexodus.blocking.ProtectionAuthority
 import com.example.myexodus.blocking.hasUsageAccess
+import com.example.myexodus.settings.isBlockerAccessibilityEnabled
 import com.example.myexodus.vpn.VpnLifecycle
 
 /**
@@ -19,6 +20,14 @@ data class BlockingReadiness(
     val overlayGranted: Boolean,
     /** Live website rules exist and Android holds no VPN consent for this app. */
     val websiteConsentMissing: Boolean,
+    /**
+     * The platform says the blocker service is enabled — it names it in the enabled list AND
+     * the accessibility master switch is not off. False is definitive — the service cannot
+     * bind; true alone does not prove it is alive (the list flaps on XOS, which is why
+     * [ProtectionAuthority] stays the liveness source). Not part of [essentialGap]: a listing
+     * flap must never downgrade a live Path A to LIMITED.
+     */
+    val accessibilityEnabledByPlatform: Boolean,
 ) {
     val essentialGap: Boolean
         get() = !usageAccess || !overlayGranted || websiteConsentMissing
@@ -34,6 +43,7 @@ internal fun readBlockingReadiness(
     overlayGranted = runCatching { OverlayController.overlayPermissionGranted(context) }
         .getOrDefault(false),
     websiteConsentMissing = hasLiveWebsiteRule && !VpnLifecycle.consented(context),
+    accessibilityEnabledByPlatform = isBlockerAccessibilityEnabled(context),
 )
 
 /**

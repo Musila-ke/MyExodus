@@ -5,19 +5,28 @@ import java.util.UUID
 
 /**
  * Partner SOS (V1 Req 35) push contract — plan §4.6/§6.7/§8.17/§8.18. The FCM data payload
- * and the launcher-intent extras it produces carry exactly `type` + `nudge_id`; the Android
- * notification tag is the fixed FR-19 tag (one replaceable tray entry — the active pair is
- * per-user, so a second nudge replaces the first by design). Nothing here is content: the
- * card is always rendered from Firestore, never from push (AD: extras are hints only).
+ * carries `type` + `nudge_id` + (since D16, 2026-10-23) `pair_id`; the pair id is a local
+ * lookup key, never content: the service resolves this phone's pairing label and names the
+ * sender, falling back to the generic copy. The Android notification tag is the fixed FR-19
+ * tag (one replaceable tray entry — the active pair is per-user, so a second nudge replaces
+ * the first by design). The card itself is always rendered from Firestore (extras are hints).
  */
 object PartnerNudgePush {
 
     const val TYPE_KEY = "type"
     const val NUDGE_ID_KEY = "nudge_id"
+    const val PAIR_ID_KEY = "pair_id"
     const val TYPE_PARTNER_NUDGE = "partner_nudge"
 
     /** FR-19 fixed Android tag — the post and the post-acknowledgment cancel (FR-16) share it. */
     const val TAG = "partner_nudge"
+
+    /** D16: the pair id is `<uidA>_<uidB>` (AD-02). Strict shape and length so a malformed
+     *  or hostile push can only ever degrade to the generic copy — never reach a lookup with
+     *  an arbitrary string. */
+    private val PAIR_ID_SHAPE = Regex("[A-Za-z0-9-]{1,128}_[A-Za-z0-9-]{1,128}")
+
+    fun validPairId(raw: String?): String? = raw?.takeIf { PAIR_ID_SHAPE.matches(it) }
 
     /**
      * §6.7 step 1 / §8.18 step 2: present and UUIDv4-syntax only. Anything else is ignored —

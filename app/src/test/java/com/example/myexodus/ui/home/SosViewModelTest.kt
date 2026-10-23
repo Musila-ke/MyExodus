@@ -46,8 +46,10 @@ class SosViewModelTest {
         /** Lets a test hold the callable open while asserting the in-flight states. */
         var sendGate: CompletableDeferred<Unit>? = null
 
+        var enrollments: List<EnrollmentRecord> = listOf(enrollment("pair-1", 100))
+
         val repository = NudgeRepository(
-            enrollments = { listOf(enrollment("pair-1", 100)) },
+            enrollments = { enrollments },
             selectedPairId = { null },
             ensureUid = { "uid-1" },
             deriveCek = {
@@ -89,6 +91,21 @@ class SosViewModelTest {
         advanceTimeBy(SosViewModel.RESULT_DISPLAY_MILLIS)
         runCurrent()
         assertEquals(SosViewModel.SosSendState.Idle, vm.state.value)
+    }
+
+    @Test
+    fun tap_carriesTheDialogsChosenRecipient_notTheDefault() = runTest {
+        val sender = FakeSender().apply {
+            // Without the pick the sender would resolve the newest (pair-new).
+            enrollments = listOf(enrollment("pair-old", 100), enrollment("pair-new", 200))
+        }
+        val vm = viewModel(sender)
+        advanceUntilIdle()
+
+        vm.onTap(message = "please call", targetPairId = "pair-old")
+        runCurrent()
+
+        assertEquals("pair-old", sender.calls.single()["pairId"])
     }
 
     @Test

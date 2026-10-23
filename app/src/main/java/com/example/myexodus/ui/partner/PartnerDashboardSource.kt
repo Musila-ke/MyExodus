@@ -15,6 +15,12 @@ import com.example.myexodus.accountability.state.UnpairState
 import java.time.ZoneId
 
 /**
+ * One selectable reach-out recipient (owner ruling 2026-10-23): the SOS dialog names exactly
+ * one partner per send — never a fan-out, and never a hidden stored "SOS partner".
+ */
+data class ReachOutTarget(val pairId: String, val name: String)
+
+/**
  * The dashboard's read model (plan §7 items 12-13, FR3/§11): built entirely from local state —
  * the enrollment, the partner chain head, stored received envelopes, and approval rows — with
  * ZERO network round-trip on load. Freshness is a property of the mailbox watermark, not of
@@ -186,6 +192,20 @@ class PartnerDashboardSource(
     suspend fun targetPartnerName(selectedPairId: String? = null): String? =
         runCatching { enrollments() }.getOrNull().orEmpty()
             .targetEnrollment(selectedPairId)?.let { displayNameOf(it) }
+
+    /**
+     * The reach-out dialog's recipient list (owner ruling 2026-10-23): the §19.5 target first,
+     * so the default choice is exactly the partner the single-partner flow always reached;
+     * the rest newest-first. A failed read degrades to an empty list, which the dialog renders
+     * as the generic unnamed flow — never a wrong name.
+     */
+    suspend fun reachOutTargets(selectedPairId: String? = null): List<ReachOutTarget> {
+        val all = runCatching { enrollments() }.getOrNull().orEmpty()
+            .sortedByDescending { it.createdAtEpochMillis }
+        val target = all.targetEnrollment(selectedPairId) ?: return emptyList()
+        return (listOf(target) + all.filter { it.pairId != target.pairId })
+            .map { ReachOutTarget(it.pairId, displayNameOf(it)) }
+    }
 
     internal companion object {
         const val WEEK_MILLIS = 7 * 24 * 60 * 60 * 1000L

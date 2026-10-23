@@ -875,11 +875,13 @@
     <string name="settings_partner_block_title">Block check-ins</string>
     <string name="settings_partner_block_body">Don’t let reach-outs from %1$s reach this phone.</string>
     <string name="settings_partner_block_failed">Couldn’t save. Check your connection and try again.</string>
-    <!-- The nudge notification copy (plan §4.6): one fixed generic pair — the same text the
-         background system notification shows, so both delivery paths read identically. No
-         partner name, no habit detail (FR-19/FR-13). -->
+    <!-- The nudge notification copy (plan §4.6, D16 rev 2026-10-23): the unlocked tray names
+         the sender from this phone's pairing label; the generic pair is both the lockscreen
+         public copy and the fallback when the push carries no resolvable pair. No habit
+         detail (FR-13). -->
     <string name="partner_nudge_title">Accountability Check-in</string>
     <string name="partner_nudge_text">Your partner reached out — check in when you can.</string>
+    <string name="partner_nudge_text_named">%1$s reached out — check in when you can.</string>
     <!-- The sender card (plan §8.15 Step 8). Result copy mirrors the plan's state names —
          deliberately terse; the plan's "chill, subtle" direction (OPD #7) and FR-25's rule
          that the tap path never shows an emergency warning. -->
@@ -896,6 +898,9 @@
          target partner and carries the message (default prefilled, editable, blank = none). -->
     <string name="sos_confirm_title">Reach out to your partner?</string>
     <string name="sos_confirm_title_named">Reach out to %1$s?</string>
+    <!-- Owner ruling 2026-10-23: with several live partners the send names one recipient —
+         shown only when there is a choice. -->
+    <string name="sos_target_label">Send to</string>
     <string name="sos_confirm_send">Send</string>
     <string name="sos_confirm_cancel">Cancel</string>
     <string name="sos_message_label">Message</string>

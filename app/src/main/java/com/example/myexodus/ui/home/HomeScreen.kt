@@ -67,6 +67,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.R
 import com.example.myexodus.accountability.sos.NudgeInboxRepository
@@ -215,30 +217,45 @@ fun HomeScreen(
         }
     }
 
-    // Owner correction 2026-10-21: "Limited" without a cause made the user tap through to
-    // Settings to learn what was down. The explainer waits out the accessibility-rebind window
-    // after a process start (XOS measures 20–40 s) so a transient rebind never flashes a card;
-    // a genuinely down service gets the same cause + Re-enable grammar as the other rows.
-    var pollingOnlyPersistent by remember { mutableStateOf(false) }
-    LaunchedEffect(authority, degradation) {
-        val pollingOnly =
-            authority == ProtectionAuthority.DEGRADED_POLLING_ONLY && degradation == null
-        val waitMs = POLLING_ONLY_EXPLAINER_DELAY_MS -
-            (SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime())
-        pollingOnlyPersistent = pollingOnly && waitMs <= 0
-        if (pollingOnly && waitMs > 0) {
-            delay(waitMs)
-            pollingOnlyPersistent = true
-        }
-    }
-
     // Owner correction 2026-10-21: accessibility is not the only blocking-essential grant.
     // Usage access, display-over-apps and the website tunnel are re-read with the 30 s tick,
     // so a grant revoked (or restored) in system settings lands on this screen by itself.
     var readiness by remember { mutableStateOf<BlockingReadiness?>(null) }
-    LaunchedEffect(nowMillis, rules) {
+    // Owner ease-of-use rule 2026-10-23: a grant toggled in system settings must land the
+    // moment the user comes back, not on the next 30 s tick — the user has just acted and is
+    // looking for the result. ON_RESUME re-runs the same read with fresh captured state.
+    var resumeTick by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumeTick++ }
+    LaunchedEffect(nowMillis, rules, resumeTick) {
         readiness = withContext(Dispatchers.IO) {
             readBlockingReadiness(labelContext, hasLiveWebsiteRule(rules.orEmpty(), nowMillis))
+        }
+    }
+
+    // Owner correction 2026-10-21: "Limited" without a cause made the user tap through to
+    // Settings to learn what was down. The explainer waits out the accessibility-rebind window
+    // after a process start (XOS measures 20–40 s) so a transient rebind never flashes a card;
+    // a genuinely down service gets the same cause + Re-enable grammar as the other rows.
+    // Owner report 2026-10-23: after an update/force-stop the enabled list was empty, so no
+    // rebind could ever complete — the wait showed "Limited" with no cause for a full minute.
+    // An absent list entry, or a cleared accessibility master switch, is definitive and skips
+    // the wait (see pollingOnlySettled).
+    var pollingOnlyPersistent by remember { mutableStateOf(false) }
+    LaunchedEffect(authority, degradation, readiness?.accessibilityEnabledByPlatform) {
+        val pollingOnly =
+            authority == ProtectionAuthority.DEGRADED_POLLING_ONLY && degradation == null
+        val waitMs = POLLING_ONLY_EXPLAINER_DELAY_MS -
+            (SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime())
+        val settled = pollingOnlySettled(
+            authority = authority,
+            degradation = degradation,
+            accessibilityEnabledByPlatform = readiness?.accessibilityEnabledByPlatform,
+            rebindWindowElapsed = waitMs <= 0,
+        )
+        pollingOnlyPersistent = settled
+        if (pollingOnly && !settled) {
+            delay(waitMs)
+            pollingOnlyPersistent = true
         }
     }
     // The consent dialog must be launched for result: a plain start makes Android's dialog
@@ -1262,6 +1279,23 @@ internal fun explainPollingOnly(
     persistent: Boolean,
 ): Boolean = persistent && degradation == null &&
     authority == ProtectionAuthority.DEGRADED_POLLING_ONLY
+
+/**
+ * Whether polling-only has stopped being explainable as a rebind. The platform state
+ * ([com.example.myexodus.settings.isBlockerAccessibilityEnabled]: enabled-list entry plus the
+ * non-cleared master switch) is only used here, as the negative signal: when the platform does
+ * not say enabled, the service cannot bind, so waiting can only hide the cause (owner report
+ * 2026-10-23 — a full minute of "Limited" with nothing to act on). When it does say enabled,
+ * the rebind window applies.
+ */
+internal fun pollingOnlySettled(
+    authority: ProtectionAuthority?,
+    degradation: ProtectionDegradation?,
+    accessibilityEnabledByPlatform: Boolean?,
+    rebindWindowElapsed: Boolean,
+): Boolean = authority == ProtectionAuthority.DEGRADED_POLLING_ONLY &&
+    degradation == null &&
+    (accessibilityEnabledByPlatform == false || rebindWindowElapsed)
 
 @Composable
 private fun AttentionRow(item: AttentionItem) {

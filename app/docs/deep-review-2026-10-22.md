@@ -30,10 +30,13 @@ pass; carried verdicts are labelled as carried.
   section below), **#47 CLOSED** (stress/adversarial evidence map — see the #47 section below),
   **#52/#53 CLOSED** (monitoring re-check; two-device runbook), and S49-D3-3 FIXED (ack replay
   is read as "already acked"). The ceremony header after success now names the outcome instead
-  of "Invite a partner" (owner report, fixed). **Next:** #43 close-out (full JVM +
-  `:app:lintDebug` ALONE, commit, rebuild + `install -r` the latest APK on the X6532), close
-  #49's ledger against the runbook routing (S49-D3-1/2 → OPD #40; adversarial-pairing device
-  legs blocked), then #56/#58 (owner decision due), #57; #36 auth-blocked.
+  of "Invite a partner" (owner report, fixed). **#43 CLOSED (2026-10-23):** commit `912af3c`,
+  JVM 227/2,046/0/0/0, lint "No issues found", debug APK installed with `install -r` on the
+  X6532 (md5 `e1ee7350c7e40fd7699cfb4605838662`, data intact, a11y binding restored, chip
+  "Protecting") — see the #43 section below. **Owner routing decision (2026-10-23):**
+  **per-subject only** — nothing is shared unless the block/streak explicitly names a partner;
+  new streaks ask for the partner at creation. **Next:** build #56/#58 to that model, then
+  #57 (rules cognitive-load redesign, Desert Dawn); #36 auth-blocked.
 
 - **Owner mandate #2 (2026-10-22, tasks #48–#50):** two-device, real-user scenario sweep —
   partner notifications for uninstall / permission revocation / milestones / per-rule
@@ -1253,6 +1256,35 @@ runbook, #36).
 failures (`PartnerNotificationsTest` 26 incl. the new plan-publish test, `PartnerPlanReceiverTest`
 9, `PartnerPlanRepositoryTest` 15, `PlanWireCodecTest` 6, `PartnerActivityJournalTest` 15,
 `RecoveryPlanRepositoryTest` 13, `HabitRepositoryTest` 34; `:app:testDebugUnitTest`, exit 0).
+
+## #43 — Double check: full verification pass + honest report (complete)
+
+**Commit:** `912af3c` — the tree carried the #54/#55/#59/#60/#61 fixes, the S49-D3-3 ack fix,
+the plan-publish notification test, the ceremony header fix, the #47/#49 ledger close-outs and
+`app/docs/blocked-two-device-runbook.md` (12 files, +379/−29).
+
+**Gates, run in order and each alone:**
+- Full JVM suite — **227 classes / 2,046 tests / 0 failures / 0 errors / 0 skipped**, exit 0
+  (`:app:testDebugUnitTest`, 7 m 22 s, after every code edit).
+- Android lint — **No issues found** (`:app:lintDebug`, 8 m 27 s, run alone).
+- `:app:assembleDebug` — BUILD SUCCESSFUL.
+
+**Device install (X6532, wireless adb `LAN-ADDRESS-REDACTED:5555`):** `install -r` only, never
+uninstall or `pm clear`. APK md5 `e1ee7350c7e40fd7699cfb4605838662`;
+`lastUpdateTime=2026-10-23 19:49:59`, `firstInstallTime=2026-09-28 23:18:55` (install identity
+preserved). Cold start: Home rendered with data intact (streak "New AC" Day 1, free since
+Oct 22; milestones; "Blocks hidden for privacy"). No FATAL lines in logcat.
+- **Expected XOS side effect, restored in the same chain:** the update/force-stop dropped the
+  accessibility binding (`enabled_accessibility_services=null`, chip "Limited", FGS polling
+  still up). Re-set the service + `accessibility_enabled=1`; `dumpsys accessibility` shows
+  "MyExodus blocker" bound and the Home chip reads **Protecting**. This is the known XOS
+  behavior already in the device-testing memory, not a product defect — but the phone must not
+  be left in "Limited".
+
+**Honest residue:** two-phone runtime legs (real FCM, adversarial pairing on real devices,
+bilateral unpair) are BLOCKED on a second physical phone and live in the runbook, not in this
+pass; S49-D3-1/2 await the owner's UX call (OPD #40); the debug-build App Check token gap on
+the phone is operational (documented under #52), and release uses Play Integrity.
 
 ## #47 F — Stress + adversarial runtime (complete)
 
