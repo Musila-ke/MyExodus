@@ -30,7 +30,13 @@ class PartnerSyncWorker @AssistedInject constructor(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
-        val report = runPartnerSyncPass(registrar, rollout, coordinator, inputData.getString(PARTNER_WAKE_MESSAGE_ID))
+        val report = runPartnerSyncPass(
+            registrar,
+            rollout,
+            coordinator,
+            wakeMessageId = inputData.getString(PARTNER_WAKE_MESSAGE_ID),
+            forceHeartbeat = inputData.getBoolean(PARTNER_FORCE_HEARTBEAT, false),
+        )
         Log.i(TAG, "sync: $report")
         runCatching { telemetry.afterPass(report) }
             .onFailure { Log.w(TAG, "telemetry report failed", it) }
@@ -55,11 +61,12 @@ suspend fun runPartnerSyncPass(
     rollout: PartnerRolloutGate,
     coordinator: PartnerSyncCoordinator,
     wakeMessageId: String? = null,
+    forceHeartbeat: Boolean = false,
 ): PartnerSyncCoordinator.SyncReport {
     if (rollout.pushRegistrationEnabled()) {
         if (!registrar.register()) Log.w("MyExodusPartnerSync", "push installation not (re)registered this run")
     }
-    val report = coordinator.syncOnce(wakeMessageId)
+    val report = coordinator.syncOnce(wakeMessageId, forceHeartbeat)
     // Unpair progress (peer shred pulled, journal row advanced, ack confirmed) repaints too:
     // deletion passes report pulledCount=0 by design (the wake path returns before the
     // watermark query), yet they are exactly the passes the Partner page must react to
@@ -95,3 +102,8 @@ internal const val PARTNER_SYNC_WORK_NAME = "partner-sync"
 /** The wake input key — shared with [PartnerMessagingService] so the producer and consumer of
  *  the wake payload can never drift apart. */
 internal const val PARTNER_WAKE_MESSAGE_ID = "messageId"
+
+/** Set only by a liveness-probe push: the server has not accepted a beat for 45 minutes, so
+ *  bypass the local 15-minute floor and answer even if this device sent a failed beat
+ *  recently. */
+internal const val PARTNER_FORCE_HEARTBEAT = "forceHeartbeat"

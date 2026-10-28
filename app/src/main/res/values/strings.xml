@@ -828,9 +828,6 @@
     <!-- Plan Step 8: the server's availability notice channel ("A paired device has not checked
          in recently"). Created at startup so the channel exists before the first 6-hour notice. -->
     <string name="partner_channel_availability_name">MyExodus partner check-ins</string>
-    <!-- Plan Step 9 (§4/§8.9): the monitored device's own 45-minute reminder channel
-         (`checkin_reminders_v1`, DEFAULT importance — a best-effort nudge, not an alarm). -->
-    <string name="partner_channel_checkin_name">MyExodus check-in reminders</string>
 
     <!-- Partner SOS (V1 Req 35, plan §8.14/§8 Step 7): the nudge channel ("Accountability
          Check-ins"), the check-ins-off Home banner (plan copy), the ceremony's ask, and the

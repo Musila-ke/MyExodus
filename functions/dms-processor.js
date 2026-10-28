@@ -33,7 +33,7 @@ const {
   normalizeConfig,
   noticeDocId,
   deadlineDecision,
-  lateReminderDecision,
+  livenessProbeDecision,
   LATE_AFTER_MS,
   consentingPartner,
   suppressionReason,
@@ -61,7 +61,6 @@ const MAX_LEASE_RECOVERY_PER_RUN = 50;
 // No relationship id, uid, install id, event category, or precise time.
 const ANDROID_PACKAGE = 'com.example.myexodus';
 const CHANNEL_AVAILABILITY = 'availability_alerts_v1';
-const CHANNEL_CHECKIN = 'checkin_reminders_v1';
 const PUSH_TITLE = 'Partner check-in';
 // §18 DoD: the notice itself must say silence is not proof — a partner may read it as an
 // accusation otherwise. Still identity-free and whole-content (no fetch needed to interpret).
@@ -69,16 +68,16 @@ const PUSH_BODY_SILENT = 'A paired device has not checked in recently. This is n
 const PUSH_BODY_RECOVERED = 'A paired device has checked in again.';
 const PUSH_TTL_MS = 60 * 60 * 1000;
 
-// The monitored device's own LATE nudge (§4 "send at most one generic check-in reminder").
-// Fixed generic copy, no partner/relationship text; NORMAL priority because the plan calls it
-// a best-effort nudge, not a wake-up guarantee — the user-visible time-sensitive notice is
-// the partner's six-hour alert, which stays HIGH. The TTL covers the LATE window itself
-// (45–90 minutes): a reminder delivered after the device has been silent for longer is no
-// longer the state it describes, and the partner path owns that threshold.
-const CHECKIN_TITLE = 'Check in with MyExodus';
-const CHECKIN_BODY = 'Your device has not checked in recently. Open the app to stay connected.';
-const CHECKIN_TTL_MS = 45 * 60 * 1000;
-const CHECKIN_COLLAPSE_KEY = 'checkin';
+// The monitored device's own silent liveness probe. Data-only, NO notification block: the
+// server never asks the user to check in. A visible "open the app" reminder blamed the user
+// for normal Doze/OEM freezing even though the app was installed and running (owner ruling
+// 2026-10-28). The probe wakes the app so the heartbeat re-sends itself; if the app cannot be
+// woken (removed, force-stopped), the six-hour partner notice is the detector. HIGH priority
+// because a deferred wake cannot do its job while the device is dozing; it fires at most once
+// per liveness generation (45 minutes of silence), so it is not a recurring high-priority
+// stream. The TTL covers the window before the partner notice owns the escalation.
+const PROBE_TTL_MS = 6 * 60 * 60 * 1000;
+const PROBE_COLLAPSE_KEY = 'liveness-probe';
 
 /** Collapse key for one relationship's availability/recovery notices. Per-device scoped, so
  *  relation identity is all that distinguishes two pairs; hashed because a raw relationship
@@ -213,15 +212,16 @@ async function processDueRow(db, dueDoc, nowMs) {
 }
 
 /**
- * §4/§8.9 LATE reminder for one due state row. Two phases by necessity — the CAS claim is a
+ * §4/§8.9 liveness probe for one due state row. Two phases by necessity — the CAS claim is a
  * transaction, the provider call is not — and the mark is committed BEFORE the send: the
- * contract is at-most-once (a best-effort nudge), so a crash between the two loses one
- * reminder rather than risking a second. No outbox row: this notice has one recipient (the
- * install itself), no relationship/consent fan-out, and therefore none of the outbox's
- * dispatch-time revalidation needs. The installation row is re-read immediately before the
- * send, and a stale/cleared/opted-out row is skipped.
+ * contract is at-most-once (a best-effort wake), so a crash between the two loses one probe
+ * rather than risking a second. No outbox row: this notice has one recipient (the install
+ * itself), no relationship/consent fan-out, and therefore none of the outbox's dispatch-time
+ * revalidation needs. The installation row is re-read immediately before the send; a
+ * stale/cleared row is skipped. `pushEligible` is deliberately NOT consulted — it describes
+ * notification capability, and this message is data-only.
  */
-async function processLateRow(db, dueDoc, nowMs, sendCheckin) {
+async function processProbeRow(db, dueDoc, nowMs, sendProbe) {
   const expected = dueDoc.data();
   const claim = await db.runTransaction(async (tx) => {
     const fresh = await tx.get(dueDoc.ref);
@@ -230,7 +230,7 @@ async function processLateRow(db, dueDoc, nowMs, sendCheckin) {
     const outageEndMs = await outageEndFor(
       tx, db, Number(state.last_received_at_ms) || 0, LATE_AFTER_MS,
     );
-    const decision = lateReminderDecision({
+    const decision = livenessProbeDecision({
       state,
       expectedGeneration: expected.liveness_generation,
       expectedLastReceivedAtMs: expected.last_received_at_ms,
@@ -240,7 +240,7 @@ async function processLateRow(db, dueDoc, nowMs, sendCheckin) {
     if (decision.action === 'STALE') return { status: 'stale', reason: decision.reason };
     if (decision.action === 'DEFER') {
       tx.update(dueDoc.ref, {
-        late_deadline_at: Timestamp.fromMillis(decision.nextLateDeadlineAtMs),
+        late_deadline_at: Timestamp.fromMillis(decision.nextProbeDeadlineAtMs),
         late_reminder_rebased_at_ms: nowMs,
         updated_at: Timestamp.fromMillis(nowMs),
       });
@@ -261,12 +261,11 @@ async function processLateRow(db, dueDoc, nowMs, sendCheckin) {
   const undeliverable = !installation ||
     installation.provider !== 'fcm' ||
     installation.stale === true ||
-    installation.pushEligible === false ||
     !installation.token;
   if (undeliverable) return { status: 'reminded', skipped: true };
 
   try {
-    await sendCheckin({ installation, nowMs });
+    await sendProbe({ installation, nowMs });
     return { status: 'reminded', sent: true };
   } catch (error) {
     if (isTokenInvalid('fcm', error)) {
@@ -379,22 +378,19 @@ function buildDmsMessage(row, tokens) {
 }
 
 /**
- * §4/§8.9: the LATE reminder to the monitored device. Fixed generic copy, no relationship
- * identity, normal priority, and its own channel so a user can silence self-reminders
- * without silencing partner accountability events (or vice versa). Collapses by device: only
- * the newest reminder for this install is worth showing.
+ * §4/§8.9: the silent liveness probe to the monitored device. Data-only — no `notification`
+ * block, so the OS shows nothing and the user is never asked to "open the app". Collapses by
+ * device: only the newest probe for this install is worth delivering.
  */
-function buildCheckinMessage(installation) {
+function buildLivenessProbeMessage(installation) {
   return {
     token: installation.token,
-    notification: { title: CHECKIN_TITLE, body: CHECKIN_BODY },
-    data: { v: '1', type: 'CHECKIN_REMINDER' },
+    data: { v: '1', type: 'LIVENESS_PROBE' },
     android: {
-      priority: 'normal',
-      ttl: CHECKIN_TTL_MS,
-      collapseKey: CHECKIN_COLLAPSE_KEY,
+      priority: 'high',
+      ttl: PROBE_TTL_MS,
+      collapseKey: PROBE_COLLAPSE_KEY,
       restrictedPackageName: ANDROID_PACKAGE,
-      notification: { channelId: CHANNEL_CHECKIN },
     },
   };
 }
@@ -420,10 +416,10 @@ async function sendDmsPush({ row, installs, nowMs }) {
   return { providerAccepted: result.successCount, invalidInstallations };
 }
 
-/** Default provider call for the LATE self-reminder (one installation, one attempt). */
-async function sendCheckinPush({ installation }) {
+/** Default provider call for the silent liveness probe (one installation, one attempt). */
+async function sendLivenessProbePush({ installation }) {
   const { getMessaging } = require('firebase-admin/messaging');
-  await getMessaging().send(buildCheckinMessage(installation));
+  await getMessaging().send(buildLivenessProbeMessage(installation));
 }
 
 /** Rows stuck in DISPATCHING past their lease (a crashed invocation) return to PENDING. */
@@ -523,7 +519,7 @@ function createDmsWorkerHandler({
   db,
   now = () => Date.now(),
   sendPush = sendDmsPush,
-  sendCheckin = sendCheckinPush,
+  sendProbe = sendLivenessProbePush,
   log = logger,
 }) {
   return async function dmsWorkerHandler() {
@@ -572,9 +568,10 @@ function createDmsWorkerHandler({
       }
     }
 
-    // §4 LATE reminder: a separate bounded due query over the earlier threshold. This is not
-    // partner fan-out — it goes to the monitored device — so it is not gated by the fleet
-    // breaker below; a correlated fleet-wide LATE spike is still visible in `lateReminded`.
+    // §4 liveness probe: a separate bounded due query over the earlier threshold. This is not
+    // partner fan-out — it is a silent wake to the monitored device — so it is not gated by
+    // the fleet breaker below; a correlated fleet-wide spike is still visible in the
+    // `lateReminded` field (name kept: Cloud Monitoring's late-burst alert policy matches it).
     const lateDue = await db.collection('dms_install_state')
       .where('late_deadline_at', '<=', Timestamp.fromMillis(nowMs))
       .orderBy('late_deadline_at')
@@ -584,7 +581,7 @@ function createDmsWorkerHandler({
     let lateDeferred = 0;
     let lateStale = 0;
     for (const doc of lateDue.docs) {
-      const outcome = await processLateRow(db, doc, nowMs, sendCheckin);
+      const outcome = await processProbeRow(db, doc, nowMs, sendProbe);
       if (outcome.status === 'reminded') lateReminded += 1;
       else if (outcome.status === 'deferred') lateDeferred += 1;
       else lateStale += 1;
@@ -666,11 +663,11 @@ exports.dmsDeadlineWorker = onSchedule(
 
 exports._createDmsWorkerHandler = createDmsWorkerHandler;
 exports._processDueRow = processDueRow;
-exports._processLateRow = processLateRow;
+exports._processProbeRow = processProbeRow;
 exports._claimNotice = claimNotice;
 exports._dispatchOutbox = dispatchOutbox;
 exports._requeueExpiredClaims = requeueExpiredClaims;
 exports._outageEndFor = outageEndFor;
 exports._buildDmsMessage = buildDmsMessage;
-exports._buildCheckinMessage = buildCheckinMessage;
-exports._sendCheckinPush = sendCheckinPush;
+exports._buildLivenessProbeMessage = buildLivenessProbeMessage;
+exports._sendLivenessProbePush = sendLivenessProbePush;

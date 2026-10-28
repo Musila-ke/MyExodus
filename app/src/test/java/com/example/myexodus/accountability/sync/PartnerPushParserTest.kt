@@ -6,7 +6,8 @@ import org.junit.Test
 /**
  * Plan Step 9 (§8.12) payload contract, client side: the wake is a generic sync trigger, the
  * message id is optional, the legacy type still routes, an unknown schema version or malformed
- * id is ignored, and the server's check-in reminder never triggers a redundant pull.
+ * id is ignored, and the silent liveness probe maps to a forced heartbeat (never a visible
+ * notification).
  */
 class PartnerPushParserTest {
 
@@ -82,8 +83,8 @@ class PartnerPushParserTest {
     @Test
     fun checkinReminder_hasNothingToPull() {
         assertEquals(
-            PartnerPushWake.CheckinReminder,
-            PartnerPushParser.parse(mapOf("v" to "1", "type" to "CHECKIN_REMINDER")),
+            PartnerPushWake.LivenessProbe,
+            PartnerPushParser.parse(mapOf("v" to "1", "type" to "LIVENESS_PROBE")),
         )
     }
 
@@ -101,7 +102,7 @@ class PartnerPushParserTest {
     fun theServerPayloadConstantsAgree() {
         // functions/dms-processor.js and functions/relay-logic.js build exactly these keys.
         assertEquals("SYNC_AVAILABLE", PartnerPushParser.TYPE_SYNC_AVAILABLE)
-        assertEquals("CHECKIN_REMINDER", PartnerPushParser.TYPE_CHECKIN_REMINDER)
+        assertEquals("LIVENESS_PROBE", PartnerPushParser.TYPE_LIVENESS_PROBE)
         assertEquals("messageId", PartnerPushParser.KEY_MESSAGE_ID)
     }
 

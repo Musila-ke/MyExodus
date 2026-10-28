@@ -218,9 +218,10 @@ per-rule partner assignment.** Those alerts are the planned escalation feature (
 
 ### 6.7 Notifications
 `PartnerNotifications.kt` owns the immutable channels (`partner_accountability_events_v1`,
-`approval_requests`, `partner_nudges_v3`, `sync_status`, `availability_alerts_v1`,
-`checkin_reminders_v1`; legacy ids exist only for cleanup/upgrade). Channel importance is
-immutable — a spec change needs a new channel id. The Partner tab's test alert is a **local
+`approval_requests`, `partner_nudges_v3`, `sync_status`, `availability_alerts_v1`; legacy ids
+exist only for cleanup/upgrade, and the retired `checkin_reminders_v1` is deleted at startup
+because check-in is a silent probe, ADR #223). Channel importance is immutable — a spec change
+needs a new channel id. The Partner tab's test alert is a **local
 self-test for one device**, not a partner delivery proof.
 
 **Trace it yourself:** pick `milestone_reached`. Follow `HabitRepository.stampAchievedMilestones`

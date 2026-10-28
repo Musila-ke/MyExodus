@@ -146,9 +146,9 @@ function createSubmitHeartbeatHandler({ db, now = () => Date.now() }) {
           last_received_at: Timestamp.fromMillis(decision.lastReceivedAtMs),
           last_received_at_ms: decision.lastReceivedAtMs,
           next_deadline_at: Timestamp.fromMillis(decision.nextDeadlineAtMs),
-          // §8.9: the LATE check-in reminder is due 45 minutes after this accepted beat. The
-          // worker compare-and-sets `late_reminder_generation`; a fresh beat moves the
-          // deadline and makes any in-flight reminder claim a no-op.
+          // §8.9: the silent liveness probe is due 45 minutes after this accepted beat. The
+          // worker compare-and-sets `late_reminder_generation` (historical field name); a
+          // fresh beat moves the deadline and makes any in-flight probe claim a no-op.
           late_deadline_at: Timestamp.fromMillis(decision.lastReceivedAtMs + LATE_AFTER_MS),
           // The deadline processor owns the generation; a heartbeat carries it forward and
           // clears the notice flag, which is what ends the outage.

@@ -81,11 +81,9 @@ object PartnerNotifications {
      *  the payload itself is fixed generic copy. */
     const val CHANNEL_AVAILABILITY_ALERTS = "availability_alerts_v1"
 
-    /** Plan Step 9 (§4/§8.9): the monitored device's own 45-minute check-in reminder. The id
-     *  matches `CHANNEL_CHECKIN` in functions/dms-processor.js. DEFAULT — a best-effort nudge
-     *  is tray-visible, not a heads-up demand; its own channel so a user can silence
-     *  self-reminders without silencing partner accountability. */
-    const val CHANNEL_CHECKIN_REMINDERS = "checkin_reminders_v1"
+    /** Retired 2026-10-28 (owner ruling): the server no longer asks the user to check in.
+     *  The liveness probe is data-only, and this tray-visible nudge is deleted at startup. */
+    internal const val CHANNEL_CHECKIN_REMINDERS_LEGACY = "checkin_reminders_v1"
 
     /** Legacy per-pair id (§19.5 multi-partner): base + pairId hash. Kept because posting
      *  keys are now (tag, id) — the pair-and-category tag below is what makes entries unique.
@@ -146,18 +144,13 @@ object PartnerNotifications {
         )
     }
 
-    /** Plan Step 9 (§4/§8.9): created at startup, create-only. DEFAULT is the plan's own
-     *  level for a best-effort nudge — the server sends it at NORMAL priority too. */
-    fun ensureCheckinRemindersChannel(context: Context) {
-        val manager = context.getSystemService(NotificationManager::class.java)
-        if (manager.getNotificationChannel(CHANNEL_CHECKIN_REMINDERS) != null) return
-        manager.createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_CHECKIN_REMINDERS,
-                context.getString(R.string.partner_channel_checkin_name),
-                NotificationManager.IMPORTANCE_DEFAULT,
-            ),
-        )
+    /** Owner ruling 2026-10-28: check-in is automatic. The old server nudge told the user to
+     *  open the app for normal Doze/OEM freezing; the channel is retired so no device keeps a
+     *  dead "check-in reminders" entry in system settings. Partner availability alerts are a
+     *  different channel and are untouched. */
+    fun deleteLegacyCheckinChannel(context: Context) {
+        context.getSystemService(NotificationManager::class.java)
+            .deleteNotificationChannel(CHANNEL_CHECKIN_REMINDERS_LEGACY)
     }
 
     /** The explicitly user-triggered test notification: proof of display, which no provider

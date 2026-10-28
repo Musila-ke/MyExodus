@@ -169,18 +169,21 @@ function deadlineDecision({ state, expectedGeneration = null, expectedLastReceiv
 }
 
 /**
- * §4 DMS states / §8.9 push adapter: at most one generic check-in reminder to the MONITORED
- * device per liveness generation, sent when the read-time state would have entered LATE
- * (45 minutes without an accepted beat). It goes to the device itself, not to any partner, so
- * relationship consent is not consulted — the caller still revalidates the installation row.
+ * §4 DMS states / §8.9 push adapter: at most one SILENT liveness probe to the MONITORED device
+ * per liveness generation, due when the read-time state would have entered LATE (45 minutes
+ * without an accepted beat). It goes to the device itself, not to any partner, so relationship
+ * consent is not consulted — the caller still revalidates the installation row. Nothing is
+ * shown to the user: the probe only wakes the app so the heartbeat can be re-sent. The
+ * persisted `late_reminder_generation` field keeps its historical name (existing rows), but it
+ * now records the last probe generation.
  *
  * Same CAS inputs as [deadlineDecision] (a beat that landed after the due query makes the
- * claim a no-op), and the same ingestion-outage compensation: a reminder whose silence
+ * claim a no-op), and the same ingestion-outage compensation: a probe whose silence
  * overlapped an outage is due from `max(last_received_at, outage_end) + 45m`, so a fleet-wide
- * ingestion outage cannot produce a burst of false nudges on recovery. A scheduler outage
+ * ingestion outage cannot produce a burst of false wake-ups on recovery. A scheduler outage
  * needs no compensation here — the beat times are untouched and this row is simply late.
  */
-function lateReminderDecision({ state, expectedGeneration = null, expectedLastReceivedAtMs = null, nowMs, outageEndMs = null }) {
+function livenessProbeDecision({ state, expectedGeneration = null, expectedLastReceivedAtMs = null, nowMs, outageEndMs = null }) {
   if (!state) return { action: 'STALE', reason: 'NO_STATE' };
   const lastReceivedAtMs = Number(state.last_received_at_ms) || 0;
   if (lastReceivedAtMs <= 0) return { action: 'STALE', reason: 'NO_RECEIPT' };
@@ -192,14 +195,14 @@ function lateReminderDecision({ state, expectedGeneration = null, expectedLastRe
     return { action: 'STALE', reason: 'RECEIPT_MOVED' };
   }
   if (Number(state.late_reminder_generation) >= generation) {
-    return { action: 'STALE', reason: 'ALREADY_REMINDED' };
+    return { action: 'STALE', reason: 'ALREADY_PROBED' };
   }
   const base = Math.max(lastReceivedAtMs, Number(outageEndMs) || 0);
   const dueAtMs = base + LATE_AFTER_MS;
   if (dueAtMs > nowMs) {
-    return { action: 'DEFER', nextLateDeadlineAtMs: dueAtMs };
+    return { action: 'DEFER', nextProbeDeadlineAtMs: dueAtMs };
   }
-  return { action: 'REMIND', generation };
+  return { action: 'PROBE', generation };
 }
 
 /**
@@ -290,7 +293,7 @@ module.exports = {
   consentEnabled,
   consentingPartner,
   deadlineDecision,
-  lateReminderDecision,
+  livenessProbeDecision,
   suppressionReason,
   circuitBreakerTripped,
   dispatchBackoffMs,

@@ -28,8 +28,9 @@ import org.robolectric.annotation.Config
  * Plan §12 line 523 (notification-permission-denied path: banner appears, no crash when a
  * notification is attempted while denied) and the channel spec: Step 9's immutable
  * `partner_accountability_events_v1` HIGH (old `partner_alerts` retired), Step 8's
- * `availability_alerts_v1` HIGH, Step 9's `checkin_reminders_v1` DEFAULT, Step 16's
- * `approval_requests` HIGH, `sync_status` LOW + debug-only. The banner itself is a
+ * `availability_alerts_v1` HIGH, Step 16's `approval_requests` HIGH, `sync_status` LOW +
+ * debug-only. `checkin_reminders_v1` is retired: check-in is silent (data-only probe,
+ * ADR #223) and upgrades delete the dead channel at startup. The banner itself is a
  * composition; the device leg covers it — this pins the posting gate and channel shape.
  * Owner ruling 2026-09-29: every post names the partner it concerns and is keyed per pair
  * (§19.5), while the lockscreen public copy stays generic (FR-13) — all pinned here.
@@ -359,14 +360,20 @@ class PartnerNotificationsTest {
         )
     }
 
-    /** Plan Step 9 (§4/§8.9): the monitored device's own reminder channel is DEFAULT — a
-     *  best-effort nudge, created before the first server dispatch. */
+    /** Owner ruling 2026-10-28: check-in is automatic. The old tray-visible reminder channel
+     *  is retired — a device upgrading keeps no dead channel in system settings. */
     @Test
-    fun ensureCheckinRemindersChannel_isDefaultImportance() {
-        PartnerNotifications.ensureCheckinRemindersChannel(context)
-        val channel = manager.getNotificationChannel(PartnerNotifications.CHANNEL_CHECKIN_REMINDERS)!!
-        assertEquals(NotificationManager.IMPORTANCE_DEFAULT, channel.importance)
-        assertEquals(context.getString(R.string.partner_channel_checkin_name), channel.name.toString())
+    fun deleteLegacyCheckinChannel_removesTheRetiredChannel() {
+        manager.createNotificationChannel(
+            NotificationChannel(
+                PartnerNotifications.CHANNEL_CHECKIN_REMINDERS_LEGACY, "legacy",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ),
+        )
+
+        PartnerNotifications.deleteLegacyCheckinChannel(context)
+
+        assertNull(manager.getNotificationChannel(PartnerNotifications.CHANNEL_CHECKIN_REMINDERS_LEGACY))
     }
 
     /** The `_v3` id migration's other half: a dented pre-v3 channel cannot be raised in

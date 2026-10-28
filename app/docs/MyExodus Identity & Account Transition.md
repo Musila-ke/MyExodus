@@ -124,8 +124,9 @@ with a reason. "Where" names the primary surfaces, not every call site.
 - **D3. OPD #37 cases under accounts.** (1) nudge notifications — **shipped 2026-10-23**: the push
   is data-only and carries `pair_id`; the client resolves its local partner label and names the
   sender (generic copy on the lock screen and as fallback) — mapping D16, ADR #222; under accounts
-  the label resolves from the profile first (D2). (2) DMS availability and LATE check-in reminders (server fixed copy — naming requires
-  either server-held names or a client-resolution design; decide the privacy trade-off);
+  the label resolves from the profile first (D2). (2) DMS availability/silence notices (server fixed copy — naming requires
+  either server-held names or a client-resolution design; decide the privacy trade-off; the LATE check-in reminder this item
+  covered is retired as of ADR #223 — check-in is a silent probe, not a notice);
   (3) every client notification with multiple partners (correct person per pair, survives rename);
   (4) deep-link/label copy ("your partner's device") audited per-pair; (5) system channel names stay
   per-app, not per-person (accepted constraint); (6) lock-screen visibility ruling for names.

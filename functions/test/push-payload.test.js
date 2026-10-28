@@ -1,8 +1,8 @@
 'use strict';
 // Step 9 payload inspection (§8.12): every plaintext byte the provider can see is pinned here.
 // The wake carries the versioned generic type plus an opaque message id; DMS notices carry
-// fixed OS copy and a hashed per-relationship collapse key; the check-in reminder carries
-// fixed self-copy only. Nothing here may ever name a relationship, uid, install, category,
+// fixed OS copy and a hashed per-relationship collapse key; the liveness probe is data-only
+// and shows nothing. Nothing here may ever name a relationship, uid, install, category,
 // event, or timestamp.
 
 const { test } = require('node:test');
@@ -10,7 +10,7 @@ const assert = require('node:assert');
 
 const { createRelayHandler } = require('../relay-logic');
 const { buildWakeMessage, WAKE_TTL_MS, WAKE_COLLAPSE_KEY, ANDROID_PACKAGE } = require('../fcm-transport');
-const { _buildDmsMessage, _buildCheckinMessage } = require('../dms-processor');
+const { _buildDmsMessage, _buildLivenessProbeMessage } = require('../dms-processor');
 const { NOTICE_AVAILABILITY, NOTICE_RECOVERY } = require('../dms-logic');
 
 const FORBIDDEN = [
@@ -98,17 +98,15 @@ test('recovery supersedes its own silence notice; different pairs never collapse
   });
 });
 
-test('check-in reminder: generic self-copy only, normal priority, 45m TTL, own channel', () => {
-  const message = _buildCheckinMessage({ id: 'install-1', token: 'tok-1' });
+test('liveness probe: data-only (no visible copy), high priority, 6h TTL, collapses', () => {
+  const message = _buildLivenessProbeMessage({ id: 'install-1', token: 'tok-1' });
 
-  assert.deepStrictEqual(message.data, { v: '1', type: 'CHECKIN_REMINDER' });
-  assert.deepStrictEqual(message.notification, {
-    title: 'Check in with MyExodus',
-    body: 'Your device has not checked in recently. Open the app to stay connected.',
-  });
-  assert.strictEqual(message.android.priority, 'normal', 'best-effort nudge, not a wake guarantee');
-  assert.strictEqual(message.android.ttl, 45 * 60 * 1000);
-  assert.strictEqual(message.android.collapseKey, 'checkin');
-  assert.strictEqual(message.android.notification.channelId, 'checkin_reminders_v1');
+  assert.deepStrictEqual(message.data, { v: '1', type: 'LIVENESS_PROBE' });
+  assert.strictEqual(message.notification, undefined, 'silent: the user is never asked to check in');
+  assert.strictEqual(message.android.priority, 'high', 'a Doze-deferred wake cannot do its job');
+  assert.strictEqual(message.android.ttl, 6 * 60 * 60 * 1000);
+  assert.strictEqual(message.android.collapseKey, 'liveness-probe');
+  assert.strictEqual(message.android.restrictedPackageName, 'com.example.myexodus');
+  assert.strictEqual(message.android.notification, undefined, 'no channel: nothing is displayed');
   assertNoIdentity(message, ['install-1']);
 });

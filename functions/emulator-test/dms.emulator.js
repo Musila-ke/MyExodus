@@ -32,9 +32,9 @@ const { DMS_PARTNER_PUSH_MS, MIN_ACCEPT_INTERVAL_MS } = require('../heartbeat-lo
 const {
   _createDmsWorkerHandler,
   _processDueRow,
-  _processLateRow,
+  _processProbeRow,
   _buildDmsMessage,
-  _buildCheckinMessage,
+  _buildLivenessProbeMessage,
 } = require('../dms-processor');
 const {
   NOTICE_AVAILABILITY,
@@ -157,22 +157,22 @@ function pushRecorder({ failTimes = 0, invalidInstallations = [] } = {}) {
   return { sends, sendPush };
 }
 
-function checkinRecorder({ failTimes = 0, code = 'unavailable' } = {}) {
+function probeRecorder({ failTimes = 0, code = 'unavailable' } = {}) {
   const sends = [];
-  const sendCheckin = async (args) => {
+  const sendProbe = async (args) => {
     sends.push(args);
     if (sends.length <= failTimes) {
       throw Object.assign(new Error('provider down'), { code });
     }
   };
-  return { sends, sendCheckin };
+  return { sends, sendProbe };
 }
 
-const workerWith = (sendPush, sendCheckin = async () => {}) => _createDmsWorkerHandler({
+const workerWith = (sendPush, sendProbe = async () => {}) => _createDmsWorkerHandler({
   db,
   now: () => clockMs,
   sendPush,
-  sendCheckin,
+  sendProbe,
   log: silentLog,
 });
 
@@ -680,20 +680,20 @@ test('dispatch: invalid provider tokens remove the token and tombstone the insta
 });
 
 // ---------------------------------------------------------------------------
-// LATE check-in reminder (§4 / §8.9)
+// Silent liveness probe (§4 / §8.9)
 
-test('late reminder: one generic nudge to the monitored install per liveness generation', async () => {
+test('liveness probe: one silent wake to the monitored install per liveness generation', async () => {
   await register(MON, INSTALL);
   const reply = await heartbeatHandler()({ auth: { uid: MON }, data: { installId: INSTALL, counter: 1 } });
   assert.strictEqual(reply.accepted, true);
   assert.strictEqual(
     (await stateRef().get()).data().late_deadline_at.toMillis(),
     NOW + 45 * MINUTE,
-    'the reminder window starts at the server receipt time',
+    'the probe window starts at the server receipt time',
   );
 
-  const checkins = checkinRecorder();
-  const worker = workerWith(pushRecorder().sendPush, checkins.sendCheckin);
+  const probes = probeRecorder();
+  const worker = workerWith(pushRecorder().sendPush, probes.sendProbe);
 
   clockMs = NOW + 45 * MINUTE - 1;
   assert.strictEqual((await worker()).lateReminded, 0);
@@ -701,9 +701,9 @@ test('late reminder: one generic nudge to the monitored install per liveness gen
   clockMs = NOW + 45 * MINUTE;
   const first = await worker();
   assert.strictEqual(first.lateReminded, 1);
-  assert.strictEqual(checkins.sends.length, 1);
-  assert.strictEqual(checkins.sends[0].installation.id, INSTALL);
-  assert.strictEqual(checkins.sends[0].installation.token, `token-${INSTALL}`);
+  assert.strictEqual(probes.sends.length, 1);
+  assert.strictEqual(probes.sends[0].installation.id, INSTALL);
+  assert.strictEqual(probes.sends[0].installation.token, `token-${INSTALL}`);
   const state = (await stateRef().get()).data();
   assert.strictEqual(state.late_reminder_generation, 1);
   assert.strictEqual(state.late_deadline_at, undefined);
@@ -711,7 +711,7 @@ test('late reminder: one generic nudge to the monitored install per liveness gen
   // Same generation, hours later: never a second nudge.
   clockMs += HOUR;
   assert.strictEqual((await worker()).lateReminded, 0);
-  assert.strictEqual(checkins.sends.length, 1);
+  assert.strictEqual(probes.sends.length, 1);
 
   // A fresh accepted beat opens a new generation and a new 45-minute window.
   clockMs += MIN_ACCEPT_INTERVAL_MS + 1;
@@ -721,11 +721,25 @@ test('late reminder: one generic nudge to the monitored install per liveness gen
   assert.strictEqual((await stateRef().get()).data().late_reminder_generation, 1, 'carried, not reset');
   clockMs = beatAt + 45 * MINUTE;
   assert.strictEqual((await worker()).lateReminded, 1);
-  assert.strictEqual(checkins.sends.length, 2);
+  assert.strictEqual(probes.sends.length, 2);
   assert.strictEqual((await stateRef().get()).data().late_reminder_generation, 2);
 });
 
-test('late reminder: stale claims are CAS no-ops (generation moved, already reminded)', async () => {
+test('liveness probe: a notifications-off install is still probed (data-only wake)', async () => {
+  // `pushEligible` describes notification capability; the probe posts nothing, so it must
+  // not inherit that gate (the partner six-hour notice still honours it).
+  await register(MON, INSTALL, { pushEligible: false });
+  await heartbeatHandler()({ auth: { uid: MON }, data: { installId: INSTALL, counter: 1 } });
+  const probes = probeRecorder();
+  const worker = workerWith(pushRecorder().sendPush, probes.sendProbe);
+
+  clockMs = NOW + 45 * MINUTE;
+  assert.strictEqual((await worker()).lateReminded, 1);
+  assert.strictEqual(probes.sends.length, 1);
+  assert.strictEqual(probes.sends[0].installation.pushEligible, false);
+});
+
+test('liveness probe: stale claims are CAS no-ops (generation moved, already probed)', async () => {
   await seedState({
     lastReceivedAtMs: NOW - 60 * MINUTE,
     extra: { late_deadline_at: Timestamp.fromMillis(NOW - 15 * MINUTE) },
@@ -733,7 +747,7 @@ test('late reminder: stale claims are CAS no-ops (generation moved, already remi
   const dueSnapshot = await stateRef().get();
   await stateRef().update({ liveness_generation: 2, last_received_at_ms: NOW - 5 * MINUTE });
   assert.deepStrictEqual(
-    await _processLateRow(db, { ref: stateRef(), data: () => dueSnapshot.data() }, NOW, async () => {}),
+    await _processProbeRow(db, { ref: stateRef(), data: () => dueSnapshot.data() }, NOW, async () => {}),
     { status: 'stale', reason: 'GENERATION_MOVED' },
   );
 
@@ -747,12 +761,12 @@ test('late reminder: stale claims are CAS no-ops (generation moved, already remi
   });
   const remindedSnapshot = await stateRef().get();
   assert.deepStrictEqual(
-    await _processLateRow(db, { ref: stateRef(), data: () => remindedSnapshot.data() }, NOW, async () => {}),
-    { status: 'stale', reason: 'ALREADY_REMINDED' },
+    await _processProbeRow(db, { ref: stateRef(), data: () => remindedSnapshot.data() }, NOW, async () => {}),
+    { status: 'stale', reason: 'ALREADY_PROBED' },
   );
 });
 
-test('late reminder: an outage inside the window rebases; an outage after it does not', async () => {
+test('liveness probe: an outage inside the window rebases; an outage after it does not', async () => {
   await register(MON, INSTALL);
   await seedState({
     lastReceivedAtMs: NOW - 60 * MINUTE,
@@ -762,8 +776,8 @@ test('late reminder: an outage inside the window rebases; an outage after it doe
     started_at_ms: NOW - 50 * MINUTE,
     ended_at_ms: NOW - 10 * MINUTE,
   });
-  const checkins = checkinRecorder();
-  const worker = workerWith(pushRecorder().sendPush, checkins.sendCheckin);
+  const probes = probeRecorder();
+  const worker = workerWith(pushRecorder().sendPush, probes.sendProbe);
 
   const rebased = await worker();
   assert.strictEqual(rebased.lateReminded, 0);
@@ -776,7 +790,7 @@ test('late reminder: an outage inside the window rebases; an outage after it doe
 
   clockMs = NOW + 35 * MINUTE;
   assert.strictEqual((await worker()).lateReminded, 1);
-  assert.strictEqual(checkins.sends.length, 1);
+  assert.strictEqual(probes.sends.length, 1);
 
   // An outage that began AFTER the LATE deadline cannot have hidden that transition.
   await seedState({
@@ -793,29 +807,29 @@ test('late reminder: an outage inside the window rebases; an outage after it doe
   clockMs = NOW + 45 * MINUTE;
   const later = await worker();
   assert.strictEqual(later.lateReminded, 1);
-  assert.deepStrictEqual(checkins.sends.map((s) => s.installation.id), [INSTALL, 'install-mon-2']);
+  assert.deepStrictEqual(probes.sends.map((s) => s.installation.id), [INSTALL, 'install-mon-2']);
 });
 
-test('late reminder: an UNREGISTERED token is removed and the nudge is never retried', async () => {
+test('liveness probe: an UNREGISTERED token is removed and the probe is never retried', async () => {
   await register(MON, INSTALL);
   await seedState({
     lastReceivedAtMs: NOW - 60 * MINUTE,
     extra: { late_deadline_at: Timestamp.fromMillis(NOW - 15 * MINUTE) },
   });
-  const checkins = checkinRecorder({
+  const probes = probeRecorder({
     failTimes: 1,
     code: 'messaging/registration-token-not-registered',
   });
 
-  const result = await workerWith(pushRecorder().sendPush, checkins.sendCheckin)();
+  const result = await workerWith(pushRecorder().sendPush, probes.sendProbe)();
   assert.strictEqual(result.lateReminded, 1);
   const install = (await db.doc(`users/${MON}/push_installations/${INSTALL}`).get()).data();
   assert.strictEqual(install.stale, true);
   assert.strictEqual(install.token, undefined);
 
   clockMs += HOUR;
-  await workerWith(pushRecorder().sendPush, checkins.sendCheckin)();
-  assert.strictEqual(checkins.sends.length, 1, 'at-most-once: no retry after a provider failure');
+  await workerWith(pushRecorder().sendPush, probes.sendProbe)();
+  assert.strictEqual(probes.sends.length, 1, 'at-most-once: no retry after a provider failure');
 });
 
 // ---------------------------------------------------------------------------
@@ -1091,22 +1105,18 @@ test('payload: the wire message is fixed copy plus the generic sync key — no r
   }
 });
 
-test('payload: the LATE reminder is fixed generic copy on its own DEFAULT channel, normal priority', () => {
-  const message = _buildCheckinMessage({ token: 'tok-mon' });
+test('payload: the liveness probe is data-only, high priority, and shows nothing', () => {
+  const message = _buildLivenessProbeMessage({ token: 'tok-mon' });
   assert.strictEqual(message.token, 'tok-mon');
-  assert.strictEqual(message.notification.title, 'Check in with MyExodus');
-  assert.strictEqual(
-    message.notification.body,
-    'Your device has not checked in recently. Open the app to stay connected.',
-  );
-  assert.deepStrictEqual(message.data, { v: '1', type: 'CHECKIN_REMINDER' });
-  assert.strictEqual(message.android.priority, 'normal', 'a nudge is not a wake-up guarantee');
-  assert.strictEqual(message.android.ttl, 45 * 60 * 1000);
-  assert.strictEqual(message.android.collapseKey, 'checkin');
+  assert.strictEqual(message.notification, undefined, 'no visible copy: check-in is automatic');
+  assert.deepStrictEqual(message.data, { v: '1', type: 'LIVENESS_PROBE' });
+  assert.strictEqual(message.android.priority, 'high', 'a Doze-deferred wake cannot do its job');
+  assert.strictEqual(message.android.ttl, 6 * 60 * 60 * 1000);
+  assert.strictEqual(message.android.collapseKey, 'liveness-probe');
   assert.strictEqual(message.android.restrictedPackageName, 'com.example.myexodus');
-  assert.deepStrictEqual(message.android.notification, { channelId: 'checkin_reminders_v1' });
+  assert.strictEqual(message.android.notification, undefined, 'no channel: nothing is displayed');
   const wire = JSON.stringify(message);
   for (const secret of [MON, WATCH, INSTALL, PAIR_ID]) {
-    assert.ok(!wire.includes(secret), `reminder payload leaks ${secret}`);
+    assert.ok(!wire.includes(secret), `probe payload leaks ${secret}`);
   }
 });

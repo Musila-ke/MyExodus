@@ -809,7 +809,7 @@ object AccountabilityModule {
         checkRejections = { pairId, partnerUid -> rejectionChecker.check(partnerUid, pairId) },
         pruneReachability = reachability::prune,
         consumeIdentityRotation = reachability::consumeIdentityRotation,
-        checkIn = { heartbeat.checkIn() },
+        checkIn = { force -> heartbeat.checkIn(force) },
         syncAvailabilityConsent = { pairId, enabled -> dms.syncConsent(pairId, enabled) },
     )
 

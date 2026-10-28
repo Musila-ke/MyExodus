@@ -28,7 +28,7 @@ const {
   consentEnabled,
   consentingPartner,
   deadlineDecision,
-  lateReminderDecision,
+  livenessProbeDecision,
   suppressionReason,
   circuitBreakerTripped,
   dispatchBackoffMs,
@@ -402,77 +402,77 @@ test('operator gate fails closed and outage intervals are validated', () => {
 });
 
 // ---------------------------------------------------------------------------
-// LATE check-in reminder (§4 / §8.9)
+// Silent liveness probe (§4 / §8.9)
 
-test('lateReminderDecision: one reminder per generation, due at receipt + 45m', () => {
+test('livenessProbeDecision: one probe per generation, due at receipt + 45m', () => {
   const state = { last_received_at_ms: NOW - 60 * MINUTE, liveness_generation: 3 };
 
   assert.deepStrictEqual(
-    lateReminderDecision({ state, nowMs: NOW - 15 * MINUTE }),
-    { action: 'REMIND', generation: 3 },
+    livenessProbeDecision({ state, nowMs: NOW - 15 * MINUTE }),
+    { action: 'PROBE', generation: 3 },
   );
   assert.deepStrictEqual(
-    lateReminderDecision({ state, nowMs: NOW - 15 * MINUTE - 1 }),
-    { action: 'DEFER', nextLateDeadlineAtMs: NOW - 15 * MINUTE },
+    livenessProbeDecision({ state, nowMs: NOW - 15 * MINUTE - 1 }),
+    { action: 'DEFER', nextProbeDeadlineAtMs: NOW - 15 * MINUTE },
   );
   assert.deepStrictEqual(
-    lateReminderDecision({
+    livenessProbeDecision({
       state: { ...state, late_reminder_generation: 3 },
       nowMs: NOW,
     }),
-    { action: 'STALE', reason: 'ALREADY_REMINDED' },
+    { action: 'STALE', reason: 'ALREADY_PROBED' },
   );
   assert.deepStrictEqual(
-    lateReminderDecision({
+    livenessProbeDecision({
       state: { ...state, late_reminder_generation: 2 },
       nowMs: NOW,
     }),
-    { action: 'REMIND', generation: 3 },
-    'a newer generation earns its own reminder',
+    { action: 'PROBE', generation: 3 },
+    'a newer generation earns its own probe',
   );
 });
 
-test('lateReminderDecision: CAS and no-data inputs are stale, never a nudge', () => {
+test('livenessProbeDecision: CAS and no-data inputs are stale, never a probe', () => {
   const state = { last_received_at_ms: NOW - 60 * MINUTE, liveness_generation: 3 };
 
   assert.deepStrictEqual(
-    lateReminderDecision({ state: null, nowMs: NOW }),
+    livenessProbeDecision({ state: null, nowMs: NOW }),
     { action: 'STALE', reason: 'NO_STATE' },
   );
   assert.deepStrictEqual(
-    lateReminderDecision({ state: { liveness_generation: 1 }, nowMs: NOW }),
+    livenessProbeDecision({ state: { liveness_generation: 1 }, nowMs: NOW }),
     { action: 'STALE', reason: 'NO_RECEIPT' },
   );
   assert.deepStrictEqual(
-    lateReminderDecision({ state, expectedGeneration: 2, nowMs: NOW }),
+    livenessProbeDecision({ state, expectedGeneration: 2, nowMs: NOW }),
     { action: 'STALE', reason: 'GENERATION_MOVED' },
   );
   assert.deepStrictEqual(
-    lateReminderDecision({ state, expectedLastReceivedAtMs: NOW - 5 * MINUTE, nowMs: NOW }),
+    livenessProbeDecision({ state, expectedLastReceivedAtMs: NOW - 5 * MINUTE, nowMs: NOW }),
     { action: 'STALE', reason: 'RECEIPT_MOVED' },
   );
 });
 
-test('lateReminderDecision: an ingestion outage rebases from max(receipt, outage end)', () => {
+test('livenessProbeDecision: an ingestion outage rebases from max(receipt, outage end)', () => {
   const state = { last_received_at_ms: NOW - 60 * MINUTE, liveness_generation: 1 };
 
   // The outage swallowed most of the window: due 45m after it ended, not immediately.
   assert.deepStrictEqual(
-    lateReminderDecision({ state, nowMs: NOW, outageEndMs: NOW - 10 * MINUTE }),
-    { action: 'DEFER', nextLateDeadlineAtMs: NOW + 35 * MINUTE },
+    livenessProbeDecision({ state, nowMs: NOW, outageEndMs: NOW - 10 * MINUTE }),
+    { action: 'DEFER', nextProbeDeadlineAtMs: NOW + 35 * MINUTE },
   );
   assert.deepStrictEqual(
-    lateReminderDecision({
+    livenessProbeDecision({
       state,
       nowMs: NOW + 35 * MINUTE,
       outageEndMs: NOW - 10 * MINUTE,
     }),
-    { action: 'REMIND', generation: 1 },
+    { action: 'PROBE', generation: 1 },
   );
   // An outage that did not overlap the 45-minute window (the caller only passes a candidate
   // whose start is inside it) leaves the original deadline in force.
   assert.deepStrictEqual(
-    lateReminderDecision({ state, nowMs: NOW, outageEndMs: null }),
-    { action: 'REMIND', generation: 1 },
+    livenessProbeDecision({ state, nowMs: NOW, outageEndMs: null }),
+    { action: 'PROBE', generation: 1 },
   );
 });

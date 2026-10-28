@@ -139,9 +139,9 @@ class MyExodusApp : Application(), Configuration.Provider {
         // Plan Step 8 (§8.12): the server's six-hour availability notice channel exists before
         // the worker's first dispatch — its id is the worker's `channelId`.
         PartnerNotifications.ensureAvailabilityAlertsChannel(this)
-        // Plan Step 9 (§4/§8.9): the check-in reminder channel exists before the worker's
-        // first LATE nudge — the server names it as the message's `channelId`.
-        PartnerNotifications.ensureCheckinRemindersChannel(this)
+        // Owner ruling 2026-10-28: check-in is automatic; retire the old visible
+        // "check-in reminder" channel (the server now sends a silent liveness probe).
+        PartnerNotifications.deleteLegacyCheckinChannel(this)
         startupTrace.lap("channels")
         // Decision 12 opt-out: FirebaseInitProvider ran before this call, so this is what the
         // stored preference overrides from the first moment of each process.

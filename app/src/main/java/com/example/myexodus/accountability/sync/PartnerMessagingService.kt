@@ -72,10 +72,13 @@ class PartnerMessagingService : FirebaseMessagingService() {
                 }
                 enqueueSync(wake.messageId)
             }
-            // §8.12/§4: the server's reminder carries fixed OS copy and no event; there is
-            // nothing to pull. It still proves the push path works in the send metrics.
-            PartnerPushWake.CheckinReminder ->
-                Log.i(TAG, "check-in reminder shown by the OS — nothing to sync")
+            // §4/§8.9: the server saw no accepted beat for 45 minutes and woke this app
+            // silently. Force the check-in: the normal 15-minute floor must not suppress the
+            // reply the server is waiting for.
+            PartnerPushWake.LivenessProbe -> {
+                Log.i(TAG, "liveness probe — forcing a heartbeat")
+                enqueueHeartbeatProbe()
+            }
             PartnerPushWake.Ignored ->
                 Log.i(TAG, "ignoring unrecognized push (from ${message.from})")
         }
@@ -116,11 +119,22 @@ class PartnerMessagingService : FirebaseMessagingService() {
         WorkManager.getInstance(this).enqueueUniqueWork(WAKE_WORK_NAME, ExistingWorkPolicy.KEEP, request)
     }
 
+    /** A separate unique name so a queued generic wake (KEEP, no force flag) cannot swallow
+     *  the probe's forced heartbeat; the pass body is the same and dedup-safe. */
+    private fun enqueueHeartbeatProbe() {
+        val request = OneTimeWorkRequestBuilder<PartnerSyncWorker>()
+            .setInputData(workDataOf(PARTNER_FORCE_HEARTBEAT to true))
+            .build()
+        WorkManager.getInstance(this)
+            .enqueueUniqueWork(PROBE_WORK_NAME, ExistingWorkPolicy.KEEP, request)
+    }
+
     private companion object {
         const val TAG = "MyExodusPush"
         // Distinct from the periodic work's name ("partner-sync" in MyExodusApp): sharing a
         // unique name would let KEEP suppress the wake while periodic work is enqueued.
         const val WAKE_WORK_NAME = "partner-sync-wake"
+        const val PROBE_WORK_NAME = "partner-liveness-probe"
         const val LABEL_LOOKUP_TIMEOUT_MS = 1_000L
     }
 }

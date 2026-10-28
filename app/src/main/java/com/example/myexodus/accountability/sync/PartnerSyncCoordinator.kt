@@ -91,8 +91,10 @@ class PartnerSyncCoordinator(
     private val consumeIdentityRotation: (activePairIds: Set<String>) -> Unit = {},
     /** Step 7 WorkManager fallback (§4.7): the pass is the 15-minute cadence, so the heartbeat
      *  rides every paired run. It runs only while paired — no relationship, nothing to report —
-     *  and the client enforces its own 15-minute window. */
-    private val checkIn: suspend () -> Unit = {},
+     *  and the client enforces its own 15-minute window unless [force] is set (a server
+     *  liveness probe proves the server has not accepted a beat recently, so the local window
+     *  must not suppress the reply). */
+    private val checkIn: suspend (Boolean) -> Unit = {},
     /** Step 8 (§8.10): converge this pair's explicit `DEVICE_AVAILABILITY_STATUS` choice onto
      *  the authoritative pairing document. True = the server holds it (or already did). */
     private val syncAvailabilityConsent: suspend (pairId: String, enabled: Boolean) -> Boolean =
@@ -152,11 +154,14 @@ class PartnerSyncCoordinator(
      *
      *  Serialized by [syncMutex]: overlapping triggers queue behind the running pass instead of
      *  reconciling from the same pre-link snapshot. */
-    suspend fun syncOnce(wakeMessageId: String? = null): SyncReport = syncMutex.withLock {
-        syncOnceLocked(wakeMessageId)
+    suspend fun syncOnce(
+        wakeMessageId: String? = null,
+        forceHeartbeat: Boolean = false,
+    ): SyncReport = syncMutex.withLock {
+        syncOnceLocked(wakeMessageId, forceHeartbeat)
     }
 
-    private suspend fun syncOnceLocked(wakeMessageId: String?): SyncReport {
+    private suspend fun syncOnceLocked(wakeMessageId: String?, forceHeartbeat: Boolean): SyncReport {
         val unpairAdvanced = runCatching { resumeUnpairs() }
             .onFailure { Log.w(TAG, "unpair resume failed", it) }
             .getOrDefault(false)
@@ -179,7 +184,7 @@ class PartnerSyncCoordinator(
             // own tail (ack poll, confirmation) still ran above and must reach the UI.
             return SyncReport(unpairAdvanced = unpairAdvanced)
         }
-        runCatching { checkIn() }
+        runCatching { checkIn(forceHeartbeat) }
             .onFailure { Log.w(TAG, "heartbeat check-in failed", it) }
         var report = SyncReport(enrolled = true, unpairAdvanced = unpairAdvanced)
         var resolved = 0

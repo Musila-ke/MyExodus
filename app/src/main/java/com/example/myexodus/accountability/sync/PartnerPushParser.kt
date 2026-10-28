@@ -3,10 +3,9 @@ package com.example.myexodus.accountability.sync
 /**
  * Plan Step 9 (§8.12): the complete client-side contract for a push payload. A wake is a
  * generic synchronization trigger — never content — so the only decisions are "run the sync
- * pass, optionally handling this message first" and "nothing to do". The server's own DMS
- * notice and check-in reminder use the same `type` vocabulary; a visible one is rendered by
- * the OS from the `notification` block, and its data half still triggers the in-app sync that
- * keeps status correct when the notification itself is muted or blocked.
+ * pass, optionally handling this message first", "force a heartbeat", and "nothing to do".
+ * The server's partner DMS notice uses the same `type` vocabulary and is rendered by the OS
+ * from its `notification` block; the liveness probe is data-only and never shown.
  *
  * A missing `messageId` is a valid generic wake (§8.12's own example has none): the pass then
  * reconciles the whole mailbox. A present id must look like the Firestore document id the
@@ -17,8 +16,8 @@ internal sealed interface PartnerPushWake {
     /** [messageId] is null for a whole-mailbox reconcile. */
     data class Sync(val messageId: String?) : PartnerPushWake
 
-    /** The OS already showed the server's generic reminder; this device has nothing to pull. */
-    object CheckinReminder : PartnerPushWake
+    /** Silent server wake for a missed heartbeat: force one check-in, nothing to show. */
+    object LivenessProbe : PartnerPushWake
 
     /** Not ours, an unknown schema version, or a malformed id. */
     object Ignored : PartnerPushWake
@@ -33,7 +32,7 @@ internal object PartnerPushParser {
     const val VERSION = "1"
     const val TYPE_SYNC_AVAILABLE = "SYNC_AVAILABLE"
     const val TYPE_LEGACY_DOMAIN_EVENT = "domain-event"
-    const val TYPE_CHECKIN_REMINDER = "CHECKIN_REMINDER"
+    const val TYPE_LIVENESS_PROBE = "LIVENESS_PROBE"
 
     private val MESSAGE_ID = Regex("^[A-Za-z0-9_-]{1,128}$")
 
@@ -57,7 +56,7 @@ internal object PartnerPushParser {
                 val id = data[KEY_MESSAGE_ID]
                 if (id != null && MESSAGE_ID.matches(id)) PartnerPushWake.Sync(id) else PartnerPushWake.Ignored
             }
-            TYPE_CHECKIN_REMINDER -> PartnerPushWake.CheckinReminder
+            TYPE_LIVENESS_PROBE -> PartnerPushWake.LivenessProbe
             else -> PartnerPushWake.Ignored
         }
     }

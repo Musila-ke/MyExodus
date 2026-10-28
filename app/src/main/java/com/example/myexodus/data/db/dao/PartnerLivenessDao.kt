@@ -4,7 +4,6 @@ import androidx.room3.Dao
 import androidx.room3.Insert
 import androidx.room3.OnConflictStrategy
 import androidx.room3.Query
-import androidx.room3.Upsert
 import com.example.myexodus.data.db.entity.DeviceLiveness
 import com.example.myexodus.data.db.entity.PartnerMonitoringCheckin
 
@@ -19,14 +18,15 @@ interface PartnerLivenessDao {
     @Query("SELECT * FROM device_liveness WHERE install_id = :installId")
     suspend fun liveness(installId: String): DeviceLiveness?
 
-    @Upsert
+    /** INSERT OR REPLACE, not @Upsert: Room's @Upsert attempts the INSERT first and logs a
+     *  UNIQUE-constraint exception before falling back to UPDATE on every existing row, which
+     *  floods logcat with error-shaped noise on each check-in. The only caller writes a full
+     *  row, so REPLACE is semantically identical here (no FKs or triggers on this table). */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertLiveness(row: DeviceLiveness)
 
     @Query("SELECT * FROM partner_monitoring_checkin WHERE id = 0")
     suspend fun checkin(): PartnerMonitoringCheckin?
-
-    @Upsert
-    suspend fun upsertCheckin(row: PartnerMonitoringCheckin)
 
     /** The row has two independent writers (snapshot recorder, heartbeat standby check), so
      *  each writes only its own columns — a full-row upsert from either would clobber the

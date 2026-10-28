@@ -906,6 +906,21 @@ class PartnerSyncCoordinatorTest {
         assertEquals("one check-in per paired pass (the client enforces the window)", 2, checkIns)
     }
 
+    /** A liveness-probe wake must answer even if this device sent a beat recently: the
+     *  server's 45-minute silence is proof its window is stale, so the force flag has to
+     *  reach [checkIn] intact and stay false on ordinary passes (ADR #223). */
+    @Test
+    fun forceHeartbeat_ridesThePassIntoCheckIn() = runTest {
+        val forces = mutableListOf<Boolean>()
+        coordinator = coordinator(warmSigner(), checkIn = { forces += it })
+        enroll()
+
+        coordinator.syncOnce(forceHeartbeat = true)
+        coordinator.syncOnce()
+
+        assertEquals(listOf(true, false), forces)
+    }
+
     /**
      * Plan Step 8 (§8.10): DMS dispatch reads the AUTHORITATIVE pair document, so the local
      * availability switch must converge there — an on switch that never reaches the server
@@ -1176,7 +1191,7 @@ class PartnerSyncCoordinatorTest {
         resumeUnpairs: suspend () -> Boolean = { false },
         drainThrowsFor: String? = null,
         drainGate: CompletableDeferred<Unit>? = null,
-        checkIn: suspend () -> Unit = {},
+        checkIn: suspend (Boolean) -> Unit = {},
         syncConsent: suspend (String, Boolean) -> Boolean = { _, _ -> true },
     ) = PartnerSyncCoordinator(
         enrollmentDao = db.enrollmentDao(),
