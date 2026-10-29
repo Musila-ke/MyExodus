@@ -8,6 +8,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.UUID
 
 /**
  * Step 3 validation: every allowed event type round-trips, every prohibited data class has
@@ -34,6 +35,11 @@ class AccountabilityEventContractTest {
         )
 
     private fun gap() = AccountabilityEventWire.gap(id, 7, now, missingStart = 3, missingEnd = 5)
+
+    private val ruleUuid = UUID.fromString("89abcdef-0123-4567-89ab-cdef01234567")
+
+    private fun ruleChange(change: RuleChange = RuleChange.ASSIGNED) =
+        AccountabilityEventWire.ruleControl(id, 7, ruleUuid, change, now)
 
     private fun raw(vararg entries: Pair<String, CBORObject>): ByteArray =
         CanonicalCbor.encodeMap(entries.toList())
@@ -62,6 +68,11 @@ class AccountabilityEventContractTest {
                 entries += "ge" to CanonicalCbor.int(5)
             }
 
+            AccountabilityEventKind.RULE_CONTROL -> {
+                entries += "rid" to CanonicalCbor.text(ruleUuid.toString())
+                entries += "chg" to CanonicalCbor.text(RuleChange.ASSIGNED.wire)
+            }
+
             AccountabilityEventKind.ACCOUNTABILITY_EVENT -> Unit
         }
         return entries
@@ -74,12 +85,57 @@ class AccountabilityEventContractTest {
                 AccountabilityEventKind.ACCOUNTABILITY_EVENT -> block(category)
                 AccountabilityEventKind.MONITORING_STATUS -> snapshot(category)
                 AccountabilityEventKind.GAP_MARKER -> gap()
+                AccountabilityEventKind.RULE_CONTROL -> ruleChange()
             }
             assertEquals(category.kind, event.kind)
             val decoded = AccountabilityEventWire.decodeOrNull(AccountabilityEventWire.encode(event))
             assertEquals(event, decoded)
         }
-        assertEquals(6, AccountabilityEventCategory.entries.size)
+        assertEquals(7, AccountabilityEventCategory.entries.size)
+    }
+
+    @Test
+    fun ruleChangesCarryAUuidAndAClosedChangeOnly() {
+        val event = ruleChange()
+        assertEquals(AccountabilityEventCategory.RULE_CHANGED, event.category)
+        assertEquals(AccountabilityEventKind.RULE_CONTROL, event.kind)
+        assertEquals(event, AccountabilityEventWire.decodeOrNull(AccountabilityEventWire.encode(event)))
+
+        val entries = validEntries(AccountabilityEventKind.RULE_CONTROL, AccountabilityEventCategory.RULE_CHANGED)
+        assertNull(
+            "a rule id must be a canonical UUID",
+            AccountabilityEventWire.decodeOrNull(
+                raw(*entries.map { if (it.first == "rid") "rid" to CanonicalCbor.text("com.secret.bank") else it }.toTypedArray()),
+            ),
+        )
+        assertNull(
+            "a change must come from the closed enum",
+            AccountabilityEventWire.decodeOrNull(
+                raw(*entries.map { if (it.first == "chg") "chg" to CanonicalCbor.text("WEAKENED") else it }.toTypedArray()),
+            ),
+        )
+        assertNull(
+            "both rule fields are required",
+            AccountabilityEventWire.decodeOrNull(raw(*entries.filterNot { it.first == "rid" }.toTypedArray())),
+        )
+        assertNull(
+            "a block event may not carry rule fields",
+            AccountabilityEventWire.decodeOrNull(
+                raw(
+                    *validEntries(AccountabilityEventKind.ACCOUNTABILITY_EVENT, AccountabilityEventCategory.BLOCKED_APP_ATTEMPT).toTypedArray(),
+                    "rid" to CanonicalCbor.text(ruleUuid.toString()),
+                ),
+            ),
+        )
+        assertNull(
+            "a rule event may not carry monitoring fields",
+            AccountabilityEventWire.decodeOrNull(
+                raw(*entries.toTypedArray(), "ms" to CanonicalCbor.text(MonitoringState.ACTIVE.wire)),
+            ),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            AccountabilityEventWire.accountability(id, 1, AccountabilityEventCategory.RULE_CHANGED, now)
+        }
     }
 
     @Test

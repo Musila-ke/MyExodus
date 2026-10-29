@@ -32,6 +32,19 @@ interface PartnerEventJournalDao {
     )
     suspend fun dueForDelivery(sinceMs: Long, nowMs: Long, limit: Int): List<PartnerEventJournal>
 
+    /** §8.4 rule-scoped route: rule-lifecycle rows for one assigned pair, consent-independent. */
+    @Query(
+        "SELECT * FROM partner_event_journal WHERE route_pair_id = :pairId " +
+            "AND created_at_ms >= :sinceMs AND expires_at_ms > :nowMs " +
+            "ORDER BY created_at_ms ASC LIMIT :limit",
+    )
+    suspend fun dueRuleChangesForPair(
+        pairId: String,
+        sinceMs: Long,
+        nowMs: Long,
+        limit: Int,
+    ): List<PartnerEventJournal>
+
     /** §8.7 retention sweep: the body detail goes after its 30-day window. */
     @Query("DELETE FROM partner_event_journal WHERE expires_at_ms <= :nowMs")
     suspend fun deleteExpired(nowMs: Long): Int

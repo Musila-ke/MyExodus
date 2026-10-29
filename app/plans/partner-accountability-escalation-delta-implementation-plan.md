@@ -639,23 +639,23 @@ the requirement's numbers/mechanism).
 
 | Req | Verdict | Evidence / remaining work |
 |---|---|---|
-| 1 per-rule `assigned/backup/streak_partner_uid` | **GAP** | `RestrictionRule` carries no partner columns; accountability is pair-level only. Product model + UI needed. |
-| 2 assignment valid only after mutual pairing + key verification | **SHIPPED** (pair level) | `PairingFlow`, `PairingProof`, `AttestationVerifier`; per-rule layer blocked on req 1. |
-| 3 rule create/reassign/weaken/disable/delete durable partner event in the same transaction | **GAP** | `EventCreator` call sites are deletion, sync-request, approval, repair, attempts/sessions, monitoring, SOS. No rule-mutation hook exists. |
+| 1 per-rule `assigned/backup/streak_partner_uid` | **SHIPPED** (delta 2026-10-29, ADR #226) | `restriction_rules.assigned_pair_id` / `backup_pair_id` / `streak_pair_id` (schema v21, additive; `MIGRATION_20_21`); editor picker over live enrollments, row label, `UNSUPERVISED` read model. Roles are local **pair ids**, not uids (the enrollment carries the verified key id; a pair id is the local trust unit). Only `assigned` is selectable — backup/streak are stored and unused until req 14/15/18. |
+| 2 assignment valid only after mutual pairing + key verification | **SHIPPED** (pair level) | `PairingFlow`, `PairingProof`, `AttestationVerifier`; the picker only offers live enrollments and the row model derives `UNSUPERVISED` when the stored pair leaves the roster (ADR #226). |
+| 3 rule create/reassign/weaken/disable/delete durable partner event in the same transaction | **SHIPPED** (delta 2026-10-29, ADR #226) | `RulesRepository.journalRows` feeds `insertAndBump`/`updateAndBump`/`deleteAndBump` (Room `@Transaction`): CREATED, ASSIGNED/UNASSIGNED (reassignment writes both), UPDATED (any other mutation — a superset of "weakening"), DISABLED, DELETED. Unassigned rules journal nothing (no eligible recipient); an unrepresentable id/clock skips the row, never the write. |
 | 4 violation persisted immediately; first dispatched; 5-min fixed window summary | **PARTIAL** | Attempts persist immediately (`AttemptLog`) and each pending attempt is dispatched individually (`PartnerSyncCoordinator.kt:332-338`); no window, bucket or `ALERT_STORM_SUMMARY`. |
-| 5 never coalesce control events | **N/A today** | Control types (deletion, approval, revoke, sync) are separate payload types and are never queued through an attempt path. Applies once req 4 ships. |
-| 6 per-recipient redaction before encryption | **SHIPPED equivalent** | Per-pair sharing flags gate every activity/streak event before journaling (ADR #115/#135); the accountability allowlist carries category only, never a target (`AccountabilityEventWire.kt:37-49`, ADR #196). |
+| 5 never coalesce control events | **N/A today** | Control types (deletion, approval, revoke, sync, rule change) are separate payload types and are never queued through an attempt path. Applies once req 4 ships. |
+| 6 per-recipient redaction before encryption | **SHIPPED equivalent** | Per-pair sharing flags gate every activity/streak event before journaling (ADR #115/#135); the accountability allowlist carries category only, never a target (`AccountabilityEventWire.kt:37-49`, ADR #196); rule rows carry a rule UUID + closed verb, never a package name (ADR #226). |
 | 7 HPKE X25519 + Ed25519 | **REJECTED** | Shipped protocol is ECDH P-256 + HKDF + AES-GCM + ECDSA low-S with hardware attestation (ADRs #96–#102, #112). Rebuilding the crypto would violate the delta-only ruling and break the shipped chain. |
 | 8 inbound auth/authorization/schema/dedupe | **SHIPPED** | Relay + rules + mailbox pipeline (ADRs #194, #198, #199). |
 | 9 accepted ≠ delivered | **SHIPPED** | ADR #203; ack pipeline #199. |
 | 10 FCM wake only; mailbox is truth | **SHIPPED** | ADRs #199/#203; `MailboxOutboxDrainer`, `FirestoreMailboxReceiver`. |
 | 13 sync ack after durable local write | **SHIPPED** | ADR #199. |
-| 16 app-health to all consenting pairs; rule events per route | **PARTIAL** | Monitoring snapshots ship to all paired, consenting partners (`MonitoringSnapshotRecorder`); rule-scoped routing blocked on req 1. |
+| 16 app-health to all consenting pairs; rule events per route | **SHIPPED** (delta 2026-10-29, ADR #226) | Monitoring snapshots ship to all paired, consenting partners (`MonitoringSnapshotRecorder`); rule-lifecycle rows carry `route_pair_id` and `dueRuleChangesForPair` routes each envelope to the assigned pair only — the legacy `dueForDelivery` loop consumes monitoring categories only, so no fan-out path can pick up a rule row. |
 | 19 revoke local-immediate, pending-sync UI | **SHIPPED** | ADR #205; `UnpairState`. |
 | 20 flush-before-revoke; retention windows | **SHIPPED equivalent, stricter** | ADR #205 ordering; `mailbox-retention.js` deletes after a 7-day floor AND all-install ack, or unconditionally at 30 days (AD-18b) — stricter than the plan's 90-day unsynced cap. |
-| 21 signed `RouteAuthorizationUpdate` with category bitmask + version | **SUPERSEDED** | Shipped consent is per-pair sharing flags (`PairProfileSharing`, `PairStreakSharing`) synced to the partner; the relay authorizes by pair membership (ADR #194). No signed consent version document exists; the delta-only ruling keeps the shipped model. |
-| 22 §8.4 authorization matrix | **PARTIAL / SUPERSEDED** | Shipped mapping: attempts/sessions → legacy `activity` events (consent-gated); monitoring → `MONITORING_STATUS`; deletion/approval/SOS → dedicated types. The plan's rule-scoped table has no subject until req 1. |
-| 23 partner-initiated revoke; `UNSUPERVISED` rules | **PARTIAL** | Partner-initiated unpair ships (ADR #205). `UNSUPERVISED` is N/A without per-rule assignment. |
+| 21 signed `RouteAuthorizationUpdate` with category bitmask + version | **SUPERSEDED** | Shipped consent is per-pair sharing flags (`PairProfileSharing`, `PairStreakSharing`) synced to the partner; the relay authorizes by pair membership (ADR #194). No signed consent version document exists; the delta-only ruling keeps the shipped model. For `RULE_CONTROL`, the per-rule assignment is the subject's own visibility choice (ADR #226). |
+| 22 §8.4 authorization matrix | **SHIPPED for rule rows / SUPERSEDED elsewhere** (ADR #226) | `RULE_CHANGED` → `RULE_CONTROL` route → current assigned partner only, independent of the activity consent matrix; backup release does not exist yet (req 14). Other rows keep the shipped mapping: attempts/sessions → legacy activity events; monitoring → `MONITORING_STATUS`; deletion/approval/SOS → dedicated types. |
+| 23 partner-initiated revoke; `UNSUPERVISED` rules | **SHIPPED** (delta 2026-10-29, ADR #226) | Partner-initiated unpair ships (ADR #205). An assigned rule whose pair leaves the roster reads `UNSUPERVISED` at read time — still enforced and visible, never auto-cleared or auto-transferred; re-pairing mints a new pair id and the user reselects. |
 | 24 control events always writable, never refused | **SHIPPED equivalent** | Control types are separate chain events; there is no outbox-capacity refusal path in the shipped model (chain cap applies uniformly, no silent eviction). |
 | 25 one active device per account; superseded heartbeat rejected | **DIFFERENT, accepted** | Heartbeat namespace is `(uid, installId)` (`heartbeat-logic.js`); multiple installs legitimately hold separate documents and there is no supersession. No multi-device blocking ships. |
 
@@ -680,17 +680,33 @@ the requirement's numbers/mechanism).
 | §8.10 time-zone/DST rules for a daily summary | **N/A** | No daily summary exists yet. |
 | 26 Play flavor first; sideload gated on inventory | **REJECTED / SUPERSEDED** | Owner ruling: no Play Store distribution; direct APK is the channel (ADR #15, ADR #171). The sideload/attestation-tier requirement is the shipped design. |
 
-### D.4 Remaining build scope (not built in the 2026-10-28/29 night session)
+### D.4 Remaining build scope
 
-The genuine gaps are one product cluster, not independent quick fixes: per-rule partner
-assignment (req 1) is a prerequisite for rule lifecycle events (req 3), rule-scoped routing
-(req 16/22), `UNSUPERVISED` (req 23) and per-rule storm summaries (req 4); backup delivery
-(req 14/15) needs a server-only held-item collection, a due sweep, and a 24-hour release
-timer; target removal (req 17) needs package-visibility reconciliation; daily streak
-summaries (req 18) need a time-zone-correct scheduler. Each changes the closed event
-allowlist (ADR #196) and needs UI work plus the plan's own test matrices (§12) and device
-legs (§12.3). They are recorded here as the next milestone, **not** as done.
+The rule-identity cluster that D.1 listed as deferred was **built on 2026-10-29** (ADR #226):
+per-rule assignment (req 1), transactional rule lifecycle events (req 3), rule-scoped routing
+(req 16/22) and `UNSUPERVISED` on unpair (req 23). What remains from this plan:
 
-**Shipped in this session (evidence in ADR #223/#224):** the silent 45-minute liveness probe
-(client + server, device-proven), the HTTP-5xx-only Cloud Functions alert policy (live,
-verified), and a Room `@Upsert` log-noise fix in `PartnerLivenessDao` (INSERT OR REPLACE).
+- **Violation-storm coalescing (req 4/5):** attempts still dispatch individually; no five-minute
+  window or `ALERT_STORM_SUMMARY`. Depends on the now-shipped rule-route rows but changes the
+  attempt dispatcher, not the rule write path.
+- **Backup delivery (req 14/15):** needs a server-side held-item collection, a due sweep, and a
+  release timer that the primary's sync-ack cancels. The `backup_pair_id` column ships unused.
+- **Target-app removal (req 17):** no `ACTION_PACKAGE_FULLY_REMOVED` handling anywhere.
+- **Daily redacted streak summary (req 18 + §8.10):** event-shaped streak disclosure ships
+  (ADR #134); a daily summary job and the `streak_pair_id` role remain unbuilt (column stored,
+  unused).
+
+Each of these still needs its §12 test matrix and §12.3 device legs before it can be called
+done. They stay recorded here as open, **not** as done.
+
+**Shipped in the 2026-10-28/29 night session (evidence in ADR #223/#224):** the silent
+45-minute liveness probe (client + server, device-proven), the HTTP-5xx-only Cloud Functions
+alert policy (live, verified), and a Room `@Upsert` log-noise fix in `PartnerLivenessDao`
+(INSERT OR REPLACE).
+
+**Shipped in the 2026-10-29 rule-assignment session (evidence in ADR #226):** Room v21
+(`assigned_pair_id` + `backup_pair_id` + `streak_pair_id`, journal `route_pair_id`/`rule_id`/
+`rule_change`, receiver-local `partner_rule_change` table, additive up + rebuild down),
+`RulesRepository` transactional journaling, rule-scoped reconcile delivery, the editor
+partner picker and rule-row label, the partner rule-change feed row, and the pre-1970
+clock/journal fix found by the stress suite.

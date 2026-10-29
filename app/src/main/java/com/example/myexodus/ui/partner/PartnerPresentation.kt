@@ -1,8 +1,10 @@
 package com.example.myexodus.ui.partner
 
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainHead
+import com.example.myexodus.data.db.entity.PartnerRuleChange
 import com.example.myexodus.recovery.RecoveryMirror
 import com.example.myexodus.ui.PillTone
 import java.time.Instant
@@ -97,7 +99,21 @@ sealed interface PartnerAlert {
         val milestoneDay: Int?,
         override val atEpochMillis: Long,
     ) : PartnerAlert
+
+    /** §8.4 RULE_CONTROL: the wire carries the rule's UUID and a closed change verb only, so
+     *  the row names the change and never an app or free text (the CBOR allowlist forbids it). */
+    data class RuleChanged(
+        val change: RuleChange,
+        override val atEpochMillis: Long,
+    ) : PartnerAlert
 }
+
+/** A stored RULE_CONTROL row as a feed entry; an unknown verb (a newer sender) is dropped
+ *  rather than rendered as a wrong one. */
+fun ruleChangeAlert(row: PartnerRuleChange): PartnerAlert? =
+    RuleChange.fromWire(row.ruleChange)?.let {
+        PartnerAlert.RuleChanged(it, row.occurredAtMinute * 60_000L)
+    }
 
 /**
  * The activity texts the app writes: "blocked:<pkg>" / "override:<pkg>" (§6) and

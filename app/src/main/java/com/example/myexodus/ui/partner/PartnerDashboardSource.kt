@@ -6,6 +6,7 @@ import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.serialization.OutboxAgeBucket
 import com.example.myexodus.data.db.entity.PartnerMonitoringSnapshot
+import com.example.myexodus.data.db.entity.PartnerRuleChange
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.sync.displayNameOf
 import com.example.myexodus.accountability.state.ChainEvent
@@ -60,6 +61,9 @@ class PartnerDashboardSource(
     /** §7 Step 7: the partner's most recent recipient-local monitoring snapshot (E2EE, read
      *  from SQLCipher). Null = nothing received yet — no claim is made. */
     private val monitoring: suspend (pairId: String) -> PartnerMonitoringSnapshot? = { null },
+    /** §8.4 RULE_CONTROL: received rule-lifecycle rows, newest first — the feed's rule half.
+     *  Contract bodies never reach [decoderFor], so the receiver's rows are the only source. */
+    private val ruleChanges: suspend (pairId: String) -> List<PartnerRuleChange> = { emptyList() },
 ) {
 
     /**
@@ -110,7 +114,9 @@ class PartnerDashboardSource(
             runCatching { decode(row.envelope) }
                 .getOrNull()
                 ?.let { alertOf(it, row.createdAtEpochMillis) }
-        }
+        } + runCatching { ruleChanges(enrollment.pairId) }.getOrElse { emptyList() }
+            .filter { it.occurredAtMinute * 60_000L >= nowMillis - WEEK_MILLIS }
+            .mapNotNull(::ruleChangeAlert)
         val chainHead = head(enrollment.pairId, enrollment.partnerSigningKeyId)
         val approvalRows = runCatching { approvals(enrollment.pairId) }.getOrElse { emptyList() }
             .map {
@@ -192,6 +198,16 @@ class PartnerDashboardSource(
     suspend fun targetPartnerName(selectedPairId: String? = null): String? =
         runCatching { enrollments() }.getOrNull().orEmpty()
             .targetEnrollment(selectedPairId)?.let { displayNameOf(it) }
+
+    /**
+     * Every live pair as (pairId, shown name), newest first — the rule editor's assignee list.
+     * The same enrollment read as [reachOutTargets]; a failed read degrades to an empty list,
+     * which the editor renders as "no partners yet", never a wrong name.
+     */
+    suspend fun pairRoster(): List<ReachOutTarget> =
+        runCatching { enrollments() }.getOrNull().orEmpty()
+            .sortedByDescending { it.createdAtEpochMillis }
+            .map { ReachOutTarget(it.pairId, displayNameOf(it)) }
 
     /**
      * The reach-out dialog's recipient list (owner ruling 2026-10-23): the §19.5 target first,

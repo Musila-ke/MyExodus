@@ -38,6 +38,10 @@ data class RestrictionRule(
     @ColumnInfo(name = "severity_level") val severityLevel: String,
     /** Pause switch (Rules screen): a disabled rule stays stored but leaves the snapshot. */
     @ColumnInfo(name = "is_enabled", defaultValue = "1") val isEnabled: Boolean = true,
+    /** Partner roles (plan §2.1 req 1): local pair ids, independent, valid only while paired. */
+    @ColumnInfo(name = "assigned_pair_id") val assignedPairId: String? = null,
+    @ColumnInfo(name = "backup_pair_id") val backupPairId: String? = null,
+    @ColumnInfo(name = "streak_pair_id") val streakPairId: String? = null,
 )
 
 /**

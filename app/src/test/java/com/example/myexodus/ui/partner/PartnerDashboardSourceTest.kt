@@ -3,12 +3,14 @@ package com.example.myexodus.ui.partner
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.MonitoringState
+import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainEvent
 import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.accountability.state.UnpairPhase
 import com.example.myexodus.accountability.state.UnpairState
 import com.example.myexodus.data.db.entity.PartnerMonitoringSnapshot
+import com.example.myexodus.data.db.entity.PartnerRuleChange
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -113,6 +115,8 @@ class PartnerDashboardSourceTest {
         pairingDeniedAt: (String) -> Long? = { null },
         /** Step 7: the partner's latest decrypted monitoring snapshot, if any arrived. */
         monitoring: (String) -> PartnerMonitoringSnapshot? = { null },
+        /** §8.4 RULE_CONTROL: the receiver's stored rule-lifecycle rows for this pair. */
+        ruleChangeRows: List<PartnerRuleChange> = emptyList(),
     ): RecordingSource {
         val sinceArgs = mutableListOf<Long>()
         val sincePairIds = mutableListOf<String>()
@@ -151,8 +155,25 @@ class PartnerDashboardSourceTest {
                 }
             },
             monitoring = { pairId -> monitoring(pairId) },
+            ruleChanges = { ruleChangeRows },
         )
         return RecordingSource(source, sinceArgs, sincePairIds, headPairIds, approvalPairIds, rejectionPairIds)
+    }
+
+    @Test
+    fun ruleChanges_mergeIntotheFeedInsideTheWeekWindowOnly() = runTest {
+        val insideWeek = PartnerRuleChange(
+            pairId = "pair-1", eventId = "evt-1", ruleId = "uuid",
+            ruleChange = "DISABLED", occurredAtMinute = (now - 60_000L) / 60_000L,
+            receivedAtMs = now, expiresAtMs = now + 1,
+        )
+        val olderThanWeek = insideWeek.copy(
+            eventId = "evt-2", occurredAtMinute = (now - 8 * 86_400_000L) / 60_000L,
+        )
+        val ui = source(ruleChangeRows = listOf(insideWeek, olderThanWeek)).source.load(now)
+        val summary = (ui as PartnerDashboardUi.Paired).alerts
+        assertEquals(1, summary.weekCount)
+        assertEquals(PartnerAlert.RuleChanged(RuleChange.DISABLED, insideWeek.occurredAtMinute * 60_000L), summary.recent.single())
     }
 
     private fun journalRow(pairId: String = "pair-1", requestedAt: Long = 500L) = UnpairState(

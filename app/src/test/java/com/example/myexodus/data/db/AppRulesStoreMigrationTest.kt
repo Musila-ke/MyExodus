@@ -674,6 +674,150 @@ class AppRulesStoreMigrationTest {
     }
 
     /**
+     * Per-rule partner assignment (v20→v21) and its rollback: the three role assignments, the
+     * journal's rule fields + delivery route, and the received-change feed are added; the
+     * rollback removes them while every rule, journal row, unique index and the Rule 4 CHECK
+     * constraint survive the rebuilds.
+     */
+    @Test
+    fun migration20to21AndBack_addsRuleAssignmentAndFeed() {
+        val scratchPath = context.getDatabasePath("rule-assignment-test.db").absolutePath
+        AndroidSQLiteDriver().open(scratchPath).use { conn ->
+            conn.prepare("CREATE TABLE user_profile (user_id TEXT NOT NULL, PRIMARY KEY(user_id))").use { it.step() }
+            conn.prepare(
+                "CREATE TABLE restriction_rules (" +
+                    "rule_id TEXT NOT NULL, profile_id TEXT NOT NULL, " +
+                    "blocked_package TEXT NOT NULL, target_type TEXT NOT NULL, " +
+                    "is_always_on INTEGER NOT NULL, daily_limit_ms INTEGER NOT NULL, " +
+                    "time_range_start INTEGER, time_range_end INTEGER, " +
+                    "active_days_of_week TEXT NOT NULL, timezone TEXT NOT NULL DEFAULT 'UTC', " +
+                    "block_expires_at INTEGER NOT NULL, severity_level TEXT NOT NULL, " +
+                    "is_enabled INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(rule_id), " +
+                    "FOREIGN KEY(profile_id) REFERENCES user_profile(user_id), " +
+                    "CONSTRAINT blocked_package_not_self " +
+                    "CHECK (TRIM(LOWER(blocked_package)) != 'com.example.myexodus'), " +
+                    "CONSTRAINT severity_valid " +
+                    "CHECK (severity_level IN ('LOW','MEDIUM','HIGH','CRITICAL')))",
+            ).use { it.step() }
+            conn.prepare(
+                "CREATE UNIQUE INDEX index_restriction_rules_profile_id_blocked_package " +
+                    "ON restriction_rules (profile_id, blocked_package)",
+            ).use { it.step() }
+            conn.prepare(
+                "CREATE TABLE partner_event_journal (" +
+                    "event_id TEXT NOT NULL, category TEXT NOT NULL, " +
+                    "occurred_at_minute INTEGER NOT NULL, monitoring_state TEXT, " +
+                    "outbox_age_bucket TEXT, schema_version INTEGER NOT NULL, " +
+                    "created_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL, " +
+                    "PRIMARY KEY(event_id))",
+            ).use { it.step() }
+            conn.prepare("INSERT INTO user_profile (user_id) VALUES ('p-1')").use { it.step() }
+            conn.prepare(
+                "INSERT INTO restriction_rules (rule_id, profile_id, blocked_package, target_type, " +
+                    "is_always_on, daily_limit_ms, active_days_of_week, timezone, block_expires_at, " +
+                    "severity_level) VALUES " +
+                    "('r-1', 'p-1', 'com.instagram.android', 'APP', 1, 0, '1111111', 'UTC', 0, 'HIGH')",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO partner_event_journal (event_id, category, occurred_at_minute, " +
+                    "schema_version, created_at_ms, expires_at_ms) VALUES " +
+                    "('11111111-1111-4111-8111-111111111111', 'BLOCKED_APP_ATTEMPT', 42, 1, 100, 200)",
+            ).use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_20_21.migrate(conn) }
+
+            assertEquals(
+                "the three role assignments are added",
+                listOf("assigned_pair_id", "backup_pair_id", "streak_pair_id"),
+                columnNames(conn, "restriction_rules").filter { it.endsWith("_pair_id") },
+            )
+            assertEquals(
+                "the rule fields and route are added to the journal",
+                listOf("rule_id", "rule_change", "route_pair_id"),
+                columnNames(conn, "partner_event_journal")
+                    .filter { it == "rule_id" || it == "rule_change" || it == "route_pair_id" },
+            )
+            conn.prepare(
+                "SELECT assigned_pair_id FROM restriction_rules WHERE rule_id = 'r-1'",
+            ).use { stmt ->
+                assertTrue(stmt.step())
+                assertTrue("an upgraded rule is unassigned", stmt.isNull(0))
+            }
+            conn.prepare(
+                "INSERT INTO partner_rule_change (pair_id, event_id, rule_id, rule_change, " +
+                    "occurred_at_minute, received_at_ms, expires_at_ms) VALUES " +
+                    "('pair-1', '22222222-2222-4222-8222-222222222222', " +
+                    "'33333333-3333-4333-8333-333333333333', 'ASSIGNED', 43, 1000, 2000)",
+            ).use { it.step() }
+            conn.prepare("SELECT count(*) FROM partner_rule_change").use { stmt ->
+                assertTrue(stmt.step())
+                assertEquals("the received-change feed accepts a row", 1L, stmt.getLong(0))
+            }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_21_20.migrate(conn) }
+
+            assertTrue(
+                "the rollback removes the role assignments",
+                columnNames(conn, "restriction_rules").none { it.endsWith("_pair_id") },
+            )
+            assertTrue(
+                "the rollback removes the journal rule fields",
+                columnNames(conn, "partner_event_journal")
+                    .none { it == "rule_id" || it == "rule_change" || it == "route_pair_id" },
+            )
+            assertTrue(
+                "the rollback drops the received-change feed",
+                columnNames(conn, "partner_rule_change").isEmpty(),
+            )
+            conn.prepare(
+                "SELECT blocked_package, severity_level FROM restriction_rules WHERE rule_id = 'r-1'",
+            ).use { stmt ->
+                assertTrue("the rule survives the rollback rebuild", stmt.step())
+                assertEquals("com.instagram.android", stmt.getText(0))
+                assertEquals("HIGH", stmt.getText(1))
+            }
+            conn.prepare(
+                "SELECT category, occurred_at_minute FROM partner_event_journal " +
+                    "WHERE event_id = '11111111-1111-4111-8111-111111111111'",
+            ).use { stmt ->
+                assertTrue("the journal row survives the rollback rebuild", stmt.step())
+                assertEquals("BLOCKED_APP_ATTEMPT", stmt.getText(0))
+                assertEquals(42L, stmt.getLong(1))
+            }
+            val indices = conn.prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name IN " +
+                    "('restriction_rules','partner_event_journal')",
+            ).use { stmt ->
+                val names = mutableListOf<String>()
+                while (stmt.step()) names.add(stmt.getText(0))
+                names
+            }
+            assertTrue(
+                "Room validates indices on open: the unique rule index must return",
+                "index_restriction_rules_profile_id_blocked_package" in indices,
+            )
+            assertTrue(
+                "the journal's two support indices must return",
+                "index_partner_event_journal_created_at_ms" in indices &&
+                    "index_partner_event_journal_expires_at_ms" in indices,
+            )
+            var checkFired = false
+            try {
+                conn.prepare(
+                    "INSERT INTO restriction_rules (rule_id, profile_id, blocked_package, target_type, " +
+                        "is_always_on, daily_limit_ms, active_days_of_week, timezone, block_expires_at, " +
+                        "severity_level) VALUES ('r-2', 'p-1', 'com.example.myexodus', 'APP', 1, 0, " +
+                        "'1111111', 'UTC', 0, 'HIGH')",
+                ).use { it.step() }
+            } catch (e: Exception) {
+                checkFired = true
+            }
+            assertTrue("the rebuild must keep the Rule 4 CHECK constraint", checkFired)
+        }
+        context.deleteDatabase("rule-assignment-test.db")
+    }
+
+    /**
      * The v16 consent matrix (ADR #135), direct invocation: 15→16 drops the legacy consent
      * columns outright (recreate-table, no seed — "nothing until you choose" for every
      * install) and adds the per-(pair, item) tables plus the journal's consent key; 16→15

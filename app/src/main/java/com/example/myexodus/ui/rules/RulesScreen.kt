@@ -79,6 +79,8 @@ import com.example.myexodus.ui.AppMark
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.LinkRow
 import com.example.myexodus.ui.WindowWidth
+import com.example.myexodus.ui.partner.PartnerDashboardSource
+import com.example.myexodus.ui.partner.ReachOutTarget
 import com.example.myexodus.ui.preloadAppLabels
 import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.rememberWindowWidth
@@ -95,6 +97,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val ROUTE_LIST = "list"
 private const val ROUTE_EDIT = "edit"
@@ -116,6 +119,8 @@ fun RulesScreen(
     platformUsage: PlatformUsageReader,
     domainUsageEngine: DomainUsageEngine,
     psl: PublicSuffixList,
+    /** Plan §2.1 req 1: the live pairs a rule can be assigned to (the editor's assignee list). */
+    partnerSource: PartnerDashboardSource,
     modifier: Modifier = Modifier,
     openRuleId: String? = null,
     onOpenRuleConsumed: () -> Unit = {},
@@ -146,6 +151,15 @@ fun RulesScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    // Per-rule partner assignment (plan §2.1 req 1): the live pairs, read once per Rules entry
+    // — pairs only change on the Partner tab, so this page cannot go stale mid-visit.
+    var partners by remember { mutableStateOf<List<ReachOutTarget>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        partners = withContext(Dispatchers.IO) {
+            runCatching { partnerSource.pairRoster() }.getOrDefault(emptyList())
+        }
+    }
 
     // Finding #19: a Home block row hands over its rule id — open that editor directly.
     LaunchedEffect(openRuleId) {
@@ -352,6 +366,7 @@ fun RulesScreen(
                     targetType = editTargetType,
                     target = editTarget,
                     existingRules = rules.orEmpty(),
+                    partners = partners,
                     repository = repository,
                     usageAccountingEngine = usageAccountingEngine,
                     platformUsage = platformUsage,
@@ -380,6 +395,7 @@ fun RulesScreen(
                     rules = loaded.rules,
                     pendingPause = pendingPause,
                     nowMillis = nowMillis,
+                    partners = partners,
                     domainUsageEngine = domainUsageEngine,
                     engineBannerMessage = engineBannerMessage.takeIf { hasLimitedSite },
                     engineOffMessage = engineOffMessage,
@@ -604,6 +620,7 @@ private fun RulesList(
     rules: List<RestrictionRule>,
     pendingPause: Map<String, Boolean>,
     nowMillis: Long,
+    partners: List<ReachOutTarget>,
     domainUsageEngine: DomainUsageEngine,
     engineBannerMessage: String?,
     /** #26: non-null when live website rules exist but the tunnel can't serve them (consent
@@ -706,6 +723,7 @@ private fun RulesList(
                     rules = appRules,
                     pendingPause = pendingPause,
                     nowMillis = nowMillis,
+                    partners = partners,
                     domainUsageEngine = domainUsageEngine,
                     onEdit = onEdit,
                     onTogglePause = onTogglePause,
@@ -736,6 +754,7 @@ private fun RulesList(
                     rules = websiteRules,
                     pendingPause = pendingPause,
                     nowMillis = nowMillis,
+                    partners = partners,
                     domainUsageEngine = domainUsageEngine,
                     onEdit = onEdit,
                     onTogglePause = onTogglePause,
@@ -751,6 +770,7 @@ private fun RulesList(
             rules = deactivated,
             pendingPause = pendingPause,
             nowMillis = nowMillis,
+            partners = partners,
             domainUsageEngine = domainUsageEngine,
             onEdit = onEdit,
             onTogglePause = onTogglePause,
@@ -793,6 +813,7 @@ private fun RuleRowsCard(
     rules: List<RestrictionRule>,
     pendingPause: Map<String, Boolean>,
     nowMillis: Long,
+    partners: List<ReachOutTarget>,
     domainUsageEngine: DomainUsageEngine,
     onEdit: (RestrictionRule) -> Unit,
     onTogglePause: (RestrictionRule, Boolean) -> Unit,
@@ -816,6 +837,7 @@ private fun RuleRowsCard(
                     enabled = pendingPause[rule.ruleId] ?: rule.isEnabled,
                     awaitingWrite = pendingPause.containsKey(rule.ruleId),
                     nowMillis = nowMillis,
+                    partners = partners,
                     domainUsageEngine = domainUsageEngine,
                     onEdit = { onEdit(rule) },
                     onTogglePause = { enable -> onTogglePause(rule, enable) },
@@ -1048,6 +1070,7 @@ private fun LazyListScope.ruleSection(
     rules: List<RestrictionRule>,
     pendingPause: Map<String, Boolean>,
     nowMillis: Long,
+    partners: List<ReachOutTarget>,
     domainUsageEngine: DomainUsageEngine,
     onEdit: (RestrictionRule) -> Unit,
     onTogglePause: (RestrictionRule, Boolean) -> Unit,
@@ -1076,6 +1099,7 @@ private fun LazyListScope.ruleSection(
             rules = rules,
             pendingPause = pendingPause,
             nowMillis = nowMillis,
+            partners = partners,
             domainUsageEngine = domainUsageEngine,
             onEdit = onEdit,
             onTogglePause = onTogglePause,
@@ -1093,6 +1117,7 @@ private fun RuleRow(
     /** A pause write for this rule is in flight — the switch is locked until it lands. */
     awaitingWrite: Boolean,
     nowMillis: Long,
+    partners: List<ReachOutTarget>,
     domainUsageEngine: DomainUsageEngine,
     onEdit: () -> Unit,
     onTogglePause: (Boolean) -> Unit,
@@ -1100,6 +1125,10 @@ private fun RuleRow(
     val label = rememberAppLabel(rule.blockedPackage)
     val res = LocalResources.current
     val state = remember(rule, enabled, nowMillis, res) { ruleRowState(rule, nowMillis, res) }
+    // §2.1 req 1/23: an assignment whose pair is gone reads UNSUPERVISED — the rule stays
+    // enforced and visible; the row says who used to watch it is no longer paired.
+    val supervisor = partners.firstOrNull { it.pairId == rule.assignedPairId }
+    val unsupervised = rule.assignedPairId != null && supervisor == null
     val pauseLabel = stringResource(R.string.rules_pause, label)
     val resumeLabel = stringResource(R.string.rules_resume, label)
     val editLabel = stringResource(R.string.rules_edit)
@@ -1136,6 +1165,31 @@ private fun RuleRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            when {
+                supervisor != null -> Text(
+                    stringResource(R.string.rules_watched_by, supervisor.name),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                unsupervised -> Text(
+                    stringResource(R.string.rules_unsupervised),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                // With a partner on the roster, "who sees this?" is answered on every row —
+                // the quiet state is what makes an assignment discoverable at all.
+                partners.isNotEmpty() -> Text(
+                    stringResource(R.string.rules_not_shared),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             // S9.3: the row's own progress against its limit. Null until the engine's startup
             // load attaches the ledger — hiding the line beats claiming a false zero.
             if (rule.targetType == "WEBSITE" && rule.dailyLimitMs > 0L && enabled) {

@@ -54,6 +54,9 @@ object SchemaConstraints {
                     block_expires_at INTEGER NOT NULL,
                     severity_level TEXT NOT NULL,
                     is_enabled INTEGER NOT NULL DEFAULT 1,
+                    assigned_pair_id TEXT,
+                    backup_pair_id TEXT,
+                    streak_pair_id TEXT,
                     PRIMARY KEY(rule_id),
                     FOREIGN KEY(profile_id) REFERENCES user_profile(user_id),
                     CONSTRAINT blocked_package_not_self
@@ -69,10 +72,10 @@ object SchemaConstraints {
                 INSERT INTO restriction_rules_rebuilt
                     (rule_id, profile_id, blocked_package, target_type, is_always_on, daily_limit_ms,
                      time_range_start, time_range_end, active_days_of_week, timezone, block_expires_at,
-                     severity_level, is_enabled)
+                     severity_level, is_enabled, assigned_pair_id, backup_pair_id, streak_pair_id)
                 SELECT rule_id, profile_id, blocked_package, target_type, is_always_on, daily_limit_ms,
                        time_range_start, time_range_end, active_days_of_week, timezone, block_expires_at,
-                       severity_level, is_enabled
+                       severity_level, is_enabled, assigned_pair_id, backup_pair_id, streak_pair_id
                 FROM restriction_rules;
                 """.trimIndent(),
             )

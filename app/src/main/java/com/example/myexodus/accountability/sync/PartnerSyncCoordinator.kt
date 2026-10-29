@@ -17,6 +17,7 @@ import com.example.myexodus.accountability.serialization.OutboxAgeBucket
 import com.example.myexodus.accountability.serialization.PlanBody
 import com.example.myexodus.accountability.serialization.PlanTaskBody
 import com.example.myexodus.accountability.serialization.PlanWire
+import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.state.ChainStateStore
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
@@ -35,6 +36,7 @@ import com.example.myexodus.streaks.StreakTimer
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FirebaseFirestore
+import java.util.UUID
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -412,10 +414,20 @@ class PartnerSyncCoordinator(
                 Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
             }
         }
+        // §8.4 rule-control queue: the rule's own assignment IS the category consent, so this
+        // queue is independent of the activity consent matrix. The route pair is the SQL
+        // predicate — a rule change never fans out to a pair that was not assigned.
+        val journal = store.partnerEventJournalDao()
+        val nowMs = System.currentTimeMillis()
+        for (row in journal.dueRuleChangesForPair(pairId, sinceMs, nowMs, RECONCILE_BATCH)) {
+            when (val emit = emitRuleChange(pairId, senderKeyId, row)) {
+                is Emit.Created -> linked++
+                Emit.Duplicate, Emit.Skip -> Unit
+                Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
+            }
+        }
         if (profileConsent?.shareAvailability == true) {
             val since = maxOf(sinceMs, profileConsent.availabilityEnabledSinceMs)
-            val journal = store.partnerEventJournalDao()
-            val nowMs = System.currentTimeMillis()
             for (row in journal.dueForDelivery(since, nowMs, RECONCILE_BATCH)) {
                 val category = AccountabilityEventCategory.fromWire(row.category) ?: continue
                 if (category.kind != AccountabilityEventKind.MONITORING_STATUS) continue
@@ -589,6 +601,7 @@ class PartnerSyncCoordinator(
             sharingDao.deleteProfileFor(orphans)
             store.partnerPlanDao().deleteForPairs(orphans)
             store.partnerMonitoringSnapshotDao().deleteFor(orphans)
+            store.partnerRuleChangeDao().deleteFor(orphans)
         }
     }
 
@@ -641,6 +654,59 @@ class PartnerSyncCoordinator(
                 is EventCreator.CreateResult.Duplicate -> Emit.Duplicate
                 is EventCreator.CreateResult.Failed -> {
                     Log.w(TAG, "monitoring event creation failed for ${row.eventId}: ${result.reason}")
+                    Emit.Skip
+                }
+            }
+        } catch (e: UserNotAuthenticatedException) {
+            Emit.Stop
+        }
+    }
+
+    /**
+     * §8.4 rule-control sender half: one journaled rule-lifecycle row → one E2EE
+     * `RULE_CHANGED` envelope for the rule's assigned pair. The row is already routed by SQL;
+     * an unparseable row is skipped (the entity constructor rejects those, so this is
+     * belt-and-braces for a store written by an older schema).
+     */
+    private suspend fun emitRuleChange(
+        pairId: String,
+        senderKeyId: String,
+        row: PartnerEventJournal,
+    ): Emit {
+        if (chain.hasEvent(pairId, senderKeyId, row.eventId)) return Emit.Duplicate
+        val ruleId = row.ruleId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+            ?: return Emit.Skip
+        val change = row.ruleChange?.let(RuleChange::fromWire) ?: return Emit.Skip
+        val signature = try {
+            signer.beginSign()
+        } catch (e: Exception) {
+            if (signer.isUserNotAuthenticated(e)) return Emit.Stop
+            Log.w(TAG, "signing init failed", e)
+            return Emit.Skip
+        }
+        return try {
+            when (
+                val result = creator.createBody(
+                    pairId = pairId,
+                    bodyFor = { sequence ->
+                        AccountabilityEventWire.encode(
+                            AccountabilityEventWire.ruleControl(
+                                eventId = row.eventId,
+                                sequence = sequence,
+                                ruleId = ruleId,
+                                change = change,
+                                occurredAtMillis = row.occurredAtMinute * 60_000L,
+                            ),
+                        )
+                    },
+                    signature = signature,
+                    eventId = row.eventId,
+                )
+            ) {
+                is EventCreator.CreateResult.Created -> Emit.Created(result.sequence)
+                is EventCreator.CreateResult.Duplicate -> Emit.Duplicate
+                is EventCreator.CreateResult.Failed -> {
+                    Log.w(TAG, "rule event creation failed for ${row.eventId}: ${result.reason}")
                     Emit.Skip
                 }
             }

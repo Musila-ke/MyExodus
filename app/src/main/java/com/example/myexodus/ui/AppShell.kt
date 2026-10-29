@@ -418,6 +418,10 @@ fun AppShell(
                         platformUsage = platformUsage,
                         domainUsageEngine = domainUsageEngine,
                         psl = psl,
+                        // Per-rule partner assignment (plan §2.1 req 1): the rule editor's
+                        // assignee list is the live pair roster — the same read the SOS
+                        // recipient dialog uses.
+                        partnerSource = partnerSource,
                         openRuleId = openRuleId,
                         onOpenRuleConsumed = { openRuleId = null },
                         modifier = contentModifier,

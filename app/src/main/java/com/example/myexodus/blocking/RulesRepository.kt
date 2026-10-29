@@ -1,9 +1,13 @@
 package com.example.myexodus.blocking
 
+import com.example.myexodus.accountability.serialization.AccountabilityEventWire
+import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.entity.PartnerEventJournal
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.UserProfile
 import com.example.myexodus.data.db.entity.isExpiredAt
+import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 
 /** Rejects a rule write past the snapshot caps (plan §8 Step 2); the UI maps [message]. */
@@ -24,6 +28,7 @@ class RulesetLimitException(message: String) : Exception(message)
 class RulesRepository(
     private val storeFactory: AppRulesStoreFactory,
     private val publisher: RulesSnapshotPublisher,
+    private val now: () -> Long = System::currentTimeMillis,
 ) {
     private fun store() = storeFactory.open() ?: throw IllegalStateException("Rules store unavailable")
 
@@ -41,19 +46,23 @@ class RulesRepository(
                     "Delete an existing rule before adding a new one.",
             )
         }
-        dao.insertAndBump(rule, db.policyVersionDao())
+        dao.insertAndBump(rule, db.policyVersionDao(), db.partnerEventJournalDao(), journalRows(null, rule))
         publisher.loadFromDb()
     }
 
     suspend fun updateRule(rule: RestrictionRule) {
         val db = store()
-        db.restrictionRuleDao().updateAndBump(rule, db.policyVersionDao())
+        val old = db.restrictionRuleDao().getById(rule.ruleId)
+        val journal = if (old == null) emptyList() else journalRows(old, rule)
+        db.restrictionRuleDao().updateAndBump(rule, db.policyVersionDao(), db.partnerEventJournalDao(), journal)
         publisher.loadFromDb()
     }
 
     suspend fun deleteRule(rule: RestrictionRule) {
         val db = store()
-        db.restrictionRuleDao().deleteAndBump(rule, db.policyVersionDao())
+        db.restrictionRuleDao().deleteAndBump(
+            rule, db.policyVersionDao(), db.partnerEventJournalDao(), journalRows(rule, null),
+        )
         publisher.loadFromDb()
     }
 
@@ -82,8 +91,53 @@ class RulesRepository(
         if (rules.isEmpty()) return
         val db = store()
         val versionDao = db.policyVersionDao()
-        rules.forEach { db.restrictionRuleDao().deleteAndBump(it, versionDao) }
+        val journalDao = db.partnerEventJournalDao()
+        rules.forEach { db.restrictionRuleDao().deleteAndBump(it, versionDao, journalDao, journalRows(it, null)) }
         publisher.loadFromDb()
+    }
+
+    /**
+     * Rule-lifecycle journal rows, in the rule's own transaction (plan §2.1 req 3). §8.4 routes
+     * them to the rule's assigned partner only; an unassigned rule has no partner to tell.
+     * Rule ids on this store are always minted as UUIDs, and the closed wire accepts nothing
+     * else — an unparseable legacy id simply has no wire identity.
+     */
+    private fun journalRows(old: RestrictionRule?, new: RestrictionRule?): List<PartnerEventJournal> {
+        val from = old?.assignedPairId
+        val to = new?.assignedPairId
+        val atMs = now()
+        val minute = AccountabilityEventWire.minuteOf(atMs)
+        val rows = mutableListOf<PartnerEventJournal>()
+
+        fun record(pairId: String, ruleId: String, change: RuleChange) {
+            // No wire identity (legacy id, pre-1970 clock) means nothing to journal — the
+            // contract row would be rejected, and a broken clock must never block the write.
+            if (minute < 1) return
+            val uuid = runCatching { UUID.fromString(ruleId) }.getOrNull() ?: return
+            rows += PartnerEventJournal.forRuleChange(
+                eventId = AccountabilityEventWire.newEventId(),
+                ruleId = uuid,
+                change = change,
+                routePairId = pairId,
+                occurredAtMinute = minute,
+                createdAtMs = atMs,
+            )
+        }
+
+        when {
+            new == null -> if (old != null && from != null) record(from, old.ruleId, RuleChange.DELETED)
+            old == null -> if (to != null) record(to, new.ruleId, RuleChange.CREATED)
+            from != to -> {
+                if (from != null) record(from, old.ruleId, RuleChange.UNASSIGNED)
+                if (to != null) record(to, new.ruleId, RuleChange.ASSIGNED)
+            }
+            to != null && old != new -> record(
+                to,
+                new.ruleId,
+                if (old.isEnabled && !new.isEnabled) RuleChange.DISABLED else RuleChange.UPDATED,
+            )
+        }
+        return rows
     }
 
     /**

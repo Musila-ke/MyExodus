@@ -3,6 +3,7 @@ package com.example.myexodus.ui.partner
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.SelfImprovement
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Timeline
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.AlertDialog
@@ -74,6 +76,7 @@ import com.example.myexodus.accountability.monitoring.PartnerConnectionBucket
 import com.example.myexodus.accountability.monitoring.PartnerStatus
 import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.UnpairPhase
 import com.example.myexodus.accountability.state.UnpairState
@@ -2036,6 +2039,16 @@ private fun StatColumn(label: String, value: String, modifier: Modifier = Modifi
     }
 }
 
+@StringRes
+private fun ruleChangeLabel(change: RuleChange): Int = when (change) {
+    RuleChange.CREATED -> R.string.partner_rule_created
+    RuleChange.ASSIGNED -> R.string.partner_rule_assigned
+    RuleChange.UNASSIGNED -> R.string.partner_rule_unassigned
+    RuleChange.UPDATED -> R.string.partner_rule_updated
+    RuleChange.DISABLED -> R.string.partner_rule_disabled
+    RuleChange.DELETED -> R.string.partner_rule_deleted
+}
+
 /**
  * One shared event. The leading mark is the real subject of the row — the app's own icon when
  * this device has it installed, a generic glyph when it doesn't (the partner's phone may block
@@ -2055,6 +2068,7 @@ private fun AlertRow(alert: PartnerAlert) {
             ?: stringResource(R.string.partner_alert_streak_unnamed)
         is PartnerAlert.Milestone -> alert.habitLabel
             ?: stringResource(R.string.partner_alert_streak_unnamed)
+        is PartnerAlert.RuleChanged -> stringResource(R.string.partner_alert_rule)
     }
     val kind = when (alert) {
         is PartnerAlert.AppActivity ->
@@ -2065,6 +2079,7 @@ private fun AlertRow(alert: PartnerAlert) {
         is PartnerAlert.Milestone -> alert.milestoneDay
             ?.let { pluralStringResource(R.plurals.partner_milestone_reached_days, it, it) }
             ?: stringResource(R.string.partner_alert_milestone_plain)
+        is PartnerAlert.RuleChanged -> stringResource(ruleChangeLabel(alert.change))
     }
     Row(
         Modifier.fillMaxWidth(),
@@ -2090,6 +2105,11 @@ private fun AlertRow(alert: PartnerAlert) {
             is PartnerAlert.Milestone -> AppMark(
                 packageName = null,
                 fallback = Icons.Outlined.EmojiEvents,
+                size = 28.dp,
+            )
+            is PartnerAlert.RuleChanged -> AppMark(
+                packageName = null,
+                fallback = Icons.Outlined.Tune,
                 size = 28.dp,
             )
         }

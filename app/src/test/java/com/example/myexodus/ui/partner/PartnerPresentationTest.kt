@@ -1,7 +1,9 @@
 package com.example.myexodus.ui.partner
 
+import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainHead
+import com.example.myexodus.data.db.entity.PartnerRuleChange
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.recovery.RecoveryMirror
 import com.example.myexodus.ui.PillTone
@@ -100,6 +102,27 @@ class PartnerPresentationTest {
         assertEquals(1, summary.todayCount)
         assertEquals(5, summary.recent.size)
         assertEquals("com.x0", (summary.recent.first() as PartnerAlert.AppActivity).target)
+    }
+
+    @Test
+    fun ruleChange_rowsUseTheOccurrenceMinute_asTheirTimestamp() {
+        val row = PartnerRuleChange(
+            pairId = "pair", eventId = "evt", ruleId = "uuid", ruleChange = "DISABLED",
+            occurredAtMinute = 28_333_333, receivedAtMs = now, expiresAtMs = now,
+        )
+        assertEquals(
+            PartnerAlert.RuleChanged(RuleChange.DISABLED, 28_333_333 * 60_000L),
+            ruleChangeAlert(row),
+        )
+    }
+
+    @Test
+    fun ruleChange_unknownVerbIsDropped_notShownAsAnotherChange() {
+        val row = PartnerRuleChange(
+            pairId = "pair", eventId = "evt", ruleId = "uuid", ruleChange = "PAUSED",
+            occurredAtMinute = 1, receivedAtMs = now, expiresAtMs = now,
+        )
+        assertNull(ruleChangeAlert(row))
     }
 
     @Test

@@ -11,6 +11,7 @@ import androidx.room3.Transaction
 import androidx.room3.Update
 import com.example.myexodus.data.db.ProtectedPackageException
 import com.example.myexodus.data.db.SchemaConstraints
+import com.example.myexodus.data.db.entity.PartnerEventJournal
 import com.example.myexodus.data.db.entity.RestrictionRule
 import kotlinx.coroutines.flow.Flow
 
@@ -56,23 +57,43 @@ abstract class RestrictionRuleDao {
     suspend fun update(rule: RestrictionRule) = translate { updateRaw(rule) }
 
     /** Blocking-core plan §6: rule write + PolicyVersion bump commit in one transaction;
-     *  any failure (constraint, Rule 4) rolls the bump back with the write. */
+     *  any failure (constraint, Rule 4) rolls the bump back with the write. Plan §2.1 req 3
+     *  adds the lifecycle journal rows to the same transaction — a failed journal insert
+     *  rolls the rule mutation back, so no partner-visible change can be silently lost. */
     @Transaction
-    open suspend fun insertAndBump(rule: RestrictionRule, versionDao: PolicyVersionDao) {
+    open suspend fun insertAndBump(
+        rule: RestrictionRule,
+        versionDao: PolicyVersionDao,
+        journalDao: PartnerEventJournalDao,
+        journal: List<PartnerEventJournal>,
+    ) {
         insert(rule)
         versionDao.bump()
+        journal.forEach { journalDao.insert(it) }
     }
 
     @Transaction
-    open suspend fun updateAndBump(rule: RestrictionRule, versionDao: PolicyVersionDao) {
+    open suspend fun updateAndBump(
+        rule: RestrictionRule,
+        versionDao: PolicyVersionDao,
+        journalDao: PartnerEventJournalDao,
+        journal: List<PartnerEventJournal>,
+    ) {
         update(rule)
         versionDao.bump()
+        journal.forEach { journalDao.insert(it) }
     }
 
     @Transaction
-    open suspend fun deleteAndBump(rule: RestrictionRule, versionDao: PolicyVersionDao) {
+    open suspend fun deleteAndBump(
+        rule: RestrictionRule,
+        versionDao: PolicyVersionDao,
+        journalDao: PartnerEventJournalDao,
+        journal: List<PartnerEventJournal>,
+    ) {
         delete(rule)
         versionDao.bump()
+        journal.forEach { journalDao.insert(it) }
     }
 
     private suspend fun <T> translate(block: suspend () -> T): T = try {

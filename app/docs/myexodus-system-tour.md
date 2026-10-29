@@ -47,7 +47,7 @@ Root (`app/src/main/java/com/example/myexodus/`):
 | `accountability/state/` | Second encrypted DB (schema v14): enrollments, chain, outbox, processed events, epochs, unpair state | `AccountabilityDatabase.kt` |
 | `streaks/` | Habits, dual-clock streak evaluation, milestones (alarms + catch-up), anomaly log | `HabitRepository.kt`, `StreakTimer.kt`, `MilestoneAlerter.kt` |
 | `recovery/` | Recovery sessions, techniques, crisis resources, risk windows, mirror events | `RecoverySessionRepository.kt` |
-| `data/db/` | Main encrypted DB (schema v20): entities, DAOs, store factory, migrations | `AppRulesStore.kt`, `AppRulesStoreFactory.kt` |
+| `data/db/` | Main encrypted DB (schema v21): entities, DAOs, store factory, migrations | `AppRulesStore.kt`, `AppRulesStoreFactory.kt` |
 | `settings/` | Protection checks, Strict/Enhanced mode, setup state, widget settings | `ProtectionChecks.kt`, `StrictModeManager.kt` |
 | `widget/` | Glance widget, snapshot writer, action activities | `DesertDawnWidget.kt`, `ProtectionSnapshotWriter.kt` |
 | `insights/` | Seven-day local read model over the journals | `InsightsRepository.kt` |
@@ -166,21 +166,40 @@ This is the deepest subsystem. Read it in layers:
   uid rotation is diagnosed with five guards (ADR #125) — do not simplify them.
 
 ### 6.2 Event contract
-`accountability/serialization/EventPayload.kt` is the single contract: payload types
-`activity`, `deletion_request`, `sync_request`, `approval_request`, `approval_response` (+ plan
-progress), with activity types `streak_updated`, `relapse_recorded`, `milestone_reached`,
-`coaching_step_updated`, `motivational_message`. Wire **schema v2** adds habit label, ended days
-and milestone day; the reader accepts v1 and v2. Every outbound body goes through the minimizer —
-only consented facts leave the device.
+Two contracts ship side by side:
 
-**There is no event type for uninstall, permission revocation, rule changes, violations, or
-per-rule partner assignment.** Those alerts are the planned escalation feature (memory
-`project_partner_accountability_escalation`, OPD #32(iii)); do not claim they exist.
+- `accountability/serialization/EventPayload.kt` — the legacy envelope body (wire **schema v2**
+  with v1 read support): payload types `activity`, `deletion_request`, `sync_request`,
+  `approval_request`, `approval_response` (+ plan progress), with activity types
+  `streak_updated`, `relapse_recorded`, `milestone_reached`, `coaching_step_updated`,
+  `motivational_message`. Wire v2 adds habit label, ended days and milestone day.
+- `accountability/serialization/AccountabilityEventWire.kt` — the closed, versioned
+  accountability body (ADR #196): kinds `ACCOUNTABILITY_EVENT`, `MONITORING_STATUS`,
+  `GAP_MARKER`, `RULE_CONTROL`; categories `BLOCKED_APP_ATTEMPT`, `BLOCKED_DOMAIN_ATTEMPT`,
+  `MONITORING_PERMISSION_CHANGED`, `MONITORING_COMPONENT_UNAVAILABLE`,
+  `DEVICE_STATUS_CHANGED`, `RULE_CHANGED`. No free-text field exists except the UUID-format
+  `eventId`; unknown keys are rejected, so a package name, URL or app label cannot ride.
+
+Partner-visible **rule lifecycle** ships on `RULE_CONTROL` (ADR #226): a rule UUID plus one
+closed verb (`CREATED`, `ASSIGNED`, `UNASSIGNED`, `UPDATED`, `DISABLED`, `DELETED`) and an
+occurrence minute — never a target. Rows are journaled in the same Room transaction as the rule
+write and delivered only to the rule's assigned pair.
+
+**Still absent:** uninstall detection (`TARGET_APP_REMOVED`, plan req 17), backup-partner
+release (`BACKUP_DELIVERY_RELEASED`, req 14/15), violation-storm summaries (req 4/5), and
+daily streak summaries (req 18). Do not claim they exist; the remaining delta is recorded in
+plan Appendix D.4.
 
 ### 6.3 Consent and routing
 - Consent is a per-`(pair, habit)` matrix (`share_streak` ∧ the specific sharing flags in
   `pair_streak_sharing`), plus availability consent with a convergence marker
   (`availability_consent_pending`, schema v20). A message with no visible context is not sent.
+- `RULE_CONTROL` routing is **not** gated by those activity flags: assigning a partner to a rule
+  is the subject's own visibility choice for that route (plan Appendix D rows 21/22, ADR #226).
+  `dueRuleChangesForPair` is the only query that reads the rule journal, and the legacy
+  fan-out loop consumes monitoring categories only — an unassigned rule has no route and its
+  mutations stay local. There is no backup recipient yet (req 14), and no `UNSUPERVISED`
+  partner is ever notified on unpair (there is no eligible recipient).
 - Fan-out is per pair: the journal row is written once, then mirrored per enrollment; each pair
   has its own mailbox, sequence and chain. `MailboxMessageHandler`'s notify lambda is keyed by
   `pairId` and resolves that pair's partner display name, so N partners get N correctly-named

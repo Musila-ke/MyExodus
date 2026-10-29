@@ -55,6 +55,7 @@ import com.example.myexodus.accountability.monitoring.PartnerHeartbeatClient
 import com.example.myexodus.accountability.monitoring.StandbyBucket
 import com.example.myexodus.accountability.monitoring.parseHeartbeatReply
 import com.example.myexodus.accountability.monitoring.parsePartnerStatus
+import com.example.myexodus.accountability.rulecontrol.RuleControlReceiver
 import com.example.myexodus.blocking.EnforcementForegroundService
 import com.example.myexodus.accountability.plan.PartnerPlanReceiver
 import com.example.myexodus.accountability.plan.PartnerPlanRepository
@@ -737,6 +738,13 @@ object AccountabilityModule {
             monitoring = { pairId ->
                 storeFactory.open()?.partnerMonitoringSnapshotDao()?.byPair(pairId)
             },
+            // §8.4 RULE_CONTROL: the receiver's feed rows; 100 covers every live row (30-day
+            // retention, rule changes are infrequent) so the week filter in load() is exact.
+            ruleChanges = { pairId ->
+                storeFactory.open()?.partnerRuleChangeDao()
+                    ?.recent(pairId, System.currentTimeMillis(), 100)
+                    ?: emptyList()
+            },
             decoderFor = { enrollment ->
                 val cek = cekDerivation.deriveCek(
                     enrollment.pairId,
@@ -905,6 +913,11 @@ object AccountabilityModule {
         storeFactory: AppRulesStoreFactory,
     ): MonitoringSnapshotReceiver = MonitoringSnapshotReceiver(storeFactory)
 
+    @Provides @Singleton
+    fun provideRuleControlReceiver(
+        storeFactory: AppRulesStoreFactory,
+    ): RuleControlReceiver = RuleControlReceiver(storeFactory)
+
     /**
      * §7 item 10 receive pipeline: dedup (AD-10b), verify-then-decrypt, chain commit with the
      * processed marker in one transaction, AD-18b ack, generic notification (AD-11/NFR2).
@@ -941,6 +954,7 @@ object AccountabilityModule {
         activityReceiver: PartnerActivityReceiver,
         planReceiver: PartnerPlanReceiver,
         monitoringReceiver: MonitoringSnapshotReceiver,
+        ruleControlReceiver: RuleControlReceiver,
         enrollmentDao: EnrollmentDao,
     ): MailboxMessageHandler {
         val processedDao = db.processedEventDao()
@@ -1017,9 +1031,11 @@ object AccountabilityModule {
                 }
             },
             // Step 7 receive half: a monitoring snapshot is recipient-local state, not an
-            // alert — it never reaches the notification path.
+            // alert — it never reaches the notification path. Rule lifecycle bodies are the
+            // same shape: the pair's local feed row is the whole delivery.
             onAccountabilityEvent = { pairId, senderKeyId, event, _ ->
                 monitoringReceiver.onEvent(pairId, senderKeyId, event)
+                ruleControlReceiver.onEvent(pairId, event)
             },
         )
     }

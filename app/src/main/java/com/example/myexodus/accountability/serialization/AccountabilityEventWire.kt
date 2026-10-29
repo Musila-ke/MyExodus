@@ -22,6 +22,7 @@ enum class AccountabilityEventKind(val wire: String) {
     ACCOUNTABILITY_EVENT("ACCOUNTABILITY_EVENT"),
     MONITORING_STATUS("MONITORING_STATUS"),
     GAP_MARKER("GAP_MARKER"),
+    RULE_CONTROL("RULE_CONTROL"),
     ;
 
     companion object {
@@ -41,6 +42,7 @@ enum class AccountabilityEventCategory(val wire: String, val kind: Accountabilit
     MONITORING_COMPONENT_UNAVAILABLE("MONITORING_COMPONENT_UNAVAILABLE", AccountabilityEventKind.MONITORING_STATUS),
     DEVICE_STATUS_CHANGED("DEVICE_STATUS_CHANGED", AccountabilityEventKind.MONITORING_STATUS),
     GAP_MARKER("GAP_MARKER", AccountabilityEventKind.GAP_MARKER),
+    RULE_CHANGED("RULE_CHANGED", AccountabilityEventKind.RULE_CONTROL),
     ;
 
     companion object {
@@ -74,6 +76,21 @@ enum class OutboxAgeBucket(val wire: String) {
     }
 }
 
+/** Closed rule-lifecycle vocabulary; the rule id rides as a UUID, never as free text. */
+enum class RuleChange(val wire: String) {
+    CREATED("CREATED"),
+    ASSIGNED("ASSIGNED"),
+    UNASSIGNED("UNASSIGNED"),
+    UPDATED("UPDATED"),
+    DISABLED("DISABLED"),
+    DELETED("DELETED"),
+    ;
+
+    companion object {
+        fun fromWire(value: String): RuleChange? = entries.firstOrNull { it.wire == value }
+    }
+}
+
 /** Plan §8.4 sender-side states, mapped one-to-one by the Step 4 outbox. Never on the wire. */
 enum class EventDeliveryState {
     PENDING,
@@ -97,6 +114,8 @@ data class AccountabilityEvent(
     val latestRelationshipSequence: Long? = null,
     val missingSequenceStart: Long? = null,
     val missingSequenceEnd: Long? = null,
+    val ruleId: UUID? = null,
+    val ruleChange: RuleChange? = null,
 ) {
     val kind: AccountabilityEventKind = category.kind
 
@@ -108,8 +127,9 @@ data class AccountabilityEvent(
             AccountabilityEventKind.ACCOUNTABILITY_EVENT -> require(
                 monitoringState == null && outboxAgeBucket == null &&
                     latestRelationshipSequence == null &&
-                    missingSequenceStart == null && missingSequenceEnd == null,
-            ) { "accountability events carry no monitoring or gap fields" }
+                    missingSequenceStart == null && missingSequenceEnd == null &&
+                    ruleId == null && ruleChange == null,
+            ) { "accountability events carry no monitoring, gap, or rule fields" }
 
             AccountabilityEventKind.MONITORING_STATUS -> {
                 requireNotNull(monitoringState) { "monitoring snapshots need a state" }
@@ -121,6 +141,9 @@ data class AccountabilityEvent(
                 require(missingSequenceStart == null && missingSequenceEnd == null) {
                     "monitoring snapshots carry no gap range"
                 }
+                require(ruleId == null && ruleChange == null) {
+                    "monitoring snapshots carry no rule fields"
+                }
             }
 
             AccountabilityEventKind.GAP_MARKER -> {
@@ -129,8 +152,19 @@ data class AccountabilityEvent(
                 require(start >= 1 && end >= start) { "gap range is invalid" }
                 require(
                     monitoringState == null && outboxAgeBucket == null &&
-                        latestRelationshipSequence == null,
-                ) { "gap markers carry no monitoring fields" }
+                        latestRelationshipSequence == null &&
+                        ruleId == null && ruleChange == null,
+                ) { "gap markers carry no monitoring or rule fields" }
+            }
+
+            AccountabilityEventKind.RULE_CONTROL -> {
+                requireNotNull(ruleId) { "rule control events need a rule id" }
+                requireNotNull(ruleChange) { "rule control events need a change" }
+                require(
+                    monitoringState == null && outboxAgeBucket == null &&
+                        latestRelationshipSequence == null &&
+                        missingSequenceStart == null && missingSequenceEnd == null,
+                ) { "rule control events carry no monitoring or gap fields" }
             }
         }
     }
@@ -156,15 +190,21 @@ object AccountabilityEventWire {
     private const val K_LATEST_SEQUENCE = "ls"
     private const val K_MISSING_START = "gs"
     private const val K_MISSING_END = "ge"
+    private const val K_RULE_ID = "rid"
+    private const val K_RULE_CHANGE = "chg"
 
     private val ALL_KEYS = setOf(
         K_VERSION, K_EVENT_ID, K_SEQUENCE, K_KIND, K_CATEGORY, K_TIME,
         K_MONITORING_STATE, K_OUTBOX_AGE, K_LATEST_SEQUENCE, K_MISSING_START, K_MISSING_END,
+        K_RULE_ID, K_RULE_CHANGE,
     )
 
     fun newEventId(): String = UUID.randomUUID().toString()
 
     fun isEventId(value: String): Boolean = EVENT_ID.matches(value)
+
+    private fun canonicalUuidOrNull(value: String): UUID? =
+        if (EVENT_ID.matches(value)) UUID.fromString(value) else null
 
     /** Epoch millis → the coarse minute the wire carries. Floor, so the time never moves later. */
     fun minuteOf(epochMillis: Long): Long = Math.floorDiv(epochMillis, 60_000L)
@@ -204,6 +244,21 @@ object AccountabilityEventWire {
         )
     }
 
+    fun ruleControl(
+        eventId: String,
+        sequence: Long,
+        ruleId: UUID,
+        change: RuleChange,
+        occurredAtMillis: Long,
+    ): AccountabilityEvent = AccountabilityEvent(
+        eventId = eventId,
+        relationshipSequence = sequence,
+        category = AccountabilityEventCategory.RULE_CHANGED,
+        occurredAtMinute = minuteOf(occurredAtMillis),
+        ruleId = ruleId,
+        ruleChange = change,
+    )
+
     fun gap(
         eventId: String,
         sequence: Long,
@@ -233,6 +288,8 @@ object AccountabilityEventWire {
         event.latestRelationshipSequence?.let { entries += K_LATEST_SEQUENCE to CanonicalCbor.int(it) }
         event.missingSequenceStart?.let { entries += K_MISSING_START to CanonicalCbor.int(it) }
         event.missingSequenceEnd?.let { entries += K_MISSING_END to CanonicalCbor.int(it) }
+        event.ruleId?.let { entries += K_RULE_ID to CanonicalCbor.text(it.toString()) }
+        event.ruleChange?.let { entries += K_RULE_CHANGE to CanonicalCbor.text(it.wire) }
         return CanonicalCbor.encodeMap(entries)
     }
 
@@ -289,6 +346,16 @@ object AccountabilityEventWire {
         } else {
             null
         }
+        val ruleId = if (keys.contains(K_RULE_ID)) {
+            map.textOrNull(K_RULE_ID)?.let(::canonicalUuidOrNull) ?: return null
+        } else {
+            null
+        }
+        val ruleChange = if (keys.contains(K_RULE_CHANGE)) {
+            map.textOrNull(K_RULE_CHANGE)?.let(RuleChange::fromWire) ?: return null
+        } else {
+            null
+        }
 
         val expected = when (kind) {
             AccountabilityEventKind.ACCOUNTABILITY_EVENT -> {
@@ -308,6 +375,13 @@ object AccountabilityEventWire {
                     K_MISSING_START, K_MISSING_END,
                 )
             }
+
+            AccountabilityEventKind.RULE_CONTROL -> {
+                setOf(
+                    K_VERSION, K_EVENT_ID, K_SEQUENCE, K_KIND, K_CATEGORY, K_TIME,
+                    K_RULE_ID, K_RULE_CHANGE,
+                )
+            }
         }
         if (keys != expected) return null
 
@@ -322,6 +396,8 @@ object AccountabilityEventWire {
                 latestRelationshipSequence = latest,
                 missingSequenceStart = missingStart,
                 missingSequenceEnd = missingEnd,
+                ruleId = ruleId,
+                ruleChange = ruleChange,
             ).takeIf { it.kind == kind }
         } catch (e: IllegalArgumentException) {
             null

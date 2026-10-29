@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -25,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -48,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -71,6 +74,7 @@ import com.example.myexodus.ui.TimeField
 import com.example.myexodus.ui.formatDuration
 import com.example.myexodus.ui.formatTime
 import com.example.myexodus.ui.toggleDay
+import com.example.myexodus.ui.partner.ReachOutTarget
 import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.vpn.VpnLifecycle.WebsiteEngineBlocker
 import java.time.DayOfWeek
@@ -110,6 +114,9 @@ fun RuleEditorScreen(
     targetType: String,
     target: String?,
     existingRules: List<RestrictionRule>,
+    /** §2.1 req 1/2: the live, verified pairs this rule can be assigned to. Empty = nothing
+     *  to assign yet; the section then says where pairing happens instead of offering rows. */
+    partners: List<ReachOutTarget>,
     repository: RulesRepository,
     usageAccountingEngine: UsageAccountingEngine,
     platformUsage: PlatformUsageReader,
@@ -164,6 +171,10 @@ fun RuleEditorScreen(
     var days by rememberSaveable { mutableStateOf(initial?.activeDaysOfWeek ?: "1111111") }
     var timezone by rememberSaveable { mutableStateOf(initial?.timezone ?: deviceZone) }
     var expiresAt by rememberSaveable { mutableLongStateOf(initial?.blockExpiresAt ?: 0L) }
+    // Kept exactly as stored: an id whose pair departed stays selected-but-flagged
+    // (UNSUPERVISED) rather than being silently cleared by an unrelated edit's save.
+    var assignedPairId by rememberSaveable { mutableStateOf(initial?.assignedPairId) }
+    val departedAssignment = assignedPairId != null && partners.none { it.pairId == assignedPairId }
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<EditorError?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -312,6 +323,7 @@ fun RuleEditorScreen(
                     activeDaysOfWeek = fields.activeDaysOfWeek,
                     timezone = timezone,
                     blockExpiresAt = expiresAt,
+                    assignedPairId = assignedPairId,
                 )
                 if (initial == null) repository.insertRule(rule) else repository.updateRule(rule)
             }.onSuccess {
@@ -602,6 +614,53 @@ fun RuleEditorScreen(
             }
         }
 
+        // §2.1 req 1: exactly one assigned partner per rule, chosen where the rule is built.
+        // The choice is a pair id — validity (mutually accepted + verified keys) is the roster's
+        // own precondition, so this list never offers a pair that has not completed pairing.
+        SectionCard {
+            Text(
+                stringResource(R.string.editor_partner_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                stringResource(R.string.editor_partner_hint),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (partners.isEmpty() && assignedPairId == null) {
+                Text(
+                    stringResource(R.string.editor_partner_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                PartnerChoiceRow(
+                    title = stringResource(R.string.editor_partner_none),
+                    hint = stringResource(R.string.editor_partner_none_hint),
+                    selected = assignedPairId == null,
+                    onSelect = { assignedPairId = null },
+                )
+                partners.forEach { partner ->
+                    PartnerChoiceRow(
+                        title = partner.name,
+                        hint = stringResource(R.string.editor_partner_choice_hint),
+                        selected = assignedPairId == partner.pairId,
+                        onSelect = { assignedPairId = partner.pairId },
+                    )
+                }
+                if (departedAssignment) {
+                    // §2.1 req 23: the pair ended while this rule pointed at it. Tapping the
+                    // row is a no-op — the two exits are "No partner" above or a live partner.
+                    PartnerChoiceRow(
+                        title = stringResource(R.string.editor_partner_departed_title),
+                        hint = stringResource(R.string.editor_partner_departed_hint),
+                        selected = true,
+                        onSelect = {},
+                    )
+                }
+            }
+        }
+
         Button(
             onClick = { save() },
             enabled = !saving,
@@ -691,6 +750,40 @@ fun RuleEditorScreen(
                 TextButton(onClick = { confirmDelete = false }) { Text(stringResource(R.string.rules_cancel)) }
             },
         )
+    }
+}
+
+/** One assignee option: radio + name + what assigning means. The same selection grammar the
+ *  partner roster uses (#96), so "which partner is chosen" looks identical everywhere. */
+@Composable
+private fun PartnerChoiceRow(
+    title: String,
+    hint: String,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .padding(vertical = 4.dp),
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                hint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
