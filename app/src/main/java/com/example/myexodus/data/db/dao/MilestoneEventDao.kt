@@ -3,6 +3,7 @@ package com.example.myexodus.data.db.dao
 import androidx.room3.Dao
 import androidx.room3.Insert
 import androidx.room3.Query
+import androidx.room3.Update
 import com.example.myexodus.data.db.entity.MilestoneEvent
 
 @Dao
@@ -12,6 +13,13 @@ interface MilestoneEventDao {
 
     @Query("SELECT * FROM milestone_events WHERE streak_id = :streakId ORDER BY milestone_day")
     suspend fun getForStreak(streakId: String): List<MilestoneEvent>
+
+    /** Whole table for the guest import (account plan §6.3: read without mutating). */
+    @Query("SELECT * FROM milestone_events")
+    suspend fun getAll(): List<MilestoneEvent>
+
+    /** Merges the facts of a deduplicated streak into the row that already exists (§6.3.4). */
+    @Update suspend fun update(event: MilestoneEvent)
 
     /** Every milestone row of every streak the habit ever had — habit deletion. */
     @Query(

@@ -47,6 +47,8 @@ class GuestTransitionCoordinator @Inject constructor(
     private val auth: AuthCoordinator,
     private val journal: GuestTransitionJournal,
     private val api: GuestTransitionApi,
+    private val stager: GuestDataStager,
+    private val quarantine: GuestQuarantine,
 ) {
     private val _state = MutableStateFlow<GuestTransitionState>(GuestTransitionState.Idle)
     val state: StateFlow<GuestTransitionState> = _state.asStateFlow()
@@ -99,6 +101,12 @@ class GuestTransitionCoordinator @Inject constructor(
         // A prepared record is already bound to its intent server-side; the parameter only
         // applies to a record the server has not accepted yet.
         val chosen = if (record.prepared) record else record.copy(intent = intent).also(journal::save)
+        // §6.2.3: the encrypted snapshot exists before any network call, for both intents,
+        // while the guest session still owns the database. A failure refuses the switch.
+        if (!stager.stage(guest.uid, chosen.transitionId, chosen.intent)) {
+            fail(TransitionStep.PREPARE, TransitionFailure.QUARANTINE_FAILED, chosen.intent)
+            return@withLock
+        }
         try {
             prepareAndArm(chosen)
         } catch (e: GuestTransitionException) {
@@ -175,18 +183,44 @@ class GuestTransitionCoordinator @Inject constructor(
         _state.value = GuestTransitionState.Finalizing(record.intent)
         try {
             val outcome = api.finalize(record.transitionId, record.capability, record.intent)
-            journal.clear()
-            disarm()
-            _state.value = GuestTransitionState.Completed(record.intent, outcome.terminatedPairIds.size)
+            finishFinalized(record, targetUid, outcome.terminatedPairIds.size)
         } catch (e: GuestTransitionException) {
-            if (e.failure == TransitionFailure.REAUTH_REQUIRED) {
+            when (e.failure) {
                 // §8.4: an elapsed lease needs a fresh target authentication, not a cancel.
-                _state.value = GuestTransitionState.Prepared(record.intent)
-                auth.requireReauth(AccountOperation.GUEST_TRANSITION)
-            } else {
-                fail(TransitionStep.FINALIZE, e.failure, record.intent)
+                TransitionFailure.REAUTH_REQUIRED -> {
+                    _state.value = GuestTransitionState.Prepared(record.intent)
+                    auth.requireReauth(AccountOperation.GUEST_TRANSITION)
+                }
+                // The earlier call landed; only the local binding and the journal remain.
+                TransitionFailure.FINALIZED -> finishFinalized(record, targetUid, 0)
+                else -> fail(TransitionStep.FINALIZE, e.failure, record.intent)
             }
         }
+    }
+
+    /**
+     * §8.4 step 6: binding the staged copy to the target UID is what makes it importable.
+     * The journal survives until that binding is durable, so a binding retry replays the
+     * idempotent finalize rather than losing the only path to the guest's data.
+     */
+    private suspend fun finishFinalized(
+        record: GuestTransitionRecord,
+        targetUid: String,
+        terminatedPairs: Int,
+    ) {
+        when (record.intent) {
+            TransitionIntent.IMPORT ->
+                if (!quarantine.markFinalized(record.guestUid, record.transitionId, targetUid)) {
+                    fail(TransitionStep.FINALIZE, TransitionFailure.QUARANTINE_UNSAVED, record.intent)
+                    return
+                }
+            // §6.2.7: discard deletes the staged copy only after finalization succeeded.
+            TransitionIntent.DISCARD ->
+                quarantine.deleteFor(record.guestUid, record.transitionId)
+        }
+        journal.clear()
+        disarm()
+        _state.value = GuestTransitionState.Completed(record.intent, terminatedPairs)
     }
 
     private suspend fun restorePrepared() = gate.withLock {

@@ -19,6 +19,10 @@ interface RecoveryStreakDao {
     @Query("SELECT * FROM recovery_streak WHERE streak_id = :streakId")
     suspend fun getById(streakId: String): RecoveryStreak?
 
+    /** Whole table for the guest snapshot (account plan §6.3: read without mutating). */
+    @Query("SELECT * FROM recovery_streak")
+    suspend fun getAll(): List<RecoveryStreak>
+
     /** Habits with a live (non-relapsed) streak — boot reconciliation's work list (§8 Step 4). */
     @Query("SELECT DISTINCT habit_id FROM recovery_streak WHERE relapsed_at IS NULL")
     suspend fun activeHabitIds(): List<String>

@@ -15,15 +15,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Account plan §12.1 (step 9): the switch state machine — journal-before-call ordering,
- * idempotent replay, the allowance rule (a failed sign-in never revokes a prepared switch) and
- * finalization keyed to the target session.
+ * Account plan §12.1 (steps 9–11): the switch state machine — journal-before-call ordering,
+ * idempotent replay, the allowance rule (a failed sign-in never revokes a prepared switch),
+ * finalization keyed to the target session, and the quarantine staged before any network call
+ * and bound to the target only after the server accepted the switch (§6.2.3, §8.4).
  */
-private val guestUser =
-    AuthIdentity("guest-1", isAnonymous = true, email = null, emailVerified = false, providerIds = emptySet())
-private val memberUser =
-    AuthIdentity("member-1", isAnonymous = false, email = "user@example.com", emailVerified = true, providerIds = setOf("password"))
-
 @OptIn(ExperimentalCoroutinesApi::class)
 class GuestTransitionCoordinatorTest {
 
@@ -90,69 +86,14 @@ class GuestTransitionCoordinatorTest {
         }
     }
 
-    private class FakeAuthOps(initial: AuthIdentity?) : AuthOperations {
-        var identity: AuthIdentity? = initial
-        private val listeners = mutableListOf<(AuthIdentity?) -> Unit>()
-        var signInCalls = 0
-        var signInGoogleCalls = 0
-        var linkGoogleCalls = 0
-
-        fun become(next: AuthIdentity?) {
-            identity = next
-            listeners.toList().forEach { it(next) }
-        }
-
-        override fun currentIdentity(): AuthIdentity? = identity
-
-        override fun observeIdentity(onChange: (AuthIdentity?) -> Unit): () -> Unit {
-            listeners += onChange
-            return { listeners -= onChange }
-        }
-
-        override suspend fun createWithEmail(email: String, password: String): AuthIdentity =
-            throw UnsupportedOperationException()
-
-        override suspend fun signInWithEmail(email: String, password: String): AuthIdentity {
-            signInCalls++
-            return memberUser.copy(email = email).also { identity = it }
-        }
-
-        override suspend fun linkWithEmail(email: String, password: String): AuthIdentity =
-            throw UnsupportedOperationException()
-
-        override suspend fun signInWithGoogle(idToken: String): AuthIdentity {
-            signInGoogleCalls++
-            return memberUser.also { identity = it }
-        }
-
-        override suspend fun linkWithGoogle(idToken: String): AuthIdentity {
-            linkGoogleCalls++
-            return memberUser.also { identity = it }
-        }
-
-        override suspend fun sendVerificationEmail(): AuthIdentity =
-            throw UnsupportedOperationException()
-
-        override suspend fun sendPasswordReset(email: String) = Unit
-
-        override suspend fun reloadAndRefreshToken(): AuthIdentity =
-            identity ?: throw UnsupportedOperationException()
-
-        override suspend fun reauthenticateWithEmail(email: String, password: String) = Unit
-
-        override suspend fun reauthenticateWithGoogle(idToken: String) = Unit
-
-        override suspend fun signOut() {
-            identity = null
-        }
-    }
-
-    private class Harness(initial: AuthIdentity? = guestUser) {
+    private class Harness(initial: AuthIdentity? = accountGuestUser) {
         val journal = FakeJournal()
         val api = FakeApi()
         val ops = FakeAuthOps(initial)
         val auth = AuthCoordinator(ops)
-        val coordinator = GuestTransitionCoordinator(auth, journal, api)
+        val stager = FakeStager()
+        val quarantine = FakeQuarantine()
+        val coordinator = GuestTransitionCoordinator(auth, journal, api, stager, quarantine)
     }
 
     /** Coroutines-test 1.11 never runs `backgroundScope` work under `advanceUntilIdle`; the
@@ -274,7 +215,7 @@ class GuestTransitionCoordinatorTest {
         h.journal.record = preparedRecord()
         h.coordinator.attach(switchScope())
 
-        h.ops.become(memberUser)
+        h.ops.become(accountMemberUser)
         advanceUntilIdle()
 
         assertEquals(1, h.api.finalizeCalls)
@@ -293,7 +234,7 @@ class GuestTransitionCoordinatorTest {
         h.api.finalizeFailure = TransitionFailure.NETWORK
         h.coordinator.attach(switchScope())
 
-        h.ops.become(memberUser)
+        h.ops.become(accountMemberUser)
         advanceUntilIdle()
         val failed = h.coordinator.state.value as GuestTransitionState.Failed
         assertEquals(TransitionStep.FINALIZE, failed.step)
@@ -313,7 +254,7 @@ class GuestTransitionCoordinatorTest {
         h.api.finalizeFailure = TransitionFailure.REAUTH_REQUIRED
         h.coordinator.attach(switchScope())
 
-        h.ops.become(memberUser)
+        h.ops.become(accountMemberUser)
         advanceUntilIdle()
 
         assertEquals(
@@ -391,5 +332,108 @@ class GuestTransitionCoordinatorTest {
         assertEquals(GuestTransitionState.Prepared(TransitionIntent.IMPORT), h.coordinator.state.value)
         h.auth.signInWithEmail("user@example.com", "secret1")
         assertTrue(h.auth.state.value is AuthState.PersistentActive)
+    }
+
+    @Test
+    fun start_stagesTheEncryptedSnapshotBeforeTheNetworkCall_forBothIntents() = runTest {
+        val h = Harness()
+        var stagedAtCall = -1
+        h.api.onPrepare = { stagedAtCall = h.stager.calls.size }
+
+        h.coordinator.start(TransitionIntent.DISCARD)
+
+        assertEquals("§6.2.3: the staged copy exists before the server call", 1, stagedAtCall)
+        assertEquals(
+            Triple("guest-1", h.journal.record!!.transitionId, TransitionIntent.DISCARD),
+            h.stager.calls.single(),
+        )
+
+        h.journal.record = preparedRecord(intent = TransitionIntent.IMPORT)
+        h.api.prepareStates.addLast(SERVER_PREPARED)
+        h.coordinator.start(TransitionIntent.IMPORT)
+        assertEquals(TransitionIntent.IMPORT, h.stager.calls.last().third)
+    }
+
+    @Test
+    fun aFailedStaging_refusesTheSwitch_withoutCallingOrArming() = runTest {
+        val h = Harness()
+        h.stager.result = false
+
+        h.coordinator.start(TransitionIntent.IMPORT)
+
+        val failed = h.coordinator.state.value as GuestTransitionState.Failed
+        assertEquals(TransitionStep.PREPARE, failed.step)
+        assertEquals(TransitionFailure.QUARANTINE_FAILED, failed.failure)
+        assertTrue(h.api.prepareCalls.isEmpty())
+        h.auth.signInWithEmail("user@example.com", "secret1")
+        assertEquals(
+            AuthState.AuthError(AccountOperation.SIGN_IN, AuthFailure.TRANSITION_REQUIRED),
+            h.auth.state.value,
+        )
+    }
+
+    @Test
+    fun importFinalize_bindsTheQuarantineToTheTargetAndKeepsIt() = runTest {
+        val h = Harness()
+        val record = preparedRecord(intent = TransitionIntent.IMPORT)
+        h.journal.record = record
+        h.coordinator.attach(switchScope())
+
+        h.ops.become(accountMemberUser)
+        advanceUntilIdle()
+
+        assertEquals(listOf(record.transitionId to "member-1"), h.quarantine.bound)
+        assertNull(h.journal.record)
+        assertEquals(GuestTransitionState.Completed(TransitionIntent.IMPORT, 2), h.coordinator.state.value)
+        assertTrue("import intent never deletes the staged copy here", h.quarantine.deleted.isEmpty())
+    }
+
+    @Test
+    fun aFailedQuarantineBinding_keepsTheJournal_andRetriesIdempotently() = runTest {
+        val h = Harness()
+        val record = preparedRecord(intent = TransitionIntent.IMPORT, id = "c".repeat(22))
+        h.journal.record = record
+        h.quarantine.markResult = false
+        h.coordinator.attach(switchScope())
+
+        h.ops.become(accountMemberUser)
+        advanceUntilIdle()
+
+        val failed = h.coordinator.state.value as GuestTransitionState.Failed
+        assertEquals(TransitionStep.FINALIZE, failed.step)
+        assertEquals(TransitionFailure.QUARANTINE_UNSAVED, failed.failure)
+        assertNotNull("the journal must survive so the binding can retry", h.journal.record)
+
+        h.quarantine.markResult = true
+        // The replay of an already-accepted finalize is a success, not a second failure.
+        h.api.finalizeFailure = TransitionFailure.FINALIZED
+        h.coordinator.resumeFinalize()
+
+        assertNull(h.journal.record)
+        assertEquals(record.transitionId, h.quarantine.bound.last().first)
+        assertEquals("member-1", h.quarantine.bound.last().second)
+        assertEquals(GuestTransitionState.Completed(TransitionIntent.IMPORT, 0), h.coordinator.state.value)
+    }
+
+    @Test
+    fun discardFinalize_deletesTheStagedCopyOnlyAfterTheServerAccepted() = runTest {
+        val h = Harness()
+        val record = preparedRecord(intent = TransitionIntent.DISCARD)
+        h.journal.record = record
+        h.api.finalizeFailure = TransitionFailure.NETWORK
+        h.coordinator.attach(switchScope())
+
+        h.ops.become(accountMemberUser)
+        advanceUntilIdle()
+
+        assertTrue("a failed finalization must not delete the staged copy", h.quarantine.deleted.isEmpty())
+        assertNotNull(h.journal.record)
+
+        h.coordinator.resumeFinalize()
+
+        assertEquals(record.guestUid to record.transitionId, h.quarantine.deleted.single())
+        assertTrue("discard never binds a copy for import", h.quarantine.bound.isEmpty())
+        assertNull(h.journal.record)
+        assertEquals(GuestTransitionState.Completed(TransitionIntent.DISCARD, 2), h.coordinator.state.value)
     }
 }

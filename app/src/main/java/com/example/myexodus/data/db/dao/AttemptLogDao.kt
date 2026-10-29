@@ -35,6 +35,10 @@ interface AttemptLogDao {
     @Query("SELECT * FROM attempt_log ORDER BY occurred_at_epoch_millis DESC, id DESC LIMIT :limit")
     suspend fun recent(limit: Int): List<AttemptLog>
 
+    /** Whole table for the guest snapshot (account plan §6.3: read without mutating). */
+    @Query("SELECT * FROM attempt_log")
+    suspend fun getAll(): List<AttemptLog>
+
     /**
      * §14 reconcile: attempts not yet mirrored to THIS pair, oldest first (ADR #111). The
      * link table — not `event_sequence` — is what the pending check reads, so one pair's

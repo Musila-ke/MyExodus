@@ -1,6 +1,7 @@
 package com.example.myexodus.ui.settings
 
 import android.util.Patterns
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -46,7 +48,9 @@ import com.example.myexodus.account.AuthProvider
 import com.example.myexodus.account.AuthState
 import com.example.myexodus.account.CloudAccess
 import com.example.myexodus.account.GoogleCredentialOutcome
+import com.example.myexodus.account.GuestImportState
 import com.example.myexodus.account.GuestTransitionState
+import com.example.myexodus.account.ImportFailure
 import com.example.myexodus.account.TransitionFailure
 import com.example.myexodus.account.TransitionIntent
 import com.example.myexodus.account.TransitionStep
@@ -70,6 +74,7 @@ internal fun AccountPane(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val transition by viewModel.transition.collectAsStateWithLifecycle()
+    val importState by viewModel.importState.collectAsStateWithLifecycle()
     val cloudAccess by viewModel.cloudAccess.collectAsStateWithLifecycle()
     val isGuest = state is AuthState.GuestActive
     val context = LocalContext.current
@@ -81,7 +86,13 @@ internal fun AccountPane(
     // A sign-in the disclosure dialog interrupted; resumes once the server confirms the switch.
     var pendingSwitch by remember { mutableStateOf<PendingSwitch?>(null) }
     var showSwitchDialog by remember { mutableStateOf(false) }
+    var showDeleteQuarantine by remember { mutableStateOf(false) }
 
+    LaunchedEffect(Unit) {
+        // The app-level collector covers a closed pane; this covers a pane opened after the
+        // transition completed while the collector's refresh found nothing bound yet.
+        viewModel.refreshImport()
+    }
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
             if (event.messageRes() != null) {
@@ -149,6 +160,15 @@ internal fun AccountPane(
                 onRetry = viewModel::retryTransition,
                 onCancelSwitch = viewModel::cancelTransition,
                 onDismiss = viewModel::dismissTransition,
+            )
+
+            ImportCard(
+                state = importState,
+                onPreview = viewModel::previewImport,
+                onConfirm = viewModel::confirmImport,
+                onDelete = { showDeleteQuarantine = true },
+                onRetry = viewModel::retryImport,
+                onDismiss = viewModel::dismissImport,
             )
 
             when (val current = state) {
@@ -240,6 +260,32 @@ internal fun AccountPane(
                             pendingSwitch = null
                         },
                     ) { Text(stringResource(R.string.account_transition_stay_guest)) }
+                }
+            },
+        )
+    }
+
+    if (showDeleteQuarantine) {
+        AlertDialog(
+            onDismissRequest = { showDeleteQuarantine = false },
+            title = { Text(stringResource(R.string.account_import_delete_title)) },
+            text = { Text(stringResource(R.string.account_import_delete_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteQuarantine = false
+                        viewModel.deleteQuarantine()
+                    },
+                ) {
+                    Text(
+                        stringResource(R.string.account_import_delete),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteQuarantine = false }) {
+                    Text(stringResource(R.string.account_import_cancel))
                 }
             },
         )
@@ -659,6 +705,164 @@ private fun TransitionCard(
     }
 }
 
+/**
+ * Account plan §8.4: the post-switch import. The counts are a dry run; nothing is written
+ * until Confirm, and the seven-day replay window is disclosed before the operation.
+ */
+@Composable
+private fun ImportCard(
+    state: GuestImportState,
+    onPreview: (Boolean) -> Unit,
+    onConfirm: () -> Unit,
+    onDelete: () -> Unit,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    fun day(ms: Long): String =
+        android.text.format.DateFormat.getMediumDateFormat(context)
+            .format(java.util.Date(ms))
+
+    when (state) {
+        GuestImportState.Idle -> Unit
+        GuestImportState.Importing ->
+            WorkingCard(stringResource(R.string.account_import_working))
+
+        is GuestImportState.Confirming -> Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(R.string.account_import_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    stringResource(R.string.account_import_body),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    stringResource(
+                        R.string.account_import_counts,
+                        state.summary.inserted,
+                        state.summary.deduplicated,
+                        state.summary.updated,
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (state.conflicts.isNotEmpty()) {
+                    Text(
+                        stringResource(
+                            R.string.account_import_conflicts,
+                            state.conflicts.sumOf { it.count },
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Text(
+                    stringResource(R.string.account_import_retention, day(state.purgeAtMs)),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (state.portablePreferencesAvailable) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable {
+                            onPreview(!state.portablePreferences)
+                        },
+                    ) {
+                        Checkbox(
+                            checked = state.portablePreferences,
+                            onCheckedChange = null,
+                        )
+                        Text(
+                            stringResource(R.string.account_import_portable),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onConfirm, enabled = state.conflicts.isEmpty()) {
+                        Text(stringResource(R.string.account_import_confirm))
+                    }
+                    TextButton(onClick = onDelete) {
+                        Text(
+                            stringResource(R.string.account_import_delete),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+        }
+
+        is GuestImportState.Imported -> Surface(
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(R.string.account_import_done_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    stringResource(
+                        R.string.account_import_done_body,
+                        state.summary.inserted,
+                        state.summary.deduplicated,
+                        day(state.purgeAtMs),
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = onDelete) {
+                        Text(stringResource(R.string.account_import_delete))
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Text(stringResource(R.string.account_dismiss))
+                    }
+                }
+            }
+        }
+
+        is GuestImportState.Failed -> Surface(
+            color = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(importFailureRes(state.failure)),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // §9: an unreadable copy is preserved, not retried and never deleted here.
+                    if (state.failure != ImportFailure.UNREADABLE) {
+                        Button(onClick = onRetry) {
+                            Text(stringResource(R.string.account_import_retry))
+                        }
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Text(stringResource(R.string.account_dismiss))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** §8.4/§9: what happened and what the user can do; no storage internals. */
+internal fun importFailureRes(failure: ImportFailure): Int = when (failure) {
+    ImportFailure.UNREADABLE -> R.string.account_import_error_unreadable
+    ImportFailure.STORE_UNAVAILABLE -> R.string.account_import_error_store
+    ImportFailure.IMPORT_FAILED -> R.string.account_import_error_generic
+}
+
 @Composable
 private fun ErrorCard(
     failure: AuthFailure,
@@ -772,6 +976,8 @@ internal fun transitionFailureRes(failure: TransitionFailure): Int = when (failu
     TransitionFailure.ACCOUNT_DELETING -> R.string.account_transition_error_deleting
     TransitionFailure.INTENT_MISMATCH -> R.string.account_transition_error_intent
     TransitionFailure.JOURNAL_UNREADABLE -> R.string.account_transition_error_journal
+    TransitionFailure.QUARANTINE_FAILED -> R.string.account_transition_error_quarantine
+    TransitionFailure.QUARANTINE_UNSAVED -> R.string.account_transition_error_quarantine_bind
     TransitionFailure.ALREADY_PREPARED,
     TransitionFailure.NOT_FOUND,
     TransitionFailure.ANONYMOUS_ONLY,

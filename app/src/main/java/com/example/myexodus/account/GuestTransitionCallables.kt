@@ -44,6 +44,10 @@ enum class TransitionFailure {
     SECURITY_CHECK_FAILED,
     /** The encrypted journal exists but cannot be read — the capability is unrecoverable here. */
     JOURNAL_UNREADABLE,
+    /** §6.2.3: the guest snapshot could not be encrypted and staged, so the switch is refused. */
+    QUARANTINE_FAILED,
+    /** Finalization succeeded but the staged copy could not be bound to the target UID. */
+    QUARANTINE_UNSAVED,
     UNKNOWN,
 }
 

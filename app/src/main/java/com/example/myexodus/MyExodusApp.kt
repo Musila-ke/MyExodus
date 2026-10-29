@@ -17,6 +17,7 @@ import androidx.work.Configuration
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.example.myexodus.account.GuestImportCoordinator
 import com.example.myexodus.account.GuestTransitionCoordinator
 import com.example.myexodus.account.LegacyCachePurge
 import com.example.myexodus.account.LocalSessionManager
@@ -86,6 +87,9 @@ class MyExodusApp : Application(), Configuration.Provider {
     // Account plan §6.2: a prepared guest transition finalizes as soon as the target session
     // exists, even if the Account pane was closed or the process restarted mid-flow.
     @Inject lateinit var guestTransitionCoordinator: GuestTransitionCoordinator
+    // Account plan §8.4: the post-switch import previews itself as soon as a bound quarantine
+    // exists, so the import is never silently skipped after a restart.
+    @Inject lateinit var guestImportCoordinator: GuestImportCoordinator
     // Account plan §7 step 10 / §12.4: the one session fence every remote operation consults.
     @Inject lateinit var localSessionManager: LocalSessionManager
 
@@ -144,6 +148,7 @@ class MyExodusApp : Application(), Configuration.Provider {
         // Account plan §6.2/§8.4: app-scoped, so finalization survives a closed pane and a
         // process death between target sign-in and finalize (the encrypted journal persists).
         guestTransitionCoordinator.attach(applicationScope)
+        guestImportCoordinator.attach(applicationScope)
         // Plan §8 Step 16's sync_status channel: debug-only (never user-visible in release).
         PartnerNotifications.ensureSyncStatusChannel(this)
         // SOS §8.14: the partner_nudges_v3 channel exists from startup — the §8.12 pushEligible

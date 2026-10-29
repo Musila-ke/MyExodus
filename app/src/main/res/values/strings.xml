@@ -1354,4 +1354,26 @@
         <item quantity="one">%1$d partner connection from guest mode ended.</item>
         <item quantity="other">%1$d partner connections from guest mode ended.</item>
     </plurals>
+
+    <!-- Account plan §8.4/§6.3: the encrypted guest snapshot and its post-switch import. -->
+    <string name="account_transition_error_quarantine">Your guest data couldn’t be secured on this device, so the switch didn’t start and nothing was changed. Try again; if it keeps failing, restart the app.</string>
+    <string name="account_transition_error_quarantine_bind">The switch finished, but this device couldn’t record where to import your guest data. Tap “Try again” to finish — don’t sign out.</string>
+    <string name="account_import_title">Import your guest data</string>
+    <string name="account_import_body">Your guest data is stored encrypted on this device. Review the counts and confirm — nothing is added until you do.</string>
+    <string name="account_import_counts">To add: %1$d · Already here: %2$d · Updated rows: %3$d</string>
+    <string name="account_import_conflicts">%1$d records break data rules and can’t be imported. Nothing has been changed — you can keep this copy or delete it.</string>
+    <string name="account_import_retention">A copy stays on this device for 7 days (until %1$s) so the import can be replayed. Replaying never restores the guest account or its partners.</string>
+    <string name="account_import_portable">Also import recovery friction and override cooldown</string>
+    <string name="account_import_confirm">Import data</string>
+    <string name="account_import_working">Importing your data…</string>
+    <string name="account_import_done_title">Guest data imported</string>
+    <string name="account_import_done_body">Added %1$d records; %2$d were already here. The encrypted copy stays until %3$s — deleting it now is permanent.</string>
+    <string name="account_import_delete">Delete quarantined data now</string>
+    <string name="account_import_delete_title">Delete quarantined guest data?</string>
+    <string name="account_import_delete_body">The encrypted copy on this device is permanently deleted. If it hasn’t been imported, that data is lost. This cannot be undone.</string>
+    <string name="account_import_cancel">Cancel</string>
+    <string name="account_import_retry">Retry import</string>
+    <string name="account_import_error_unreadable">The stored copy of your guest data can’t be opened, so it wasn’t imported. It has been left untouched on this device.</string>
+    <string name="account_import_error_store">Your local database is unavailable right now, so nothing was imported. Try again.</string>
+    <string name="account_import_error_generic">The import didn’t finish and nothing was changed. Try again.</string>
 </resources>

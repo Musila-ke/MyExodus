@@ -11,9 +11,17 @@ import com.example.myexodus.account.AuthOperations
 import com.example.myexodus.account.DatabaseScopeSwitch
 import com.example.myexodus.account.FirebaseAuthOperations
 import com.example.myexodus.account.FirestoreSessionCloud
+import com.example.myexodus.account.AuthCoordinator
+import com.example.myexodus.account.GuestDataStager
+import com.example.myexodus.account.GuestImportCoordinator
+import com.example.myexodus.account.GuestImportPlanner
+import com.example.myexodus.account.GuestTransitionCoordinator
+import com.example.myexodus.account.GuestQuarantine
+import com.example.myexodus.account.GuestQuarantineStager
 import com.example.myexodus.account.GuestTransitionApi
 import com.example.myexodus.account.GuestTransitionCallables
 import com.example.myexodus.account.GuestTransitionJournal
+import com.example.myexodus.account.KeystoreGuestQuarantine
 import com.example.myexodus.account.KeystoreGuestTransitionJournal
 import com.example.myexodus.account.LocalSessionManager
 import com.example.myexodus.account.PrefsSessionStore
@@ -28,6 +36,8 @@ import com.example.myexodus.accountability.sync.FirestoreSchema
 import com.example.myexodus.accountability.sync.PARTNER_SYNC_WORK_NAME
 import com.example.myexodus.accountability.sync.PushInstallationRegistrar
 import com.example.myexodus.accountability.sync.awaitReportingDenial
+import com.example.myexodus.blocking.RulesRepository
+import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.LocalDatabaseMigration
 import com.example.myexodus.telemetry.CrashReporting
 import com.google.firebase.firestore.FirebaseFirestore
@@ -57,6 +67,35 @@ object AccountModule {
     @Singleton
     fun provideGuestTransitionApi(functions: FirebaseFunctions): GuestTransitionApi =
         GuestTransitionCallables(functions)
+
+    /** §6.2.3/§8.4: the encrypted guest snapshot + import journal, shared by stager and importer. */
+    @Provides
+    @Singleton
+    fun provideGuestQuarantine(@ApplicationContext context: Context): GuestQuarantine =
+        KeystoreGuestQuarantine(context)
+
+    @Provides
+    @Singleton
+    fun provideGuestDataStager(
+        storeFactory: AppRulesStoreFactory,
+        quarantine: GuestQuarantine,
+    ): GuestDataStager = GuestQuarantineStager(storeFactory, quarantine)
+
+    @Provides
+    @Singleton
+    fun provideGuestImportPlanner(): GuestImportPlanner = GuestImportPlanner()
+
+    @Provides
+    @Singleton
+    fun provideGuestImportCoordinator(
+        auth: AuthCoordinator,
+        transition: GuestTransitionCoordinator,
+        storeFactory: AppRulesStoreFactory,
+        quarantine: GuestQuarantine,
+        rules: RulesRepository,
+        planner: GuestImportPlanner,
+    ): GuestImportCoordinator =
+        GuestImportCoordinator(auth, transition, storeFactory, quarantine, rules, planner)
 
     @Provides
     @Singleton

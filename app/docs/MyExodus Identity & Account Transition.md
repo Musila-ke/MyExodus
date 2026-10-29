@@ -25,8 +25,12 @@ JVM- and emulator-verified, and device-run on the X6532. Step 8 (auth core, ADR 
 implemented and JVM-verified: `AuthCoordinator` + Credential Manager Google + email/password,
 verification and reauthentication, surfaced as Settings → Account. Step 9 (guest transition,
 ADR #235) and step 10 (session fencing / Firestore–FCM teardown / one-time legacy purge,
-ADR #236) are implemented, JVM-verified and device-run on the API-37 AVD. Step 11
-(quarantine + additive guest import) remains.
+ADR #236) are implemented, JVM-verified and device-run on the API-37 AVD. Step 11 (encrypted
+quarantine + additive logical guest import with a crash-safe journal, ADR #237) is implemented,
+JVM-verified (2,187 tests) and device-run on the API-37 AVD (IMPORT and DISCARD both proven
+end-to-end; evidence in ADR #237). Release 1's remaining work is
+Release 2 (backup/restore), whose §6.2.8 import-vs-backup conflict machinery is recorded in
+ADR #237 as an explicit obligation for #38/#42/#37.
 
 ---
 
@@ -301,7 +305,21 @@ with a reason. "Where" names the primary surfaces, not every call site.
   meters/ledger, VPN/DNS state, widget snapshots, pairing keys, enrollments/chains, outbox and
   nudge inbox. The open engineering piece is **key recovery** (passphrase-derived KEK vs
   recovery-phrase escrow, the never-built Req 28 `recovery_escrow_key` intent); no backup ships
-  until that is ruled. Runtime usage accounting stays device-local.
+  until that is ruled. Runtime usage accounting stays device-local. **Guest→account import
+  (Release 1 step 11, ADR #237)** applies the same logical-data scope: the encrypted local
+  quarantine stores habits, streaks, milestones, attempts, sessions, coaching, risk windows and
+  the recovery policy — never blocks, usage, pairing state or the profile row — and the
+  additive import recomputes habit aggregates from canonical rows instead of carrying the
+  cached values.
+  **IMPLEMENTED (R1.11, 2026-10-30, ADR #237):** the Account pane's Import card shows the
+  dry-run counts (`To add / Already here / Updated rows`), the portable-preferences opt-in
+  (only when the policies differ), `Import data`, `Retry import`, `Delete quarantined data now`
+  behind its own confirmation, and an Imported card naming the seven-day deletion date; the
+  import applies as one transaction with natural-key replay, and DISCARD deletes the staged copy
+  only after finalization succeeds. The imported habit adopts the guest's selection only when
+  the target has no selected habit, so a fresh target shows the import on Home without ever
+  overriding an existing choice. Device-proven both branches; the observed uids/hashes are
+  recorded in ADR #237.
 - **G6. Migration safety.** The link-upgrade must not touch Room; the DB version does not change.
 - **G7. UID-scoped database paths — IMPLEMENTED (Release 1 step 7, ADR #233).**
   `LocalDatabaseMigration` copies `myexodus_rules.db`, `myexodus_accountability.db` and
@@ -309,10 +327,10 @@ with a reason. "Where" names the primary surfaces, not every call site.
   commits a journal (`scope_uid_hash`) that makes the operation idempotent and crash-safe; the
   legacy files survive as the rollback copy for seven days. Names derive only from a SHA-256 of
   the uid — never from backup/UI input — and a different current identity never inherits a
-  stored scope (ADR #125 rotation keeps this install's data). What remains for the account
-  transition itself (steps 10–11; the step-9 prepare/finalize/cancel work is ADR #235): switching
-  the *active* scope on sign-in/sign-out, which is a call into this class, and the cloud-restore
-  offer on keystore failure (Release 2, G5).
+  stored scope (ADR #125 rotation keeps this install's data). The account transition itself is
+  now complete: step 9 prepare/finalize/cancel (ADR #235), step 10 active-scope switching and
+  session fencing (ADR #236), and step 11 quarantine/import (ADR #237). The cloud-restore offer
+  on keystore failure remains a Release 2 (G5) item.
 
 ### H. UX and onboarding
 - **H1. First-run identity choice** (continue anonymously vs create/sign in), with what an account

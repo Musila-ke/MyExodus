@@ -10,6 +10,8 @@ import com.example.myexodus.account.AuthEvent
 import com.example.myexodus.account.AuthState
 import com.example.myexodus.account.GoogleCredentialOutcome
 import com.example.myexodus.account.GoogleCredentialProvider
+import com.example.myexodus.account.GuestImportCoordinator
+import com.example.myexodus.account.GuestImportState
 import com.example.myexodus.account.GuestTransitionCoordinator
 import com.example.myexodus.account.CloudAccess
 import com.example.myexodus.account.GuestTransitionState
@@ -35,6 +37,7 @@ import kotlinx.coroutines.launch
 class AccountViewModel @Inject constructor(
     private val coordinator: AuthCoordinator,
     private val guestTransition: GuestTransitionCoordinator,
+    private val guestImport: GuestImportCoordinator,
     private val functions: FirebaseFunctions,
     private val sessions: LocalSessionManager,
 ) : ViewModel() {
@@ -42,6 +45,7 @@ class AccountViewModel @Inject constructor(
     val state: StateFlow<AuthState> = coordinator.state
     val events: Flow<AuthEvent> = coordinator.events
     val transition: StateFlow<GuestTransitionState> = guestTransition.state
+    val importState: StateFlow<GuestImportState> = guestImport.state
 
     /** Plan §9: READY unless the one-time legacy-cache purge failed this launch. */
     val cloudAccess: StateFlow<CloudAccess> = sessions.cloudAccess
@@ -104,6 +108,21 @@ class AccountViewModel @Inject constructor(
     }
 
     fun dismissTransition() = guestTransition.dismiss()
+
+    /** Fresh dry run whenever the pane opens; the app-level collector covers closed panes. */
+    fun refreshImport() = viewModelScope.launch { guestImport.refresh() }
+
+    fun previewImport(includePortablePreferences: Boolean) = viewModelScope.launch {
+        guestImport.preview(includePortablePreferences)
+    }
+
+    fun confirmImport() = viewModelScope.launch { guestImport.confirm() }
+
+    fun retryImport() = viewModelScope.launch { guestImport.refresh() }
+
+    fun deleteQuarantine() = viewModelScope.launch { guestImport.deleteQuarantine() }
+
+    fun dismissImport() = guestImport.dismiss()
 
     fun sendVerificationEmail() = viewModelScope.launch { coordinator.sendVerificationEmail() }
 

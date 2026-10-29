@@ -18,6 +18,10 @@ interface RecoverySessionDao {
     @Query("SELECT * FROM recovery_session WHERE id = :id")
     suspend fun byId(id: String): RecoverySession?
 
+    /** Whole table for the guest snapshot (account plan §6.3: read without mutating). */
+    @Query("SELECT * FROM recovery_session")
+    suspend fun getAll(): List<RecoverySession>
+
     @Query(
         "SELECT * FROM recovery_session ORDER BY started_at_epoch_ms DESC " +
             "LIMIT :limit OFFSET :offset",

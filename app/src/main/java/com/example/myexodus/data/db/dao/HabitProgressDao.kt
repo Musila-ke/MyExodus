@@ -41,6 +41,10 @@ interface HabitProgressDao {
     @Query("SELECT * FROM habit_progress WHERE profile_id = :profileId")
     fun observeByProfile(profileId: String): Flow<List<HabitProgress>>
 
+    /** Whole table for the guest snapshot (account plan §6.3: read without mutating). */
+    @Query("SELECT * FROM habit_progress")
+    suspend fun getAll(): List<HabitProgress>
+
     /** All habits of a profile, deterministic display order (multi-habit switcher). */
     @Query(
         "SELECT * FROM habit_progress WHERE profile_id = :profileId " +
