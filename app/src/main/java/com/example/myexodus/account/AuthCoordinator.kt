@@ -24,6 +24,9 @@ import kotlinx.coroutines.flow.receiveAsFlow
 @Singleton
 class AuthCoordinator @Inject constructor(
     private val operations: AuthOperations,
+    /** Plan §7 step 10/§8.7: the local teardown every identity change runs around its credential
+     *  call. The default keeps the coordinator's own state machine testable without a session. */
+    private val sessions: SessionTransitions = SessionTransitions.Unfenced,
 ) {
     private val _state = MutableStateFlow<AuthState>(AuthState.Initializing)
     val state: StateFlow<AuthState> = _state.asStateFlow()
@@ -69,6 +72,7 @@ class AuthCoordinator @Inject constructor(
      * a signed-out device creates the account directly.
      */
     suspend fun createAccount(email: String, password: String) = operate(AccountOperation.CREATE_ACCOUNT) {
+        requireCloudReady()
         val identity = when {
             operations.currentIdentity() == null -> operations.createWithEmail(email.trim(), password)
             operations.currentIdentity()?.isAnonymous == true -> operations.linkWithEmail(email.trim(), password)
@@ -82,7 +86,16 @@ class AuthCoordinator @Inject constructor(
     /** Sign in to an existing account. Refused from a guest unless a transition is prepared. */
     suspend fun signInWithEmail(email: String, password: String) = operate(AccountOperation.SIGN_IN) {
         requireSwitchPermitted()
-        val identity = operations.signInWithEmail(email.trim(), password)
+        requireCloudReady()
+        // §8.7: a guest leaving for an existing account tears the old session down first; a
+        // signed-out device has no session to tear down.
+        val switching = operations.currentIdentity()?.isAnonymous == true
+        if (switching) startTransition(signOut = false)
+        val identity = if (switching) {
+            settleTransition { operations.signInWithEmail(email.trim(), password) }
+        } else {
+            operations.signInWithEmail(email.trim(), password)
+        }
         _events.send(AuthEvent.SignedIn(persistent = true, emailVerified = identity.emailVerified))
         identity
     }
@@ -92,6 +105,7 @@ class AuthCoordinator @Inject constructor(
      * collision-safe upgrade), signed-out → sign in. A collision is the neutral guidance case.
      */
     suspend fun continueWithGoogle(idToken: String) = operate(AccountOperation.SIGN_IN) {
+        requireCloudReady()
         val identity = when {
             operations.currentIdentity() == null -> operations.signInWithGoogle(idToken)
             operations.currentIdentity()?.isAnonymous == true -> operations.linkWithGoogle(idToken)
@@ -104,7 +118,9 @@ class AuthCoordinator @Inject constructor(
     /** The guest-transition path: sign in to the EXISTING account a prepared switch targets. */
     suspend fun switchToGoogle(idToken: String) = operate(AccountOperation.SIGN_IN) {
         requireSwitchPermitted()
-        val identity = operations.signInWithGoogle(idToken)
+        requireCloudReady()
+        startTransition(signOut = false)
+        val identity = settleTransition { operations.signInWithGoogle(idToken) }
         _events.send(AuthEvent.SignedIn(persistent = true, emailVerified = identity.emailVerified))
         identity
     }
@@ -159,20 +175,38 @@ class AuthCoordinator @Inject constructor(
      * listener teardown belongs to LocalSessionManager.
      */
     suspend fun signOut() {
+        if (_state.value is AuthState.Authenticating) return
         _state.value = AuthState.Authenticating(AccountOperation.SIGN_OUT)
         try {
-            operations.signOut()
+            requireCloudReady()
+            // §4.1: an ordinary sign-out flushes queued writes and removes the push mapping
+            // while the UID still owns them; the local database is retained, not deleted.
+            if (base is AuthState.GuestActive || base is AuthState.PersistentActive) {
+                startTransition(signOut = true)
+            }
+            try {
+                operations.signOut()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // signOut() is local-only; even an SDK failure must not trap the user in a session.
+            }
+            base = AuthState.SignedOut
+            identitySwitchAllowed = false
+            _state.value = base
+            _events.send(AuthEvent.SignedOut)
+            sessions.completeTransition(null)
         } catch (e: CancellationException) {
             _state.value = base
+            runCatching { sessions.abortTransition() }
             throw e
-        } catch (_: Exception) {
-            // signOut() is local-only; even an SDK failure must not trap the user in a session.
+        } catch (e: AuthOperationException) {
+            _state.value = AuthState.AuthError(AccountOperation.SIGN_OUT, e.failure)
         }
-        base = AuthState.SignedOut
-        identitySwitchAllowed = false
-        _state.value = base
-        _events.send(AuthEvent.SignedOut)
     }
+
+    /** Plan §8.7: the user explicitly confirmed discarding unacknowledged SDK writes. */
+    fun approvePendingWriteDiscard() = sessions.approvePendingWriteDiscard()
 
     private suspend fun operate(operation: AccountOperation, block: suspend () -> AuthIdentity?) {
         if (_state.value is AuthState.Authenticating) return
@@ -203,6 +237,36 @@ class AuthCoordinator @Inject constructor(
         val current = operations.currentIdentity() ?: return
         if (!current.isAnonymous) throw AuthOperationException(AuthFailure.ALREADY_SIGNED_IN)
         if (!identitySwitchAllowed) throw AuthOperationException(AuthFailure.TRANSITION_REQUIRED)
+    }
+
+    /** Plan §9: the one-time legacy-cache purge blocks every Firestore-backed identity change. */
+    private fun requireCloudReady() {
+        if (!sessions.isCloudReady()) throw AuthOperationException(AuthFailure.CLOUD_MIGRATION_PENDING)
+    }
+
+    /** Plan §8.7: the teardown runs before the credential call; its refusal is user-facing. */
+    private suspend fun startTransition(signOut: Boolean) {
+        when (val start = sessions.beginTransition(signOut)) {
+            TransitionStart.Started -> Unit
+            is TransitionStart.Refused -> throw AuthOperationException(
+                when (start.refusal) {
+                    TransitionRefusal.PENDING_WRITES -> AuthFailure.PENDING_WRITES
+                    TransitionRefusal.MIGRATION_BLOCKED -> AuthFailure.CLOUD_MIGRATION_PENDING
+                    TransitionRefusal.ALREADY_TRANSITIONING -> AuthFailure.TRANSITION_IN_PROGRESS
+                },
+            )
+        }
+    }
+
+    /**
+     * Plan §8.4: a refused credential must leave the guest session exactly as it was — the
+     * teardown is reverted and the prepared transition journal survives for the retry.
+     */
+    private suspend fun <T> settleTransition(block: suspend () -> T): T = try {
+        block()
+    } catch (failure: Throwable) {
+        runCatching { sessions.abortTransition() }
+        throw failure
     }
 
     /** Best effort: an account exists even if the verification mail has to be re-sent later. */

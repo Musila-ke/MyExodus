@@ -1295,6 +1295,12 @@
     <string name="account_error_already_signed_in">An account is already signed in. Sign out first.</string>
     <string name="account_error_not_signed_in">Sign in to an account first.</string>
     <string name="account_error_security">Google sign-in couldn\'t be verified. Try again.</string>
+    <string name="account_error_pending_writes">The switch didn\'t finish because some changes saved on this device haven\'t reached the server yet. Try again in a moment, or discard those changes to continue now.</string>
+    <string name="account_error_cloud_pending">Accounts are paused for this launch. The app couldn\'t finish preparing its secure storage, so signing in now could show another account\'s data. Restart the app to try again.</string>
+    <string name="account_error_transition_in_progress">Another account change is already in progress. Wait for it to finish, then try again.</string>
+    <string name="account_pending_writes_discard">Discard unsent changes and retry</string>
+    <string name="account_restart">Restart app</string>
+    <string name="account_cloud_blocked">Accounts are paused for this launch — the app couldn\'t clear an old local cache after updating. Your data on this device is untouched. Restart the app to finish setup.</string>
     <string name="account_error_generic">Something went wrong. Try again in a moment.</string>
 
     <string name="account_verify_title">Verify your email</string>

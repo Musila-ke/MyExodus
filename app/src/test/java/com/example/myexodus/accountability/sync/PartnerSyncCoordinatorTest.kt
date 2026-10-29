@@ -5,6 +5,8 @@ import android.content.Context
 import android.security.keystore.UserNotAuthenticatedException
 import androidx.room3.Room
 import androidx.test.core.app.ApplicationProvider
+import com.example.myexodus.account.SessionFence
+import com.example.myexodus.account.SessionFingerprint
 import com.example.myexodus.accountability.EventCreator
 import com.example.myexodus.accountability.crypto.AccountabilitySigner
 import com.example.myexodus.accountability.crypto.EventCipher
@@ -1327,6 +1329,25 @@ class PartnerSyncCoordinatorTest {
         ),
     )
 
+    @Test
+    fun aFencedOutSession_runsNothing_andReportsAnEmptyPass() = runTest {
+        enroll()
+        var current: SessionFingerprint? = null
+        coordinator = coordinator(warmSigner(), fence = SessionFence { current })
+
+        val report = coordinator.syncOnce()
+
+        // Account plan §7 step 10 / §12.4: no heartbeat, drain, pull or repair while the
+        // session is signed out, transitioning or blocked by the one-time purge.
+        assertEquals(PartnerSyncCoordinator.SyncReport(), report)
+        assertTrue(stepOrder.isEmpty())
+        assertTrue(drainCalls.isEmpty())
+        assertTrue(pullCalls.isEmpty())
+        assertEquals(0, repairCalls)
+        assertTrue(consentCalls.isEmpty())
+        assertTrue(identityRotations.isEmpty())
+    }
+
     /** One Step 4 journal row; monitoring fields are only attached to monitoring categories
      *  (the entity's constructor enforces the same split). */
     private suspend fun insertMonitoringRow(
@@ -1380,6 +1401,7 @@ class PartnerSyncCoordinatorTest {
         drainGate: CompletableDeferred<Unit>? = null,
         checkIn: suspend (Boolean) -> Unit = {},
         syncConsent: suspend (String, Boolean) -> Boolean = { _, _ -> true },
+        fence: SessionFence = SessionFence.Unfenced,
     ) = PartnerSyncCoordinator(
         enrollmentDao = db.enrollmentDao(),
         storeFactory = factory,
@@ -1413,6 +1435,7 @@ class PartnerSyncCoordinatorTest {
             consentCalls += pId to enabled
             syncConsent(pId, enabled)
         },
+        fence = fence,
     )
 
     private fun enroll(

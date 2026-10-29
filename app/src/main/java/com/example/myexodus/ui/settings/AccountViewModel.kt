@@ -11,7 +11,9 @@ import com.example.myexodus.account.AuthState
 import com.example.myexodus.account.GoogleCredentialOutcome
 import com.example.myexodus.account.GoogleCredentialProvider
 import com.example.myexodus.account.GuestTransitionCoordinator
+import com.example.myexodus.account.CloudAccess
 import com.example.myexodus.account.GuestTransitionState
+import com.example.myexodus.account.LocalSessionManager
 import com.example.myexodus.account.TransitionIntent
 import com.example.myexodus.account.TransitionStep
 import com.example.myexodus.accountability.sync.AccountCallables
@@ -34,11 +36,21 @@ class AccountViewModel @Inject constructor(
     private val coordinator: AuthCoordinator,
     private val guestTransition: GuestTransitionCoordinator,
     private val functions: FirebaseFunctions,
+    private val sessions: LocalSessionManager,
 ) : ViewModel() {
 
     val state: StateFlow<AuthState> = coordinator.state
     val events: Flow<AuthEvent> = coordinator.events
     val transition: StateFlow<GuestTransitionState> = guestTransition.state
+
+    /** Plan §9: READY unless the one-time legacy-cache purge failed this launch. */
+    val cloudAccess: StateFlow<CloudAccess> = sessions.cloudAccess
+
+    /**
+     * Plan §8.7: the action a pending-writes refusal refers to. The discard button replays it
+     * after the user chose to drop the queued writes; dismissal forgets it.
+     */
+    private var lastAttempt: (() -> Unit)? = null
 
     private val google = GoogleCredentialProvider(BuildConfig.GOOGLE_WEB_CLIENT_ID)
     val googleAvailable: Boolean = google.available
@@ -46,17 +58,32 @@ class AccountViewModel @Inject constructor(
     suspend fun requestGoogleCredential(context: Context): GoogleCredentialOutcome =
         google.requestCredential(context)
 
-    fun createAccount(email: String, password: String) = launchAuthenticated {
-        coordinator.createAccount(email, password)
+    fun createAccount(email: String, password: String) {
+        lastAttempt = { createAccount(email, password) }
+        launchAuthenticated { coordinator.createAccount(email, password) }
     }
 
-    fun signInWithEmail(email: String, password: String) = launchAuthenticated {
-        coordinator.signInWithEmail(email, password)
+    fun signInWithEmail(email: String, password: String) {
+        lastAttempt = { signInWithEmail(email, password) }
+        launchAuthenticated { coordinator.signInWithEmail(email, password) }
     }
 
-    fun continueWithGoogle(idToken: String, switchAccount: Boolean) = launchAuthenticated {
-        if (switchAccount) coordinator.switchToGoogle(idToken) else coordinator.continueWithGoogle(idToken)
+    fun continueWithGoogle(idToken: String, switchAccount: Boolean) {
+        lastAttempt = { continueWithGoogle(idToken, switchAccount) }
+        launchAuthenticated {
+            if (switchAccount) coordinator.switchToGoogle(idToken) else coordinator.continueWithGoogle(idToken)
+        }
     }
+
+    /** Plan §8.7: the user explicitly chose to discard queued SDK writes, then retry. */
+    fun discardPendingWritesAndRetry() {
+        coordinator.approvePendingWriteDiscard()
+        val retry = lastAttempt
+        if (retry != null) retry() else dismissTransient()
+    }
+
+    /** Plan §9: the only recovery for a failed one-time purge is a clean restart. */
+    fun restartForCloudRecovery() = sessions.restart()
 
     fun startTransition(intent: TransitionIntent) = viewModelScope.launch {
         guestTransition.start(intent)
@@ -92,14 +119,22 @@ class AccountViewModel @Inject constructor(
         coordinator.reauthenticateWithGoogle(idToken)
     }
 
-    fun signOut() = viewModelScope.launch { coordinator.signOut() }
+    fun signOut() {
+        lastAttempt = { signOut() }
+        viewModelScope.launch { coordinator.signOut() }
+    }
 
     fun requireReauth(operation: AccountOperation) = coordinator.requireReauth(operation)
 
-    fun dismissTransient() = coordinator.dismissTransient()
+    fun dismissTransient() {
+        lastAttempt = null
+        coordinator.dismissTransient()
+    }
 
     private fun launchAuthenticated(block: suspend () -> Unit) = viewModelScope.launch {
         block()
+        // Keep the attempt alive on failure: a pending-writes error's discard button replays it.
+        if (coordinator.state.value !is AuthState.AuthError) lastAttempt = null
         if (coordinator.state.value is AuthState.PersistentActive) {
             runCatching { AccountCallables.initializeUserProfile(functions) }
             // A switch that raced ahead of the target profile exists retries here, after the

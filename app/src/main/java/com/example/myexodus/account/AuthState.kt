@@ -77,6 +77,15 @@ enum class AuthFailure {
      * must prepare first so pairs are terminated only after target authentication succeeds.
      */
     TRANSITION_REQUIRED,
+    /**
+     * Account plan §8.7: writes queued under the old identity could not be acknowledged, so the
+     * switch is blocked until the user explicitly chooses to discard them.
+     */
+    PENDING_WRITES,
+    /** Plan §9: the one-time legacy-cache purge failed; Firestore-backed changes are blocked. */
+    CLOUD_MIGRATION_PENDING,
+    /** Another identity change already froze the session; waiting is enough. */
+    TRANSITION_IN_PROGRESS,
     SECURITY_CHECK_FAILED,
     UNKNOWN,
 }

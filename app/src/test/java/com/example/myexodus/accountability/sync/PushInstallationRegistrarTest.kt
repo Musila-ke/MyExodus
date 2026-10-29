@@ -43,6 +43,7 @@ class PushInstallationRegistrarTest {
             tokenThrows: Boolean = false,
             deleteLegacyFails: Boolean = false,
             legacyInstallationId: String? = "android-id-legacy",
+            sessionActive: Boolean = true,
         ) = PushInstallationRegistrar(
             ensureInstallationId = {
                 fidCalls++
@@ -66,6 +67,7 @@ class PushInstallationRegistrarTest {
                 if (writeFails) throw IllegalStateException("permission denied")
                 writes += Write(uid, installationId, data)
             },
+            sessionActive = { sessionActive },
             legacyInstallationId = legacyInstallationId,
             deleteLegacy = { uid, installationId ->
                 if (deleteLegacyFails) throw IllegalStateException("delete denied")
@@ -173,6 +175,15 @@ class PushInstallationRegistrarTest {
         assertFalse(Fake().registrar(fidThrows = true).register())
         assertFalse(Fake().registrar(tokenThrows = true).register())
         assertFalse(Fake().registrar(writeFails = true).register())
+    }
+
+    @Test
+    fun register_afterTheSessionMoved_writesNothingUnderTheOldIdentity() = runBlocking {
+        val fake = Fake()
+        // Account plan §7 step 10: the identity resolved a moment ago is no longer current.
+        assertFalse(fake.registrar(sessionActive = false).register())
+        assertEquals(0, fake.writes.size)
+        assertEquals("nothing replaced the legacy document either", 0, fake.legacyDeletes.size)
     }
 }
 

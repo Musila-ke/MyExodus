@@ -46,6 +46,9 @@ internal object LocalDatabaseMigration {
     private const val TAG = "MyExodusDbScope"
     private const val PREFS = "local_db_migration"
     private const val KEY_SCOPE_HASH = "scope_uid_hash"
+    /** Plan §7 step 20: where the current identity's stores live. Written by a switch; the
+     *  journal marker above describes the install-wide migration, not the active identity. */
+    private const val KEY_ACTIVE_HASH = "active_scope_uid_hash"
     private const val KEY_LAST_UID_HASH = "last_uid_hash"
     private const val KEY_OP_ID = "operation_id"
     private const val KEY_ACTIVATED_AT = "activated_at"
@@ -67,22 +70,28 @@ internal object LocalDatabaseMigration {
                 if (!userUnlocked(context)) return // CE prefs and the Keystore DEKs are unreachable
                 val prefs = prefs(context)
                 val storedHash = prefs.getString(KEY_SCOPE_HASH, null)
+                val activeHash = prefs.getString(KEY_ACTIVE_HASH, null)
                 val currentHash =
                     runCatching { FirebaseAuth.getInstance().currentUser?.uid }.getOrNull()?.let(::uidHash)
-                val hash = storedHash ?: currentHash ?: return // no identity yet: legacy paths
+                // The switch pointer wins: after an identity change the install journal still
+                // records the migration's original scope. An install that never migrated (the
+                // user started signed out) adopts the live identity's scope on this launch.
+                val hash = activeHash ?: storedHash ?: currentHash ?: return // no identity yet: legacy paths
                 val scope = Scope(hash)
-                if (storedHash != null) {
-                    if (currentHash != null && prefs.getString(KEY_LAST_UID_HASH, null) != currentHash) {
-                        Log.w(
-                            TAG,
-                            "current identity differs from the scoped one; retained until the " +
-                                "account-transition flow owns the switch",
-                        )
-                        prefs.edit(commit = true) { putString(KEY_LAST_UID_HASH, currentHash) }
+                if (storedHash == null) {
+                    if (!migrateAll(context, scope, prefs, currentHash)) {
+                        Log.w(TAG, "scope migration incomplete; legacy paths stay active this launch")
+                        return
                     }
-                } else if (!migrateAll(context, scope, prefs, currentHash)) {
-                    Log.w(TAG, "scope migration incomplete; legacy paths stay active this launch")
-                    return
+                } else if (currentHash != null && currentHash != hash &&
+                    prefs.getString(KEY_LAST_UID_HASH, null) != currentHash
+                ) {
+                    Log.w(
+                        TAG,
+                        "current identity differs from the active scope; retained until the " +
+                            "session manager owns the switch",
+                    )
+                    prefs.edit(commit = true) { putString(KEY_LAST_UID_HASH, currentHash) }
                 }
                 activeScope = scope
                 Log.i(TAG, "local databases scoped to uid hash ${hash.take(8)}…")
@@ -103,6 +112,31 @@ internal object LocalDatabaseMigration {
         scopeOrNull()?.accountabilityName ?: AccountabilityNames.LEGACY
 
     fun keySuffix(): String = scopeOrNull()?.keySuffix ?: ""
+
+    /** The scope a switch has pointed the process at, or null if none ever ran. */
+    fun activeScopeHash(context: Context): String? =
+        prefs(context).getString(KEY_ACTIVE_HASH, null)
+
+    /** The scope a store opened right now would use — the switch pointer wins over the journal. */
+    fun effectiveScopeHash(context: Context): String? =
+        prefs(context).getString(KEY_ACTIVE_HASH, null)
+            ?: prefs(context).getString(KEY_SCOPE_HASH, null)
+
+    /** Domain-separated hash for a uid, so the session layer can compare pointers cheaply. */
+    fun scopeHashOf(uid: String): String = uidHash(uid)
+
+    /**
+     * Plan §7 step 20: points the next process start at [uid]'s stores. Never deletes anything —
+     * the previous scope's files stay on disk for the R1.11 import/expiry sweep. The caller
+     * restarts the process so no open store keeps the previous UID's files or keys.
+     */
+    fun switchScopeTo(context: Context, uid: String) {
+        synchronized(lock) {
+            val hash = uidHash(uid)
+            prefs(context).edit(commit = true) { putString(KEY_ACTIVE_HASH, hash) }
+            Log.i(TAG, "active database scope switched to uid hash ${hash.take(8)}…")
+        }
+    }
 
     /** Domain-separated, filename-safe: 32 hex chars of SHA-256 over the UID. */
     internal fun uidHash(uid: String): String {

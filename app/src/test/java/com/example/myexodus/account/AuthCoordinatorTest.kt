@@ -489,4 +489,116 @@ class AuthCoordinatorTest {
             coordinator.state.value,
         )
     }
+
+    /** Plan §7 step 10/§8.7: the teardown runs BEFORE the credential, completion belongs to the
+     *  session manager's identity observer. */
+    private class RecordingTransitions(
+        private val cloudReady: Boolean = true,
+        private val startResult: TransitionStart = TransitionStart.Started,
+    ) : SessionTransitions {
+        val calls = mutableListOf<String>()
+        var beginSignOut: Boolean? = null
+        var completed = false
+        var aborted = 0
+
+        override fun isCloudReady(): Boolean = cloudReady
+
+        override suspend fun beginTransition(signOut: Boolean): TransitionStart {
+            calls += "begin"
+            beginSignOut = signOut
+            return startResult
+        }
+
+        override fun completeTransition(newUid: String?) {
+            calls += "complete"
+            completed = true
+        }
+
+        override suspend fun abortTransition() {
+            calls += "abort"
+            aborted++
+        }
+
+        override fun approvePendingWriteDiscard() = Unit
+    }
+
+    @Test
+    fun aGuestSwitch_beginsTheTransitionBeforeTheCredentialCall() = runTest {
+        val fake = FakeOperations(guest)
+        val sessions = RecordingTransitions()
+        val coordinator = AuthCoordinator(fake, sessions)
+        coordinator.setIdentitySwitchAllowed(true)
+
+        coordinator.signInWithEmail("a@example.com", "secret1")
+
+        assertEquals(1, fake.signInEmailCalls)
+        assertEquals(listOf("begin"), sessions.calls)
+        assertEquals(false, sessions.beginSignOut)
+    }
+
+    @Test
+    fun aFailedCredential_abortsTheTeardownAndKeepsTheFailure() = runTest {
+        val fake = FakeOperations(guest).apply { nextFailure = AuthFailure.INVALID_CREDENTIALS }
+        val sessions = RecordingTransitions()
+        val coordinator = AuthCoordinator(fake, sessions)
+        coordinator.setIdentitySwitchAllowed(true)
+
+        coordinator.signInWithEmail("a@example.com", "wrong")
+
+        assertEquals(listOf("begin", "abort"), sessions.calls)
+        assertEquals(
+            AuthState.AuthError(AccountOperation.SIGN_IN, AuthFailure.INVALID_CREDENTIALS),
+            coordinator.state.value,
+        )
+    }
+
+    @Test
+    fun aPendingWritesRefusal_neverReachesTheCredentialCall() = runTest {
+        val fake = FakeOperations(guest)
+        val sessions = RecordingTransitions(startResult = TransitionStart.Refused(TransitionRefusal.PENDING_WRITES))
+        val coordinator = AuthCoordinator(fake, sessions)
+        coordinator.setIdentitySwitchAllowed(true)
+
+        coordinator.signInWithEmail("a@example.com", "secret1")
+
+        assertEquals(0, fake.signInEmailCalls)
+        assertEquals(0, sessions.aborted)
+        assertEquals(
+            AuthState.AuthError(AccountOperation.SIGN_IN, AuthFailure.PENDING_WRITES),
+            coordinator.state.value,
+        )
+    }
+
+    @Test
+    fun signOut_flushesWithTheSignOutFlag_thenCompletesTheTransition() = runTest {
+        val fake = FakeOperations(member)
+        val sessions = RecordingTransitions()
+        val coordinator = AuthCoordinator(fake, sessions)
+
+        coordinator.signOut()
+
+        assertEquals(true, sessions.beginSignOut)
+        assertEquals(listOf("begin", "complete"), sessions.calls)
+        assertEquals(AuthState.SignedOut, coordinator.state.value)
+    }
+
+    @Test
+    fun aCloudBlockedLaunch_refusesEveryCredentialPath() = runTest {
+        val fake = FakeOperations(null)
+        val coordinator = AuthCoordinator(fake, RecordingTransitions(cloudReady = false))
+
+        coordinator.createAccount("new@example.com", "secret1")
+        assertEquals(
+            AuthState.AuthError(AccountOperation.CREATE_ACCOUNT, AuthFailure.CLOUD_MIGRATION_PENDING),
+            coordinator.state.value,
+        )
+        assertEquals(0, fake.createCalls)
+
+        coordinator.signInWithEmail("a@example.com", "secret1")
+        assertEquals(
+            AuthState.AuthError(AccountOperation.SIGN_IN, AuthFailure.CLOUD_MIGRATION_PENDING),
+            coordinator.state.value,
+        )
+        assertEquals(0, fake.signInEmailCalls)
+    }
 }

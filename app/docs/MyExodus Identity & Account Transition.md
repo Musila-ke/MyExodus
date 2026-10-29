@@ -20,11 +20,13 @@ writes denied, system events read-only), the kill switch moved into `appendUserE
 `versionCode = 2` / `versionName = "1.1"`, and the startup update-required gate. Deploy
 (step 5) and the anonymous-cleanup check (step 6) are still open. Record: ADR #229, ADR #230
 and `app/docs/account-release0-inventory.md` §10–§12.
-**Release 1 status (2026-10-29):** step 7 (UID-scoped databases, ADR #233) is implemented,
+**Release 1 status (2026-10-30):** step 7 (UID-scoped databases, ADR #233) is implemented,
 JVM- and emulator-verified, and device-run on the X6532. Step 8 (auth core, ADR #234) is
 implemented and JVM-verified: `AuthCoordinator` + Credential Manager Google + email/password,
-verification and reauthentication, surfaced as Settings → Account. Steps 9–11 (guest
-transition, session fencing, quarantine/import) remain.
+verification and reauthentication, surfaced as Settings → Account. Step 9 (guest transition,
+ADR #235) and step 10 (session fencing / Firestore–FCM teardown / one-time legacy purge,
+ADR #236) are implemented, JVM-verified and device-run on the API-37 AVD. Step 11
+(quarantine + additive guest import) remains.
 
 ---
 
@@ -113,18 +115,26 @@ with a reason. "Where" names the primary surfaces, not every call site.
   deregistered (E8); server-side pairs and any encrypted backup remain for a later sign-in. The
   next partner operation mints a fresh guest uid (ADR #125 path), so the old identity is
   recoverable only through the account.
-  **PARTIAL (R1.8):** `AuthCoordinator.signOut()` performs Firebase sign-out only and states
-  plainly that on-device data is kept; worker/listener/cache/FCM teardown and the G2 wipe are
-  R1.10 (`LocalSessionManager`).
+  **IMPLEMENTED (R1.10, 2026-10-30, ADR #236; plan §13 item 13 supersedes the G2 wipe as the
+  default):** ordinary sign-out retains the encrypted local database by design. `beginTransition`
+  fences every remote operation (`LocalSessionManager` / `SessionFence`), flushes pending
+  Firestore SDK writes (refusal → explicit discard-and-retry), increments the session generation,
+  persists the signed-out choice, and deletes the push mapping while the old UID still owns the
+  token; completion cancels account-scoped work and restarts the process. A signed-out install
+  never mints a guest; signing in again reopens the same retained scope. Explicit local-data
+  removal with unsent/unbacked-up confirmation is **not built** — open item, no plan step yet.
 - **A4. Account switching.** Recommended: single account per install; switching wipes local data and
   re-syncs from the account. Multi-account profiles would require a Room schema change and are
   rejected unless a real need appears.
   **IMPLEMENTED — server + client half (R1.9, 2026-10-29, ADR #235):** the prepare/finalize/cancel
   callables (transactional lease, rate window, kill switch, capability hash, idempotent replay)
-  and the client coordinator/UI are live and device-proven. The local-data consequence (G2 wipe +
-  additive guest import) is R1.11 (#40); until it lands, finalize terminates pairs and queues the
-  cleanup job but does not move guest data into the account. The destructive local wipe on
-  sign-out/switch is R1.10 (#39, `LocalSessionManager`).
+  and the client coordinator/UI are live and device-proven. The switch teardown is R1.10
+  (ADR #236): the old session is fenced, flushed, generation-bumped, its push mapping removed,
+  and the process restarts; the previous scope's database and key alias are **retained** on disk
+  under their own scope, so the new UID can never open them (device-proven: a guest-only marker
+  habit was absent after switching into the account). The additive guest import (R1.11, #40) is
+  what moves guest data into the account; until it lands, finalize terminates pairs and queues
+  the cleanup job without moving data.
 - **A5. Dead-token recovery diverges by identity type.** ADR #125's rotate-to-new-anonymous-uid
   stays guest-only; a signed-in user is sent to re-authentication instead of rotating. The
   re-pair card gains a "Sign in" remedy (C2).

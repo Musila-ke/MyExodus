@@ -40,6 +40,12 @@ class PushInstallationRegistrar(
     private val fetchToken: suspend () -> String?,
     private val pushEligible: () -> Boolean,
     private val write: suspend (uid: String, installationId: String, data: Map<String, Any>) -> Unit,
+    /**
+     * Account plan §7 step 10/§12.4: the identity must still be the one this pass resolved right
+     * before the mapping write — a switch that committed while the FID/token were resolving
+     * must not re-create the old UID's mapping under the new session.
+     */
+    private val sessionActive: () -> Boolean = { true },
     private val legacyInstallationId: String? = null,
     private val deleteLegacy: suspend (uid: String, installationId: String) -> Unit = { _, _ -> },
 ) {
@@ -61,6 +67,10 @@ class PushInstallationRegistrar(
             val token = fetchToken()?.takeIf { it.isNotBlank() }
             if (token == null) {
                 Log.w(TAG, "registration skipped: no FCM token")
+                return false
+            }
+            if (!sessionActive()) {
+                Log.i(TAG, "registration skipped: the session changed while resolving")
                 return false
             }
             write(

@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import androidx.room3.Room
+import com.example.myexodus.account.SessionFence
 import com.example.myexodus.accountability.BilateralDeletion
 import com.example.myexodus.accountability.EventCreator
 import com.example.myexodus.accountability.approval.ApprovalFlow
@@ -303,6 +304,9 @@ object AccountabilityModule {
                             close(error)
                             return@addSnapshotListener
                         }
+                        // Account plan §8.7: a cache-only snapshot must never render after a
+                        // transition; wait for the server's own answer.
+                        if (snapshot?.metadata?.isFromCache == true) return@addSnapshotListener
                         trySend(snapshot?.documents?.map(::nudgeDocOf).orEmpty())
                     }
                 awaitClose { registration.remove() }
@@ -375,6 +379,7 @@ object AccountabilityModule {
         messaging: FirebaseMessaging,
         resolver: PairUidResolver,
         crashReporting: CrashReporting,
+        sessionFence: SessionFence,
     ): PushInstallationRegistrar = PushInstallationRegistrar(
         ensureInstallationId = { PushInstallationRegistrar.installationIdOf() },
         platform = "android",
@@ -382,6 +387,9 @@ object AccountabilityModule {
         ensureUid = { resolver.ensureUid() },
         fetchToken = { messaging.token.await() },
         pushEligible = { PushInstallationRegistrar.pushEligibleOf(context) },
+        // Account plan §7 step 10: never mint a mapping under a session that changed
+        // while the FID/token were resolving.
+        sessionActive = { sessionFence.current() != null },
         write = { uid, installationId, data ->
             FirestoreSchema.pushInstallationDocument(firestore, uid, installationId)
                 .set(data)
@@ -405,6 +413,7 @@ object AccountabilityModule {
         store: ChainStateStore,
         functions: FirebaseFunctions,
         crashReporting: CrashReporting,
+        sessionFence: SessionFence,
     ): MailboxOutboxDrainer {
         val dao = db.outboxDao()
         return MailboxOutboxDrainer(
@@ -420,6 +429,8 @@ object AccountabilityModule {
             write = { _, messageId, data ->
                 AccountCallables.appendUserEvent(functions, messageId, data)
             },
+            // §7 step 10: a mid-drain identity switch stops the batch; rows stay PENDING.
+            stillCurrent = { authorUid -> sessionFence.current()?.uid == authorUid },
             onSendLatency = { millis ->
                 crashReporting.nonFatal(
                     "${PartnerSyncTelemetry.EVENT_T1_MS} bucket=${PartnerSyncTelemetry.latencyBucket(millis)}",
@@ -670,12 +681,15 @@ object AccountabilityModule {
         firestore: FirebaseFirestore,
         reachability: PairingReachabilityStore,
         functions: FirebaseFunctions,
+        sessionFence: SessionFence,
     ): PairUidResolver = PairUidResolver(
         context,
         firestore,
         reachability,
         // Release 0: every protected callable requires the ACTIVE profile this creates.
         ensureProfile = { AccountCallables.initializeUserProfile(functions) },
+        // §7 step 10: a signed-out or transitioning session must never mint a guest.
+        fence = sessionFence,
     )
 
     /** Owner mandate 2026-10-04: the foreground realtime doorbell (see [PartnerLiveSync]). */
@@ -826,6 +840,7 @@ object AccountabilityModule {
         rejectionChecker: MailboxRejectionChecker,
         reachability: PairingReachabilityStore,
         dms: PartnerDmsClient,
+        sessionFence: SessionFence,
     ): PartnerSyncCoordinator = PartnerSyncCoordinator(
         enrollmentDao = enrollmentDao,
         storeFactory = storeFactory,
@@ -846,6 +861,7 @@ object AccountabilityModule {
         consumeIdentityRotation = reachability::consumeIdentityRotation,
         checkIn = { force -> heartbeat.checkIn(force) },
         syncAvailabilityConsent = { pairId, enabled -> dms.syncConsent(pairId, enabled) },
+        fence = sessionFence,
     )
 
     /** Plan Step 8 (§8.10/§8.11): the DMS client half — consent convergence onto the authoritative

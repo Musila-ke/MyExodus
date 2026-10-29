@@ -56,6 +56,13 @@ class MailboxOutboxDrainer(
      *  durably). */
     private val expireDue: suspend (nowEpochMillis: Long) -> Int,
     private val write: suspend (partnerUid: String, messageId: String, data: Map<String, Any>) -> Unit,
+    /**
+     * Account plan §7 step 10/§12.4: re-checked immediately before every write, like
+     * [stillAuthorized] — an identity switch that commits mid-drain must stop the rest of the
+     * batch without sending anything under the new session. Rows stay PENDING for the new UID's
+     * pass to cancel or deliver.
+     */
+    private val stillCurrent: (authorUid: String) -> Boolean = { true },
     private val now: () -> Long = System::currentTimeMillis,
     /** §14/§11 T1 sample: outbox write attempt → Firestore write confirmed, in millis. Fired
      *  once per successfully written message so the console sees a (bucketed) distribution,
@@ -69,6 +76,9 @@ class MailboxOutboxDrainer(
 
         /** §9: rules rejected the write — authorization failure, do not retry. */
         data object PermissionDenied : DrainResult
+
+        /** §7 step 10: the session changed mid-drain — nothing after that point was sent. */
+        data object SessionChanged : DrainResult
 
         data class Failed(val reason: String) : DrainResult
     }
@@ -103,6 +113,12 @@ class MailboxOutboxDrainer(
                 false
             }
             if (!authorized) continue
+            // Plan §7 step 10: the identity may have moved to the new session a moment ago;
+            // cancellation of this worker is not enough to stop a running loop.
+            if (!stillCurrent(authorUid)) {
+                Log.i(TAG, "session changed mid-drain — stopping before ${row.messageId}")
+                return DrainResult.SessionChanged
+            }
             val data = FirestoreSchema.mailboxMessageData(
                 senderId = row.senderKeyId,
                 senderUid = authorUid,

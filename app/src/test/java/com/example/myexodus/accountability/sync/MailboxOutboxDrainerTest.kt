@@ -47,6 +47,8 @@ class MailboxOutboxDrainerTest {
         var requestedLimit = -1
         val cancelled = mutableSetOf<String>()
         var authorizeError: Exception? = null
+        /** The session fence's current uid; a different value simulates a switch mid-drain. */
+        var currentAuthorUid: String? = "uid-me"
 
         val drainer = MailboxOutboxDrainer(
             pendingRows = { _, _, limit ->
@@ -67,6 +69,7 @@ class MailboxOutboxDrainerTest {
                 writes += Write(partnerUid, messageId, data)
                 clock += advancePerWrite
             },
+            stillCurrent = { authorUid -> authorUid == currentAuthorUid },
             now = { clock },
             onSendLatency = { latencies += it },
         )
@@ -245,5 +248,22 @@ class MailboxOutboxDrainerTest {
         assertEquals(MailboxOutboxDrainer.DrainResult.Sent(0), result)
         assertTrue(fake.writes.isEmpty())
         assertTrue(fake.sent.isEmpty())
+    }
+
+    @Test
+    fun drain_sessionChangeMidBatch_stopsWithoutWritingUnderTheNewSession() = runBlocking {
+        val fake = Fake(listOf(row("m1", byteArrayOf(1)), row("m2", byteArrayOf(2))))
+        // The first write succeeds; the identity moves before the second row is reached.
+        fake.writeError = {
+            fake.currentAuthorUid = "someone-else"
+            null
+        }
+
+        val result = fake.drainer.drain("pair-1", "uid-me", "uid-partner")
+
+        assertSame(MailboxOutboxDrainer.DrainResult.SessionChanged, result)
+        assertEquals(listOf("m1"), fake.writes.map { it.messageId })
+        assertEquals("the first row was delivered and marked", listOf("m1"), fake.sent)
+        assertTrue("no failure is recorded — the row stays PENDING for the new session", fake.attempts.isEmpty())
     }
 }

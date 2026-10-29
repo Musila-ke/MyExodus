@@ -18,6 +18,8 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.example.myexodus.account.GuestTransitionCoordinator
+import com.example.myexodus.account.LegacyCachePurge
+import com.example.myexodus.account.LocalSessionManager
 import com.example.myexodus.accountability.state.LocalWipeDetector
 import com.example.myexodus.accountability.sync.AppCheckInstaller
 import com.example.myexodus.accountability.sync.PartnerNotifications
@@ -84,6 +86,8 @@ class MyExodusApp : Application(), Configuration.Provider {
     // Account plan §6.2: a prepared guest transition finalizes as soon as the target session
     // exists, even if the Account pane was closed or the process restarted mid-flow.
     @Inject lateinit var guestTransitionCoordinator: GuestTransitionCoordinator
+    // Account plan §7 step 10 / §12.4: the one session fence every remote operation consults.
+    @Inject lateinit var localSessionManager: LocalSessionManager
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -126,6 +130,11 @@ class MyExodusApp : Application(), Configuration.Provider {
     )
 
     override fun onCreate() {
+        // Plan §7 step 20: the one-time legacy disk-cache purge must precede the first
+        // Firestore operation, i.e. before super.onCreate() starts the rest of bootstrap.
+        // A locked-boot process start cannot reach CE prefs or the disk cache; it defers to
+        // USER_UNLOCKED (userUnlockedReceiver), and nothing opens Firestore pre-unlock.
+        purgeLegacyCacheIfUnlocked()
         super.onCreate()
         startupTrace.lap("super")
         // §8.5: App Check provider in place before ANY Firestore op (mailbox pull, backfill
@@ -155,6 +164,11 @@ class MyExodusApp : Application(), Configuration.Provider {
         // stored preference overrides from the first moment of each process.
         crashReporting.applyStoredPreference()
         startupTrace.lap("crashpref")
+        // Plan §7 step 20: resolve the active identity and adopt its DB scope BEFORE the
+        // migration/open block below and before any worker can run (the fence reads CE prefs,
+        // so a locked-boot process defers this to USER_UNLOCKED).
+        val unlocked = getSystemService(UserManager::class.java).isUserUnlocked
+        if (unlocked) localSessionManager.onAppStart(applicationScope)
         // §14: database/key failure classification as telemetry (§9's own taxonomy). One
         // observer instead of per-site emits — the health store is the single sink every DB
         // recovery path already writes, and it is in-memory, so each failing launch reports.
@@ -208,7 +222,7 @@ class MyExodusApp : Application(), Configuration.Provider {
         // WorkManager cannot be touched pre-unlock (direct-boot components; its CE workdb is
         // unreachable — "WorkManager can't be accessed from direct boot"). The health-check
         // period is unique-name KEEP: any post-unlock process start enqueues it.
-        if (getSystemService(UserManager::class.java).isUserUnlocked) {
+        if (unlocked) {
             // §8 Step 6 cold-start trigger; post-unlock only — the status store is CE prefs.
             val authority = statusMonitor.refresh()
             startupTrace.lap("status-refresh")
@@ -224,7 +238,10 @@ class MyExodusApp : Application(), Configuration.Provider {
             )
             enqueueHealthCheck()
             startupTrace.lap("wm")
-            enqueuePartnerSync(this)
+            // Plan §7 step 10: no sync work under a signed-out or transitioning session —
+            // the worker would only no-op against the fence, and a signed-out account has no
+            // pairs to serve. Anonymous sessions are fenced-active and keep syncing (ADR #125).
+            if (localSessionManager.current() != null) enqueuePartnerSync(this)
             enqueueDailyMaintenance(this)
             startupTrace.lap("wm-rest")
             // Owner report 2026-10-15 (ADR #152): XOS kills the FGS-hosting process ("prcp
@@ -286,11 +303,24 @@ class MyExodusApp : Application(), Configuration.Provider {
     private val userUnlockedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action != Intent.ACTION_USER_UNLOCKED) return
-            // A process started pre-unlock could not migrate (CE prefs and Keystore are
-            // unreachable); run it now, before the store open that reconcile triggers.
+            // A process started pre-unlock could not purge, resolve the session or migrate
+            // (CE prefs and Keystore are unreachable); run all three now, in dependency
+            // order: purge first (no Firestore op may precede it), then the fence's scope
+            // adoption, then the migration, before the store open that reconcile triggers.
+            purgeLegacyCacheIfUnlocked()
+            localSessionManager.onAppStart(applicationScope)
             if (!underInstrumentation) LocalDatabaseMigration.start(context)
             reconcileBootIfNeeded()
         }
+    }
+
+    /** Plan §7 step 20's one-time upgrade purge. Instrumented suites own Firestore/DB state
+     *  (the same reason [underInstrumentation] skips the migration below). */
+    private fun purgeLegacyCacheIfUnlocked() {
+        if (underInstrumentation) return
+        if (!getSystemService(UserManager::class.java).isUserUnlocked) return
+        runCatching { LegacyCachePurge.run(this) }
+            .onFailure { Log.w(TAG, "legacy cache purge failed", it) }
     }
 
     private companion object {

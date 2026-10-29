@@ -3,6 +3,8 @@ package com.example.myexodus.accountability.sync
 import android.content.Context
 import android.security.keystore.UserNotAuthenticatedException
 import android.util.Log
+import com.example.myexodus.account.SessionFence
+import com.example.myexodus.account.SessionFingerprint
 import com.example.myexodus.accountability.EventCreator
 import com.example.myexodus.accountability.crypto.AccountabilitySigner
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
@@ -101,6 +103,13 @@ class PartnerSyncCoordinator(
      *  the authoritative pairing document. True = the server holds it (or already did). */
     private val syncAvailabilityConsent: suspend (pairId: String, enabled: Boolean) -> Boolean =
         { _, _ -> true },
+    /**
+     * Account plan §7 step 10/§12.4: the identity this pass runs under. A pass started while the
+     * session was valid stops before its next remote step if the fence moved (transition,
+     * sign-out or a purge block) — WorkManager cancellation alone cannot stop a running pass.
+     * The JVM default keeps the coordinator's own contract testable without a session.
+     */
+    private val fence: SessionFence = SessionFence.Unfenced,
 ) {
 
     data class SyncReport(
@@ -164,6 +173,9 @@ class PartnerSyncCoordinator(
     }
 
     private suspend fun syncOnceLocked(wakeMessageId: String?, forceHeartbeat: Boolean): SyncReport {
+        // Account plan §8.7: signed out, mid transition or blocked by the one-time purge means
+        // no cloud work at all — local stores are untouched, so the next valid pass heals.
+        val fingerprint = fence.current() ?: return SyncReport()
         val unpairAdvanced = runCatching { resumeUnpairs() }
             .onFailure { Log.w(TAG, "unpair resume failed", it) }
             .getOrDefault(false)
@@ -186,14 +198,22 @@ class PartnerSyncCoordinator(
             // own tail (ack poll, confirmation) still ran above and must reach the UI.
             return SyncReport(unpairAdvanced = unpairAdvanced)
         }
+        if (!fence.isCurrent(fingerprint)) {
+            Log.i(TAG, "session changed at pass start — no remote work sent")
+            return SyncReport(enrolled = true, unpairAdvanced = unpairAdvanced)
+        }
         runCatching { checkIn(forceHeartbeat) }
             .onFailure { Log.w(TAG, "heartbeat check-in failed", it) }
         var report = SyncReport(enrolled = true, unpairAdvanced = unpairAdvanced)
         var resolved = 0
         for (enrollment in enrollments) {
+            if (!fence.isCurrent(fingerprint)) {
+                Log.i(TAG, "session changed mid-pass — remaining pairs skipped")
+                break
+            }
             // Per-pair isolation covers THROWN failures too (e.g. an SQLite error under disk
             // pressure): the slice is skipped, every other pair still runs, the pass returns.
-            val one = runCatching { syncPair(enrollment, wakeMessageId) }
+            val one = runCatching { syncPair(enrollment, wakeMessageId, fingerprint) }
                 .onFailure { Log.w(TAG, "pair ${enrollment.pairId} slice failed", it) }
                 .getOrNull() ?: continue
             resolved++
@@ -215,7 +235,11 @@ class PartnerSyncCoordinator(
 
     /** One pair's slice of the pass; null when its uids could not be resolved (the pair is
      *  skipped, every other pair still runs). */
-    private suspend fun syncPair(enrollment: EnrollmentRecord, wakeMessageId: String?): SyncReport? {
+    private suspend fun syncPair(
+        enrollment: EnrollmentRecord,
+        wakeMessageId: String?,
+        fingerprint: SessionFingerprint,
+    ): SyncReport? {
         val uids = resolveUids(enrollment.pairId) ?: return null
         val (myUid, partnerUid) = uids
 
@@ -267,6 +291,9 @@ class PartnerSyncCoordinator(
 
         var drained = false
         var drainedCount = 0
+        // Plan §8.7: the drain is the first remote write of the pair slice; a transition that
+        // started while local reconcile ran must stop here.
+        if (!fence.isCurrent(fingerprint)) return null
         when (val outcome = drainOutbox(enrollment.pairId, myUid, partnerUid)) {
             is MailboxOutboxDrainer.DrainResult.Sent -> {
                 drained = true
@@ -274,9 +301,11 @@ class PartnerSyncCoordinator(
                 Log.i(TAG, "drain: ${outcome.eventsDelivered} event(s) delivered")
             }
             is MailboxOutboxDrainer.DrainResult.PermissionDenied -> Log.w(TAG, "drain: PERMISSION_DENIED — rows left pending, retried next run")
+            MailboxOutboxDrainer.DrainResult.SessionChanged -> Log.i(TAG, "drain: session changed — remaining rows left pending")
             is MailboxOutboxDrainer.DrainResult.Failed -> Log.w(TAG, "drain failed: ${outcome.reason} (retried next run)")
         }
 
+        if (!fence.isCurrent(fingerprint)) return null
         val pulled = runCatching { pullMailbox(enrollment.pairId, myUid, wakeMessageId) }
             .onFailure { Log.w(TAG, "mailbox pull failed", it) }
             .getOrNull()
@@ -792,6 +821,11 @@ class PairUidResolver(
     /** Release 0: creates the ACTIVE `users/{uid}` profile every protected callable requires.
      *  Best effort — a failure retries on the next `ensureUid()`. */
     private val ensureProfile: suspend () -> Unit = {},
+    /**
+     * Account plan §4.1/§8.7: a deliberate sign-out must not be undone by the lazy anonymous
+     * mint, and no identity may be minted while a switch or the one-time purge owns the session.
+     */
+    private val fence: SessionFence = SessionFence.Unfenced,
 ) {
     /** Uid whose profile this process has already ensured; rotation/reset re-runs it. */
     private var profileReadyFor: String? = null
@@ -808,6 +842,10 @@ class PairUidResolver(
      *  push registration) while reads pass — the "missing or insufficient permissions" pairing
      *  failure of that day. Serializing sign-in leaves exactly one account per install. */
     suspend fun ensureUid(): String? = SIGN_IN_LOCK.withLock {
+        if (!fence.mayMintGuest()) {
+            Log.w(TAG, "no uid: signed out or the session is transitioning")
+            return@withLock null
+        }
         AppCheckInstaller.install(appContext)
         val auth = FirebaseAuth.getInstance()
         var user = auth.currentUser ?: signIn(auth)

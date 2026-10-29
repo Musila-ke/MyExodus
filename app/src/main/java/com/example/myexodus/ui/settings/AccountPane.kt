@@ -44,6 +44,7 @@ import com.example.myexodus.account.AuthEvent
 import com.example.myexodus.account.AuthFailure
 import com.example.myexodus.account.AuthProvider
 import com.example.myexodus.account.AuthState
+import com.example.myexodus.account.CloudAccess
 import com.example.myexodus.account.GoogleCredentialOutcome
 import com.example.myexodus.account.GuestTransitionState
 import com.example.myexodus.account.TransitionFailure
@@ -69,6 +70,7 @@ internal fun AccountPane(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val transition by viewModel.transition.collectAsStateWithLifecycle()
+    val cloudAccess by viewModel.cloudAccess.collectAsStateWithLifecycle()
     val isGuest = state is AuthState.GuestActive
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -137,6 +139,10 @@ internal fun AccountPane(
                 StatusCard(stringResource(it))
             }
 
+            if (cloudAccess != CloudAccess.READY) {
+                CloudBlockedCard(onRestart = viewModel::restartForCloudRecovery)
+            }
+
             TransitionCard(
                 state = transition,
                 signedIn = state is AuthState.PersistentActive,
@@ -153,7 +159,12 @@ internal fun AccountPane(
 
                 is AuthState.Authenticating -> WorkingCard()
 
-                is AuthState.AuthError -> ErrorCard(current.failure, onDismiss = viewModel::dismissTransient)
+                is AuthState.AuthError -> ErrorCard(
+                    failure = current.failure,
+                    onDismiss = viewModel::dismissTransient,
+                    onDiscardPendingWrites = viewModel::discardPendingWritesAndRetry,
+                    onRestart = viewModel::restartForCloudRecovery,
+                )
 
                 is AuthState.ReauthRequired -> ReauthCard(
                     state = current,
@@ -649,7 +660,12 @@ private fun TransitionCard(
 }
 
 @Composable
-private fun ErrorCard(failure: AuthFailure, onDismiss: () -> Unit) {
+private fun ErrorCard(
+    failure: AuthFailure,
+    onDismiss: () -> Unit,
+    onDiscardPendingWrites: () -> Unit,
+    onRestart: () -> Unit,
+) {
     Surface(
         color = MaterialTheme.colorScheme.errorContainer,
         contentColor = MaterialTheme.colorScheme.onErrorContainer,
@@ -658,7 +674,36 @@ private fun ErrorCard(failure: AuthFailure, onDismiss: () -> Unit) {
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(failureRes(failure)), style = MaterialTheme.typography.bodyMedium)
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.account_dismiss)) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (failure) {
+                    // §8.7: the only way past a write flush that cannot complete except waiting.
+                    AuthFailure.PENDING_WRITES -> TextButton(onClick = onDiscardPendingWrites) {
+                        Text(stringResource(R.string.account_pending_writes_discard))
+                    }
+                    // §9: a failed one-time purge is not retryable in-process.
+                    AuthFailure.CLOUD_MIGRATION_PENDING -> TextButton(onClick = onRestart) {
+                        Text(stringResource(R.string.account_restart))
+                    }
+                    else -> Unit
+                }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.account_dismiss)) }
+            }
+        }
+    }
+}
+
+/** Stands whenever this launch is cloud-blocked, even with no auth failure on screen. */
+@Composable
+private fun CloudBlockedCard(onRestart: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.account_cloud_blocked), style = MaterialTheme.typography.bodyMedium)
+            TextButton(onClick = onRestart) { Text(stringResource(R.string.account_restart)) }
         }
     }
 }
@@ -700,6 +745,9 @@ internal fun failureRes(failure: AuthFailure): Int = when (failure) {
     AuthFailure.ALREADY_SIGNED_IN -> R.string.account_error_already_signed_in
     AuthFailure.NOT_SIGNED_IN -> R.string.account_error_not_signed_in
     AuthFailure.TRANSITION_REQUIRED -> R.string.account_error_transition
+    AuthFailure.PENDING_WRITES -> R.string.account_error_pending_writes
+    AuthFailure.CLOUD_MIGRATION_PENDING -> R.string.account_error_cloud_pending
+    AuthFailure.TRANSITION_IN_PROGRESS -> R.string.account_error_transition_in_progress
     AuthFailure.SECURITY_CHECK_FAILED -> R.string.account_error_security
     AuthFailure.UNKNOWN -> R.string.account_error_generic
 }
