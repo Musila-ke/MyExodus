@@ -69,6 +69,7 @@ import com.example.myexodus.accountability.sync.decodePublicKey
 import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.LocalDatabaseMigration
 import com.example.myexodus.data.db.entity.decodeMilestoneDays
 import com.example.myexodus.secrets.SecretsRepository
 import com.example.myexodus.accountability.sos.NudgeInboxRepository
@@ -114,7 +115,11 @@ object AccountabilityModule {
 
     @Provides @Singleton
     fun provideAccountabilityDatabase(@ApplicationContext context: Context): AccountabilityDatabase =
-        Room.databaseBuilder(context, AccountabilityDatabase::class.java, AccountabilityDatabase.DB_NAME)
+        Room.databaseBuilder(
+            context,
+            AccountabilityDatabase::class.java,
+            LocalDatabaseMigration.accountabilityDbName(context),
+        )
             .addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS)
             .build()
 

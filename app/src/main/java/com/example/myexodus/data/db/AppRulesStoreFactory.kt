@@ -166,7 +166,7 @@ class AppRulesStoreFactory(
 
     private fun build(
         encrypted: Boolean,
-        databaseName: String = DB_NAME,
+        databaseName: String = LocalDatabaseMigration.rulesDbName(appContext),
         journalMode: RoomDatabase.JournalMode = RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING,
     ): AppRulesStore {
         val builder = Room.databaseBuilder(appContext, AppRulesStore::class.java, databaseName)
@@ -232,7 +232,8 @@ class AppRulesStoreFactory(
         ).use { it.step() }
     }
 
-    private fun dbPath(): String = appContext.getDatabasePath(DB_NAME).absolutePath
+    private fun dbPath(): String =
+        appContext.getDatabasePath(LocalDatabaseMigration.rulesDbName(appContext)).absolutePath
 
     companion object {
         const val DB_NAME = "myexodus_rules.db"

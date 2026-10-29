@@ -40,7 +40,9 @@ class ActivityLogStore(
      */
     fun open(): Boolean = synchronized(lock) {
         if (db != null) return true
-        val path = appContext.getDatabasePath(ActivityLogSchema.DB_NAME)
+        val path = appContext.getDatabasePath(
+            LocalDatabaseMigration.activityDbName(appContext),
+        )
         return try {
             // Self-contained like every other SQLCipher consumer (finding #66): without this,
             // the store's first open in a process that has not yet touched the rules DB dies

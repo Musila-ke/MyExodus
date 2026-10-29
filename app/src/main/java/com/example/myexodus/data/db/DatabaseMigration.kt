@@ -73,9 +73,13 @@ class DatabaseMigration(
         // The pre-split legacy file predates raw-key mode (ADR #153) and must be opened with
         // its own legacy keying — a raw-passphrase open would fail this read.
         SQLCipherDriver(dek, null, null).open(legacyFile.absolutePath).use { legacy ->
-            val rulesPath = appContext.getDatabasePath(AppRulesStoreFactory.DB_NAME)
+            val rulesPath = appContext.getDatabasePath(
+                LocalDatabaseMigration.rulesDbName(appContext),
+            )
             rulesStoreFactory.currentDriver().open(rulesPath.absolutePath).use { rules ->
-                val activityPath = appContext.getDatabasePath(ActivityLogSchema.DB_NAME)
+                val activityPath = appContext.getDatabasePath(
+                    LocalDatabaseMigration.activityDbName(appContext),
+                )
                 val logKey = activityLogKeyManager.getOrCreateKey()
                 val logRaw = SqlCipherRawKey.passphraseFor(logKey)
                 try {

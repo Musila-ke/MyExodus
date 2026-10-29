@@ -44,14 +44,17 @@ names are implemented as compatibility adapters, not parallel collections (§4.3
 
 | Store | File | Engine | Contents |
 |---|---|---|---|
-| `AppRulesStore` v21 | `myexodus_rules.db` | Room + SQLCipher (Keystore-wrapped DEK) | rules, habits, recovery, journal, usage, user profile, partner-activity journal/outbox projections |
-| `AccountabilityDatabase` v14 | `myexodus_accountability.db` | **plain Room (FBE only)** | chain events/heads, enrollments, approvals, **E2EE outbox** |
-| Activity log | `myexodus_activity.db` | raw SQLCipher | capped event queue (1,000) |
+| `AppRulesStore` v21 | `myexodus_rules_<uidHash>.db` (`myexodus_rules.db` retained 7 days as rollback copy) | Room + SQLCipher (Keystore-wrapped DEK) | rules, habits, recovery, journal, usage, user profile, partner-activity journal/outbox projections |
+| `AccountabilityDatabase` v14 | `myexodus_accountability_<uidHash>.db` (`myexodus_accountability.db` retained) | **plain Room (FBE only)** | chain events/heads, enrollments, approvals, **E2EE outbox** |
+| Activity log | `myexodus_activity_<uidHash>.db` (`myexodus_activity.db` retained) | raw SQLCipher | capped event queue (1,000) |
 | Legacy combined | `myexodus.db` | SQLCipher | pre-split data; handled by `DatabaseMigration` |
 
 Two consequences the plan assumes differently: the E2EE outbox is **not** in SQLCipher today
 (plan §8.7 says it is), and Release 1's UID-scoped migration must cover **three** stores plus
-Keystore aliases — not one database.
+Keystore aliases — not one database. **Done in step 7** (`LocalDatabaseMigration`, ADR #233):
+scoped names/key aliases derive from a SHA-256 of the uid; the migration is journalled,
+idempotent and crash-safe, and device-proven on the X6532 (Release 0 build → scoped files,
+journal committed, legacy copies retained).
 
 ## 4. Current Firestore write surface (the complete client-write list)
 

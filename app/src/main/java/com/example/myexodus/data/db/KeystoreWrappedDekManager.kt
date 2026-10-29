@@ -141,6 +141,14 @@ class KeystoreWrappedDekManager(
         else -> KeyFailure.DatabaseIssue
     }
 
+    /**
+     * Stores [dek] wrapped under this instance's KEK without generating a new DEK — the
+     * UID-scope migration's adoption of the existing store key. The caller owns [dek].
+     */
+    fun adoptKey(dek: ByteArray) {
+        wrapAndStore(getOrCreateKek(), dek)
+    }
+
     /** True when a wrapped DEK is already stored (i.e. the key was created on a prior run). */
     fun hasWrappedKey(): Boolean =
         prefs.getString(KEY_DEK_IV, null) != null && prefs.getString(KEY_DEK_BLOB, null) != null

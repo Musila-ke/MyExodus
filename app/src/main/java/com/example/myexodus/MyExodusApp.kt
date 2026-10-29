@@ -39,6 +39,7 @@ import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.DatabaseHealth
 import com.example.myexodus.data.db.DatabaseHealthStore
 import com.example.myexodus.data.db.DatabaseMigration
+import com.example.myexodus.data.db.LocalDatabaseMigration
 import com.example.myexodus.recovery.RecoverySessionRepository
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.telemetry.StartupTrace
@@ -178,6 +179,11 @@ class MyExodusApp : Application(), Configuration.Provider {
         // INSERTs fail with "no such table" against an unprimed store (caught 2026-08-28 review).
         // Migration no-ops when already complete.
         if (!underInstrumentation) {
+            // Plan §8.1: scoped database paths must be active before any store opens. Sync on
+            // purpose — the open below and every component's own open read the scope; the first
+            // launch after the update copies three files, later launches read one pref.
+            runCatching { LocalDatabaseMigration.start(this) }
+                .onFailure { Log.w(TAG, "local DB scope migration failed; legacy paths stay active", it) }
             applicationScope.launch {
                 rulesStoreFactory.open()
                 databaseMigration.runOnceIfNeeded()
@@ -273,6 +279,9 @@ class MyExodusApp : Application(), Configuration.Provider {
     private val userUnlockedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action != Intent.ACTION_USER_UNLOCKED) return
+            // A process started pre-unlock could not migrate (CE prefs and Keystore are
+            // unreachable); run it now, before the store open that reconcile triggers.
+            if (!underInstrumentation) LocalDatabaseMigration.start(context)
             reconcileBootIfNeeded()
         }
     }

@@ -217,7 +217,10 @@ with a reason. "Where" names the primary surfaces, not every call site.
   data (rules, usage, streaks, enrollments, outbox, nudge inbox) after an explicit confirmation;
   the guest→linked upgrade preserves everything because the uid does not change. Decide explicitly.
 - **G3. Room schema.** No multi-account profiles (A4); therefore no per-uid partitioning.
-- **G4. Local encryption.** SQLCipher/Keystore setup is per-install and unchanged.
+- **G4. Local encryption.** SQLCipher + Keystore-wrapped DEK; the wrapping scheme is unchanged,
+  but aliases and prefs names are now UID-scope-suffixed (`_<uidHash>`, ADR #233) so a retained
+  database of one identity can never be opened under another. The DEK itself is adopted from the
+  legacy scoped alias, never re-derived.
 - **G5. Backup/restore is the ruled direction, with an open design.** Per OPD #6 (2026-09-30):
   an app-encrypted blob under the account uid (never plaintext server-side), restorable to a new
   install; Android Auto Backup is the wrong rail (25 MB cap, cannot carry Keystore keys).
@@ -229,6 +232,15 @@ with a reason. "Where" names the primary surfaces, not every call site.
   recovery-phrase escrow, the never-built Req 28 `recovery_escrow_key` intent); no backup ships
   until that is ruled. Runtime usage accounting stays device-local.
 - **G6. Migration safety.** The link-upgrade must not touch Room; the DB version does not change.
+- **G7. UID-scoped database paths — IMPLEMENTED (Release 1 step 7, ADR #233).**
+  `LocalDatabaseMigration` copies `myexodus_rules.db`, `myexodus_accountability.db` and
+  `myexodus_activity.db` to `myexodus_{store}_<uidHash>.db` on the first post-update launch and
+  commits a journal (`scope_uid_hash`) that makes the operation idempotent and crash-safe; the
+  legacy files survive as the rollback copy for seven days. Names derive only from a SHA-256 of
+  the uid — never from backup/UI input — and a different current identity never inherits a
+  stored scope (ADR #125 rotation keeps this install's data). What remains for the account
+  transition itself (steps 9–11): switching the *active* scope on sign-in/sign-out, which is a
+  call into this class, and the cloud-restore offer on keystore failure (Release 2, G5).
 
 ### H. UX and onboarding
 - **H1. First-run identity choice** (continue anonymously vs create/sign in), with what an account
