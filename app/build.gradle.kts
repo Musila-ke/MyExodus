@@ -25,6 +25,11 @@ android {
         versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Account plan §8.3: the registered Web Application Client ID for Credential Manager.
+        // Blank until the owner registers the OAuth client; the Account pane hides Google and
+        // offers email/password instead (the guaranteed non-GMS path).
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"\"")
     }
 
     buildTypes {
@@ -202,4 +207,8 @@ dependencies {
     // Step 13: the Partner tab's approve/reject signs a chain event via BiometricPrompt —
     // moved from debugImplementation (the harness no longer owns the only prompt).
     implementation(libs.androidx.biometric)
+    // Release 1 (account plan §8.3): Google sign-in through Credential Manager.
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
+    implementation(libs.googleid)
 }

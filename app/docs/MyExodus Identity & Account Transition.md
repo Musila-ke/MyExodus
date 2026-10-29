@@ -20,6 +20,11 @@ writes denied, system events read-only), the kill switch moved into `appendUserE
 `versionCode = 2` / `versionName = "1.1"`, and the startup update-required gate. Deploy
 (step 5) and the anonymous-cleanup check (step 6) are still open. Record: ADR #229, ADR #230
 and `app/docs/account-release0-inventory.md` §10–§12.
+**Release 1 status (2026-10-29):** step 7 (UID-scoped databases, ADR #233) is implemented,
+JVM- and emulator-verified, and device-run on the X6532. Step 8 (auth core, ADR #234) is
+implemented and JVM-verified: `AuthCoordinator` + Credential Manager Google + email/password,
+verification and reauthentication, surfaced as Settings → Account. Steps 9–11 (guest
+transition, session fencing, quarantine/import) remain.
 
 ---
 
@@ -79,6 +84,11 @@ with a reason. "Where" names the primary surfaces, not every call site.
   states with provider + verification status. `ensureUid()` must stop minting an anonymous uid
   before the user has chosen "continue anonymously". *Where:* `PartnerSyncCoordinator.kt`
   (`PairUidResolver`), `di/AccountabilityModule.kt`, new auth repository.
+  **IMPLEMENTED (R1.8, 2026-10-29, ADR #234):** `AuthState` (Initializing / SignedOut /
+  GuestActive / PersistentActive / Authenticating / ReauthRequired / AuthError) is driven by
+  `AuthCoordinator` over an `AuthOperations` seam (`FirebaseAuthOperations` in production).
+  Pair operations still mint an anonymous uid lazily; guest remains the default and no pane
+  implies an account is required.
 - **A2. Upgrade path = link, with collision handling.** Anonymous → email/Google via
   `linkWithCredential`; on `credential-already-in-use`, offer sign-in-to-existing vs cancel and
   state that cancelling keeps the guest identity. Never silently orphan either side.
@@ -86,11 +96,19 @@ with a reason. "Where" names the primary surfaces, not every call site.
   existing account from a guest install replaces the guest identity — an explicit choose-one whose
   local consequence is the G2 wipe; the guest's pairs remain reachable only by its old uid and are
   otherwise abandoned. Never silent.
+  **IMPLEMENTED (R1.8, 2026-10-29):** guest + email/password or Google = `linkWithCredential`
+  (uid preserved, proven in `AuthCoordinatorTest`). Collision surfaces the plan's neutral copy
+  via `AuthEvent.Collision`; the coordinator never signs out, unlinks or mutates the guest on
+  a collision (JVM-proven). Signing in to a *different* account from a guest is refused with
+  `TRANSITION_REQUIRED` until the R1.9 guest-transition coordinator sets the switch allowance.
 - **A3. Sign-out semantics.** Confirmation must list consequences: partner updates stop, pending
   outbox stops, local sensitive data is wiped after confirmation (G2), push installation is
   deregistered (E8); server-side pairs and any encrypted backup remain for a later sign-in. The
   next partner operation mints a fresh guest uid (ADR #125 path), so the old identity is
   recoverable only through the account.
+  **PARTIAL (R1.8):** `AuthCoordinator.signOut()` performs Firebase sign-out only and states
+  plainly that on-device data is kept; worker/listener/cache/FCM teardown and the G2 wipe are
+  R1.10 (`LocalSessionManager`).
 - **A4. Account switching.** Recommended: single account per install; switching wipes local data and
   re-syncs from the account. Multi-account profiles would require a Room schema change and are
   rejected unless a real need appears.
@@ -102,8 +120,17 @@ with a reason. "Where" names the primary surfaces, not every call site.
 - **A7. Provider setup for the direct-APK channel.** Email/password + Google enabled in the
   Firebase project; email verification; password policy; email-enumeration protection; OAuth
   client IDs for a non-Play install. Verify against official Firebase docs before implementation.
+  **OPEN — deployment checklist (R1.8):** client code is ready; the providers themselves are
+  console state. `GOOGLE_WEB_CLIENT_ID` is blank in `app/build.gradle.kts`, so Google is hidden
+  and email/password is the live path until the owner registers a Web application client ID
+  (SHA-1 for the signing certificate) and pastes it in. Also confirm: Email/Password provider
+  enabled, email-verification templates/action domain set, email-enumeration protection on,
+  and the "one account per email address" linking policy recorded in
+  `account-release0-inventory.md`'s console checklist.
 - **A8. Offer timing.** Anonymous remains the default (OPD #6 direction). The account offer belongs
   before pairing (highest value) and in Settings as "Secure your identity" (OPD #36).
+  **PARTIAL (R1.8):** Settings → Account exists (first row of the Settings index, state-derived
+  subtitle). The pre-pairing offer has not been built.
 - **A9. Email verification and password lifecycle.** Decide what an unverified email may do
   (recommend: all core use allowed, verification prompted, required for email change and account
   deletion) and for how long. Password reset while signed out (email link/code, generic copy so
@@ -112,12 +139,24 @@ with a reason. "Where" names the primary surfaces, not every call site.
   needs no app deep link for reset, but the sending domain and templates must be configured.
   Email change is Deferred unless the plan calls for it; if added it requires recent
   reauthentication and re-verification.
+  **IMPLEMENTED (client, R1.8):** verification send/confirm (confirm reloads the Auth record and
+  force-refreshes the token before any protected call) and reset with generic copy — a reset for
+  an unknown address reports success, so the flow cannot enumerate accounts. Unverified accounts
+  keep full core use; verification is prompted in the pane. Password *change* while signed in
+  and email change remain unbuilt (recent-login reauthentication exists in `AuthCoordinator`).
 - **A10. Provider availability across OEMs.** The app targets every Android skin; devices without
   Google Play services cannot use Credential Manager Google sign-in. Detect availability, hide the
   Google option and fall back to email/password — never dead-end (OPD #6 already records that the
   email/password provider itself needs no Play services). Verify the exact Credential Manager +
   Firebase ID-token flow (web/server OAuth client id, no Play install referrer) against official
   docs before implementation.
+  **IMPLEMENTED (R1.8):** Google is offered only when a Web Client ID was compiled in (today:
+  never). A missing Play-services provider, a missing credential and any other picker failure
+  return `PROVIDER_UNAVAILABLE` while email/password stays visible; user cancellation returns
+  silently with no browser fallback. The nonce contract was verified against the official
+  Credential Manager guide: 32 random bytes as unpadded base64url passed to
+  `GetGoogleIdOption.setNonce`, and the returned ID token's `nonce` claim must be identical —
+  Firebase does not check it, so a mismatch is rejected before Firebase sees the token.
 
 ### B. Device keys, attestation, recovery
 - **B1. New-device enrollment protocol.** Signing in on a *new* phone restores the uid but not the

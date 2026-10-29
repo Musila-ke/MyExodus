@@ -122,6 +122,7 @@ import com.example.myexodus.ui.AppShell
 import com.example.myexodus.ui.NavKeys
 import com.example.myexodus.ui.SecureSurfaces
 import com.example.myexodus.ui.home.NudgeInboxViewModel
+import com.example.myexodus.ui.settings.AccountViewModel
 import com.example.myexodus.ui.settings.NudgeSettingsViewModel
 import com.example.myexodus.ui.home.SosViewModel
 import com.example.myexodus.ui.partner.PairingCeremonyDeps
@@ -303,6 +304,9 @@ class MainActivity : FragmentActivity() {
 
     /** SOS §8.19 (Step 11): the recipient's block switch on the Settings row. */
     private val nudgeSettingsViewModel: NudgeSettingsViewModel by viewModels()
+
+    /** Account plan §8.3 (R1.8): the optional-account pane's driver. */
+    private val accountViewModel: AccountViewModel by viewModels()
 
     /** Plan §8 Step 5 / Decision 9: the foreground evaluation trigger lives here, at the
      *  Activity lifecycle boundary — never inside composition. The ViewModel's own `init`
@@ -675,6 +679,7 @@ class MainActivity : FragmentActivity() {
                         sos = sosViewModel,
                         nudgeInbox = nudgeInboxViewModel,
                         nudgeSettings = nudgeSettingsViewModel,
+                        account = accountViewModel,
                         partnerSource = partnerDashboardSource,
                         onLoadPartnerStatus = { pairId -> partnerDmsClient.status(pairId) },
                         partnerSelection = partnerSelection,

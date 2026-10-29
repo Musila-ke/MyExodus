@@ -107,6 +107,7 @@ import com.example.myexodus.ui.recovery.RecoveryPrefs
 import com.example.myexodus.ui.recovery.RecoveryScreen
 import com.example.myexodus.ui.recovery.UrgeLogSheet
 import com.example.myexodus.ui.rules.RulesScreen
+import com.example.myexodus.ui.settings.AccountViewModel
 import com.example.myexodus.ui.settings.NudgeSettingsViewModel
 import com.example.myexodus.ui.settings.SettingsScreen
 import com.example.myexodus.ui.insights.InsightsViewModel
@@ -175,6 +176,8 @@ fun AppShell(
     nudgeInbox: NudgeInboxViewModel,
     /** SOS §8.19 (Step 11): the recipient block switch behind the Settings row. */
     nudgeSettings: NudgeSettingsViewModel,
+    /** Account plan §8.3: the optional-account pane. */
+    account: AccountViewModel,
     partnerSource: PartnerDashboardSource,
     /** Plan Step 8 (§8.10): the partner's server-derived connection reading, coarse buckets
      *  only. The client bounds callable traffic; null = no honest answer right now. */
@@ -490,6 +493,7 @@ fun AppShell(
                         recoveryPrefs = prefs,
                         domainUsageEngine = domainUsageEngine,
                         accountingOutageSource = accountingOutage,
+                        account = account,
                         // SOS §8.19 (Step 11): the block switch's state + refresh/write paths.
                         partnerBlock = partnerBlock,
                         onPartnerBlockRefresh = nudgeSettings::refresh,

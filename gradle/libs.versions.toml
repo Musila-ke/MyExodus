@@ -29,6 +29,14 @@ peteroCbor = "4.5.6"
 cameraX = "1.6.2"
 zxing = "3.5.4"
 biometric = "1.1.0"
+# Release 1 (account plan §8.3): Credential Manager + Google ID token. firebase-auth
+# 24.2.0 already pulls credentials 1.2.0-rc01/googleid 1.1.0 transitively; these pin the
+# stable versions explicitly so the API surface we compile against is not a transitive RC
+# that a Firebase BOM bump could move. googleid 1.2.1 is compiled with Kotlin metadata
+# 2.4.0, which the project's Kotlin 2.2 compiler cannot read (verified in a build on
+# 2026-10-29); 1.1.0 is the newest readable release.
+credentials = "1.6.0"
+googleid = "1.1.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -92,6 +100,9 @@ firebase-auth = { group = "com.google.firebase", name = "firebase-auth" }
 firebase-crashlytics = { group = "com.google.firebase", name = "firebase-crashlytics" }
 firebase-config = { group = "com.google.firebase", name = "firebase-config" }
 androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
+androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
+androidx-credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
+googleid = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }
 androidx-glance-appwidget = { group = "androidx.glance", name = "glance-appwidget", version.ref = "glance" }
 androidx-glance-material3 = { group = "androidx.glance", name = "glance-material3", version.ref = "glance" }
 

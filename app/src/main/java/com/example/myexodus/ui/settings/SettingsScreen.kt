@@ -15,6 +15,7 @@ import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.NotificationsOff
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Visibility
@@ -43,6 +44,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.R
+import com.example.myexodus.account.AuthState
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.usage.AccountingOutage
@@ -87,6 +89,8 @@ fun SettingsScreen(
     recoveryPrefs: RecoveryPrefs,
     domainUsageEngine: DomainUsageEngine,
     accountingOutageSource: AccountingOutageSource,
+    /** Account plan §8.3: the optional-account pane's driver. */
+    account: AccountViewModel,
     /** SOS §8.19 (Step 11): the recipient's block switch — null hides the row (no partner). */
     modifier: Modifier = Modifier,
     partnerBlock: NudgeSettingsViewModel.UiState? = null,
@@ -169,10 +173,16 @@ fun SettingsScreen(
             modifier = modifier,
         )
         PANE_ABOUT -> AboutScreen(onBack = { pane = null }, modifier = modifier)
+        PANE_ACCOUNT -> AccountPane(
+            viewModel = account,
+            onBack = { pane = null },
+            modifier = modifier,
+        )
         else -> SettingsIndex(
             modifier = modifier,
             serviceEnabled = serviceEnabled,
             checks = loaded,
+            account = account,
             monitor = monitor,
             strictMode = strictMode,
             settings = settings,
@@ -190,11 +200,13 @@ private const val PANE_PROTECTION = "protection"
 private const val PANE_COACHING_PLAN = "coaching_plan"
 private const val PANE_RISK_WINDOWS = "risk_windows"
 private const val PANE_ABOUT = "about"
+private const val PANE_ACCOUNT = "account"
 
 @Composable
 private fun SettingsIndex(
     serviceEnabled: Boolean,
     checks: ProtectionChecks?,
+    account: AccountViewModel,
     monitor: EnhancedModeHealthMonitor,
     strictMode: StrictModeManager,
     settings: EnhancedModeSettings,
@@ -212,6 +224,22 @@ private fun SettingsIndex(
     var crashReportsOn by remember { mutableStateOf(crashReporting.enabled) }
     // Null until the checks land: the row shows no status rather than claiming one it hasn't read.
     val attention = checks?.let { attentionCount(it, serviceEnabled) }
+    // §8.3: the identity row states the current mode without implying an account is required.
+    val accountState by account.state.collectAsStateWithLifecycle()
+    val accountSubtitle = when (val current = accountState) {
+        is AuthState.PersistentActive -> stringResource(
+            if (current.email != null && !current.emailVerified) {
+                R.string.account_settings_subtitle_unverified
+            } else {
+                R.string.account_settings_subtitle_signed_in
+            },
+            current.email ?: stringResource(R.string.account_google_account),
+        )
+        AuthState.Initializing, is AuthState.Authenticating, is AuthState.AuthError,
+        is AuthState.ReauthRequired -> null
+        AuthState.SignedOut, is AuthState.GuestActive ->
+            stringResource(R.string.account_settings_subtitle_guest)
+    }
     val protectionSubtitle = when (attention) {
         null -> null
         0 -> stringResource(R.string.settings_protection_summary_ok)
@@ -246,6 +274,14 @@ private fun SettingsIndex(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column {
+                IndexRow(
+                    icon = Icons.Outlined.Person,
+                    title = stringResource(R.string.account_settings_title),
+                    subtitle = accountSubtitle,
+                    onClick = { onOpenPane(PANE_ACCOUNT) },
+                )
+
+                RowDivider()
                 IndexRow(
                     icon = Icons.Outlined.Shield,
                     title = stringResource(R.string.settings_protection_header),
