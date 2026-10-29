@@ -269,9 +269,10 @@ exports.retryDispatchSweep = retryDispatchSweep;
 
 // AD-18b: daily mailbox retention job — the only deleter of mailbox documents.
 // §9 corrected ordering / ADR #98: daily pairing idempotency-record retention (24h).
-const { cleanupMailboxes, cleanupIdempotencyRecords } = require('./cleanup');
+const { cleanupMailboxes, cleanupIdempotencyRecords, cleanupEventRateLimits } = require('./cleanup');
 exports.cleanupMailboxes = cleanupMailboxes;
 exports.cleanupIdempotencyRecords = cleanupIdempotencyRecords;
+exports.cleanupEventRateLimits = cleanupEventRateLimits;
 
 // V1 Req 35 / plan §8.4 Step 2: the SOS acceptance callable. The raw handler (injected db)
 // is exported for the emulator suite, same seam pattern as `_createRegisterPairing`.
@@ -319,3 +320,36 @@ exports.recordIngestionOutage = recordIngestionOutage;
 // notification dispatch. `_createDmsWorkerHandler` is the emulator suite's seam.
 const { dmsDeadlineWorker } = require('./dms-processor');
 exports.dmsDeadlineWorker = dmsDeadlineWorker;
+
+// Account plan §7 Release 0 step 2 / §8.8: `appendUserEvent` is the only user-event write
+// path once the rules stop allowing direct mailbox creates. `_createAppendUserEventHandler`
+// is the emulator suite's seam (injected db + clock).
+const { createAppendUserEvent, createAppendUserEventHandler } = require('./event-append');
+exports.appendUserEvent = createAppendUserEvent({ db });
+exports._createAppendUserEventHandler = createAppendUserEventHandler;
+
+// Account plan §7 Release 0 step 2 / §8.8-§8.10: the pair/profile callables — invitation
+// register/respond, terminate (+ deterministic system event), profile initialization and
+// the client compatibility read. `_create*Handler` are the emulator suite's seams.
+const {
+  createInitializeUserProfile,
+  createCreatePairInvitation,
+  createRespondToPairInvitation,
+  createTerminatePair,
+  createGetClientCompatibility,
+  createInitializeUserProfileHandler,
+  createCreatePairInvitationHandler,
+  createRespondToPairInvitationHandler,
+  createTerminatePairHandler,
+  createGetClientCompatibilityHandler,
+} = require('./pair-lifecycle');
+exports.initializeUserProfile = createInitializeUserProfile({ db });
+exports.createPairInvitation = createCreatePairInvitation({ db });
+exports.respondToPairInvitation = createRespondToPairInvitation({ db });
+exports.terminatePair = createTerminatePair({ db });
+exports.getClientCompatibility = createGetClientCompatibility({ db });
+exports._createInitializeUserProfileHandler = createInitializeUserProfileHandler;
+exports._createCreatePairInvitationHandler = createCreatePairInvitationHandler;
+exports._createRespondToPairInvitationHandler = createRespondToPairInvitationHandler;
+exports._createTerminatePairHandler = createTerminatePairHandler;
+exports._createGetClientCompatibilityHandler = createGetClientCompatibilityHandler;

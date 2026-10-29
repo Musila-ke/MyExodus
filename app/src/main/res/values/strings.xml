@@ -465,6 +465,13 @@
     <string name="picker_no_match">No apps match “%1$s”.</string>
     <string name="picker_none">No launchable apps found.</string>
 
+    <!-- Update gate (MainActivity, account plan §8.10): shown when the installed build is
+         below the server-published minimum. The body is the fallback when the server
+         publishes no message. -->
+    <string name="update_required_title">Update required</string>
+    <string name="update_required_body">This version of MyExodus is no longer supported. Install the latest APK over this version, then tap Check again.</string>
+    <string name="update_required_retry">Check again</string>
+
     <!-- Database bootstrap screen (MainActivity): the pre-shell gate while the encrypted store
          opens, or after a health failure — including the destructive reset dialog. -->
     <string name="db_health_opening">Opening MyExodus…</string>

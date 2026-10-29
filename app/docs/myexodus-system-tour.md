@@ -209,7 +209,10 @@ plan Appendix D.4.
   notifications. Per-pair tray ids (ADR #119) complete the routing contract.
 
 ### 6.4 Transport
-- `Outbox` (durable, sequence-ordered) → `MailboxOutboxDrainer` → Firestore `relayMailboxMessage`
+- `Outbox` (durable, sequence-ordered) → `MailboxOutboxDrainer` → `appendUserEvent` callable
+  (Release 0 step 3: the ONLY event write path — rules deny direct client mailbox creates;
+  the operator kill switch is enforced inside the callable) →
+  Firestore `relayMailboxMessage`
   → dispatch to the recipient's installations (`relay-dispatch/*`, at-least-once) → FCM wake
   (`PartnerMessagingService` → `FirestoreMailboxReceiver`) → `MailboxEventProcessor`:
   dedupe (`ProcessedEvent`) → verify signature → decrypt → chain append (`ChainEvent`/`ChainHead`)
@@ -227,7 +230,9 @@ plan Appendix D.4.
   remote erasure is acknowledgment-based and honestly reported. `UnpairState` has two facts:
   partner-device ack (`confirmed_at`) and server revocation (`revoked_at`, v14); `TERMINAL`
   requires both, the 7-day timeout reports `LOCAL_ONLY_TERMINATED`, never a false claim. The
-  terminate write retries each pass and cancels pending envelopes (`CANCELLED_BY_REVOCATION`).
+  terminate write retries each pass through the `terminatePair` callable (Release 0; the callable
+  writes the deterministic `system_events/pair_terminated`) and cancels pending envelopes
+  (`CANCELLED_BY_REVOCATION`).
 
 ### 6.6 Availability/heartbeat (DMS)
 - `PartnerHeartbeatClient` persists-before-send; `submitHeartbeat` is idempotent by `(uid,
@@ -342,7 +347,7 @@ FCM.
 
 - **JVM tests:** `./gradlew :app:testDebugUnitTest` — aggregate from
   `app/build/test-results/testDebugUnitTest/TEST-*.xml`; never trust a piped tail's exit code.
-  Current baseline: 225 classes / 2,010 tests / 0 failures.
+  Current baseline: 230 classes / 2,081 tests / 0 failures (2026-10-29).
 - **Lint:** `./gradlew :app:lintDebug` **alone** (ADR #208 — combining it with tests in one
   invocation crashes the lint worker). "No issues found" is the gate.
 - **Instrumentation:** `:app:assembleDebugAndroidTest` then the relevant instrumented suites; the

@@ -19,8 +19,10 @@ android {
         // §16/§314: confirm against target-user-base analytics before treating as final.
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        // Release 0 is the first build that carries a meaningful version: the server's
+        // clientCompatibility minimum is compared against this versionCode (plan §8.10).
+        versionCode = 2
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

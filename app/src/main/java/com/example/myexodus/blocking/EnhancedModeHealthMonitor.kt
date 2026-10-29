@@ -5,12 +5,15 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.security.advancedprotection.AdvancedProtectionManager
 import android.view.accessibility.AccessibilityManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.edit
 import com.example.myexodus.R
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,6 +39,8 @@ class EnhancedModeHealthMonitor @Inject constructor(
 
     private val _enabled = MutableStateFlow(false)
     private val _advancedProtection = MutableStateFlow(false)
+    private val handler = Handler(Looper.getMainLooper())
+    private val alertPending = AtomicBoolean(false)
 
     /** True while this service is in the platform's enabled-accessibility list. */
     val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
@@ -66,8 +71,11 @@ class EnhancedModeHealthMonitor @Inject constructor(
         val now = isServiceEnabled()
         val was = prefs.getBoolean(KEY_WAS_ENABLED, false)
         if (now != was) {
-            prefs.edit { putBoolean(KEY_WAS_ENABLED, now) }
-            if (!now && was) notifyDisabled()
+            if (now) {
+                prefs.edit { putBoolean(KEY_WAS_ENABLED, true) }
+            } else {
+                scheduleDisabledAlert()
+            }
         }
         // Unconditional on enabled, so a re-enable the process never observed live
         // (Settings toggle while dead) still clears the alert — it otherwise sat in the
@@ -102,6 +110,22 @@ class EnhancedModeHealthMonitor @Inject constructor(
         appContext.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
     }
 
+    /**
+     * Delayed re-check before alerting: an APK update briefly unbinds the service while the new
+     * process starts (device-caught 2026-10-29 — false alert 4.6 s before it reconnected), which
+     * read as a genuine disable. The transition is only committed to prefs when the re-check
+     * still finds it off, so a process death during the window re-detects on the next start.
+     */
+    private fun scheduleDisabledAlert() {
+        if (!alertPending.compareAndSet(false, true)) return
+        handler.postDelayed({
+            alertPending.set(false)
+            if (isServiceEnabled()) return@postDelayed
+            prefs.edit { putBoolean(KEY_WAS_ENABLED, false) }
+            notifyDisabled()
+        }, DISABLED_ALERT_DELAY_MILLIS)
+    }
+
     private fun notifyDisabled() {
         val manager = appContext.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
@@ -134,5 +158,8 @@ class EnhancedModeHealthMonitor @Inject constructor(
         // re-posts because refresh() only notifies on a fresh enabled→disabled turn).
         // Guarded by ProtectionNotificationIdsTest.
         const val NOTIFICATION_ID = 1004
+        // Longer than any observed update/reboot re-bind (4.6 s on X6532); the fallback keeps
+        // blocking either way, so the alert is not time-critical.
+        internal const val DISABLED_ALERT_DELAY_MILLIS = 15_000L
     }
 }

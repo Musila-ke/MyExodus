@@ -3,9 +3,7 @@ package com.example.myexodus.accountability.sync
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.accountability.enrollment.PairingToken
-import com.google.firebase.firestore.Blob
 import com.google.firebase.firestore.FieldValue
-import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -25,19 +23,6 @@ class FirestoreSchemaTest {
         assertEquals(a, FirestoreSchema.pairingTokenDocumentId(token))
         assertEquals(64, a.length) // hex sha256
         assertNotEquals(a, FirestoreSchema.pairingTokenDocumentId(PairingToken.generate(1_700_000_000_000L)))
-    }
-
-    @Test
-    fun pairingTokenData_expiryIsATimestampSoRulesCanCompareToRequestTime() {
-        @Suppress("UNCHECKED_CAST")
-        val data = FirestoreSchema.pairingTokenData(PairingToken.generate(1_700_000_000_000L), "uid-a", byteArrayOf(1, 2, 3)) as Map<String, Any>
-        val expiresAt = data["expiresAt"] as com.google.firebase.Timestamp
-        assertEquals(1_700_000_600L, expiresAt.seconds) // 1_700_000_000_000ms + TTL 600_000ms = 1_700_000_600s
-        assertEquals(0L, expiresAt.nanoseconds.toLong())
-        assertEquals("uid-a", data["creatorUid"]) // rule: creatorUid == request.auth.uid
-        assertArrayEquals(byteArrayOf(1, 2, 3), (data["payload"] as Blob).toBytes())
-        // Exactly the rule's create hasOnly — the partner response fields land via update.
-        assertEquals(setOf("creatorUid", "expiresAt", "payload"), data.keys)
     }
 
     @Test

@@ -2,8 +2,10 @@ package com.example.myexodus.blocking
 
 import android.app.NotificationManager
 import android.content.Context
+import android.os.Looper
 import android.view.accessibility.AccessibilityManager
 import androidx.test.core.app.ApplicationProvider
+import java.time.Duration
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -43,6 +45,12 @@ class EnhancedModeHealthMonitorTest {
     private fun notificationCount() =
         shadowOf(context.getSystemService(NotificationManager::class.java)).size()
 
+    /** The disabled alert is posted only after the delayed re-check fires. */
+    private fun fireDisabledAlertRecheck() {
+        shadowOf(Looper.getMainLooper())
+            .idleFor(Duration.ofMillis(EnhancedModeHealthMonitor.DISABLED_ALERT_DELAY_MILLIS + 1))
+    }
+
     @Test
     fun enabledService_isDetected() {
         setEnabledServices(BlockerAccessibilityService::class.java.name)
@@ -64,11 +72,31 @@ class EnhancedModeHealthMonitorTest {
         setEnabledServices()
         monitor.refresh()
         assertFalse(monitor.enabled.value)
+        assertEquals(0, notificationCount())
+
+        fireDisabledAlertRecheck()
         assertEquals(1, notificationCount())
 
         // No re-alert on subsequent checks while still disabled.
         monitor.refresh()
+        fireDisabledAlertRecheck()
         assertEquals(1, notificationCount())
+    }
+
+    @Test
+    fun transientUnbind_reconnectBeforeRecheck_doesNotAlert() {
+        // APK update on X6532 2026-10-29: the service was unbound for ~4.6 s while the new
+        // process started; that must not count as a disable.
+        setEnabledServices(BlockerAccessibilityService::class.java.name)
+        val monitor = EnhancedModeHealthMonitor(context)
+
+        setEnabledServices()
+        monitor.refresh()
+
+        setEnabledServices(BlockerAccessibilityService::class.java.name)
+        monitor.refresh()
+        fireDisabledAlertRecheck()
+        assertEquals(0, notificationCount())
     }
 
     @Test
@@ -77,6 +105,7 @@ class EnhancedModeHealthMonitorTest {
         val monitor = EnhancedModeHealthMonitor(context)
         setEnabledServices()
         monitor.refresh()
+        fireDisabledAlertRecheck()
         assertEquals(1, notificationCount())
 
         // The alert claims "blocker is off" — once it is back on, it must leave the shade.
@@ -131,6 +160,8 @@ class EnhancedModeHealthMonitorTest {
         BlockerAccessibilityService.connected.set(false)
         monitor.refresh()
         assertFalse(monitor.enabled.value)
+        assertEquals(0, notificationCount())
+        fireDisabledAlertRecheck()
         assertEquals(1, notificationCount())
     }
 }

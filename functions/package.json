@@ -10,6 +10,8 @@
     "test": "node --test",
     "test:sos": "firebase emulators:exec --only firestore --project demo-myexodus-sos \"node --test emulator-test/partner-sos.emulator.js emulator-test/partner-sos-push.emulator.js emulator-test/partner-sos-scheduler.emulator.js\"",
     "test:rules": "firebase emulators:exec --config ../firebase.json --only firestore --project demo-myexodus-step2 \"node --test emulator-test/firestore-rules.emulator.js\"",
+    "test:append": "firebase emulators:exec --only firestore --project demo-myexodus-append \"node --test emulator-test/event-append.emulator.js\"",
+    "test:lifecycle": "firebase emulators:exec --only firestore --project demo-myexodus-lifecycle \"node --test emulator-test/pair-lifecycle.emulator.js\"",
     "test:heartbeat": "firebase emulators:exec --only firestore --project demo-myexodus-heartbeat \"node --test emulator-test/heartbeat.emulator.js\"",
     "test:dms": "firebase emulators:exec --only firestore --project demo-myexodus-dms \"node --test emulator-test/dms.emulator.js\"",
     "test:dms-soak": "firebase emulators:exec --only firestore --project demo-myexodus-dms-soak \"node emulator-test/dms-soak.js\""

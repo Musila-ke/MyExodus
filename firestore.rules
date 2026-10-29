@@ -18,27 +18,34 @@ service cloud.firestore {
     // documented, caught on-device 2026-08-30). Do not add a null-permitting branch: that
     // would let any authenticated user probe whether two known uids are paired.
     //
-    // Amendment (plan §8 Step 13 / AD-13b): the ONE client write is revocation — a member
-    // may flip active -> terminated, status field only, one-way. create/delete stay denied,
-    // so the v1 revocation-reopen gap remains structurally closed; the mailbox create rule
-    // (status == 'active') makes every further partner write impossible (Req 29). The losing
-    // racer in a mutual unpair gets PERMISSION_DENIED, which the client treats as a no-op.
+    // Amendment (plan §8 Step 13 / AD-13b, superseded by account plan Release 0 step 3):
+    // revocation moved behind the `terminatePair` callable, which validates membership and
+    // writes the deterministic `system_events/pair_terminated` record. Clients can no longer
+    // write this document at all — create/update/delete are denied, so the v1
+    // revocation-reopen gap stays structurally closed and pair membership/status can never
+    // be tampered with client-side. The losing racer in a mutual unpair is an idempotent
+    // success inside the callable.
     match /pairings/{pairId} {
       allow read: if request.auth != null && request.auth.uid in resource.data.members;
-      allow update: if request.auth != null
-        && request.auth.uid in resource.data.members
-        && resource.data.status == 'active'
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
-        && request.resource.data.status == 'terminated';
-      allow create, delete: if false;
+      allow create, update, delete: if false;
+
+      // Backend-originated lifecycle events only (account plan §4.3/§8.2). Participants may
+      // read; Admin SDK is the only writer (`terminatePair` writes pair_terminated). These
+      // are server-authenticated metadata events, never E2EE peer content.
+      match /system_events/{eventId} {
+        allow read: if request.auth != null
+          && exists(/databases/$(database)/documents/pairings/$(pairId))
+          && request.auth.uid in get(/databases/$(database)/documents/pairings/$(pairId)).data.members;
+        allow create, update, delete: if false;
+      }
     }
 
-    // Mailbox: the recipient-scoped delivery channel (plan §8 Step 1). messageId is
-    // client-generated and used as the document id (AD-09), so a retried write of the
-    // same Outbox row is an idempotent overwrite by construction. payload is opaque
-    // base64 ciphertext; the real 4096-byte payload limit and base64 well-formedness are
-    // enforced in the relay function (AD-19 — rules cannot count the decoded bytes).
-    // hasOnly + types + a coarse size bound are defense-in-depth, not the boundary.
+    // Mailbox = the shipped event_chain (account plan §4.3 adapter): immutable, append-only
+    // E2EE events. Since Release 0 step 2 every append goes through the `appendUserEvent`
+    // callable (Admin SDK), so DIRECT CLIENT CREATE IS DENIED — the outer-schema allowlist,
+    // record kind, size cap, pair/profile state and operator kill switch all live server-side
+    // (`event-append.js`). Old clients that still write directly fail closed and must update
+    // (plan step 5). Reads and acks keep their shipped shape.
     match /mailboxes/{recipientUid}/messages/{messageId} {
       // Read: the recipient (owner) as before, plus the message's AUTHOR — the relay marks a
       // rejected message with `relayStatus` on this document, and that marker is the send
@@ -48,36 +55,10 @@ service cloud.firestore {
       // author-read shape as the ack rule below.
       allow read: if request.auth.uid == recipientUid
         || resource.data.senderUid == request.auth.uid;
-      allow create: if request.auth != null
-        && request.resource.data.senderUid == request.auth.uid
-        && request.resource.data.keys().hasOnly(
-             ['senderId', 'senderUid', 'pairId', 'payload', 'keyEpoch', 'timestamp'])
-        && request.resource.data.senderId is string
-        && request.resource.data.pairId is string
-        && request.resource.data.pairId.size() <= 128
-        && request.resource.data.payload is string
-        && request.resource.data.payload.size() <= 8192
-        && request.resource.data.keyEpoch is int
-        && request.resource.data.keyEpoch >= 0
-        && request.resource.data.timestamp == request.time
-        && exists(/databases/$(database)/documents/pairings/$(request.resource.data.pairId))
-        && get(/databases/$(database)/documents/pairings/$(request.resource.data.pairId)).data.status == 'active'
-        && request.auth.uid in get(/databases/$(database)/documents/pairings/$(request.resource.data.pairId)).data.members
-        // Step 2 gate (2026-10-21): the RECIPIENT must be the other member too. Without this,
-        // any paired user could post junk into any mailbox using their own active pairId;
-        // the relay rejects it (PAIRING_INVALID) but only after storage, and before rate
-        // limiting — an unthrottled mailbox-fill path. Free with the same get().
-        && recipientUid in get(/databases/$(database)/documents/pairings/$(request.resource.data.pairId)).data.members
-        // Step 12 operator gate (2026-10-22, ADR #207): the partner-accountability kill switch.
-        // Absent doc or absent field = enabled (this feature ships on); an explicit false
-        // stops NEW partner sends at the transport boundary while leaving every stored
-        // document (pairings, mailbox messages, acks) intact — rollback is not deletion.
-        // config/** is deny-all to clients; this rules-internal access costs one call.
-        && (!exists(/databases/$(database)/documents/config/features)
-            || get(/databases/$(database)/documents/config/features).data.get('partnerAccountabilityEnabled', true) != false);
-      // Immutable after create; deletion is exclusively the scheduled cleanup function's
-      // job (AD-18b). A client must never be able to delete a mailbox document.
-      allow update, delete: if false;
+      // Append is callable-only (Release 0 step 2/3). Immutable after create; deletion is
+      // exclusively the scheduled cleanup function's job (AD-18b). A client must never be
+      // able to create, update or delete a mailbox document.
+      allow create, update, delete: if false;
 
       // Per-installation acknowledgment (AD-18b), written by the recipient device itself
       // after it has processed the event. The cleanup function deletes a message only
@@ -161,6 +142,14 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // User profile (account plan §4.3/§8.2): owner read only. Created and mutated solely by
+    // `initializeUserProfile` and future lifecycle callables (Admin SDK); clients never
+    // write it. This match is document-level — subcollections keep their own rules below.
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
     // Per-device/provider push registrations (AD-18a). provider is constrained to the
     // transports that exist (plan §8 Steps 7/8); token freshness is tracked via updatedAt.
     // pushEligible (SOS §8.12) is optional so pre-SOS clients keep registering; when present
@@ -186,34 +175,32 @@ service cloud.firestore {
     // Pairing rendezvous (user-ruled 2026-09-18: the SAS/QR public-key exchange stays as
     // shipped — the pairing QR cannot carry the initiator's attestation payload, device-
     // caught 2026-08-30). Document id = SHA-256(token), so possession of the 256-bit token
-    // is the read capability; lifetime is enforced against request.time. The initiator
-    // creates it; the partner updates it with its own material + transcript signature
-    // (pinned fields: the update cannot alter creatorUid / payload / expiresAt); whoever
-    // holds the token deletes it once the registerPairing function has activated the pair.
-    // This document is transport only — it grants no authority. Authority is the signed
-    // proof registered through the function (AD-02 / §8 Step 3).
+    // is the read capability; lifetime is enforced against request.time. Release 0 step 2
+    // moved minting and the partner response behind `createPairInvitation` /
+    // `respondToPairInvitation` (Admin SDK validates expiry, single-use, self-response,
+    // profile state and per-UID rate limits), so client create/update are now denied. Read
+    // and delete stay client-side: the token holder reads the rendezvous material and
+    // removes the document after registerPairing activates the pair. This document is
+    // transport only — authority is the signed proof registered through the function.
     match /pairing_tokens/{tokenId} {
-      allow create: if request.auth != null
-        && request.resource.data.keys().hasOnly(['creatorUid', 'expiresAt', 'payload'])
-        && request.resource.data.creatorUid == request.auth.uid
-        && request.resource.data.expiresAt > request.time;
+      allow create, update: if false;
       allow read: if request.auth != null
         && (resource == null || resource.data.expiresAt > request.time);
-      // Single-use: the first partner response commits; a concurrent second update then
-      // sees partnerUid already present and is denied (atomic — rules evaluate the read
-      // state at commit). The client maps that denial to TokenAlreadyUsed.
-      allow update: if request.auth != null
-        && resource.data.expiresAt > request.time
-        && !('partnerUid' in resource.data)
-        && request.resource.data.keys().hasOnly(
-             ['creatorUid', 'expiresAt', 'payload', 'partnerUid', 'partnerPayload', 'partnerSignature'])
-        && request.resource.data.creatorUid == resource.data.creatorUid
-        && request.resource.data.expiresAt == resource.data.expiresAt
-        && request.resource.data.payload == resource.data.payload
-        && request.resource.data.partnerUid == request.auth.uid;
       allow delete: if request.auth != null
         && (resource == null || resource.data.expiresAt > request.time);
     }
+
+    // Client compatibility metadata (account plan §4.3, Release 0 step 4): server-published,
+    // public read so an outdated client can learn it must update; never client-writable.
+    match /clientCompatibility/{docId} {
+      allow read: if docId == 'current';
+      allow write: if false;
+    }
+
+    // Release 0 server-owned collections (account plan §4.3/§8.2): deletion tombstones/job
+    // state and event token buckets are Admin SDK only in both directions.
+    match /deletionJobs/{document=**} { allow read, write: if false; }
+    match /eventRateLimits/{document=**} { allow read, write: if false; }
 
     // Relay bookkeeping + rate counters + pairing idempotency records: function-only
     // (AD-10, AD-23, §9 corrected ordering).

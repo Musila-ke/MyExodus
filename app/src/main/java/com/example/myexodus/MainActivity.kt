@@ -76,6 +76,7 @@ import com.example.myexodus.accountability.monitoring.PartnerDmsClient
 import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.state.AccountabilityDatabase
+import com.example.myexodus.accountability.sync.AccountCallables
 import com.example.myexodus.accountability.sync.MessageSendOutcome
 import com.example.myexodus.accountability.sync.PairUidResolver
 import com.example.myexodus.accountability.sync.messageSendOutcome
@@ -88,6 +89,7 @@ import com.example.myexodus.accountability.sync.PartnerRolloutGate
 import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.accountability.sync.PushInstallationRegistrar
 import com.example.myexodus.accountability.sync.runPartnerSyncPass
+import com.google.firebase.functions.FirebaseFunctions
 import com.example.myexodus.R
 import com.example.myexodus.blocking.recovery.RecoveryStateStore
 import com.example.myexodus.recovery.RecoveryPlanRepository
@@ -263,6 +265,8 @@ class MainActivity : FragmentActivity() {
     // Plan Step 8: the Partner tab's connection card — consent convergence rides the sync
     // pass; this client is the screen's bounded (60 s) status read.
     @Inject lateinit var partnerDmsClient: PartnerDmsClient
+    /** Plan §8.10: startup compatibility read (public callable, no App Check/auth). */
+    @Inject lateinit var functions: FirebaseFunctions
     @Inject lateinit var pushInstallationRegistrar: PushInstallationRegistrar
     @Inject lateinit var partnerRolloutGate: PartnerRolloutGate
     // Owner mandate 2026-10-04 (realtime): the foreground mailbox doorbell — its ring lands
@@ -470,6 +474,24 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         setContent {
             MyExodusTheme {
+                // Plan §8.10: new clients read the server-published minimum version at startup
+                // and show the update-required message below it. This is a UX signal only —
+                // rules and callables enforce independently, so a failed read is not a bypass.
+                var updateRequired by remember { mutableStateOf<String?>(null) }
+                var compatibilityAttempt by remember { mutableStateOf(0) }
+                LaunchedEffect(compatibilityAttempt) {
+                    // A failed read keeps the previous state: once blocked, a retry without
+                    // connectivity must not unlock the app.
+                    runCatching { AccountCallables.clientCompatibility(functions) }
+                        .onSuccess { compatibility ->
+                            updateRequired = if (compatibility.blocks(BuildConfig.VERSION_CODE)) {
+                                compatibility.updateMessage?.takeIf { it.isNotBlank() }
+                                    ?: getString(R.string.update_required_body)
+                            } else {
+                                null
+                            }
+                        }
+                }
                 // §8.2: the monitor publishes degradation reactively — the banner updates the
                 // moment the FGS start() detection lands, not only on the next resume.
                 val degradation by protectionStatusMonitor.degradation.collectAsStateWithLifecycle()
@@ -607,7 +629,16 @@ class MainActivity : FragmentActivity() {
                 // Local read: a delegated property cannot be smart-cast, and AppShell now takes
                 // the store non-null — it is only ever composed once the store is open.
                 val openStore = rulesStore
-                if (usable && showSetup == true) {
+                val blockedUpdate = updateRequired
+                if (blockedUpdate != null) {
+                    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                        UpdateRequiredScreen(
+                            message = blockedUpdate,
+                            onRetry = { compatibilityAttempt++ },
+                            modifier = Modifier.padding(innerPadding),
+                        )
+                    }
+                } else if (usable && showSetup == true) {
                     SetupScreen(
                         monitor = monitor,
                         onFinish = {
@@ -1252,6 +1283,28 @@ private fun BiometricUnavailableDialog(
             }
         },
     )
+}
+
+@Composable
+private fun UpdateRequiredScreen(
+    message: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            stringResource(R.string.update_required_title),
+            style = MaterialTheme.typography.titleLarge,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(message)
+        Spacer(Modifier.height(16.dp))
+        Button(onClick = onRetry) { Text(stringResource(R.string.update_required_retry)) }
+    }
 }
 
 @Composable

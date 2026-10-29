@@ -12,6 +12,14 @@ change"; find what those are, what is affected, what must be modified or added, 
 anything.
 **Canonical companions:** OPD #6 (account identity & comms), #30 (identity-loss diagnosis),
 #36 (sign-in/account model), #37 (name-the-person cases); ADR #125 (identity rotation guards).
+**Release 0 status (2026-10-29):** plan steps 2–4 are implemented and test-green but **not
+deployed** — server callables (`appendUserEvent`, invitation create/respond, `terminatePair`,
+`initializeUserProfile`, `getClientCompatibility`), server-owned event token buckets, the
+client routed through them, hardened rules (profile owner-read, direct event/pair/token
+writes denied, system events read-only), the kill switch moved into `appendUserEvent`,
+`versionCode = 2` / `versionName = "1.1"`, and the startup update-required gate. Deploy
+(step 5) and the anonymous-cleanup check (step 6) are still open. Record: ADR #229, ADR #230
+and `app/docs/account-release0-inventory.md` §10–§12.
 
 ---
 

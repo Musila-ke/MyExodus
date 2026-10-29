@@ -139,7 +139,7 @@ internal class FakeExchange(
     private val cloud: FakeCloud,
     private val nowMillis: () -> Long,
     private val scheduler: TestCoroutineScheduler,
-) : PairingExchange(ApplicationProvider.getApplicationContext(), firestoreInstance()) {
+) : PairingExchange(ApplicationProvider.getApplicationContext(), firestoreInstance(), functionsInstance()) {
 
     override suspend fun registerToken(token: PairingToken, creatorUid: String, payload: EnrollmentPayload) {
         if (cloud.failNextTokenRegistration) {

@@ -1,8 +1,12 @@
 'use strict';
 // Step 2 security gate: the mailbox rules are the server-side authorization boundary.
-// These tests run against the real firestore.rules in the Firestore emulator and prove
-// recipient isolation, create-only replay handling, the field allowlist, and that a
-// revoked (terminated) relationship can no longer receive queued events.
+// These tests run against the real firestore.rules in the Firestore emulator.
+//
+// Account plan Release 0 step 3 changed the write side: appendUserEvent is the ONLY event
+// write path, so direct client mailbox creates are denied outright. What remains here is
+// the read boundary (recipient isolation, author relay marker), immutability, acks, and
+// that pair lifecycle + DMS state stay server-only. The append-side gates (schema, pair and
+// profile state, token buckets, kill switch) are covered by event-append.emulator.js.
 //
 // Run: npm run test:rules (functions/)
 
@@ -101,92 +105,16 @@ test('the author can read the marker on its own sent message, not someone else�
   await assertFails(getDoc(doc(alice, mailbox('erin', 'from-dave'))));
 });
 
-test('a member of an active pair can write to the other member’s mailbox', async () => {
-  await assertSucceeds(
-    setDoc(doc(alice, mailbox('bob', 'queued-1')), message('alice', 'pair-alice-bob')),
-  );
-});
-
-test('operator kill switch: an explicit false stops new sends and leaves stored data readable', async () => {
-  await env.withSecurityRulesDisabled(async (ctx) => {
-    await setDoc(doc(ctx.firestore(), 'config', 'features'), { partnerAccountabilityEnabled: false });
-  });
+test('direct client mailbox create is denied — appendUserEvent is the only write path', async () => {
+  // Valid-looking payload by an active pair member: still denied. The callable owns every
+  // schema/state/token-bucket check now, so no client write variant is admissible.
+  await assertFails(setDoc(doc(alice, mailbox('bob', 'queued-1')), message('alice', 'pair-alice-bob')));
+  await assertFails(setDoc(doc(alice, mailbox('bob', 'spoof')), message('bob', 'pair-alice-bob')));
   await assertFails(
-    setDoc(doc(alice, mailbox('bob', 'switch-off')), message('alice', 'pair-alice-bob')),
+    setDoc(doc(alice, mailbox('bob', 'ghost-pair')), message('alice', 'pair-does-not-exist')),
   );
-  // Rollback is not deletion: the pairing and an already-stored message survive and stay readable.
-  await assertSucceeds(getDoc(doc(alice, 'pairings/pair-alice-bob')));
-  await assertSucceeds(getDoc(doc(bob, mailbox('bob', 'from-alice'))));
-});
-
-test('operator kill switch: absent doc, absent field, or explicit true leaves sends enabled', async () => {
-  await assertSucceeds(
-    setDoc(doc(alice, mailbox('bob', 'no-config-doc')), message('alice', 'pair-alice-bob')),
-  );
-  await env.withSecurityRulesDisabled(async (ctx) => {
-    await setDoc(doc(ctx.firestore(), 'config', 'features'), { partnerSosEnabled: false });
-  });
-  await assertSucceeds(
-    setDoc(doc(alice, mailbox('bob', 'field-absent')), message('alice', 'pair-alice-bob')),
-  );
-  await env.withSecurityRulesDisabled(async (ctx) => {
-    await setDoc(doc(ctx.firestore(), 'config', 'features'), { partnerAccountabilityEnabled: true });
-  });
-  await assertSucceeds(
-    setDoc(doc(alice, mailbox('bob', 'explicit-true')), message('alice', 'pair-alice-bob')),
-  );
-});
-
-test('senderUid cannot be spoofed', async () => {
-  await assertFails(
-    setDoc(doc(alice, mailbox('bob', 'spoof')), message('bob', 'pair-alice-bob')),
-  );
-});
-
-test('a revoked relationship cannot queue new events', async () => {
-  const frank = env.authenticatedContext('frank').firestore();
-  await assertFails(
-    setDoc(doc(frank, mailbox('gina', 'after-terminate')), message('frank', 'pair-frank-gina')),
-  );
-});
-
-test('another relationship’s pairId cannot be used to post into a mailbox', async () => {
-  await assertFails(
-    setDoc(doc(dave, mailbox('bob', 'wrong-pair')), message('dave', 'pair-dave-erin')),
-  );
-});
-
-test('a pairId the sender does not belong to is denied', async () => {
   await assertFails(
     setDoc(doc(stranger, mailbox('bob', 'not-a-member')), message('stranger', 'pair-alice-bob')),
-  );
-});
-
-test('a mailbox document is create-only — replaying the message id is denied', async () => {
-  await assertFails(
-    setDoc(doc(alice, mailbox('bob', 'from-alice')), message('alice', 'pair-alice-bob')),
-  );
-});
-
-test('the field allowlist rejects key material and unknown fields', async () => {
-  await assertFails(
-    setDoc(doc(alice, mailbox('bob', 'with-cek')), message('alice', 'pair-alice-bob', {
-      cek: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-    })),
-  );
-  await assertFails(
-    setDoc(doc(alice, mailbox('bob', 'with-plaintext')), message('alice', 'pair-alice-bob', {
-      plaintext: 'blocked com.secret.app',
-    })),
-  );
-});
-
-test('oversized payloads are refused at the storage boundary', async () => {
-  await assertFails(
-    setDoc(
-      doc(alice, mailbox('bob', 'oversized')),
-      message('alice', 'pair-alice-bob', { payload: 'A'.repeat(8193) }),
-    ),
   );
 });
 
@@ -208,15 +136,13 @@ test('only the recipient can acknowledge its own messages', async () => {
   );
 });
 
-test('an unknown pairing id cannot be used at all', async () => {
-  await assertFails(
-    setDoc(doc(alice, mailbox('bob', 'ghost-pair')), message('alice', 'pair-does-not-exist')),
-  );
-});
-
 test('the pairing document itself is not client-writable', async () => {
+  const { updateDoc } = require('firebase/firestore');
   await assertFails(
     setDoc(doc(alice, 'pairings/pair-alice-bob'), { members: ['alice'], status: 'active' }),
+  );
+  await assertFails(
+    updateDoc(doc(alice, 'pairings/pair-alice-bob'), { status: 'terminated' }),
   );
 });
 

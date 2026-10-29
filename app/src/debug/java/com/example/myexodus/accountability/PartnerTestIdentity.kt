@@ -122,7 +122,7 @@ class PartnerTestIdentity(
     fun pairingFlow(): PairingFlow = PairingFlow(
         enrollmentFlow = EnrollmentFlow(signer, AttestationVerifier(), cekDerivation),
         enrollmentDao = enrollmentDao,
-        exchange = PairingExchange(context, firestore),
+        exchange = PairingExchange(context, firestore, functions),
         registration = PairingRegistration(context, functions),
         secretsRepository = secretsRepository,
         nowEpochMillis = System::currentTimeMillis,

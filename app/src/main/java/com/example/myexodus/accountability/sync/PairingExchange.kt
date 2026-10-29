@@ -5,18 +5,20 @@ import com.example.myexodus.accountability.enrollment.EnrollmentPayload
 import com.example.myexodus.accountability.enrollment.PairingToken
 import com.example.myexodus.accountability.enrollment.decodeEnrollmentPayload
 import com.example.myexodus.accountability.enrollment.encodeEnrollmentPayload
-import com.google.firebase.firestore.Blob
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.functions.FirebaseFunctions
+import com.google.firebase.functions.FirebaseFunctionsException
 import kotlinx.coroutines.delay
+import java.util.Base64
 
 /**
  * §10 steps 1-3 relay exchange, v2 model (§8 Step 3). The token document id is
- * SHA-256(token) — a token document is unaddressable without the token — and expiry is
- * enforced server-side by the rules (expiresAt > request.time). Single-use partner
- * response is enforced by the rules' `!('partnerUid' in resource.data)` precondition on
- * update: the first response commits, a concurrent second is denied (the caller maps
- * that to [RespondResult.AlreadyUsed]).
+ * SHA-256(token) — a token document is unaddressable without the token, which is what
+ * makes the possession-gated read the capability. Since Release 0 (account plan §7 step 2)
+ * the writes are server-mediated: `createPairInvitation`, `respondToPairInvitation` and
+ * `terminatePair` validate expiry, single-use, self-response and membership server-side;
+ * the direct-write rules are gone. Reads stay direct and expiry-gated by the rules.
  *
  * The token document is transport only — it grants no authority. Authority is the signed
  * pairing proof each device submits to registerPairing ([PairingRegistration]), which
@@ -26,6 +28,7 @@ import kotlinx.coroutines.delay
 open class PairingExchange(
     private val appContext: Context,
     private val firestore: FirebaseFirestore,
+    private val functions: FirebaseFunctions,
 ) {
 
     /** The partner's response fields written into the token document. */
@@ -76,13 +79,20 @@ open class PairingExchange(
         data object Pending : PairingStatus
     }
 
-    /** §10 step 1: register the token (with the initiator's payload) before the QR is shown. */
+    /**
+     * §10 step 1: register the token (with the initiator's payload) before the QR is shown.
+     * The creator uid is auth-derived server-side; [creatorUid] stays in the signature
+     * because the test seam models the document it would have written.
+     */
     open suspend fun registerToken(token: PairingToken, creatorUid: String, payload: EnrollmentPayload) {
         AppCheckInstaller.install(appContext)
-        firestore.collection(FirestoreSchema.PAIRING_TOKENS_COLLECTION)
-            .document(FirestoreSchema.pairingTokenDocumentId(token))
-            .set(FirestoreSchema.pairingTokenData(token, creatorUid, encodeEnrollmentPayload(payload)))
-            .await()
+        functions.getHttpsCallable("createPairInvitation").call(
+            mapOf(
+                "tokenId" to FirestoreSchema.pairingTokenDocumentId(token),
+                "expiresAtEpochMillis" to token.expiresAtEpochMillis,
+                "payloadB64" to Base64.getEncoder().encodeToString(encodeEnrollmentPayload(payload)),
+            ),
+        ).await()
     }
 
     /**
@@ -157,8 +167,10 @@ open class PairingExchange(
 
     /**
      * §10 step 2 (partner half): write the partner's enrollment payload + transcript
-     * signature into the token document. Single-use is the rules' precondition (see class
-     * doc) — the denied case surfaces here as [RespondResult.AlreadyUsed].
+     * signature onto the token document through `respondToPairInvitation`. Single-use,
+     * expiry and self-response are server-validated — expired/already-used both surface as
+     * [RespondResult.AlreadyUsed]. The caller uid is auth-derived; [myUid] stays in the
+     * signature for the test seam.
      */
     open suspend fun respondOnToken(
         token: PairingToken,
@@ -167,26 +179,24 @@ open class PairingExchange(
         partnerSignature: ByteArray,
     ): RespondResult {
         AppCheckInstaller.install(appContext)
-        val ref = firestore.collection(FirestoreSchema.PAIRING_TOKENS_COLLECTION)
-            .document(FirestoreSchema.pairingTokenDocumentId(token))
         return try {
-            ref.update(
+            functions.getHttpsCallable("respondToPairInvitation").call(
                 mapOf(
-                    "partnerUid" to myUid,
-                    "partnerPayload" to Blob.fromBytes(encodeEnrollmentPayload(myPayload)),
-                    "partnerSignature" to Blob.fromBytes(partnerSignature),
+                    "tokenId" to FirestoreSchema.pairingTokenDocumentId(token),
+                    "partnerPayloadB64" to Base64.getEncoder()
+                        .encodeToString(encodeEnrollmentPayload(myPayload)),
+                    "partnerSignatureB64" to Base64.getEncoder().encodeToString(partnerSignature),
                 ),
             ).await()
             RespondResult.Written
-        } catch (e: FirebaseFirestoreException) {
-            if (e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
-                // Doc exists (update on a missing doc is NOT_FOUND, not denial) and the
-                // write was refused: either a concurrent response won the single-use race
-                // or the token expired — same outcome either way (v1 had this same
-                // denial-mapping ambiguity on the redeem read).
-                RespondResult.AlreadyUsed
-            } else {
-                RespondResult.Failed(e.message ?: "token response write failed")
+        } catch (e: FirebaseFunctionsException) {
+            when (e.code) {
+                // Expired and already-used are the same dead-attempt outcome.
+                FirebaseFunctionsException.Code.NOT_FOUND,
+                FirebaseFunctionsException.Code.FAILED_PRECONDITION,
+                -> RespondResult.AlreadyUsed
+
+                else -> RespondResult.Failed(e.message ?: "token response write failed")
             }
         }
     }
@@ -262,31 +272,30 @@ open class PairingExchange(
     }
 
     /**
-     * §8 Step 13 / Step 10 revocation: flips `/pairings/{pairId}` status to `terminated` — the
-     * rules pin the update to members + active→terminated (no other field, no un-terminating),
-     * and the mailbox create rule (status == 'active') makes further partner writes
-     * structurally impossible (Req 29: ending a partnership stops all future syncs). The
-     * registerPairing function reads `terminated` as a re-pair and increments the AD-07 epoch.
+     * §8 Step 13 / Step 10 revocation: `terminatePair` performs the member-only,
+     * idempotent active→terminated transition server-side and writes the deterministic
+     * `system_events/pair_terminated` notice. `terminated` (missing pair included) makes
+     * further partner writes structurally impossible (Req 29: ending a partnership stops
+     * all future syncs); registerPairing reads `terminated` as a re-pair and increments
+     * the AD-07 epoch.
      *
-     * Returns true only when the server-side exit is acknowledged: the write landed, the
-     * document is gone, or a denial proved the document is already `terminated` (the one
-     * client write cannot change a terminated document, so a member's denied flip that reads
-     * back `terminated` is the partner having terminated first). Network, attestation, and
-     * ambiguous denials return false — Step 10's journal keeps that row pending and retries.
+     * Returns true only when the server-side exit is acknowledged: success, or a denial
+     * that reads back `terminated` (the partner terminated first). Network, attestation,
+     * and ambiguous denials return false — Step 10's journal keeps that row pending and
+     * retries.
      */
     open suspend fun terminatePair(pairId: String): Boolean {
         AppCheckInstaller.install(appContext)
-        val document = FirestoreSchema.pairingDocument(firestore, pairId)
         return try {
-            document.update("status", "terminated").await()
+            functions.getHttpsCallable("terminatePair").call(mapOf("pairId" to pairId)).await()
             true
-        } catch (e: FirebaseFirestoreException) {
+        } catch (e: FirebaseFunctionsException) {
             when (e.code) {
-                FirebaseFirestoreException.Code.NOT_FOUND -> true
-                FirebaseFirestoreException.Code.PERMISSION_DENIED,
-                FirebaseFirestoreException.Code.FAILED_PRECONDITION,
+                FirebaseFunctionsException.Code.NOT_FOUND -> true
+                FirebaseFunctionsException.Code.PERMISSION_DENIED,
+                FirebaseFunctionsException.Code.FAILED_PRECONDITION,
                 -> runCatching {
-                    val snapshot = document.get().await()
+                    val snapshot = FirestoreSchema.pairingDocument(firestore, pairId).get().await()
                     !snapshot.exists() || snapshot.getString("status") == "terminated"
                 }.getOrDefault(false)
 

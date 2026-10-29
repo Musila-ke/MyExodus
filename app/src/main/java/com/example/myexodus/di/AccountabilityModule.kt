@@ -28,6 +28,7 @@ import com.example.myexodus.accountability.state.ChainEventDao
 import com.example.myexodus.accountability.state.ChainStateStore
 import com.example.myexodus.accountability.state.LocalWipeDetector
 import com.example.myexodus.accountability.state.SessionKeyManager
+import com.example.myexodus.accountability.sync.AccountCallables
 import com.example.myexodus.accountability.sync.AppCheckInstaller
 import com.example.myexodus.accountability.sync.ChainRepairCoordinator
 import com.example.myexodus.accountability.sync.FirestoreMailboxReceiver
@@ -383,14 +384,14 @@ object AccountabilityModule {
     )
 
     /** Plan §7 item 9 / §6 steps 3+8 (AD-06b): the v2 drain writes to the partner's mailbox.
-     *  `set()` is create-or-replace client-side, but the rules hold no update rule — a replay
-     *  of an already-written message evaluates as an update and is denied, so the stored
-     *  envelope is never re-written. */
+     *  Release 0: the write is the `appendUserEvent` callable (server-mediated, rate-limited,
+     *  rules deny direct client mailbox create). [AccountCallables.appendUserEvent] translates
+     *  the callable error into the Firestore code space the drainer already classifies. */
     @Provides @Singleton
     fun provideMailboxOutboxDrainer(
         db: AccountabilityDatabase,
         store: ChainStateStore,
-        firestore: FirebaseFirestore,
+        functions: FirebaseFunctions,
         crashReporting: CrashReporting,
     ): MailboxOutboxDrainer {
         val dao = db.outboxDao()
@@ -404,9 +405,8 @@ object AccountabilityModule {
                 dao.recordAttempt(messageId, atEpochMillis, nextAttemptAtEpochMillis, errorCode)
             },
             expireDue = dao::expireDue,
-            write = { partnerUid, messageId, data ->
-                FirestoreSchema.mailboxMessageDocument(firestore, partnerUid, messageId)
-                    .set(data).await()
+            write = { _, messageId, data ->
+                AccountCallables.appendUserEvent(functions, messageId, data)
             },
             onSendLatency = { millis ->
                 crashReporting.nonFatal(
@@ -495,6 +495,7 @@ object AccountabilityModule {
         keystore: AccountabilityKeyStore,
         exchange: PairingExchange,
         firestore: FirebaseFirestore,
+        functions: FirebaseFunctions,
     ): BilateralDeletion {
         return BilateralDeletion(
             creator = creator,
@@ -504,7 +505,7 @@ object AccountabilityModule {
             destroyPairAgreementKey = keystore::destroyPairAgreementKey,
             destroyDeviceAgreementKey = keystore::destroyAgreementKey,
             terminatePair = exchange::terminatePair,
-            deliverRequest = { partnerUid, row ->
+            deliverRequest = { _, row ->
                 val uid = FirebaseAuth.getInstance().currentUser?.uid
                 val senderId = row.senderKeyId
                 if (uid == null || senderId == null) {
@@ -512,19 +513,23 @@ object AccountabilityModule {
                 } else {
                     AppCheckInstaller.install(context)
                     try {
-                        FirestoreSchema.mailboxMessageDocument(firestore, partnerUid, row.messageId).set(
-                            FirestoreSchema.mailboxMessageData(
-                                senderId = senderId,
-                                senderUid = uid,
-                                pairId = row.pairId,
-                                payloadBase64 = Base64.getEncoder().encodeToString(row.requestEnvelope),
-                                keyEpoch = row.keyEpoch,
+                        // Release 0: the same appendUserEvent callable as the outbox drain —
+                        // direct client mailbox writes are denied by the rules.
+                        AccountCallables.appendUserEvent(
+                            functions,
+                            row.messageId,
+                            mapOf(
+                                "senderId" to senderId,
+                                "senderUid" to uid,
+                                "pairId" to row.pairId,
+                                "payload" to Base64.getEncoder().encodeToString(row.requestEnvelope),
+                                "keyEpoch" to row.keyEpoch,
                             ),
-                        ).await()
+                        )
                         true
                     } catch (e: FirebaseFirestoreException) {
-                        // ALREADY_EXISTS: delivered by a crashed earlier attempt. Denied: either
-                        // a rules rejection or that same replay (create-only rule) — see the
+                        // ALREADY_EXISTS: delivered by a crashed earlier attempt. Denied: the
+                        // pair already terminated or this uid is no longer a member — see the
                         // drainer's ambiguity note; retrying is pointless either way and the
                         // remote-erasure claim never rests on this flag.
                         e.code == FirebaseFirestoreException.Code.ALREADY_EXISTS ||
@@ -580,7 +585,8 @@ object AccountabilityModule {
     fun providePairingExchange(
         @ApplicationContext context: Context,
         firestore: FirebaseFirestore,
-    ): PairingExchange = PairingExchange(context, firestore)
+        functions: FirebaseFunctions,
+    ): PairingExchange = PairingExchange(context, firestore, functions)
 
     /** AD-17b: region must equal the deployed function's region and the Firestore database region. */
     @Provides @Singleton
@@ -649,7 +655,14 @@ object AccountabilityModule {
         @ApplicationContext context: Context,
         firestore: FirebaseFirestore,
         reachability: PairingReachabilityStore,
-    ): PairUidResolver = PairUidResolver(context, firestore, reachability)
+        functions: FirebaseFunctions,
+    ): PairUidResolver = PairUidResolver(
+        context,
+        firestore,
+        reachability,
+        // Release 0: every protected callable requires the ACTIVE profile this creates.
+        ensureProfile = { AccountCallables.initializeUserProfile(functions) },
+    )
 
     /** Owner mandate 2026-10-04: the foreground realtime doorbell (see [PartnerLiveSync]). */
     @Provides @Singleton

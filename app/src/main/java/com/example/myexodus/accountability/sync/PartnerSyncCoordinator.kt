@@ -789,7 +789,13 @@ class PairUidResolver(
     private val appContext: Context,
     private val firestore: FirebaseFirestore,
     private val reachability: PairingReachabilityStore,
+    /** Release 0: creates the ACTIVE `users/{uid}` profile every protected callable requires.
+     *  Best effort — a failure retries on the next `ensureUid()`. */
+    private val ensureProfile: suspend () -> Unit = {},
 ) {
+    /** Uid whose profile this process has already ensured; rotation/reset re-runs it. */
+    private var profileReadyFor: String? = null
+
     /** The local device's uid — anonymous sign-in if needed. [resolve]'s first half, on its
      *  own for the pairing ceremony, which needs a uid before any pair id exists.
      *
@@ -820,7 +826,13 @@ class PairUidResolver(
             if (user != null) reachability.markIdentityRotated(System.currentTimeMillis())
         }
         if (user == null) Log.w(TAG, "no uid — sign-in unavailable")
-        user?.uid
+        user?.uid?.also { uid ->
+            if (uid != profileReadyFor) {
+                runCatching { ensureProfile() }
+                    .onSuccess { profileReadyFor = uid }
+                    .onFailure { Log.w(TAG, "profile initialization failed — will retry", it) }
+            }
+        }
     }
 
     private suspend fun signIn(auth: FirebaseAuth): FirebaseUser? = runCatching {

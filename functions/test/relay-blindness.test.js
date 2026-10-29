@@ -13,6 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { createRelayHandler } = require('../relay-logic');
+const { INPUT_KEYS } = require('../event-append-logic');
 
 const PLAINTEXT = 'blocked app com.secret.bank notification="code 1234" https://secret.example';
 const DELIVERY_MODULES = [
@@ -112,15 +113,18 @@ test('delivery modules contain no decryption or key-derivation code', () => {
   }
 });
 
-test('mailbox create rules allow no key-material field', () => {
+test('the event write callable accepts no key-material field', () => {
+  assert.deepStrictEqual([...INPUT_KEYS].sort(), [
+    'ciphertextB64', 'eventId', 'keyEpoch', 'pairId', 'senderId',
+  ], 'keyEpoch is a counter; no secret material crosses the callable');
+});
+
+test('direct client mailbox writes are denied in the rules', () => {
   const rules = fs.readFileSync(path.join(__dirname, '..', '..', 'firestore.rules'), 'utf8');
   const mailboxBlock = rules.slice(rules.indexOf('match /mailboxes/'));
-  const allowlist = mailboxBlock.slice(
-    mailboxBlock.indexOf('hasOnly('),
-    mailboxBlock.indexOf(')', mailboxBlock.indexOf('hasOnly(')),
+  assert.match(
+    mailboxBlock,
+    /allow create, update, delete: if false;/,
+    'appendUserEvent must be the only event write path',
   );
-  const fields = [...allowlist.matchAll(/'([^']+)'/g)].map((m) => m[1]).sort();
-  assert.deepStrictEqual(fields, [
-    'keyEpoch', 'pairId', 'payload', 'senderId', 'senderUid', 'timestamp',
-  ], 'keyEpoch is a counter; no secret material can be written to a mailbox');
 });

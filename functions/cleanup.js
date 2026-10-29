@@ -76,6 +76,31 @@ exports.cleanupIdempotencyRecords = onSchedule(
   },
 );
 
+// §8.8: event token-bucket documents are server-only and expire through scheduled cleanup.
+// A day idle restores any bucket to its full burst capacity, so dropping the document is
+// equivalent to refilling it — retention is cost hygiene, never correctness.
+exports.cleanupEventRateLimits = onSchedule(
+  {
+    region: REGION,
+    schedule: '53 3 * * *',
+    timeZone: 'UTC',
+    maxInstances: 1,
+    timeoutSeconds: 300,
+  },
+  async () => {
+    const stale = await db.collection('eventRateLimits')
+      .where('updatedAt', '<', Timestamp.fromMillis(Date.now() - 24 * 60 * 60 * 1000))
+      .orderBy('updatedAt')
+      .limit(CLEANUP_BATCH)
+      .get();
+    if (stale.empty) return;
+    const batch = db.batch();
+    stale.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+    logger.info('eventRateLimits cleanup', { deleted: stale.size });
+  },
+);
+
 async function allAcked(messageDoc, recipientUid) {
   const [instSnap, ackSnap] = await Promise.all([
     db.collection(`users/${recipientUid}/push_installations`).get(),

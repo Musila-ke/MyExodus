@@ -1,7 +1,6 @@
 package com.example.myexodus.accountability.sync
 
 import com.example.myexodus.accountability.enrollment.PairingToken
-import com.google.firebase.firestore.Blob
 import com.google.firebase.firestore.CollectionReference
 import com.google.firebase.firestore.DocumentReference
 import com.google.firebase.firestore.DocumentSnapshot
@@ -231,22 +230,4 @@ object FirestoreSchema {
         return digest.joinToString("") { "%02x".format(it) }
     }
 
-    /**
-     * §10 step 1: relay-registered token fields — exactly the keys the rules' create
-     * hasOnly allows. The initiator's enrollment payload rides here (not in the QR — real
-     * attestation chains overflow QR capacity, 2953 B ceiling; caught on-device on the
-     * X6532, 2026-08-30); [payload] is public key material + attestation certs, gated by
-     * token possession and expiry like the token itself. expiresAt is a Firestore Timestamp
-     * so the rules' lifetime gate can compare it to `request.time` (a number epoch would
-     * not be comparable in rules). The partner's response lands as partnerUid /
-     * partnerPayload / partnerSignature via [PairingExchange.respondOnToken].
-     */
-    fun pairingTokenData(token: PairingToken, creatorUid: String, payload: ByteArray): Map<String, Any> = mapOf(
-        "creatorUid" to creatorUid,
-        "expiresAt" to Timestamp(
-            token.expiresAtEpochMillis / 1000,
-            ((token.expiresAtEpochMillis % 1000) * 1_000_000).toInt(),
-        ),
-        "payload" to Blob.fromBytes(payload),
-    )
 }

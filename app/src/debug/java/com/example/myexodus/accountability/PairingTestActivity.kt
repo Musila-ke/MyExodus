@@ -89,7 +89,11 @@ class PairingTestActivity : FragmentActivity() {
         PairingFlow(
             enrollmentFlow = EnrollmentFlow(AccountabilitySigner(), AttestationVerifier(), CekDerivation()),
             enrollmentDao = InMemoryEnrollmentDao(),
-            exchange = PairingExchange(this, FirebaseFirestore.getInstance(harnessApp)),
+            exchange = PairingExchange(
+                this,
+                FirebaseFirestore.getInstance(harnessApp),
+                FirebaseFunctions.getInstance(harnessApp, PairingRegistration.REGION),
+            ),
             registration = PairingRegistration(
                 this,
                 FirebaseFunctions.getInstance(harnessApp, PairingRegistration.REGION),
