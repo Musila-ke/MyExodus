@@ -34,6 +34,7 @@ import com.example.myexodus.accountability.sync.ChainRepairCoordinator
 import com.example.myexodus.accountability.sync.FirestoreMailboxReceiver
 import com.example.myexodus.accountability.sync.FirestoreSchema
 import com.example.myexodus.accountability.sync.await
+import com.example.myexodus.accountability.sync.awaitReportingDenial
 import com.example.myexodus.accountability.sync.MailboxEventProcessor
 import com.example.myexodus.accountability.sync.MailboxMessageHandler
 import com.example.myexodus.accountability.sync.MailboxOutboxDrainer
@@ -310,7 +311,7 @@ object AccountabilityModule {
                     FirestoreSchema.nudgeAckData(),
                 )
             }
-            batch.commit().await()
+            batch.commit().awaitReportingDenial(crashReporting, "nudge_ack")
         },
         cancelNotifications = { PartnerNotifications.cancelPartnerNudge(context) },
         reportUnreadable = { cause -> crashReporting.nonFatal("partner_nudge_card", cause) },
@@ -333,6 +334,7 @@ object AccountabilityModule {
         db: AccountabilityDatabase,
         uidResolver: PairUidResolver,
         partnerSelection: PartnerSelection,
+        crashReporting: CrashReporting,
     ): NudgeSettingsRepository = NudgeSettingsRepository(
         enrollments = db.enrollmentDao()::all,
         selectedPairId = { partnerSelection.selectedPairId },
@@ -344,7 +346,7 @@ object AccountabilityModule {
         writeBlocked = { pairId, uid, blocked ->
             FirestoreSchema.nudgeSettingsDocument(firestore, pairId, uid)
                 .set(FirestoreSchema.nudgeSettingsData(blocked))
-                .await()
+                .awaitReportingDenial(crashReporting, "nudge_settings")
         },
     )
 
@@ -367,6 +369,7 @@ object AccountabilityModule {
         firestore: FirebaseFirestore,
         messaging: FirebaseMessaging,
         resolver: PairUidResolver,
+        crashReporting: CrashReporting,
     ): PushInstallationRegistrar = PushInstallationRegistrar(
         ensureInstallationId = { PushInstallationRegistrar.installationIdOf() },
         platform = "android",
@@ -375,11 +378,15 @@ object AccountabilityModule {
         fetchToken = { messaging.token.await() },
         pushEligible = { PushInstallationRegistrar.pushEligibleOf(context) },
         write = { uid, installationId, data ->
-            FirestoreSchema.pushInstallationDocument(firestore, uid, installationId).set(data).await()
+            FirestoreSchema.pushInstallationDocument(firestore, uid, installationId)
+                .set(data)
+                .awaitReportingDenial(crashReporting, "push_installation")
         },
         legacyInstallationId = PushInstallationRegistrar.androidIdOf(context),
         deleteLegacy = { uid, installationId ->
-            FirestoreSchema.pushInstallationDocument(firestore, uid, installationId).delete().await()
+            FirestoreSchema.pushInstallationDocument(firestore, uid, installationId)
+                .delete()
+                .awaitReportingDenial(crashReporting, "push_installation_delete")
         },
     )
 
@@ -496,6 +503,7 @@ object AccountabilityModule {
         exchange: PairingExchange,
         firestore: FirebaseFirestore,
         functions: FirebaseFunctions,
+        crashReporting: CrashReporting,
     ): BilateralDeletion {
         return BilateralDeletion(
             creator = creator,
@@ -563,7 +571,8 @@ object AccountabilityModule {
                             AppCheckInstaller.install(context)
                             try {
                                 FirestoreSchema.mailboxAckDocument(firestore, uid, messageId, installationId)
-                                    .set(FirestoreSchema.mailboxAckData()).await()
+                                    .set(FirestoreSchema.mailboxAckData())
+                                    .awaitReportingDenial(crashReporting, "unpair_ack")
                                 true
                             } catch (e: FirebaseFirestoreException) {
                                 // The acks rules hold no update rule: a retried ack is denied —
@@ -960,6 +969,7 @@ object AccountabilityModule {
         db: AccountabilityDatabase,
         firestore: FirebaseFirestore,
         store: ChainStateStore,
+        crashReporting: CrashReporting,
         processor: MailboxEventProcessor,
         repair: ChainRepairCoordinator,
         approval: ApprovalFlow,
@@ -981,7 +991,8 @@ object AccountabilityModule {
                 PushInstallationRegistrar.installationIdOf()?.let { installationId ->
                     try {
                         FirestoreSchema.mailboxAckDocument(firestore, recipientUid, messageId, installationId)
-                            .set(FirestoreSchema.mailboxAckData()).await()
+                            .set(FirestoreSchema.mailboxAckData())
+                            .awaitReportingDenial(crashReporting, "mailbox_ack")
                     } catch (e: FirebaseFirestoreException) {
                         // The ack rule is create-only (AD-18b). A denial therefore usually means
                         // the ack already exists — the processed-but-unacked crash window's

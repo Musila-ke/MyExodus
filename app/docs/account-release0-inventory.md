@@ -249,13 +249,20 @@ Order followed (ADR #230): functions → APK → compatibility record → rules.
    Firestore is App Check-enforced, so an un-attested REST probe is rejected before rules
    evaluate.
 
-App Check: the API-37 AVD's debug token was (re-)registered mid-run — its previous token had
-been rejected (“Decoding App Check token failed”), which accounted for 108 of the HTTP 401
-rejections behind the old Cloud Functions “error rate” alerts. Registered token:
-`projects/913808045052/apps/1:913808045052:android:5fe57aa09fd14a279e3879/debugTokens/NWM2MTNkNmEtYjZkZi00MDEzLTk4N2MtYmE0OTFhYjhiMjE0`
-(display name “AVD MyExodus_API37 (re-onboarded 2026-10-29)”). That alert class is already
-retired at the policy level (5xx-only, ADR #224); the registration removes the background
-401 noise itself.
+App Check: the API-37 AVD's debug token was (re-)registered mid-run — its previous
+registration did not match the AVD's actual secret (“Decoding App Check token failed”), which
+accounted for 108 of the HTTP 401 rejections behind the old Cloud Functions “error rate”
+alerts. Live registration:
+`projects/913808045052/apps/1:913808045052:android:5fe57aa09fd14a279e3879/debugTokens/MzU5NzNiZmItNzEwNS00NGIxLTliNGItZTYzNTU0Y2ExNDJh`
+(display name “AVD MyExodus_API37 (correct secret, 2026-10-29)”); a direct `exchangeDebugToken`
+replay with the app's API key and signing cert returned a 942-char App Check token, and a
+second registration listing on 2026-10-29 confirms the superseded entry is gone. App-side
+re-verified at 19:13–19:14 after `install -r` of the 1.1 APK on `emulator-5554`: cold start
+logged no “Failed to exchange debug token”, and an App Check–protected callable reached the
+server (`submitHeartbeat` answered with the application-level `INSTALL_NOT_REGISTERED`, not a
+401), which proves the in-app exchange now succeeds. That alert class is already retired at
+the policy level (5xx-only, ADR #224); the registration removes the background 401 noise
+itself.
 
 Post-deploy observations:
 
@@ -267,8 +274,39 @@ Post-deploy observations:
   “Enhanced Mode is off” alert (ADR #231); fixed with a delayed re-check and re-proven on
   the X6532: the 1.1 update posted 1004 once, the fixed rebuild installed at 18:44:51 posted
   none (events log, zero `notification_enqueue` for 1004).
+- Cold-start ordering on a freshly installed AVD (19:14:13): the first `submitHeartbeat`
+  ran one second before push-installation registration completed and got
+  `INSTALL_NOT_REGISTERED`. The server requires `users/{uid}/push_installations/{installId}`
+  (`functions/heartbeat.js:59`), while the client's guard only checks the local install id —
+  so the first launch after install can spend one heartbeat on this. The next 15-minute beat
+  should succeed once registration landed; not worth a client change in Release 0.
 
-## 14. Step 6 — anonymous auto-cleanup check (2026-10-29)
+## 14. Plan §13.1 item 6 — monitoring before Release 1 (2026-10-29, ADR #232)
+
+- **Firestore rules denials:** there is no server-side signal — Firestore writes no log entry,
+  metric, or audit record for a write a rule denies. The client is therefore the only observer:
+  the six direct client writes (nudge settings, nudge acks, push-install set/delete, mailbox
+  acks, unpair acks) now report `firestore_denied cause=<op>` through the existing Crashlytics
+  non-fatal rail before rethrowing; only `PERMISSION_DENIED` is reported, transport failures are
+  not. Read it in the Crashlytics console (one issue class). Evidence: Robolectric
+  `FirestoreTaskDenialTest` 2/2; full JVM 2,084/0/0 (2026-10-29).
+- **Pair operation failures:** every callable already logs `<callable> rejected` with `reason`.
+  Log-based counter metric `logging.googleapis.com/user/callable_rejections` (filter
+  `jsonPayload.message=~"rejected$"`, label `reason`) now counts those handler-level
+  rejections; App Check 401s are structurally excluded because they never reach a handler.
+  Alert policy `projects/myexodus-53804/alertPolicies/9334481852107082372` — WARNING, fires at
+  ≥20 rejections in 15 min, `autoClose 1800s`, owner email channel. Threshold is set above
+  known-benign traffic (the daily `terminatePair NOT_A_PAIR_MEMBER` orphan; one
+  `INSTALL_NOT_REGISTERED` per fresh install), so it detects storms/loops, not isolated
+  failures; single rejections stay visible in CF logs, the dashboard and the in-app recovery
+  surfaces. Verified: metric created via API and listed; its filter replayed against 8 real
+  entries (including the 2026-10-23 `RATE_LIMITED` burst of seven in one second); a live AVD
+  cold start produced a handler-level rejection at 16:31:47Z after the metric existed.
+- **Honest limit:** the client event is a count on a best-effort rail (opt-out honored), not a
+  rate; and a metric-based alert policy cannot carry `notificationRateLimit` (the API rejects
+  it), so repeat emails are bounded by `autoClose` and one-incident-per-series.
+
+## 15. Step 6 — anonymous auto-cleanup check (2026-10-29)
 
 - `identitytoolkit` admin config for the project: `signIn.anonymous.enabled = true`, with no
   `autoDeleteAnonymousAccounts` setting — auto-cleanup is **off**, matching the plan's
