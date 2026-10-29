@@ -101,6 +101,13 @@ with a reason. "Where" names the primary surfaces, not every call site.
   via `AuthEvent.Collision`; the coordinator never signs out, unlinks or mutates the guest on
   a collision (JVM-proven). Signing in to a *different* account from a guest is refused with
   `TRANSITION_REQUIRED` until the R1.9 guest-transition coordinator sets the switch allowance.
+  **IMPLEMENTED (R1.9, 2026-10-29, ADR #235):** the switch path is live — the guest pane's
+  sign-in/Google opens the plan's disclosure (Import my progress / Discard guest progress /
+  Stay a guest); only a confirmed choice calls `GuestTransitionCoordinator`, whose encrypted
+  journal is written before the prepare callable and replayed (same id/capability) across a
+  lost response, process death, a typo'd password or a reauth detour. Pairs stay untouched
+  until finalize runs under the target session. Device-proven both branches (IMPORT and
+  DISCARD) on the API-37 AVD with server state FINALIZED and cleanup jobs QUEUED.
 - **A3. Sign-out semantics.** Confirmation must list consequences: partner updates stop, pending
   outbox stops, local sensitive data is wiped after confirmation (G2), push installation is
   deregistered (E8); server-side pairs and any encrypted backup remain for a later sign-in. The
@@ -112,6 +119,12 @@ with a reason. "Where" names the primary surfaces, not every call site.
 - **A4. Account switching.** Recommended: single account per install; switching wipes local data and
   re-syncs from the account. Multi-account profiles would require a Room schema change and are
   rejected unless a real need appears.
+  **IMPLEMENTED — server + client half (R1.9, 2026-10-29, ADR #235):** the prepare/finalize/cancel
+  callables (transactional lease, rate window, kill switch, capability hash, idempotent replay)
+  and the client coordinator/UI are live and device-proven. The local-data consequence (G2 wipe +
+  additive guest import) is R1.11 (#40); until it lands, finalize terminates pairs and queues the
+  cleanup job but does not move guest data into the account. The destructive local wipe on
+  sign-out/switch is R1.10 (#39, `LocalSessionManager`).
 - **A5. Dead-token recovery diverges by identity type.** ADR #125's rotate-to-new-anonymous-uid
   stays guest-only; a signed-in user is sent to re-authentication instead of rotating. The
   re-pair card gains a "Sign in" remedy (C2).
@@ -120,13 +133,22 @@ with a reason. "Where" names the primary surfaces, not every call site.
 - **A7. Provider setup for the direct-APK channel.** Email/password + Google enabled in the
   Firebase project; email verification; password policy; email-enumeration protection; OAuth
   client IDs for a non-Play install. Verify against official Firebase docs before implementation.
-  **OPEN — deployment checklist (R1.8):** client code is ready; the providers themselves are
-  console state. `GOOGLE_WEB_CLIENT_ID` is blank in `app/build.gradle.kts`, so Google is hidden
-  and email/password is the live path until the owner registers a Web application client ID
-  (SHA-1 for the signing certificate) and pastes it in. Also confirm: Email/Password provider
-  enabled, email-verification templates/action domain set, email-enumeration protection on,
-  and the "one account per email address" linking policy recorded in
-  `account-release0-inventory.md`'s console checklist.
+  **OPEN — deployment checklist (R1.8, state verified via the Admin APIs 2026-10-29):**
+  client code is ready; the providers themselves are console state. Confirmed live: Email/Password
+  and Anonymous providers enabled; email-enumeration protection on
+  (`emailPrivacyConfig.enableImprovedEmailPrivacy = true`); action links resolve on the Hosting
+  domain (`mobileLinksConfig.domain = HOSTING_DOMAIN`, default site `myexodus-53804`;
+  authorized domains `localhost`, `myexodus-53804.firebaseapp.com`, `myexodus-53804.web.app`);
+  a Firebase **web app `auth-action-web`** (`1:913808045052:web:fef25b7e24e2f54b9e3879`) exists so
+  the action-link handler has a web client — verification links previously had no valid action
+  target. Still owner-side: **(a)** `GOOGLE_WEB_CLIENT_ID` is blank in `app/build.gradle.kts`, so
+  Google stays hidden and email/password is the only live provider until a Web application OAuth
+  client is registered (SHA-1 for the signing certificate) and pasted in; **(b)** notification
+  email still uses Firebase's default shared sender (`notification.sendEmail.method = DEFAULT`) —
+  verification mail lands in **Gmail Spam**; a custom SMTP relay on an owned domain is a
+  **release blocker for the verification flow**, not a code change; **(c)** confirm the
+  "one account per email address" linking policy recorded in `account-release0-inventory.md`'s
+  console checklist.
 - **A8. Offer timing.** Anonymous remains the default (OPD #6 direction). The account offer belongs
   before pairing (highest value) and in Settings as "Secure your identity" (OPD #36).
   **PARTIAL (R1.8):** Settings → Account exists (first row of the Settings index, state-derived
@@ -278,8 +300,9 @@ with a reason. "Where" names the primary surfaces, not every call site.
   legacy files survive as the rollback copy for seven days. Names derive only from a SHA-256 of
   the uid — never from backup/UI input — and a different current identity never inherits a
   stored scope (ADR #125 rotation keeps this install's data). What remains for the account
-  transition itself (steps 9–11): switching the *active* scope on sign-in/sign-out, which is a
-  call into this class, and the cloud-restore offer on keystore failure (Release 2, G5).
+  transition itself (steps 10–11; the step-9 prepare/finalize/cancel work is ADR #235): switching
+  the *active* scope on sign-in/sign-out, which is a call into this class, and the cloud-restore
+  offer on keystore failure (Release 2, G5).
 
 ### H. UX and onboarding
 - **H1. First-run identity choice** (continue anonymously vs create/sign in), with what an account

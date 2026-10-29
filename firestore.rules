@@ -227,5 +227,13 @@ service cloud.firestore {
     match /nudgePushQueue/{document=**} { allow read, write: if false; }
     match /config/features { allow read, write: if false; }
     match /config/dms { allow read, write: if false; }
+
+    // Guest transition (account plan §4.2/§8.4): records hold the capability hash and the
+    // lease enforces one unfinalized transition per guest uid — both are function-only, and
+    // the capability itself must never be client-readable anywhere. The gate document is
+    // likewise server-owned so a client can neither read nor flip the flag.
+    match /guestTransitions/{document=**} { allow read, write: if false; }
+    match /guestTransitionLeases/{document=**} { allow read, write: if false; }
+    match /serverFeatureGates/{document=**} { allow read, write: if false; }
   }
 }

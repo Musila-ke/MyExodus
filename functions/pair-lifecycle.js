@@ -294,4 +294,5 @@ module.exports = {
   createTerminatePairHandler,
   createGetClientCompatibilityHandler,
   INVITATION_LIMIT,
+  readActiveProfile,
 };

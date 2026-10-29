@@ -31,6 +31,9 @@ class AuthCoordinator @Inject constructor(
     private val _events = Channel<AuthEvent>(Channel.BUFFERED)
     val events: Flow<AuthEvent> = _events.receiveAsFlow()
 
+    /** The durable identity, with any transient overlay (error, reauth, authenticating) removed. */
+    val durableState: AuthState get() = base
+
     /** The durable identity a transient overlay returns to. */
     @Volatile private var base: AuthState = AuthState.Initializing
 
@@ -52,8 +55,10 @@ class AuthCoordinator @Inject constructor(
 
     /**
      * Enables signing in to a different account. Only the guest-transition coordinator calls
-     * this, after its encrypted journal holds a prepared transition; any failure or completed
-     * identity change clears it again.
+     * this, after its encrypted journal holds a prepared transition. A prepared transition
+     * survives a failed sign-in attempt — that retry is the plan's §8.4 recovery path — while a
+     * completed switch, a cancellation and sign-out clear it. Pair termination never depends on
+     * this flag: only finalize (with the journal's capability) can terminate.
      */
     fun setIdentitySwitchAllowed(allowed: Boolean) {
         identitySwitchAllowed = allowed
@@ -92,6 +97,14 @@ class AuthCoordinator @Inject constructor(
             operations.currentIdentity()?.isAnonymous == true -> operations.linkWithGoogle(idToken)
             else -> throw AuthOperationException(AuthFailure.ALREADY_SIGNED_IN)
         }
+        _events.send(AuthEvent.SignedIn(persistent = true, emailVerified = identity.emailVerified))
+        identity
+    }
+
+    /** The guest-transition path: sign in to the EXISTING account a prepared switch targets. */
+    suspend fun switchToGoogle(idToken: String) = operate(AccountOperation.SIGN_IN) {
+        requireSwitchPermitted()
+        val identity = operations.signInWithGoogle(idToken)
         _events.send(AuthEvent.SignedIn(persistent = true, emailVerified = identity.emailVerified))
         identity
     }
@@ -176,14 +189,12 @@ class AuthCoordinator @Inject constructor(
             throw e
         } catch (e: AuthOperationException) {
             base = stateOf(operations.currentIdentity())
-            identitySwitchAllowed = false
             if (e.failure == AuthFailure.CREDENTIAL_ALREADY_REGISTERED) {
                 _events.send(AuthEvent.Collision)
             }
             _state.value = AuthState.AuthError(operation, e.failure)
         } catch (_: Exception) {
             base = stateOf(operations.currentIdentity())
-            identitySwitchAllowed = false
             _state.value = AuthState.AuthError(operation, AuthFailure.UNKNOWN)
         }
     }

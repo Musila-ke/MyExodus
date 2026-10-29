@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -31,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -43,6 +45,10 @@ import com.example.myexodus.account.AuthFailure
 import com.example.myexodus.account.AuthProvider
 import com.example.myexodus.account.AuthState
 import com.example.myexodus.account.GoogleCredentialOutcome
+import com.example.myexodus.account.GuestTransitionState
+import com.example.myexodus.account.TransitionFailure
+import com.example.myexodus.account.TransitionIntent
+import com.example.myexodus.account.TransitionStep
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.PillTone
 import com.example.myexodus.ui.StatusPill
@@ -62,12 +68,17 @@ internal fun AccountPane(
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val transition by viewModel.transition.collectAsStateWithLifecycle()
+    val isGuest = state is AuthState.GuestActive
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // Hold the event/failure, resolve its copy in composition — a Context.getString from a
     // coroutine would not follow a configuration change (Compose lint).
     var statusEvent by remember { mutableStateOf<AuthEvent?>(null) }
     var statusFailure by remember { mutableStateOf<AuthFailure?>(null) }
+    // A sign-in the disclosure dialog interrupted; resumes once the server confirms the switch.
+    var pendingSwitch by remember { mutableStateOf<PendingSwitch?>(null) }
+    var showSwitchDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
@@ -85,18 +96,33 @@ internal fun AccountPane(
         }
     }
 
-    fun runGoogle(reauth: Boolean) {
+    fun runGoogle(reauth: Boolean, switchAccount: Boolean = false) {
         scope.launch {
             when (val result = viewModel.requestGoogleCredential(context)) {
                 is GoogleCredentialOutcome.Success ->
                     if (reauth) viewModel.reauthenticateWithGoogle(result.idToken)
-                    else viewModel.continueWithGoogle(result.idToken)
+                    else viewModel.continueWithGoogle(result.idToken, switchAccount)
                 GoogleCredentialOutcome.Cancelled -> Unit
                 is GoogleCredentialOutcome.Unavailable -> {
                     statusEvent = null
                     statusFailure = result.failure
                 }
             }
+        }
+    }
+
+    LaunchedEffect(transition) {
+        val pending = pendingSwitch ?: return@LaunchedEffect
+        when (transition) {
+            is GuestTransitionState.Prepared -> {
+                pendingSwitch = null
+                when (pending) {
+                    is PendingSwitch.Email -> viewModel.signInWithEmail(pending.email, pending.password)
+                    PendingSwitch.Google -> runGoogle(reauth = false, switchAccount = true)
+                }
+            }
+            GuestTransitionState.Idle -> pendingSwitch = null
+            else -> Unit
         }
     }
 
@@ -110,6 +136,14 @@ internal fun AccountPane(
             (statusEvent?.messageRes() ?: statusFailure?.let { failureRes(it) })?.let {
                 StatusCard(stringResource(it))
             }
+
+            TransitionCard(
+                state = transition,
+                signedIn = state is AuthState.PersistentActive,
+                onRetry = viewModel::retryTransition,
+                onCancelSwitch = viewModel::cancelTransition,
+                onDismiss = viewModel::dismissTransition,
+            )
 
             when (val current = state) {
                 AuthState.Initializing -> Box(
@@ -135,21 +169,84 @@ internal fun AccountPane(
                 AuthState.SignedOut,
                 is AuthState.GuestActive,
                 -> GuestAccount(
-                    hasGuestUid = state is AuthState.GuestActive,
+                    hasGuestUid = isGuest,
+                    prepared = transition is GuestTransitionState.Prepared,
                     googleAvailable = viewModel.googleAvailable,
                     viewModel = viewModel,
-                    onGoogle = { runGoogle(reauth = false) },
+                    onSignIn = { email, password ->
+                        if (transition is GuestTransitionState.Prepared || !isGuest) {
+                            viewModel.signInWithEmail(email, password)
+                        } else {
+                            pendingSwitch = PendingSwitch.Email(email, password)
+                            showSwitchDialog = true
+                        }
+                    },
+                    onGoogle = {
+                        if (transition is GuestTransitionState.Prepared || !isGuest) {
+                            runGoogle(reauth = false, switchAccount = isGuest)
+                        } else {
+                            pendingSwitch = PendingSwitch.Google
+                            showSwitchDialog = true
+                        }
+                    },
                 )
             }
         }
     }
+
+    if (showSwitchDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showSwitchDialog = false
+                pendingSwitch = null
+            },
+            title = { Text(stringResource(R.string.account_transition_title)) },
+            text = { Text(stringResource(R.string.account_transition_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showSwitchDialog = false
+                        viewModel.startTransition(TransitionIntent.IMPORT)
+                    },
+                ) { Text(stringResource(R.string.account_transition_import)) }
+            },
+            dismissButton = {
+                Column(horizontalAlignment = Alignment.End) {
+                    TextButton(
+                        onClick = {
+                            showSwitchDialog = false
+                            viewModel.startTransition(TransitionIntent.DISCARD)
+                        },
+                    ) {
+                        Text(
+                            stringResource(R.string.account_transition_discard),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    TextButton(
+                        onClick = {
+                            showSwitchDialog = false
+                            pendingSwitch = null
+                        },
+                    ) { Text(stringResource(R.string.account_transition_stay_guest)) }
+                }
+            },
+        )
+    }
+}
+
+private sealed interface PendingSwitch {
+    data class Email(val email: String, val password: String) : PendingSwitch
+    data object Google : PendingSwitch
 }
 
 @Composable
 private fun GuestAccount(
     hasGuestUid: Boolean,
+    prepared: Boolean,
     googleAvailable: Boolean,
     viewModel: AccountViewModel,
+    onSignIn: (String, String) -> Unit,
     onGoogle: () -> Unit,
 ) {
     var email by rememberSaveable { mutableStateOf("") }
@@ -234,7 +331,7 @@ private fun GuestAccount(
                 onClick = {
                     if (!validInput()) return@Button
                     if (signInMode) {
-                        viewModel.signInWithEmail(email, password)
+                        onSignIn(email, password)
                     } else {
                         viewModel.createAccount(email, password)
                     }
@@ -272,11 +369,11 @@ private fun GuestAccount(
                     ) { Text(stringResource(R.string.account_forgot)) }
                 }
             }
-            if (signInMode && hasGuestUid) {
-                // A guest cannot switch identity directly: the transition flow (plan §6.2)
-                // prepares a server-side intent before any pair is terminated.
+            if (signInMode && hasGuestUid && !prepared) {
+                // Plan §8.4: the disclosure (import vs discard, pair effects) comes before the
+                // server-side preparation; the button opens it rather than signing in directly.
                 Text(
-                    stringResource(R.string.account_error_transition),
+                    stringResource(R.string.account_transition_guest_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -428,7 +525,10 @@ private fun ReauthCard(
 }
 
 @Composable
-private fun WorkingCard() {
+private fun WorkingCard() = WorkingCard(stringResource(R.string.account_working))
+
+@Composable
+private fun WorkingCard(text: String) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = MaterialTheme.shapes.medium,
@@ -440,7 +540,110 @@ private fun WorkingCard() {
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             CircularProgressIndicator(Modifier.size(20.dp))
-            Text(stringResource(R.string.account_working), style = MaterialTheme.typography.bodyMedium)
+            Text(text, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+/**
+ * Account plan §8.4: the switch's own status, above the identity cards. Pairs are untouched
+ * until finalization, so the guest copy only ever promises what the server will do.
+ */
+@Composable
+private fun TransitionCard(
+    state: GuestTransitionState,
+    signedIn: Boolean,
+    onRetry: () -> Unit,
+    onCancelSwitch: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    when (state) {
+        GuestTransitionState.Idle -> Unit
+        GuestTransitionState.Preparing ->
+            WorkingCard(stringResource(R.string.account_transition_preparing))
+        GuestTransitionState.Cancelling ->
+            WorkingCard(stringResource(R.string.account_transition_cancelling))
+        is GuestTransitionState.Finalizing ->
+            WorkingCard(stringResource(R.string.account_transition_finalizing))
+
+        is GuestTransitionState.Prepared -> Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(
+                        if (signedIn) R.string.account_transition_finish_title
+                        else R.string.account_transition_prepared_title,
+                    ),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    stringResource(
+                        if (signedIn) R.string.account_transition_finish_body
+                        else R.string.account_transition_prepared_body,
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (signedIn) {
+                    OutlinedButton(onClick = onRetry) {
+                        Text(stringResource(R.string.account_transition_retry))
+                    }
+                } else {
+                    TextButton(onClick = onCancelSwitch) {
+                        Text(stringResource(R.string.account_transition_stay_guest))
+                    }
+                }
+            }
+        }
+
+        is GuestTransitionState.Completed -> Surface(
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(R.string.account_transition_completed_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    pluralStringResource(
+                        R.plurals.account_transition_completed_pairs,
+                        state.terminatedPairs,
+                        state.terminatedPairs,
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.account_dismiss)) }
+            }
+        }
+
+        is GuestTransitionState.Failed -> Surface(
+            color = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(transitionFailureRes(state.failure)),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (state.step != TransitionStep.FINALIZE) {
+                        TextButton(onClick = onCancelSwitch) {
+                            Text(stringResource(R.string.account_transition_stay_guest))
+                        }
+                    }
+                    Button(onClick = onRetry) {
+                        Text(stringResource(R.string.account_transition_retry))
+                    }
+                }
+            }
         }
     }
 }
@@ -499,4 +702,33 @@ internal fun failureRes(failure: AuthFailure): Int = when (failure) {
     AuthFailure.TRANSITION_REQUIRED -> R.string.account_error_transition
     AuthFailure.SECURITY_CHECK_FAILED -> R.string.account_error_security
     AuthFailure.UNKNOWN -> R.string.account_error_generic
+}
+
+/** §8.4 failure copy: what happened and what the user can do about it. */
+internal fun transitionFailureRes(failure: TransitionFailure): Int = when (failure) {
+    TransitionFailure.NETWORK -> R.string.account_transition_error_network
+    TransitionFailure.DENIED,
+    TransitionFailure.INVALID_CAPABILITY,
+    TransitionFailure.NOT_OWNER,
+    TransitionFailure.SECURITY_CHECK_FAILED,
+    -> R.string.account_transition_error_verify
+    TransitionFailure.SIGN_IN_REQUIRED -> R.string.account_error_not_signed_in
+    TransitionFailure.REAUTH_REQUIRED -> R.string.account_error_requires_recent
+    TransitionFailure.NOT_ENABLED -> R.string.account_transition_error_unavailable
+    TransitionFailure.RATE_LIMITED -> R.string.account_transition_error_rate_limited
+    TransitionFailure.CANCELLED,
+    TransitionFailure.FINALIZED,
+    -> R.string.account_transition_error_cancelled
+    TransitionFailure.OWNED_BY_ANOTHER_ACCOUNT -> R.string.account_transition_error_owner
+    TransitionFailure.PROFILE_NOT_ACTIVE -> R.string.account_transition_error_profile
+    TransitionFailure.ACCOUNT_DELETING -> R.string.account_transition_error_deleting
+    TransitionFailure.INTENT_MISMATCH -> R.string.account_transition_error_intent
+    TransitionFailure.JOURNAL_UNREADABLE -> R.string.account_transition_error_journal
+    TransitionFailure.ALREADY_PREPARED,
+    TransitionFailure.NOT_FOUND,
+    TransitionFailure.ANONYMOUS_ONLY,
+    TransitionFailure.PERSISTENT_ACCOUNT_REQUIRED,
+    TransitionFailure.CONFLICT,
+    TransitionFailure.UNKNOWN,
+    -> R.string.account_transition_error_generic
 }

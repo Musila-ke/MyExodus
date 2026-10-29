@@ -17,6 +17,7 @@ import androidx.work.Configuration
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.example.myexodus.account.GuestTransitionCoordinator
 import com.example.myexodus.accountability.state.LocalWipeDetector
 import com.example.myexodus.accountability.sync.AppCheckInstaller
 import com.example.myexodus.accountability.sync.PartnerNotifications
@@ -80,6 +81,9 @@ class MyExodusApp : Application(), Configuration.Provider {
     // trigger, not decoration: nothing calls into the writer from the app — its collectors and
     // its heartbeat only run while this process is alive, and this line is what starts them.
     @Inject lateinit var protectionSnapshotWriter: ProtectionSnapshotWriter
+    // Account plan §6.2: a prepared guest transition finalizes as soon as the target session
+    // exists, even if the Account pane was closed or the process restarted mid-flow.
+    @Inject lateinit var guestTransitionCoordinator: GuestTransitionCoordinator
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -128,6 +132,9 @@ class MyExodusApp : Application(), Configuration.Provider {
         // responder, drain) — app-startup install covers paths that never route through drainOutbox.
         AppCheckInstaller.install(this)
         startupTrace.lap("appcheck")
+        // Account plan §6.2/§8.4: app-scoped, so finalization survives a closed pane and a
+        // process death between target sign-in and finalize (the encrypted journal persists).
+        guestTransitionCoordinator.attach(applicationScope)
         // Plan §8 Step 16's sync_status channel: debug-only (never user-visible in release).
         PartnerNotifications.ensureSyncStatusChannel(this)
         // SOS §8.14: the partner_nudges_v3 channel exists from startup — the §8.12 pushEligible

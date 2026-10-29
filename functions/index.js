@@ -353,3 +353,19 @@ exports._createCreatePairInvitationHandler = createCreatePairInvitationHandler;
 exports._createRespondToPairInvitationHandler = createRespondToPairInvitationHandler;
 exports._createTerminatePairHandler = createTerminatePairHandler;
 exports._createGetClientCompatibilityHandler = createGetClientCompatibilityHandler;
+
+// Account plan §7 Release 1 step 9 / §8.4 / §4.2: the guest-transition callables.
+const {
+  createPrepareGuestTransition,
+  createFinalizeGuestTransition,
+  createCancelGuestTransition,
+  createPrepareGuestTransitionHandler,
+  createFinalizeGuestTransitionHandler,
+  createCancelGuestTransitionHandler,
+} = require('./guest-transition');
+exports.prepareGuestTransition = createPrepareGuestTransition({ db });
+exports.finalizeGuestTransition = createFinalizeGuestTransition({ db });
+exports.cancelGuestTransition = createCancelGuestTransition({ db });
+exports._createPrepareGuestTransitionHandler = createPrepareGuestTransitionHandler;
+exports._createFinalizeGuestTransitionHandler = createFinalizeGuestTransitionHandler;
+exports._createCancelGuestTransitionHandler = createCancelGuestTransitionHandler;

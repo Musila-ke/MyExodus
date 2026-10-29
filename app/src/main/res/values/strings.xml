@@ -1316,4 +1316,36 @@
     <string name="account_reauth_cancel">Cancel</string>
     <string name="account_working">Working…</string>
     <string name="account_dismiss">OK</string>
+
+    <string name="account_transition_title">Switch to an existing account?</string>
+    <string name="account_transition_body">Your guest progress can move into the account or be left behind — you choose. Either way, partner connections you made in guest mode end once you sign in, and this guest session can’t be restored afterwards.</string>
+    <string name="account_transition_import">Import my progress</string>
+    <string name="account_transition_discard">Discard guest progress</string>
+    <string name="account_transition_stay_guest">Stay a guest</string>
+    <string name="account_transition_guest_hint">Signing in to an existing account from guest mode first asks what to do with your guest progress, then ends your guest partner connections.</string>
+    <string name="account_transition_preparing">Preparing the account switch…</string>
+    <string name="account_transition_cancelling">Cancelling the switch…</string>
+    <string name="account_transition_finalizing">Finishing the switch…</string>
+    <string name="account_transition_prepared_title">Ready to switch</string>
+    <string name="account_transition_prepared_body">Sign in to your existing account to finish the switch. Partner connections from guest mode end when the switch completes.</string>
+    <string name="account_transition_finish_title">Finish the switch</string>
+    <string name="account_transition_finish_body">You’re signed in. The switch finishes once the server confirms — tap “Try again” if it didn’t restart on its own.</string>
+    <string name="account_transition_completed_title">Account switched</string>
+    <string name="account_transition_retry">Try again</string>
+    <string name="account_transition_error_network">Couldn’t reach the server. Check your connection and try again.</string>
+    <string name="account_transition_error_unavailable">Account switching isn’t available right now. Try again later.</string>
+    <string name="account_transition_error_rate_limited">Too many switch attempts today. Try again tomorrow.</string>
+    <string name="account_transition_error_cancelled">This switch was cancelled. Start it again if you still want to switch accounts.</string>
+    <string name="account_transition_error_owner">This switch belongs to a different account. Sign out and start it again from guest mode.</string>
+    <string name="account_transition_error_verify">This switch couldn’t be verified on this device. Restart the app and try again.</string>
+    <string name="account_transition_error_profile">Your account setup is still finishing. Try again in a moment.</string>
+    <string name="account_transition_error_deleting">This account is being deleted, so it can’t receive guest data.</string>
+    <string name="account_transition_error_intent">The saved choice didn’t match this attempt. Keep your guest session, then start the switch again.</string>
+    <string name="account_transition_error_journal">Couldn’t read the saved switch on this device. Restart the app and try again.</string>
+    <string name="account_transition_error_generic">Something went wrong with the switch. Try again in a moment.</string>
+
+    <plurals name="account_transition_completed_pairs">
+        <item quantity="one">%1$d partner connection from guest mode ended.</item>
+        <item quantity="other">%1$d partner connections from guest mode ended.</item>
+    </plurals>
 </resources>

@@ -436,6 +436,44 @@ class AuthCoordinatorTest {
     }
 
     @Test
+    fun aFailedSignIn_doesNotRevokeThePreparedSwitch() = runTest {
+        val fake = FakeOperations(guest).apply { nextFailure = AuthFailure.INVALID_CREDENTIALS }
+        val coordinator = AuthCoordinator(fake)
+        coordinator.setIdentitySwitchAllowed(true)
+
+        coordinator.signInWithEmail("a@example.com", "wrong")
+        assertEquals(
+            AuthState.AuthError(AccountOperation.SIGN_IN, AuthFailure.INVALID_CREDENTIALS),
+            coordinator.state.value,
+        )
+
+        // §8.4: a typo must not burn the prepared switch — the retry stays open.
+        coordinator.signInWithEmail("a@example.com", "right")
+        assertTrue(coordinator.state.value is AuthState.PersistentActive)
+        assertEquals(2, fake.signInEmailCalls)
+    }
+
+    @Test
+    fun switchToGoogle_signsInRatherThanLinks_andRequiresThePreparedTransition() = runTest {
+        val fake = FakeOperations(guest)
+        val coordinator = AuthCoordinator(fake)
+
+        coordinator.switchToGoogle("id-token")
+        assertEquals(
+            AuthState.AuthError(AccountOperation.SIGN_IN, AuthFailure.TRANSITION_REQUIRED),
+            coordinator.state.value,
+        )
+        assertEquals(0, fake.signInGoogleCalls)
+
+        coordinator.setIdentitySwitchAllowed(true)
+        coordinator.switchToGoogle("id-token")
+
+        assertEquals(1, fake.signInGoogleCalls)
+        assertEquals("a switch must never link the guest into the target", 0, fake.linkGoogleCalls)
+        assertTrue(coordinator.state.value is AuthState.PersistentActive)
+    }
+
+    @Test
     fun switchAllowance_isClearedOnceTheIdentityStopsBeingAnonymous() = runTest {
         val fake = FakeOperations(guest)
         val coordinator = AuthCoordinator(fake)

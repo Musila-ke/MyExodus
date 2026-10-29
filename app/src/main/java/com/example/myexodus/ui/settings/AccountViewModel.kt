@@ -10,6 +10,10 @@ import com.example.myexodus.account.AuthEvent
 import com.example.myexodus.account.AuthState
 import com.example.myexodus.account.GoogleCredentialOutcome
 import com.example.myexodus.account.GoogleCredentialProvider
+import com.example.myexodus.account.GuestTransitionCoordinator
+import com.example.myexodus.account.GuestTransitionState
+import com.example.myexodus.account.TransitionIntent
+import com.example.myexodus.account.TransitionStep
 import com.example.myexodus.accountability.sync.AccountCallables
 import com.google.firebase.functions.FirebaseFunctions
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -28,11 +32,13 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class AccountViewModel @Inject constructor(
     private val coordinator: AuthCoordinator,
+    private val guestTransition: GuestTransitionCoordinator,
     private val functions: FirebaseFunctions,
 ) : ViewModel() {
 
     val state: StateFlow<AuthState> = coordinator.state
     val events: Flow<AuthEvent> = coordinator.events
+    val transition: StateFlow<GuestTransitionState> = guestTransition.state
 
     private val google = GoogleCredentialProvider(BuildConfig.GOOGLE_WEB_CLIENT_ID)
     val googleAvailable: Boolean = google.available
@@ -48,9 +54,29 @@ class AccountViewModel @Inject constructor(
         coordinator.signInWithEmail(email, password)
     }
 
-    fun continueWithGoogle(idToken: String) = launchAuthenticated {
-        coordinator.continueWithGoogle(idToken)
+    fun continueWithGoogle(idToken: String, switchAccount: Boolean) = launchAuthenticated {
+        if (switchAccount) coordinator.switchToGoogle(idToken) else coordinator.continueWithGoogle(idToken)
     }
+
+    fun startTransition(intent: TransitionIntent) = viewModelScope.launch {
+        guestTransition.start(intent)
+    }
+
+    fun cancelTransition() = viewModelScope.launch { guestTransition.cancel() }
+
+    fun retryTransition() {
+        when (val current = guestTransition.state.value) {
+            is GuestTransitionState.Failed -> when (current.step) {
+                TransitionStep.PREPARE ->
+                    current.intent?.let { intent -> viewModelScope.launch { guestTransition.start(intent) } }
+                TransitionStep.FINALIZE -> viewModelScope.launch { guestTransition.resumeFinalize() }
+                TransitionStep.CANCEL -> cancelTransition()
+            }
+            else -> Unit
+        }
+    }
+
+    fun dismissTransition() = guestTransition.dismiss()
 
     fun sendVerificationEmail() = viewModelScope.launch { coordinator.sendVerificationEmail() }
 
@@ -76,6 +102,9 @@ class AccountViewModel @Inject constructor(
         block()
         if (coordinator.state.value is AuthState.PersistentActive) {
             runCatching { AccountCallables.initializeUserProfile(functions) }
+            // A switch that raced ahead of the target profile exists retries here, after the
+            // profile call; with no journal this is a no-op.
+            guestTransition.resumeFinalize()
         }
     }
 }
