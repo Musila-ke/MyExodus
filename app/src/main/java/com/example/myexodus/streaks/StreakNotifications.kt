@@ -21,7 +21,10 @@ import com.example.myexodus.notifications.NotificationTapTarget
  */
 object StreakNotifications {
 
-    private const val CHANNEL_MILESTONES = "streak_milestones"
+    // A channel's importance is immutable after creation, so the heads-up upgrade needs a new
+    // id: the old DEFAULT channel stays behind empty rather than silently keeping this at 3.
+    private const val CHANNEL_MILESTONES = "streak_milestones_v2"
+    private const val CHANNEL_MILESTONES_LEGACY = "streak_milestones"
 
     /** Fixed id + per-milestone tag: the NotificationManager key is (tag, id), so two habits
      *  or two milestones can never replace each other's entry. The old bare stable-hash id
@@ -43,13 +46,16 @@ object StreakNotifications {
         habitId: String,
     ) {
         if (!NotificationAccess.canPost(context)) return
-        context.getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_MILESTONES,
-                context.getString(R.string.streaks_milestone_channel_name),
-                NotificationManager.IMPORTANCE_DEFAULT,
-            ),
-        )
+        context.getSystemService(NotificationManager::class.java).apply {
+            createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_MILESTONES,
+                    context.getString(R.string.streaks_milestone_channel_name),
+                    NotificationManager.IMPORTANCE_HIGH,
+                ),
+            )
+            deleteNotificationChannel(CHANNEL_MILESTONES_LEGACY)
+        }
         // Lands on Home with the right habit displayed (multi-habit): the splash card renders
         // at the top of Home for the *displayed* habit, so the tap both switches to this
         // habit's Home and shows its card — never another habit's. Extras don't count toward
@@ -77,7 +83,7 @@ object StreakNotifications {
                 .setContentText(
                     context.getString(R.string.streaks_milestone_notification_text, milestoneDay),
                 )
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
                 .setContentIntent(openHome)
                 .build(),

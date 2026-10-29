@@ -421,8 +421,12 @@ class PartnerSyncCoordinator(
         val nowMs = System.currentTimeMillis()
         for (row in journal.dueRuleChangesForPair(pairId, sinceMs, nowMs, RECONCILE_BATCH)) {
             when (val emit = emitRuleChange(pairId, senderKeyId, row)) {
-                is Emit.Created -> linked++
-                Emit.Duplicate, Emit.Skip -> Unit
+                // Once the event is on the chain, the chain and its outbox row own delivery;
+                // the journal row only feeds creation. Deleting it lets the LIMIT window
+                // advance past a backlog that exceeds one batch.
+                is Emit.Created -> { linked++; journal.deleteById(row.eventId) }
+                Emit.Duplicate -> journal.deleteById(row.eventId)
+                Emit.Skip -> Unit
                 Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
             }
         }

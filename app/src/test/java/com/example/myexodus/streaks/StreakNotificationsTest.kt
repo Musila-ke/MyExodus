@@ -42,7 +42,12 @@ class StreakNotificationsTest {
         StreakNotifications.postMilestone(context, STREAK_A, 7, "Alcohol", HABIT_A)
 
         val posted = manager.activeNotifications.single()
-        assertEquals("streak_milestones", posted.notification.channelId)
+        assertEquals("streak_milestones_v2", posted.notification.channelId)
+        assertEquals(
+            "milestones must banner, not sit in the tray",
+            NotificationManager.IMPORTANCE_HIGH,
+            manager.getNotificationChannel("streak_milestones_v2").importance,
+        )
         assertEquals(
             context.getString(R.string.streaks_milestone_notification_title, 7, "Alcohol"),
             posted.notification.extras.getString(Notification.EXTRA_TITLE),

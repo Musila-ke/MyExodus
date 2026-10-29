@@ -64,9 +64,10 @@ class AndroidDomainUsageHost(private val context: Context) : DomainUsageHost {
                 NotificationChannel(
                     CHANNEL_ID,
                     context.getString(R.string.domain_usage_channel_name),
-                    NotificationManager.IMPORTANCE_DEFAULT,
+                    NotificationManager.IMPORTANCE_HIGH,
                 ),
             )
+            nm.deleteNotificationChannel(CHANNEL_ID_LEGACY)
             nm.notify(
                 id,
                 NotificationCompat.Builder(context, CHANNEL_ID)
@@ -115,7 +116,10 @@ class AndroidDomainUsageHost(private val context: Context) : DomainUsageHost {
     }
 
     private companion object {
-        const val CHANNEL_ID = "domain_usage_status"
+        // Versioned: importance cannot be raised on an existing channel (owner report
+        // 2026-10-29 — warnings stayed in the tray).
+        const val CHANNEL_ID = "domain_usage_status_v1"
+        const val CHANNEL_ID_LEGACY = "domain_usage_status"
         const val NOTIFICATION_ID = 2
         const val WARNING_NOTIFICATION_ID = 3
     }

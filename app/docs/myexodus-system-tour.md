@@ -196,10 +196,13 @@ plan Appendix D.4.
   (`availability_consent_pending`, schema v20). A message with no visible context is not sent.
 - `RULE_CONTROL` routing is **not** gated by those activity flags: assigning a partner to a rule
   is the subject's own visibility choice for that route (plan Appendix D rows 21/22, ADR #226).
-  `dueRuleChangesForPair` is the only query that reads the rule journal, and the legacy
-  fan-out loop consumes monitoring categories only — an unassigned rule has no route and its
-  mutations stay local. There is no backup recipient yet (req 14), and no `UNSUPERVISED`
-  partner is ever notified on unpair (there is no eligible recipient).
+  `dueRuleChangesForPair` is the only query that reads the rule journal; it drains the pair's
+  rows oldest-first and **deletes each row once its envelope is on the chain** (or is found
+  there already), so the LIMIT window always advances (ADR #227). The legacy fan-out loop
+  (`dueForDelivery`) selects `route_pair_id IS NULL` only, so neither queue can see the other's
+  rows — an unassigned rule has no route and its mutations stay local. There is no backup
+  recipient yet (req 14), and no `UNSUPERVISED` partner is ever notified on unpair (there is no
+  eligible recipient).
 - Fan-out is per pair: the journal row is written once, then mirrored per enrollment; each pair
   has its own mailbox, sequence and chain. `MailboxMessageHandler`'s notify lambda is keyed by
   `pairId` and resolves that pair's partner display name, so N partners get N correctly-named
@@ -240,8 +243,10 @@ plan Appendix D.4.
 `approval_requests`, `partner_nudges_v3`, `sync_status`, `availability_alerts_v1`; legacy ids
 exist only for cleanup/upgrade, and the retired `checkin_reminders_v1` is deleted at startup
 because check-in is a silent probe, ADR #223). Channel importance is immutable — a spec change
-needs a new channel id. The Partner tab's test alert is a **local
-self-test for one device**, not a partner delivery proof.
+needs a new channel id; the app-side surfaces follow the same rule (`streak_milestones_v2`,
+`domain_usage_status_v1`, `enhanced_mode_health_v1` are HIGH as of ADR #228, with the legacy ids
+deleted at post time; `protection_status` stays LOW because it is the ongoing FGS row). The
+Partner tab's test alert is a **local self-test for one device**, not a partner delivery proof.
 
 **Trace it yourself:** pick `milestone_reached`. Follow `HabitRepository.stampAchievedMilestones`
 → journal → `EventPayload` encode → outbox → drainer → server relay → receiver → processor →

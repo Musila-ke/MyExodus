@@ -11,12 +11,14 @@ import com.example.myexodus.accountability.crypto.EventCipher
 import com.example.myexodus.accountability.crypto.IdentityEpochStore
 import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
+import com.example.myexodus.accountability.serialization.AccountabilityEvent
 import com.example.myexodus.accountability.serialization.AccountabilityEventCategory
 import com.example.myexodus.accountability.serialization.AccountabilityEventKind
 import com.example.myexodus.accountability.serialization.AccountabilityEventWire
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.serialization.OutboxAgeBucket
+import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.decodePayload
 import com.example.myexodus.accountability.serialization.decodeSigned
 import com.example.myexodus.accountability.serialization.eventHash
@@ -45,6 +47,7 @@ import java.security.MessageDigest
 import java.security.PrivateKey
 import java.security.PublicKey
 import java.security.Signature
+import java.util.UUID
 import java.security.spec.ECGenParameterSpec
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -892,6 +895,169 @@ class PartnerSyncCoordinatorTest {
         }
     }
 
+    /**
+     * §8.4 rule-control sender: one journaled lifecycle row becomes one encrypted
+     * `RULE_CHANGED` envelope carrying the rule UUID and closed verb — never a package name.
+     */
+    @Test
+    fun ruleJournal_assignedPair_becomesOneChainedRuleControlEvent() = runTest {
+        enroll()
+        val ruleId = UUID.randomUUID()
+        val eventId = insertRuleChangeRow(ruleId, RuleChange.ASSIGNED)
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(1, report.eventsLinked)
+        val signed = decodeSigned(store.chainFor(pairId).single().envelope)
+        val body = AccountabilityEventWire.decodeOrNull(
+            cipher.decrypt(cek, signed.unsigned.sequence, signed.unsigned.ciphertext),
+        )!!
+        assertEquals(eventId, body.eventId)
+        assertEquals(AccountabilityEventKind.RULE_CONTROL, body.kind)
+        assertEquals(AccountabilityEventCategory.RULE_CHANGED, body.category)
+        assertEquals(ruleId, body.ruleId)
+        assertEquals(RuleChange.ASSIGNED, body.ruleChange)
+    }
+
+    /** The route pair is the SQL predicate: a row routed elsewhere never rides this pair. */
+    @Test
+    fun ruleJournal_neverCrossesIntoAnotherPair() = runTest {
+        val secondPair = "pair-second"
+        enroll()
+        enroll(secondPair, partnerSigningKey = ecKeyPair().public, partnerAgreementKey = ecKeyPair().public)
+        uids[secondPair] = "me" to "partner-two"
+        insertRuleChangeRow(UUID.randomUUID(), RuleChange.UPDATED, routePairId = secondPair)
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(1, report.eventsLinked)
+        assertTrue("the unassigned pair gets nothing", store.chainFor(pairId).isEmpty())
+        assertEquals(1, store.chainFor(secondPair).size)
+    }
+
+    @Test
+    fun ruleJournal_secondPass_doesNotDuplicate_andLeavesNoWorkItem() = runTest {
+        enroll()
+        insertRuleChangeRow(UUID.randomUUID(), RuleChange.DISABLED)
+        assertEquals(1, coordinator.syncOnce().eventsLinked)
+
+        val second = coordinator.syncOnce()
+
+        assertEquals(0, second.eventsLinked)
+        assertEquals("one row, one event", 1, store.chainFor(pairId).size)
+        assertEquals(
+            "a delivered row leaves the work list so the LIMIT window advances",
+            0,
+            factory.open()!!.partnerEventJournalDao()
+                .dueRuleChangesForPair(pairId, 0L, System.currentTimeMillis(), 10).size,
+        )
+    }
+
+    @Test
+    fun ruleJournal_coldWindow_leavesTheRowPending_forTheNextWarmPass() = runTest {
+        enroll()
+        coordinator = coordinator(coldSigner())
+        insertRuleChangeRow(UUID.randomUUID(), RuleChange.UNASSIGNED)
+
+        val cold = coordinator.syncOnce()
+
+        assertEquals(0, cold.eventsLinked)
+        assertTrue("no prompt from background reconcile", store.chainFor(pairId).isEmpty())
+        assertEquals(
+            1,
+            factory.open()!!.partnerEventJournalDao()
+                .dueRuleChangesForPair(pairId, 0L, System.currentTimeMillis(), 10).size,
+        )
+
+        coordinator = coordinator(warmSigner())
+        assertEquals(1, coordinator.syncOnce().eventsLinked)
+        assertEquals(1, store.chainFor(pairId).size)
+    }
+
+    @Test
+    fun ruleJournal_beforeThePairingMoment_isNotReplayed() = runTest {
+        val pairedAt = System.currentTimeMillis()
+        enroll(enrolledAt = pairedAt)
+        val before = insertRuleChangeRow(
+            UUID.randomUUID(), RuleChange.ASSIGNED, createdAtMs = pairedAt - 60_000L,
+        )
+        val at = insertRuleChangeRow(UUID.randomUUID(), RuleChange.ASSIGNED, createdAtMs = pairedAt)
+
+        assertEquals(1, coordinator.syncOnce().eventsLinked)
+
+        val remaining = factory.open()!!.partnerEventJournalDao()
+            .dueRuleChangesForPair(pairId, 0L, System.currentTimeMillis(), 10)
+        assertEquals("only the pre-pairing row is left, never delivered", listOf(before), remaining.map { it.eventId })
+        val signed = decodeSigned(store.chainFor(pairId).single().envelope)
+        val delivered = AccountabilityEventWire.decodeOrNull(
+            cipher.decrypt(cek, signed.unsigned.sequence, signed.unsigned.ciphertext),
+        )!!
+        assertEquals("the at-pairing row is the one delivered", at, delivered.eventId)
+    }
+
+    /**
+     * Stress finding (2026-10-29): LIMIT 100 returns the same oldest rows every pass, so a
+     * backlog larger than one batch used to starve its tail until expiry. Delivered rows now
+     * leave the work list and every pass advances by one batch.
+     */
+    @Test
+    fun ruleJournal_backlogBeyondOneBatch_deliversEverythingAcrossPasses() = runTest {
+        enroll()
+        val now = System.currentTimeMillis()
+        val ruleIds = (0 until BULK_RULES).map { UUID.randomUUID() }
+        ruleIds.forEachIndexed { i, ruleId ->
+            insertRuleChangeRow(ruleId, RuleChange.UPDATED, createdAtMs = now - (BULK_RULES - i) * 1_000L)
+        }
+
+        assertEquals(100, coordinator.syncOnce().eventsLinked)
+        assertEquals(100, coordinator.syncOnce().eventsLinked)
+        assertEquals(5, coordinator.syncOnce().eventsLinked)
+        assertEquals(0, coordinator.syncOnce().eventsLinked)
+
+        val chain = store.chainFor(pairId)
+        assertEquals("every row delivered exactly once", BULK_RULES, chain.size)
+        fun bodyAt(index: Int): AccountabilityEvent {
+            val signed = decodeSigned(chain[index].envelope)
+            return AccountabilityEventWire.decodeOrNull(
+                cipher.decrypt(cek, signed.unsigned.sequence, signed.unsigned.ciphertext),
+            )!!
+        }
+        assertEquals("oldest first", ruleIds.first(), bodyAt(0).ruleId)
+        assertEquals("newest last", ruleIds.last(), bodyAt(chain.lastIndex).ruleId)
+        assertEquals(
+            0,
+            factory.open()!!.partnerEventJournalDao()
+                .dueRuleChangesForPair(pairId, 0L, System.currentTimeMillis(), 1_000).size,
+        )
+    }
+
+    /** Rule rows must not consume the monitoring queue's own LIMIT window. */
+    @Test
+    fun monitoringJournal_isNotStarvedByAPendingRuleBacklog() = runTest {
+        enroll()
+        seedConsent(shareAvailability = true)
+        val now = System.currentTimeMillis()
+        repeat(150) { i ->
+            insertRuleChangeRow(
+                UUID.randomUUID(), RuleChange.UPDATED, createdAtMs = now - (150 - i) * 1_000L,
+            )
+        }
+        insertMonitoringRow(createdAtMs = now)
+
+        coordinator.syncOnce()
+
+        assertEquals(
+            "100 rule rows + the monitoring snapshot in the first pass",
+            101,
+            store.chainFor(pairId).size,
+        )
+        assertTrue(
+            "rule rows never occupy the monitoring queue's window",
+            factory.open()!!.partnerEventJournalDao()
+                .dueForDelivery(0L, now, 1_000).all { it.ruleId == null },
+        )
+    }
+
     @Test
     fun checkIn_ridesPairedPassesOnly() = runTest {
         var checkIns = 0
@@ -1184,6 +1350,27 @@ class PartnerSyncCoordinatorTest {
         return eventId
     }
 
+    /** One §8.4 rule-lifecycle journal row, routed by its own [routePairId]. */
+    private suspend fun insertRuleChangeRow(
+        ruleId: UUID = UUID.randomUUID(),
+        change: RuleChange = RuleChange.ASSIGNED,
+        routePairId: String = pairId,
+        createdAtMs: Long = System.currentTimeMillis(),
+    ): String {
+        val eventId = AccountabilityEventWire.newEventId()
+        factory.open()!!.partnerEventJournalDao().insert(
+            PartnerEventJournal.forRuleChange(
+                eventId = eventId,
+                ruleId = ruleId,
+                change = change,
+                routePairId = routePairId,
+                occurredAtMinute = AccountabilityEventWire.minuteOf(createdAtMs),
+                createdAtMs = createdAtMs,
+            ),
+        )
+        return eventId
+    }
+
     private fun coordinator(
         signer: AccountabilitySigner,
         drain: MailboxOutboxDrainer.DrainResult = MailboxOutboxDrainer.DrainResult.Sent(2),
@@ -1322,6 +1509,9 @@ class PartnerSyncCoordinatorTest {
         /** Consent-chain fixtures: one shared inactive profile + habit for every seed. */
         private const val TEST_PROFILE_ID = "sync-test-profile"
         private const val TEST_HABIT_ID = "sync-test-habit"
+
+        /** Two full batches plus a remainder — the reconcile batch ceiling is 100. */
+        private const val BULK_RULES = 205
 
         private fun ecKeyPair(): KeyPair = KeyPairGenerator.getInstance("EC").apply {
             initialize(ECGenParameterSpec("secp256r1"))

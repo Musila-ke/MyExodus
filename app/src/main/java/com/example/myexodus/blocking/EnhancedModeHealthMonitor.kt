@@ -108,9 +108,10 @@ class EnhancedModeHealthMonitor @Inject constructor(
             NotificationChannel(
                 CHANNEL_ID,
                 appContext.getString(R.string.enhanced_mode_health_channel_name),
-                NotificationManager.IMPORTANCE_LOW,
+                NotificationManager.IMPORTANCE_HIGH,
             ),
         )
+        manager.deleteNotificationChannel(CHANNEL_ID_LEGACY)
         val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(appContext.getString(R.string.enhanced_mode_health_disabled_title))
@@ -123,7 +124,10 @@ class EnhancedModeHealthMonitor @Inject constructor(
     internal companion object {
         const val PREFS_NAME = "enhanced_mode_health"
         const val KEY_WAS_ENABLED = "was_enabled"
-        const val CHANNEL_ID = "enhanced_mode_health"
+        // Versioned: importance cannot be raised on an existing channel (owner report
+        // 2026-10-29 — this alert stayed in the tray).
+        const val CHANNEL_ID = "enhanced_mode_health_v1"
+        const val CHANNEL_ID_LEGACY = "enhanced_mode_health"
         // 1004: distinct from FGS (1001), degraded (1002), and outage (1003) — a shared id
         // replaces the other alert in the shade (finding #9, 2026-10-16: this carried 1003,
         // which the later outage surface also took; a swallowed transition alert never

@@ -650,7 +650,7 @@ the requirement's numbers/mechanism).
 | 9 accepted ≠ delivered | **SHIPPED** | ADR #203; ack pipeline #199. |
 | 10 FCM wake only; mailbox is truth | **SHIPPED** | ADRs #199/#203; `MailboxOutboxDrainer`, `FirestoreMailboxReceiver`. |
 | 13 sync ack after durable local write | **SHIPPED** | ADR #199. |
-| 16 app-health to all consenting pairs; rule events per route | **SHIPPED** (delta 2026-10-29, ADR #226) | Monitoring snapshots ship to all paired, consenting partners (`MonitoringSnapshotRecorder`); rule-lifecycle rows carry `route_pair_id` and `dueRuleChangesForPair` routes each envelope to the assigned pair only — the legacy `dueForDelivery` loop consumes monitoring categories only, so no fan-out path can pick up a rule row. |
+| 16 app-health to all consenting pairs; rule events per route | **SHIPPED** (delta 2026-10-29, ADR #226/#227) | Monitoring snapshots ship to all paired, consenting partners (`MonitoringSnapshotRecorder`); rule-lifecycle rows carry `route_pair_id` and `dueRuleChangesForPair` routes each envelope to the assigned pair only and deletes the row once chained (ADR #227), while the legacy `dueForDelivery` loop selects `route_pair_id IS NULL` only — neither queue can see the other's rows, so no fan-out path can pick up a rule row. |
 | 19 revoke local-immediate, pending-sync UI | **SHIPPED** | ADR #205; `UnpairState`. |
 | 20 flush-before-revoke; retention windows | **SHIPPED equivalent, stricter** | ADR #205 ordering; `mailbox-retention.js` deletes after a 7-day floor AND all-install ack, or unconditionally at 30 days (AD-18b) — stricter than the plan's 90-day unsynced cap. |
 | 21 signed `RouteAuthorizationUpdate` with category bitmask + version | **SUPERSEDED** | Shipped consent is per-pair sharing flags (`PairProfileSharing`, `PairStreakSharing`) synced to the partner; the relay authorizes by pair membership (ADR #194). No signed consent version document exists; the delta-only ruling keeps the shipped model. For `RULE_CONTROL`, the per-rule assignment is the subject's own visibility choice (ADR #226). |
@@ -710,3 +710,13 @@ alert policy (live, verified), and a Room `@Upsert` log-noise fix in `PartnerLiv
 `RulesRepository` transactional journaling, rule-scoped reconcile delivery, the editor
 partner picker and rule-row label, the partner rule-change feed row, and the pre-1970
 clock/journal fix found by the stress suite.
+
+**Delivery-mechanics fix found by the owner-requested stress matrix (ADR #227):** delivered
+rule rows are deleted once their envelope is on the chain, so `dueRuleChangesForPair`'s LIMIT
+window advances past row 100; `dueForDelivery` selects `route_pair_id IS NULL` so a rule
+backlog can never occupy the monitoring queue (and vice versa). Seven new coordinator tests
+prove the batch ceiling (205 rows → 100/100/5/0), route isolation, dedupe, cold-window retry,
+pairing-window bound and queue starvation. The physical X6532 leg ran the v21 APK over the live
+database (four rules intact, six enrollments in the picker, assignment persisted across cold
+start); a sealed rule envelope on device still awaits a sync pass with resolved Firebase
+identity, and the partner-receipt half needs a second attesting device.
