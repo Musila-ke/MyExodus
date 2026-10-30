@@ -172,6 +172,7 @@ dependencies {
     implementation(libs.camera.lifecycle)
     implementation(libs.zxing.core)
     implementation(libs.bcprov.jdk18on)
+    implementation(libs.zxcvbn)
     implementation(libs.androidx.datastore.tink)
     implementation(libs.androidx.datastore.preferences)
     // Home-screen widget (V1 Req 36). Pinned per the widget spec §5 Decision 12′, re-verified

@@ -235,5 +235,25 @@ service cloud.firestore {
     match /guestTransitions/{document=**} { allow read, write: if false; }
     match /guestTransitionLeases/{document=**} { allow read, write: if false; }
     match /serverFeatureGates/{document=**} { allow read, write: if false; }
+
+    // Encrypted backup state (account plan §4.3, Release 2): the key bundle, the pointer and
+    // the committed manifests are owner-readable only while the account is active, and only
+    // the backup callables (Admin SDK) ever write them. The get() on an absent profile is a
+    // rule error, i.e. a denial — a UID with no profile has nothing to read.
+    match /users/{uid}/backupControl/{docId} {
+      allow read: if request.auth != null
+        && request.auth.uid == uid
+        && get(/databases/$(database)/documents/users/$(uid)).data.status == 'ACTIVE';
+      allow write: if false;
+    }
+    match /users/{uid}/backupManifests/{backupId} {
+      allow read: if request.auth != null
+        && request.auth.uid == uid
+        && get(/databases/$(database)/documents/users/$(uid)).data.status == 'ACTIVE';
+      allow write: if false;
+    }
+    // Upload reservations are server-only in both directions (Storage rules consult them
+    // through the Admin path, never a client session).
+    match /backupReservations/{document=**} { allow read, write: if false; }
   }
 }

@@ -80,6 +80,15 @@ beforeEach(async () => {
       ...message('dave', 'pair-dave-erin'),
       timestamp: new Date(),
     });
+    // Release 2 backup state: an active owner, a deleting owner, and an owner-less UID.
+    await setDoc(doc(db, 'users/alice'), { status: 'ACTIVE', profileVersion: 1 });
+    await setDoc(doc(db, 'users/deleting'), { status: 'PENDING_DELETION', profileVersion: 1 });
+    for (const uid of ['alice', 'deleting']) {
+      await setDoc(doc(db, `users/${uid}/backupControl/keyBundle`), { revision: 1, keyId: 'k1' });
+      await setDoc(doc(db, `users/${uid}/backupControl/current`), { backupId: 'b1', revision: 1 });
+      await setDoc(doc(db, `users/${uid}/backupManifests/b1`), { revision: 1, size: 1024 });
+    }
+    await setDoc(doc(db, 'backupReservations/b1'), { uid: 'alice', status: 'active' });
   });
 });
 
@@ -144,6 +153,34 @@ test('the pairing document itself is not client-writable', async () => {
   await assertFails(
     updateDoc(doc(alice, 'pairings/pair-alice-bob'), { status: 'terminated' }),
   );
+});
+
+test('backup control documents are owner-readable only while the account is active', async () => {
+  const { deleteDoc, updateDoc } = require('firebase/firestore');
+  const owner = env.authenticatedContext('alice').firestore();
+  const deleting = env.authenticatedContext('deleting').firestore();
+  const noProfile = env.authenticatedContext('stranger').firestore();
+
+  for (const path of ['backupControl/keyBundle', 'backupControl/current', 'backupManifests/b1']) {
+    await assertSucceeds(getDoc(doc(owner, `users/alice/${path}`)));
+    // A pending-deletion account loses every backup read, including its own.
+    await assertFails(getDoc(doc(deleting, `users/deleting/${path}`)));
+    // Another authenticated UID can never read it, with or without a profile.
+    await assertFails(getDoc(doc(noProfile, `users/alice/${path}`)));
+    await assertFails(getDoc(doc(anonymous, `users/alice/${path}`)));
+    // No client write variant is admissible — the backup callables are the only writers.
+    await assertFails(setDoc(doc(owner, `users/alice/${path}`), { revision: 99 }));
+    await assertFails(updateDoc(doc(owner, `users/alice/${path}`), { revision: 99 }));
+    await assertFails(deleteDoc(doc(owner, `users/alice/${path}`)));
+  }
+});
+
+test('upload reservations stay server-only', async () => {
+  const { updateDoc } = require('firebase/firestore');
+  await assertFails(getDoc(doc(alice, 'backupReservations/b1')));
+  await assertFails(getDocs(collection(alice, 'backupReservations')));
+  await assertFails(setDoc(doc(alice, 'backupReservations/b2'), { uid: 'alice' }));
+  await assertFails(updateDoc(doc(alice, 'backupReservations/b1'), { status: 'expired' }));
 });
 
 test('dms_install_state is invisible and unwritable to every client, even its owner', async () => {

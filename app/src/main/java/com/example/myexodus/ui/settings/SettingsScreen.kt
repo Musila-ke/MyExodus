@@ -91,6 +91,8 @@ fun SettingsScreen(
     accountingOutageSource: AccountingOutageSource,
     /** Account plan §8.3: the optional-account pane's driver. */
     account: AccountViewModel,
+    /** Account plan §7 Release 2 step 12: the ABK key-bundle pane. */
+    backupKey: BackupKeyViewModel,
     /** SOS §8.19 (Step 11): the recipient's block switch — null hides the row (no partner). */
     modifier: Modifier = Modifier,
     partnerBlock: NudgeSettingsViewModel.UiState? = null,
@@ -176,6 +178,12 @@ fun SettingsScreen(
         PANE_ACCOUNT -> AccountPane(
             viewModel = account,
             onBack = { pane = null },
+            onOpenBackupKey = { pane = PANE_BACKUP_KEY },
+            modifier = modifier,
+        )
+        PANE_BACKUP_KEY -> BackupKeyScreen(
+            viewModel = backupKey,
+            onBack = { pane = PANE_ACCOUNT },
             modifier = modifier,
         )
         else -> SettingsIndex(
@@ -201,6 +209,7 @@ private const val PANE_COACHING_PLAN = "coaching_plan"
 private const val PANE_RISK_WINDOWS = "risk_windows"
 private const val PANE_ABOUT = "about"
 private const val PANE_ACCOUNT = "account"
+private const val PANE_BACKUP_KEY = "backup_key"
 
 @Composable
 private fun SettingsIndex(

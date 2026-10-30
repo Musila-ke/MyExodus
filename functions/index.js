@@ -369,3 +369,15 @@ exports.cancelGuestTransition = createCancelGuestTransition({ db });
 exports._createPrepareGuestTransitionHandler = createPrepareGuestTransitionHandler;
 exports._createFinalizeGuestTransitionHandler = createFinalizeGuestTransitionHandler;
 exports._createCancelGuestTransitionHandler = createCancelGuestTransitionHandler;
+
+// Account plan §7 Release 2 step 12 / §6.4-§6.5 / §8.5: the wrapped-ABK key-bundle callables.
+const {
+  createInitializeBackupKeyBundle,
+  createUpdateBackupKeyBundle,
+  createInitializeBackupKeyBundleHandler,
+  createUpdateBackupKeyBundleHandler,
+} = require('./backup-key');
+exports.initializeBackupKeyBundle = createInitializeBackupKeyBundle({ db });
+exports.updateBackupKeyBundle = createUpdateBackupKeyBundle({ db });
+exports._createInitializeBackupKeyBundleHandler = createInitializeBackupKeyBundleHandler;
+exports._createUpdateBackupKeyBundleHandler = createUpdateBackupKeyBundleHandler;

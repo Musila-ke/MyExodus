@@ -41,7 +41,8 @@ Baseline current as of 2026-09-13 (all versions verified together: `assembleDebu
 | core-ktx / activity-compose | 1.19.0 / 1.13.0 | Baseline androidx |
 | Test: junit4 / ext-junit / espresso | 4.13.2 / 1.3.0 / 3.7.0 | Unit + instrumentation |
 | Test: uiautomator | 2.3.0 | Instrumentation UiAutomation (compileSdk-37 stubs trimmed: `UiAutomation` flags 0x4/0x8 — see ADR #17 addendum) |
-| BouncyCastle bcprov-jdk18on | 1.85.2 | Android Key Attestation certificate-chain parsing (protocol §8.1). Runtime version is past CVE-2025-14813's fixed 1.80.2 (the vulnerable 1.79 copy in the lockfile is `androidLintTool`-only — see scan section) |
+| BouncyCastle bcprov-jdk18on | 1.85.2 | Android Key Attestation certificate-chain parsing (protocol §8.1) **and the Argon2id KDF for the ABK key bundle (R2.12, ADR #238)** — pure Java, no JNI/ABI surface; RFC 9106 known-answer vectors pinned on-device. Runtime version is past CVE-2025-14813's fixed 1.80.2 (the vulnerable 1.79 copy in the lockfile is `androidLintTool`-only — see scan section) |
+| com.nulab-inc:zxcvbn | 1.9.0 | Passphrase strength scoring for the ABK bundle (plan §8.5, R2.12, ADR #238). MIT, pure-Java jar, no transitive dependencies; manual passphrases require score 4/4, generated six-word EFF phrases bypass the estimate by generation method |
 | androidx.security:security-crypto | 1.1.0 | EncryptedSharedPreferences for §8.2 biometric-enrollment cached state + identity epoch |
 | CameraX (core / camera2 / lifecycle) | 1.6.2 | Animated QR receiving via ImageAnalysis (protocol §6.3, plan §11: STRATEGY_KEEP_ONLY_LATEST + 640x480) |
 | zxing:core | 3.5.4 | QR encode/decode for offline sync (protocol §6.3) |

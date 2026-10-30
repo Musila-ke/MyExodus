@@ -22,6 +22,9 @@ coroutines = "1.11.0"
 robolectric = "4.16"
 androidxTestCore = "1.7.0"
 bcprov = "1.85.2"
+# Account plan §8.5 (Release 2): zxcvbn-style passphrase scoring. Pure-Java jar, MIT, no
+# transitive dependencies, JVM 7 — safe on minSdk 26 with no ABI surface.
+zxcvbn = "1.9.0"
 datastoreTink = "1.3.0-alpha10"
 glance = "1.1.1"
 tinkAndroid = "1.23.0"
@@ -78,6 +81,7 @@ kotlinx-serialization-bom = { group = "org.jetbrains.kotlinx", name = "kotlinx-s
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 androidx-test-core = { group = "androidx.test", name = "core", version.ref = "androidxTestCore" }
 bcprov-jdk18on = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bcprov" }
+zxcvbn = { group = "com.nulab-inc", name = "zxcvbn", version.ref = "zxcvbn" }
 bcpkix-jdk18on = { group = "org.bouncycastle", name = "bcpkix-jdk18on", version = "1.85" }
 androidx-datastore-tink = { group = "androidx.datastore", name = "datastore-tink", version.ref = "datastoreTink" }
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastoreTink" }

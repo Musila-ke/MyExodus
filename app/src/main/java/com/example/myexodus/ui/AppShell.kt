@@ -108,6 +108,7 @@ import com.example.myexodus.ui.recovery.RecoveryScreen
 import com.example.myexodus.ui.recovery.UrgeLogSheet
 import com.example.myexodus.ui.rules.RulesScreen
 import com.example.myexodus.ui.settings.AccountViewModel
+import com.example.myexodus.ui.settings.BackupKeyViewModel
 import com.example.myexodus.ui.settings.NudgeSettingsViewModel
 import com.example.myexodus.ui.settings.SettingsScreen
 import com.example.myexodus.ui.insights.InsightsViewModel
@@ -178,6 +179,8 @@ fun AppShell(
     nudgeSettings: NudgeSettingsViewModel,
     /** Account plan §8.3: the optional-account pane. */
     account: AccountViewModel,
+    /** Account plan §7 Release 2 step 12: the ABK key-bundle pane. */
+    backupKey: BackupKeyViewModel,
     partnerSource: PartnerDashboardSource,
     /** Plan Step 8 (§8.10): the partner's server-derived connection reading, coarse buckets
      *  only. The client bounds callable traffic; null = no honest answer right now. */
@@ -494,6 +497,7 @@ fun AppShell(
                         domainUsageEngine = domainUsageEngine,
                         accountingOutageSource = accountingOutage,
                         account = account,
+                        backupKey = backupKey,
                         // SOS §8.19 (Step 11): the block switch's state + refresh/write paths.
                         partnerBlock = partnerBlock,
                         onPartnerBlockRefresh = nudgeSettings::refresh,

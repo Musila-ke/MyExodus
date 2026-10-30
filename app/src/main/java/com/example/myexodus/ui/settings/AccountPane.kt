@@ -70,6 +70,7 @@ import kotlinx.coroutines.launch
 internal fun AccountPane(
     viewModel: AccountViewModel,
     onBack: () -> Unit,
+    onOpenBackupKey: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -195,6 +196,7 @@ internal fun AccountPane(
                 is AuthState.PersistentActive -> PersistentAccount(
                     state = current,
                     viewModel = viewModel,
+                    onOpenBackupKey = onOpenBackupKey,
                 )
 
                 AuthState.SignedOut,
@@ -443,6 +445,7 @@ private fun GuestAccount(
 private fun PersistentAccount(
     state: AuthState.PersistentActive,
     viewModel: AccountViewModel,
+    onOpenBackupKey: () -> Unit,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -507,6 +510,28 @@ private fun PersistentAccount(
                         Text(stringResource(R.string.account_verify_confirm))
                     }
                 }
+            }
+        }
+    }
+
+    // §6.4: encrypted backup belongs to the account that owns it, so its entry point lives here.
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                stringResource(R.string.backup_key_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                stringResource(R.string.backup_key_account_body),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(onClick = onOpenBackupKey) {
+                Text(stringResource(R.string.backup_key_account_open))
             }
         }
     }
@@ -585,7 +610,7 @@ private fun ReauthCard(
 private fun WorkingCard() = WorkingCard(stringResource(R.string.account_working))
 
 @Composable
-private fun WorkingCard(text: String) {
+internal fun WorkingCard(text: String) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = MaterialTheme.shapes.medium,

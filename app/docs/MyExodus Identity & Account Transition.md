@@ -303,9 +303,9 @@ with a reason. "Where" names the primary surfaces, not every call site.
   streaks, milestones, the day log/journal-derived content, recovery resources and personal
   settings; **exclude device-specific state** — app block rules and package targets, usage
   meters/ledger, VPN/DNS state, widget snapshots, pairing keys, enrollments/chains, outbox and
-  nudge inbox. The open engineering piece is **key recovery** (passphrase-derived KEK vs
-  recovery-phrase escrow, the never-built Req 28 `recovery_escrow_key` intent); no backup ships
-  until that is ruled. Runtime usage accounting stays device-local. **Guest→account import
+  nudge inbox. **Key recovery is ruled and built (R2.12, below)** — passphrase-derived Argon2id
+  KEK plus a user-held BIP-39 recovery key; the never-built Req 28 `recovery_escrow_key` intent
+  stays dead. Runtime usage accounting stays device-local. **Guest→account import
   (Release 1 step 11, ADR #237)** applies the same logical-data scope: the encrypted local
   quarantine stores habits, streaks, milestones, attempts, sessions, coaching, risk windows and
   the recovery policy — never blocks, usage, pairing state or the profile row — and the
@@ -320,6 +320,25 @@ with a reason. "Where" names the primary surfaces, not every call site.
   the target has no selected habit, so a fresh target shows the import on Home without ever
   overriding an existing choice. Device-proven both branches; the observed uids/hashes are
   recorded in ADR #237.
+  **IMPLEMENTED key recovery (R2.12, 2026-10-30, ADR #238):** a random 32-byte ABK is wrapped
+  twice — AES-256-GCM under an Argon2id KEK (`m=32768 KiB`, `t=3`, `p=1`, fresh 16-byte salt;
+  BouncyCastle `bcprov-jdk18on` 1.85.2) for the passphrase, and under an HKDF-SHA-256 KEK for a
+  32-byte recovery key shown once as a 24-word BIP-39 mnemonic (checksum-only, no seed
+  derivation; `FLAG_SECURE`, sensitive clipboard, acknowledgement, never persisted). AAD binds
+  UID, key IDs, format version, wrapper kind and KDF parameters; only the wrapped bundle leaves
+  the device. `initializeBackupKeyBundle` (revision 1) and compare-and-set
+  `updateBackupKeyBundle` run in `us-central1` with App Check enforced and gate on a persistent,
+  non-anonymous, non-deleting account with an ACTIVE profile and verified email. Passphrases:
+  manual ≥16 characters and zxcvbn 4/4; generated six-word EFF phrases accepted by generation
+  method. Rotation re-wraps one secret with fresh salt/nonce (ABK and snapshot wrappers
+  unchanged) and reports success only after the committed wrapper self-tests; an exfiltrated
+  old secret cannot be revoked retroactively. `DataStoreBackupRevisionStore` anchors the
+  highest revision per UID and fails closed on a lower one; a brand-new device has no anchor.
+  Cancel reconciles with server truth after a guard that runs before every mutating callable.
+  **Honest limit:** §11.5's p95 < 2 s target is missed on the X6532 debug build (p50 ≈ 4.3 s,
+  p95 ≈ 4.7–4.9 s); parameters were not weakened, and the release-build measurement is an open
+  owner decision. The backup *payload* — binary envelope, uploads, manifests, restore — remains
+  R2.13–R2.15.
 - **G6. Migration safety.** The link-upgrade must not touch Room; the DB version does not change.
 - **G7. UID-scoped database paths — IMPLEMENTED (Release 1 step 7, ADR #233).**
   `LocalDatabaseMigration` copies `myexodus_rules.db`, `myexodus_accountability.db` and
