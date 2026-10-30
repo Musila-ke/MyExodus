@@ -41,6 +41,14 @@
       "collectionGroup": "nudges",
       "fieldPath": "envelope",
       "indexes": []
+    },
+    {
+      "collectionGroup": "reservations",
+      "fieldPath": "expiresAt",
+      "indexes": [
+        { "queryScope": "COLLECTION", "order": "ASCENDING" },
+        { "queryScope": "COLLECTION_GROUP", "order": "ASCENDING" }
+      ]
     }
   ]
 }

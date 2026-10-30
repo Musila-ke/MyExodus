@@ -31,6 +31,7 @@ import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.accountability.sync.PushInstallationRegistrar
 import com.example.myexodus.accountability.sync.enqueuePartnerSync
 import com.example.myexodus.accountability.sync.runPartnerSyncPass
+import com.example.myexodus.backup.BackupStagingSweeper
 import com.example.myexodus.blocking.BootReconciliationStore
 import com.example.myexodus.blocking.EnforcementForegroundService
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
@@ -95,6 +96,8 @@ class MyExodusApp : Application(), Configuration.Provider {
     @Inject lateinit var scopeRecoveryImporter: ScopeRecoveryImporter
     // Account plan §7 step 10 / §12.4: the one session fence every remote operation consults.
     @Inject lateinit var localSessionManager: LocalSessionManager
+    // Account plan §6.4 item 14: stale plaintext/compressed staging never survives a start.
+    @Inject lateinit var backupStagingSweeper: BackupStagingSweeper
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -176,7 +179,15 @@ class MyExodusApp : Application(), Configuration.Provider {
         // migration/open block below and before any worker can run (the fence reads CE prefs,
         // so a locked-boot process defers this to USER_UNLOCKED).
         val unlocked = getSystemService(UserManager::class.java).isUserUnlocked
-        if (unlocked) localSessionManager.onAppStart(applicationScope)
+        if (unlocked) {
+            localSessionManager.onAppStart(applicationScope)
+            // §6.4 item 14: the journal names the one object an active operation still needs;
+            // everything else in staging is stale by construction. CE storage → post-unlock only.
+            applicationScope.launch {
+                runCatching { backupStagingSweeper.sweep() }
+                    .onFailure { Log.w(TAG, "backup staging sweep failed", it) }
+            }
+        }
         // §14: database/key failure classification as telemetry (§9's own taxonomy). One
         // observer instead of per-site emits — the health store is the single sink every DB
         // recovery path already writes, and it is in-memory, so each failing launch reports.

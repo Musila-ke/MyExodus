@@ -1,0 +1,32 @@
+rules_version = '2';
+// Account plan §8.6: backup objects are write-once, owner-only, and may only be written at a
+// path the backend reserved for this UID. The reservation document is server-owned; clients
+// cannot create, read or alter it (firestore.rules denies every backupReservations path).
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /backups/{uid}/{backupId} {
+      function isOwner() {
+        return request.auth != null && request.auth.uid == uid;
+      }
+      function hasLiveReservation() {
+        // One Firestore access (the documented limit is two); a missing document makes the
+        // field access fail closed.
+        let reservation = firestore.get(/databases/(default)/documents/backupReservations/$(uid)/reservations/$(backupId));
+        return reservation.data.backupId == backupId
+          && reservation.data.expiresAt > request.time;
+      }
+      allow read: if isOwner();
+      allow create: if isOwner()
+        && resource == null
+        && request.resource.contentType == 'application/octet-stream'
+        && request.resource.size > 0
+        && request.resource.size <= 21 * 1024 * 1024
+        && hasLiveReservation();
+      // Objects are immutable once the reservation path is written.
+      allow update, delete: if false;
+    }
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

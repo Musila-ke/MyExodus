@@ -1139,6 +1139,28 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * v21 → v22 (account plan §6.4 item 11): the per-UID remote-snapshot anchors. One
+         * singleton row; a fresh install starts with no row and therefore no anchor.
+         */
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS remote_backup_anchor (" +
+                        "id INTEGER NOT NULL, materialized_revision INTEGER, " +
+                        "materialized_sha256 TEXT, high_water_revision INTEGER, " +
+                        "high_water_sha256 TEXT, PRIMARY KEY(id))",
+                ).use { it.step() }
+            }
+        }
+
+        /** v22 rollback: a v21 build has no backup anchors, so the table is simply dropped. */
+        val MIGRATION_22_21 = object : Migration(22, 21) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("DROP TABLE IF EXISTS remote_backup_anchor").use { it.step() }
+            }
+        }
+
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override suspend fun migrate(connection: SQLiteConnection) {
                 // Recovery resource UI (plan v3 W7): the urge/recovery session log and the
@@ -1355,7 +1377,7 @@ class AppRulesStoreFactory(
             MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21,
             MIGRATION_10_9, MIGRATION_12_11, MIGRATION_13_12, MIGRATION_14_13, MIGRATION_15_14,
             MIGRATION_16_15, MIGRATION_17_16, MIGRATION_18_17, MIGRATION_19_18, MIGRATION_20_19,
-            MIGRATION_21_20,
+            MIGRATION_21_20, MIGRATION_21_22, MIGRATION_22_21,
         )
     }
 }

@@ -381,3 +381,22 @@ exports.initializeBackupKeyBundle = createInitializeBackupKeyBundle({ db });
 exports.updateBackupKeyBundle = createUpdateBackupKeyBundle({ db });
 exports._createInitializeBackupKeyBundleHandler = createInitializeBackupKeyBundleHandler;
 exports._createUpdateBackupKeyBundleHandler = createUpdateBackupKeyBundleHandler;
+
+// Account plan §7 Release 2 step 14 / §6.4 items 11-14 / §8.6: reservation, manifest commit
+// and orphan cleanup.
+const {
+  createBeginBackup,
+  createExtendBackupReservation,
+  createCommitBackupManifest,
+  createBeginBackupHandler,
+  createExtendBackupReservationHandler,
+  createCommitBackupManifestHandler,
+  createCleanupBackupOrphans,
+} = require('./backup-manifest');
+exports.beginBackup = createBeginBackup({ db });
+exports.extendBackupReservation = createExtendBackupReservation({ db });
+exports.commitBackupManifest = createCommitBackupManifest({ db });
+exports.cleanupBackupOrphans = createCleanupBackupOrphans({ db });
+exports._createBeginBackupHandler = createBeginBackupHandler;
+exports._createExtendBackupReservationHandler = createExtendBackupReservationHandler;
+exports._createCommitBackupManifestHandler = createCommitBackupManifestHandler;

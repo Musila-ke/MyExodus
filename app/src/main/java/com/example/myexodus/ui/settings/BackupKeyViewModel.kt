@@ -8,10 +8,16 @@ import com.example.myexodus.backup.BackupKeyException
 import com.example.myexodus.backup.BackupKeyFailure
 import com.example.myexodus.backup.BackupKeyManager
 import com.example.myexodus.backup.BackupKeyManager.Unlock
+import com.example.myexodus.backup.BackupPair
+import com.example.myexodus.backup.BackupProgress
+import com.example.myexodus.backup.BackupUploadException
+import com.example.myexodus.backup.BackupUploadFailure
+import com.example.myexodus.backup.BackupUploads
 import com.example.myexodus.backup.PassphrasePolicy
 import com.example.myexodus.backup.RemoteBundle
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +34,7 @@ import kotlinx.coroutines.withContext
 @HiltViewModel
 class BackupKeyViewModel @Inject constructor(
     private val manager: BackupKeyManager,
+    private val uploader: BackupUploads,
     private val auth: AuthCoordinator,
 ) : ViewModel() {
 
@@ -46,16 +53,34 @@ class BackupKeyViewModel @Inject constructor(
         data class Reveal(val words: List<String>, val setup: Boolean) : Operation
     }
 
+    /** §6.4 items 11-13: the snapshot-upload state machine, as the pane presents it. */
+    sealed interface Backup {
+        data object Idle : Backup
+        data class Running(val progress: BackupProgress) : Backup
+        data class Succeeded(val revision: Long) : Backup
+        /** §6.6 item 3: the exact pointer a replacement must be bound to. */
+        data class Replace(val current: BackupPair) : Backup
+        data class Failed(val failure: BackupUploadFailure, val retryable: Boolean) : Backup
+    }
+
     private val _status = MutableStateFlow<Status>(Status.Loading)
     val status: StateFlow<Status> = _status.asStateFlow()
 
     private val _operation = MutableStateFlow<Operation>(Operation.Idle)
     val operation: StateFlow<Operation> = _operation.asStateFlow()
 
+    private val _backup = MutableStateFlow<Backup>(Backup.Idle)
+    val backup: StateFlow<Backup> = _backup.asStateFlow()
+
     val authState: StateFlow<AuthState> = auth.state
 
     private var remote: RemoteBundle? = null
     private var job: Job? = null
+    private var backupJob: Job? = null
+    // Held only while one backup flow runs: the ABK unwrap secret and the pointer the user
+    // explicitly confirmed. Never persisted, dropped on every terminal outcome.
+    private var pendingUnlock: Unlock? = null
+    private var pendingReplace: BackupPair? = null
 
     init {
         refresh()
@@ -107,6 +132,41 @@ class BackupKeyViewModel @Inject constructor(
         _operation.value = Operation.Reveal(rotated.recoveryWords, setup = false)
     }
 
+    /** §6.4 items 5-13: creates one snapshot with the user's secret for this operation only. */
+    fun backUpNow(unlock: Unlock) {
+        pendingUnlock = unlock
+        pendingReplace = null
+        startBackup(unlock, replace = null)
+    }
+
+    /** §6.4 item 11: replaces exactly the cloud pointer the user was shown. */
+    fun replaceCloudBackup() {
+        val confirmed = (_backup.value as? Backup.Replace)?.current ?: return
+        val unlock = pendingUnlock ?: return
+        pendingReplace = confirmed
+        startBackup(unlock, confirmed)
+    }
+
+    /** A retry reuses the secret and confirmed pointer still held by this flow. */
+    fun retryBackup() {
+        val unlock = pendingUnlock ?: return
+        startBackup(unlock, pendingReplace)
+    }
+
+    /** The upload session survives, so the next attempt resumes instead of restarting. */
+    fun cancelBackup() {
+        if (_backup.value !is Backup.Running) return
+        backupJob?.cancel()
+        clearBackupSecrets()
+        _backup.value = Backup.Idle
+    }
+
+    fun dismissBackup() {
+        if (_backup.value is Backup.Running) return
+        clearBackupSecrets()
+        _backup.value = Backup.Idle
+    }
+
     /** Drops the mnemonic from memory; the screen only offers this after acknowledgement. */
     fun acknowledgeReveal() {
         if (_operation.value is Operation.Reveal) _operation.value = Operation.Idle
@@ -130,6 +190,60 @@ class BackupKeyViewModel @Inject constructor(
             val uid = persistentUid() ?: return@launch
             statusFromServer(uid)
         }
+    }
+
+    private fun startBackup(unlock: Unlock, replace: BackupPair?) {
+        backupJob?.cancel()
+        val bundle = remote
+        val uid = persistentUid()
+        if (bundle == null || uid == null) {
+            clearBackupSecrets()
+            _backup.value = Backup.Failed(BackupUploadFailure.SIGN_IN_REQUIRED, retryable = false)
+            return
+        }
+        backupJob = viewModelScope.launch {
+            _backup.value = Backup.Running(BackupProgress.Preparing)
+            try {
+                // The ABK unwrap runs Argon2: never on the main thread. Network and disk work
+                // inside the uploader suspends or hops to IO itself.
+                val result = withContext(Dispatchers.Default) {
+                    uploader.backup(bundle, unlock, replace) { progress ->
+                        _backup.value = Backup.Running(progress)
+                    }
+                }
+                clearBackupSecrets()
+                _backup.value = Backup.Succeeded(result.revision)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: BackupUploadException) {
+                val conflict = conflictPointer(e)
+                if (conflict != null) {
+                    _backup.value = Backup.Replace(conflict)
+                } else {
+                    val retryable = e.failure in RETRYABLE
+                    if (!retryable) clearBackupSecrets()
+                    _backup.value = Backup.Failed(e.failure, retryable)
+                }
+            } catch (e: Exception) {
+                clearBackupSecrets()
+                _backup.value = Backup.Failed(BackupUploadFailure.UNKNOWN, retryable = false)
+            }
+        }
+    }
+
+    /**
+     * §6.4 item 11: a base/conflict answer names the pointer a replacement must carry. A
+     * server-side race can answer without one, so the current pointer is read again (which
+     * also raises the high-water mark) rather than guessed.
+     */
+    private suspend fun conflictPointer(e: BackupUploadException): BackupPair? {
+        if (e.failure !in CONFLICTS) return null
+        return e.current ?: runCatching { uploader.currentPointer() }.getOrNull()
+    }
+
+    private fun clearBackupSecrets() {
+        pendingUnlock = null
+        pendingReplace = null
     }
 
     private fun launchOperation(block: suspend (String) -> Unit) {
@@ -176,4 +290,22 @@ class BackupKeyViewModel @Inject constructor(
 
     private fun persistentUid(): String? =
         (auth.state.value as? AuthState.PersistentActive)?.uid
+
+    private companion object {
+        /** §6.4 item 11: only these answers are settled by explicit user confirmation. */
+        val CONFLICTS = setOf(
+            BackupUploadFailure.BACKUP_BASE_REQUIRED,
+            BackupUploadFailure.REMOTE_BACKUP_AHEAD,
+            BackupUploadFailure.BACKUP_CONFLICT,
+        )
+
+        /** Failures a repeat of the same operation, with the same secret, can recover from. */
+        val RETRYABLE = setOf(
+            BackupUploadFailure.NETWORK,
+            BackupUploadFailure.BACKUP_RESERVATION_LIMIT,
+            BackupUploadFailure.BACKUP_RESERVATION_EXPIRED,
+            BackupUploadFailure.BACKUP_OBJECT_MISSING,
+            BackupUploadFailure.BACKUP_OBJECT_MISMATCH,
+        )
+    }
 }

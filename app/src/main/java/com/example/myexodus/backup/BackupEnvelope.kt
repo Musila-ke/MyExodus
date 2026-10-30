@@ -210,3 +210,14 @@ object BackupEnvelope {
         return value
     }
 }
+
+/** §8.6 wire identity: backup IDs are 32 lowercase hex chars and SHA-256 values 64. */
+internal fun ByteArray.toLowerHex(): String {
+    val digits = "0123456789abcdef"
+    val out = StringBuilder(size * 2)
+    for (byte in this) {
+        val value = byte.toInt() and 0xFF
+        out.append(digits[value ushr 4]).append(digits[value and 0x0F])
+    }
+    return out.toString()
+}

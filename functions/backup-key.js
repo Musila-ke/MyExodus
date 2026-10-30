@@ -157,4 +157,6 @@ module.exports = {
   createUpdateBackupKeyBundle,
   createInitializeBackupKeyBundleHandler,
   createUpdateBackupKeyBundleHandler,
+  requireBackupAccount,
+  signInProviderOf,
 };

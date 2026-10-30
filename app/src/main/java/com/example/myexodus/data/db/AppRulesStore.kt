@@ -19,6 +19,7 @@ import com.example.myexodus.data.db.dao.RecoveryPolicyDao
 import com.example.myexodus.data.db.dao.RecoverySessionDao
 import com.example.myexodus.data.db.dao.RecoveryStateDao
 import com.example.myexodus.data.db.dao.RecoveryStreakDao
+import com.example.myexodus.data.db.dao.RemoteBackupAnchorDao
 import com.example.myexodus.data.db.dao.RiskWindowDao
 import com.example.myexodus.data.db.dao.RestrictionRuleDao
 import com.example.myexodus.data.db.dao.UsageLedgerDao
@@ -47,6 +48,7 @@ import com.example.myexodus.data.db.entity.RecoveryPolicy
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.data.db.entity.RecoveryState
 import com.example.myexodus.data.db.entity.RecoveryStreak
+import com.example.myexodus.data.db.entity.RemoteBackupAnchor
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.RiskWindow
 import com.example.myexodus.data.db.entity.UsageLedger
@@ -93,8 +95,9 @@ import com.example.myexodus.domainusage.RuleUsageDao
         PartnerMonitoringCheckin::class,
         PartnerMonitoringSnapshot::class,
         PartnerRuleChange::class,
+        RemoteBackupAnchor::class,
     ],
-    version = 21,
+    version = 22,
     exportSchema = true,
 )
 abstract class AppRulesStore : RoomDatabase() {
@@ -120,4 +123,5 @@ abstract class AppRulesStore : RoomDatabase() {
     abstract fun partnerRuleChangeDao(): PartnerRuleChangeDao
     abstract fun pairSharingDao(): PairSharingDao
     abstract fun partnerPlanDao(): PartnerPlanDao
+    abstract fun remoteBackupAnchorDao(): RemoteBackupAnchorDao
 }

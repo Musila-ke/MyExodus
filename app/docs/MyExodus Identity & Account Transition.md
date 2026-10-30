@@ -354,7 +354,27 @@ with a reason. "Where" names the primary surfaces, not every call site.
   app-private staging sink and reports success only after `doFinal()` verifies the tag; every
   unknown magic/version, invalid length, truncation, trailing byte and tamper maps to a closed
   rejection reason. `withAbk` holds the unwrapped ABK for exactly one operation and zeroes it
-  on every exit. Upload reservations/manifests remain R2.14; staging restore remains R2.15.
+  on every exit.
+  **IMPLEMENTED upload + manifest (R2.14, 2026-10-30, ADR #242):** `BackupUploader` drives one
+  backup as freeze-read → serialize → seal → prove (exact object length and SHA-256) → delete
+  the compressed staging file → `beginBackup` → resumable Storage upload (the issued session URI
+  is journaled in the same Tink-wrapped DataStore at most once a second, never logged; the
+  reservation is extended before a resumed upload and every 10 minutes while uploading) →
+  `commitBackupManifest`; the local anchors advance only after the server confirms the commit.
+  Before anything is sealed it mirrors the server decision table against this device's
+  high-water anchor, so a replayed, ahead-of-base, or equivocated pointer stops the operation
+  before any reservation. An explicit replacement is bound to the exact pointer the user was
+  shown and still passes the high-water guard. A lost upload response is resolved by the
+  manifest's own SHA-256 check: bytes that arrived are committed instead of re-uploaded (the
+  create-only Storage rule would reject a second write anyway). Resume is honoured only when
+  UID, session generation, backup ID, length and SHA-256 all still match; anything else is
+  discarded with its object. `storage.rules` already enforces owner-only create-only
+  octet-stream writes ≤ 21 MiB at the reserved path with a live reservation document, and
+  denies every update/delete. The Account pane's Encrypted backup card has a Back up now form
+  (passphrase or recovery words, held in memory only until the flow ends), live progress,
+  cancel, a retry that reuses the held secret, and a Replace / Keep the cloud backup choice
+  when the server names a conflicting pointer. Staging restore remains R2.15; the success copy
+  ("restore it on a new phone") becomes fully true only with R2.15 in the same release.
   **Same-device recovery is not backup (ADR #240, 2026-10-30).** The 2026-10-29 ruling still
   governs the backup blob and the portable quarantine: block rules, usage meters/ledger and
   pairing state never enter either. A retained scope is a different artifact — the previous
