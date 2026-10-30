@@ -339,6 +339,14 @@ with a reason. "Where" names the primary surfaces, not every call site.
   p95 ≈ 4.7–4.9 s); parameters were not weakened, and the release-build measurement is an open
   owner decision. The backup *payload* — binary envelope, uploads, manifests, restore — remains
   R2.13–R2.15.
+  **Same-device recovery is not backup (ADR #240, 2026-10-30).** The 2026-10-29 ruling still
+  governs the backup blob and the portable quarantine: block rules, usage meters/ledger and
+  pairing state never enter either. A retained scope is a different artifact — the previous
+  identity's own database on this phone — so the same-device recovery (G8) additionally restores
+  its block rules, daily usage trackers, usage ledger and per-rule usage into the account scope,
+  additively and idempotently, before the offer is retired. Pairing state still stays out: the
+  transition terminates every pair server-side (reason `GUEST_ACCOUNT_TRANSITION`), so there is
+  no live relationship to restore into the new identity.
 - **G6. Migration safety.** The link-upgrade must not touch Room; the DB version does not change.
 - **G7. UID-scoped database paths — IMPLEMENTED (Release 1 step 7, ADR #233).**
   `LocalDatabaseMigration` copies `myexodus_rules.db`, `myexodus_accountability.db` and
@@ -350,6 +358,31 @@ with a reason. "Where" names the primary surfaces, not every call site.
   now complete: step 9 prepare/finalize/cancel (ADR #235), step 10 active-scope switching and
   session fencing (ADR #236), and step 11 quarantine/import (ADR #237). The cloud-restore offer
   on keystore failure remains a Release 2 (G5) item.
+- **G8. An identity change outside a transition keeps the retained scope importable — IMPLEMENTED
+  (2026-10-30, ADRs #239/#240).** `onAppStart` used to treat any persisted non-anonymous identity whose
+  uid hash differed from the active scope as the crash window of a switch and moved the pointer
+  without asking; on 2026-10-30 that emptied the app for an account whose real data was still in
+  the guest scope. The switch is now expected only when a persisted `pending_identity_switch`
+  marker (written by `beginTransition`, cleared by `completeTransition`/`abortTransition`) is
+  present. An unmarked mismatch still moves the pointer — a retained database must never open
+  under a different UID — but records an offer (`recovery_scope_hash` plus the uid it is promised
+  to; a guest sign-out promises it to the next account, because an anonymous UID can never sign
+  back in). A **bound** offer (promised to the signed-in uid) stages itself at the next start and
+  imports without a second tap; an **unbound** guest-sign-out offer keeps the Account pane's
+  "Data from a previous profile" card (ADR #240). Either way the retained scope is read from a
+  byte copy (db plus a non-empty `-wal`) under its own Keystore DEK — the original is never
+  opened, rekeyed or checkpointed, and a missing key is never re-minted — and the snapshot enters
+  the same R1.11 quarantine, dry run, conflict refusal, atomic apply and seven-day replay. The
+  automatic path still stops at a human decision: plan conflicts and the portable-preferences
+  opt-in show the Import card. A same-device recovery additionally restores the retained block
+  rules and usage (trackers, ledger, per-rule usage) into the account scope before the offer is
+  retired (ADR #240); none of that enters the backup or the portable quarantine — the G5
+  exclusion still governs those. The offer is cleared exactly when the import commits and its
+  local restore succeeds; deleting the quarantine does not delete the retained scope, so the
+  offer reappears while those files still exist. Only one retained scope can be on offer at a
+  time (the pointer that was replaced). No new disclosure: pre-R1.10 builds showed the retained
+  data to whoever was signed in, and the transition's own choice is the consent for a bound
+  offer; an unbound offer still asks the signed-in account first.
 
 ### H. UX and onboarding
 - **H1. First-run identity choice** (continue anonymously vs create/sign in), with what an account

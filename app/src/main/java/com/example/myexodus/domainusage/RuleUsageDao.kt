@@ -18,6 +18,16 @@ abstract class RuleUsageDao {
     @Query("SELECT * FROM rule_usage_daily WHERE day_key = :dayKey")
     abstract suspend fun loadDay(dayKey: String): List<RuleUsageDaily>
 
+    /** ADR #240: the retained scope's per-rule history, read from its recovery copy. */
+    @Query("SELECT * FROM rule_usage_daily")
+    abstract suspend fun all(): List<RuleUsageDaily>
+
+    /** ADR #240: a same-device recovery replays retained rows under INV-5's never-lower rule. */
+    @Transaction
+    open suspend fun restoreMax(rows: List<RuleUsageDaily>) {
+        for (row in rows) upsertMaxRow(row.ruleId, row.revision, row.dayKey, row.activeMs)
+    }
+
     /** D-32 × §6.8: across every retained day — the last edit may have happened yesterday. */
     @Query("SELECT rule_id AS ruleId, MAX(revision) AS revision FROM rule_usage_daily GROUP BY rule_id")
     abstract suspend fun maxRevisions(): List<RuleRevision>

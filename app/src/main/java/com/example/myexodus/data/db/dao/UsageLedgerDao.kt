@@ -36,6 +36,10 @@ interface UsageLedgerDao {
     @Query("SELECT * FROM usage_ledger WHERE event_id = :eventId LIMIT 1")
     suspend fun findByEventId(eventId: String): UsageLedger?
 
+    /** ADR #240: the retained scope's journal, read from its recovery copy (age-bounded). */
+    @Query("SELECT * FROM usage_ledger")
+    suspend fun all(): List<UsageLedger>
+
     /** The gap detector's temporal baseline (§8.4 / AD-15): the latest row *this source* wrote.
      *  Read from the journal so the baseline can never disagree with it. */
     @Query("SELECT * FROM usage_ledger WHERE source = :source ORDER BY id DESC LIMIT 1")

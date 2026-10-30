@@ -2,6 +2,7 @@ package com.example.myexodus.account
 
 import android.content.Context
 import android.util.Log
+import androidx.core.content.edit
 import com.example.myexodus.accountability.sync.await
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.firestore.FirebaseFirestore
@@ -86,7 +87,7 @@ object LegacyCachePurge {
         val instance = FirebaseFirestore.getInstance()
         Tasks.await(instance.terminate(), TIMEOUT_SECONDS, TimeUnit.SECONDS)
         Tasks.await(instance.clearPersistence(), TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        prefs.edit().putBoolean(KEY_LEGACY_CACHE_PURGED, true).commit()
+        prefs.edit(commit = true) { putBoolean(KEY_LEGACY_CACHE_PURGED, true) }
         Log.i(TAG, "legacy Firestore disk cache purged")
         true
     } catch (e: Exception) {

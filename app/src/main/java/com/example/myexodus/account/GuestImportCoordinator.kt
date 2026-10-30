@@ -58,6 +58,8 @@ class GuestImportCoordinator(
     private val rules: RulesRepository,
     private val planner: GuestImportPlanner,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** ADR #239: lets a one-time recovery import retire its offer exactly when the rows commit. */
+    private val onImported: suspend (GuestQuarantineRecord) -> Unit = {},
 ) {
     private val _state = MutableStateFlow<GuestImportState>(GuestImportState.Idle)
     val state: StateFlow<GuestImportState> = _state.asStateFlow()
@@ -95,19 +97,26 @@ class GuestImportCoordinator(
     /** The portable-preferences checkbox: recomputes the counts for the chosen opt-in. */
     suspend fun preview(includePortablePreferences: Boolean) = gate.withLock {
         val record = pending
-        if (record != null) showDryRun(record, includePortablePreferences) else refreshLocked()
+        if (record != null) {
+            dryRun(record, includePortablePreferences)?.let { showConfirming(record, it) }
+        } else {
+            refreshLocked()
+        }
     }
 
-    /** The user confirmed the dry run: apply atomically, then journal the outcome. */
+    /** The user confirmed a plan the dry run could not apply on its own: apply atomically. */
     suspend fun confirm() = gate.withLock {
-        val targetUid = (auth.durableState as? AuthState.PersistentActive)?.uid ?: return@withLock
-        val record = pending ?: return@withLock
-        if (record.targetUid != targetUid) return@withLock
+        pending?.let { applyLocked(it) }
+    }
+
+    private suspend fun applyLocked(record: GuestQuarantineRecord) {
+        val targetUid = (auth.durableState as? AuthState.PersistentActive)?.uid ?: return
+        if (record.targetUid != targetUid) return
         _state.value = GuestImportState.Importing
         val db = storeFactory.open()
         if (db == null) {
             _state.value = GuestImportState.Failed(ImportFailure.STORE_UNAVAILABLE, null)
-            return@withLock
+            return
         }
         val profileId = rules.ensureActiveProfile().userId
         val plan = try {
@@ -122,18 +131,12 @@ class GuestImportCoordinator(
                 fresh
             }
         } catch (e: ImportConflicted) {
-            _state.value = GuestImportState.Confirming(
-                summary = e.plan.summary,
-                conflicts = e.plan.conflicts,
-                purgeAtMs = record.purgeAtMs,
-                portablePreferences = portablePreferences,
-                portablePreferencesAvailable = portablePreferencesAvailable,
-            )
-            return@withLock
+            showConfirming(record, e.plan)
+            return
         } catch (e: Exception) {
             Log.w(TAG, "guest import failed (${e.javaClass.simpleName})")
             _state.value = GuestImportState.Failed(ImportFailure.IMPORT_FAILED, null)
-            return@withLock
+            return
         }
         val done = record.copy(
             targetUid = targetUid,
@@ -144,15 +147,27 @@ class GuestImportCoordinator(
             // Rows committed but the journal did not record it; the replay deduplicates every
             // natural key, so Retry re-runs a zero-insert dry run and records the outcome.
             _state.value = GuestImportState.Failed(ImportFailure.IMPORT_FAILED, plan.summary)
-            return@withLock
+            return
         }
+        onImported(done)
         pending = null
         val next = quarantine.forTarget(targetUid).records.firstOrNull { it.importedAtMs == null }
         if (next != null) {
-            showDryRun(next, portablePreferences)
+            presentOrApply(next)
         } else {
             _state.value = GuestImportState.Imported(plan.summary, record.purgeAtMs)
         }
+    }
+
+    /**
+     * ADR #240 (owner ruling 2026-10-30): an import the user already asked for (the transition's
+     * keep-my-data choice, or a bound recovery copy) lands without a second confirmation tap.
+     * The card remains exactly where a human decision is required: conflicts, and the portable
+     * preferences opt-in, whose default must not be chosen silently.
+     */
+    private suspend fun presentOrApply(record: GuestQuarantineRecord) {
+        val plan = dryRun(record, portablePreferences) ?: return
+        if (plan.canApply && !portablePreferencesAvailable) applyLocked(record) else showConfirming(record, plan)
     }
 
     /** §8.4 `Delete quarantine now`: this account's staged copies, permanently. */
@@ -178,7 +193,7 @@ class GuestImportCoordinator(
         val scan = quarantine.forTarget(targetUid)
         val next = scan.records.firstOrNull { it.importedAtMs == null }
         if (next != null) {
-            showDryRun(next, portablePreferences)
+            presentOrApply(next)
             return
         }
         val imported = scan.records.firstOrNull { it.importedAtMs != null }
@@ -193,34 +208,39 @@ class GuestImportCoordinator(
         }
     }
 
-    private suspend fun showDryRun(
+    private suspend fun dryRun(
         record: GuestQuarantineRecord,
         includePortablePreferences: Boolean,
-    ) {
+    ): ImportPlan? {
         pending = record
         portablePreferences = includePortablePreferences
         val db = storeFactory.open()
         if (db == null) {
             _state.value = GuestImportState.Failed(ImportFailure.STORE_UNAVAILABLE, null)
-            return
+            return null
         }
-        try {
+        return try {
             val profileId = rules.ensureActiveProfile().userId
             val target = readTargetSnapshot(db, profileId)
             val plan = planner.plan(record.snapshot, target, includePortablePreferences)
             portablePreferencesAvailable =
                 record.snapshot.policy != null && record.snapshot.policy != target.policy
-            _state.value = GuestImportState.Confirming(
-                summary = plan.summary,
-                conflicts = plan.conflicts,
-                purgeAtMs = record.purgeAtMs,
-                portablePreferences = includePortablePreferences,
-                portablePreferencesAvailable = portablePreferencesAvailable,
-            )
+            plan
         } catch (e: Exception) {
             Log.w(TAG, "guest import dry run failed (${e.javaClass.simpleName})")
             _state.value = GuestImportState.Failed(ImportFailure.IMPORT_FAILED, null)
+            null
         }
+    }
+
+    private fun showConfirming(record: GuestQuarantineRecord, plan: ImportPlan) {
+        _state.value = GuestImportState.Confirming(
+            summary = plan.summary,
+            conflicts = plan.conflicts,
+            purgeAtMs = record.purgeAtMs,
+            portablePreferences = portablePreferences,
+            portablePreferencesAvailable = portablePreferencesAvailable,
+        )
     }
 
     private suspend fun apply(plan: ImportPlan, db: AppRulesStore) {

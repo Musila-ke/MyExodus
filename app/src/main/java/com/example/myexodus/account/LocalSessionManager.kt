@@ -2,6 +2,7 @@ package com.example.myexodus.account
 
 import android.content.Context
 import android.util.Log
+import androidx.core.content.edit
 import com.example.myexodus.data.db.LocalDatabaseMigration
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -26,6 +27,11 @@ interface SessionStore {
     fun pendingUnregisterUid(): String?
     fun setPendingUnregister(uid: String?)
     fun legacyCachePurged(): Boolean
+
+    /** ADR #239: an identity change the app itself started; the only marker that lets the
+     *  next process move the database scope without asking. */
+    fun pendingIdentitySwitch(): Boolean
+    fun setPendingIdentitySwitch(value: Boolean)
 }
 
 @Singleton
@@ -34,26 +40,32 @@ class PrefsSessionStore @Inject constructor(@ApplicationContext context: Context
 
     override fun generation(): Long = prefs.getLong(KEY_GENERATION, 0)
     override fun setGeneration(value: Long) {
-        prefs.edit().putLong(KEY_GENERATION, value).commit()
+        prefs.edit(commit = true) { putLong(KEY_GENERATION, value) }
     }
 
     override fun signedOut(): Boolean = prefs.getBoolean(KEY_SIGNED_OUT, false)
     override fun setSignedOut(value: Boolean) {
-        prefs.edit().putBoolean(KEY_SIGNED_OUT, value).commit()
+        prefs.edit(commit = true) { putBoolean(KEY_SIGNED_OUT, value) }
     }
 
     override fun pendingUnregisterUid(): String? = prefs.getString(KEY_PENDING_UNREGISTER, null)
     override fun setPendingUnregister(uid: String?) {
-        prefs.edit().putString(KEY_PENDING_UNREGISTER, uid).commit()
+        prefs.edit(commit = true) { putString(KEY_PENDING_UNREGISTER, uid) }
     }
 
     override fun legacyCachePurged(): Boolean =
         prefs.getBoolean(LegacyCachePurge.KEY_LEGACY_CACHE_PURGED, false)
 
+    override fun pendingIdentitySwitch(): Boolean = prefs.getBoolean(KEY_PENDING_SWITCH, false)
+    override fun setPendingIdentitySwitch(value: Boolean) {
+        prefs.edit(commit = true) { putBoolean(KEY_PENDING_SWITCH, value) }
+    }
+
     private companion object {
         const val KEY_GENERATION = "session_generation"
         const val KEY_SIGNED_OUT = "signed_out"
         const val KEY_PENDING_UNREGISTER = "pending_unregister_uid"
+        const val KEY_PENDING_SWITCH = "pending_identity_switch"
     }
 }
 
@@ -63,6 +75,22 @@ interface DatabaseScopeSwitch {
     fun activeHash(): String?
 
     fun switchTo(uid: String)
+
+    /**
+     * ADR #239: an identity changed outside a session transition (a pre-R1.10 build signed in,
+     * or a guest signed out). The scope pointer still has to move — a retained database must
+     * never open under a different UID — but the retained data is no longer silently orphaned:
+     * it stays importable, and [recoveryOffer] is what the Account pane offers back.
+     */
+    fun recordRecoveryOffer(retainedHash: String, forUid: String?)
+
+    /** The retained scope still offered for import to [uid] (null: any account may take it). */
+    fun recoveryOffer(uid: String?): String?
+
+    /** ADR #240: that offer only while bound to an account; an unbound copy is never automatic. */
+    fun boundRecoveryOffer(uid: String?): String?
+
+    fun clearRecoveryOffer()
 }
 
 /**
@@ -104,6 +132,12 @@ fun interface Relauncher {
  * scope pointer moved — a different UID must never open a retained database) and retries the
  * push-mapping deletion the network may have refused. An anonymous→anonymous UID change is the
  * ADR #125 rotation: the local scope and every pairing stay exactly as they are.
+ *
+ * ADR #239: only a switch THIS app started (the journal marker) may move the scope without an
+ * import decision. An unexplained identity change still moves the pointer — the retained
+ * database may never be served under another UID — but it is recorded as a recovery offer, so
+ * the signed-in account sees "data from an earlier session" and can import it explicitly
+ * instead of finding an empty app.
  */
 @Singleton
 class LocalSessionManager @Inject constructor(
@@ -143,7 +177,18 @@ class LocalSessionManager @Inject constructor(
             signedOut = store.signedOut()
             // Crash window: the credential changed but the process died before the scope pointer
             // moved. A retained database must never open under a different UID.
-            if (current != null && !current.isAnonymous) reconcileScope(current.uid)
+            val switchedHere = store.pendingIdentitySwitch()
+            if (switchedHere) store.setPendingIdentitySwitch(false)
+            if (current != null && !current.isAnonymous) {
+                val active = scopes.activeHash()
+                if (active != null && active != uidHash(current.uid)) {
+                    // ADR #239: an unmarked change (signed in on a pre-R1.10 build) must not
+                    // strand the retained data behind an empty scope without a way back.
+                    if (!switchedHere) scopes.recordRecoveryOffer(active, current.uid)
+                    scopes.switchTo(current.uid)
+                    Log.w(TAG, "identity changed outside a session transition; retained scope kept for recovery")
+                }
+            }
             initialized = true
             operations.observeIdentity(::onIdentityObserved)
         }
@@ -177,14 +222,23 @@ class LocalSessionManager @Inject constructor(
 
     override fun isCloudReady(): Boolean = _cloudAccess.value == CloudAccess.READY
 
+    /** ADR #239: the retained scope the current identity may still import, or null. */
+    fun recoveryOffer(): String? = scopes.recoveryOffer(operations.currentIdentity()?.uid)
+
+    /** ADR #240: the offered scope only when an account owns it (never a signed-out guest's). */
+    fun boundRecoveryOffer(): String? = scopes.boundRecoveryOffer(operations.currentIdentity()?.uid)
+
+    /** Called once a recovery import committed; the retained scope stays, the offer is done. */
+    fun clearRecoveryOffer() = scopes.clearRecoveryOffer()
+
     override suspend fun beginTransition(signOut: Boolean): TransitionStart {
-        val uid = synchronized(lock) {
+        val (uid, wasAnonymous) = synchronized(lock) {
             if (_cloudAccess.value != CloudAccess.READY) return TransitionStart.Refused(TransitionRefusal.MIGRATION_BLOCKED)
             if (phase != Phase.ACTIVE) return TransitionStart.Refused(TransitionRefusal.ALREADY_TRANSITIONING)
             // No identity means nothing is queued under a token; the caller may proceed.
             val current = identity ?: return TransitionStart.Started
             phase = Phase.TRANSITIONING
-            current.uid
+            current.uid to current.isAnonymous
         }
         // §8.7: run while the old UID is still the current auth subject. Nothing has been
         // terminated yet, so a refusal below is a clean, reversible state.
@@ -197,9 +251,18 @@ class LocalSessionManager @Inject constructor(
         synchronized(lock) {
             generation += 1
             store.setGeneration(generation)
+            // ADR #239: written before the credential call, so a process death between a
+            // successful sign-in and completeTransition can never look like a stray change.
+            store.setPendingIdentitySwitch(true)
             if (signOut) {
                 signedOut = true
                 store.setSignedOut(true)
+                // An anonymous UID can never sign back in; without this, its local data would
+                // become unreachable. Retained and offered to the next persistent account.
+                if (wasAnonymous) {
+                    val active = scopes.activeHash()
+                    if (active != null && active == uidHash(uid)) scopes.recordRecoveryOffer(active, null)
+                }
             }
         }
         // §4.3: the mapping is deletable only while this UID is current. Offline, the retry
@@ -213,6 +276,7 @@ class LocalSessionManager @Inject constructor(
         synchronized(lock) {
             if (phase == Phase.COMPLETING) return
             phase = Phase.COMPLETING
+            store.setPendingIdentitySwitch(false)
             if (newUid != null) {
                 reconcileScope(newUid)
                 signedOut = false
@@ -228,6 +292,7 @@ class LocalSessionManager @Inject constructor(
         synchronized(lock) {
             if (phase != Phase.TRANSITIONING) return
             phase = Phase.ACTIVE
+            store.setPendingIdentitySwitch(false)
             if (store.signedOut()) {
                 signedOut = false
                 store.setSignedOut(false)

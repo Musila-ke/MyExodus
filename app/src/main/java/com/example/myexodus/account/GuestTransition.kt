@@ -3,6 +3,7 @@ package com.example.myexodus.account
 import android.content.Context
 import android.util.Base64
 import android.util.Log
+import androidx.core.content.edit
 import com.example.myexodus.data.db.KeystoreWrappedDekManager
 import java.security.GeneralSecurityException
 import javax.crypto.Cipher
@@ -83,17 +84,20 @@ class KeystoreGuestTransitionJournal(appContext: Context) : GuestTransitionJourn
         try {
             cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"))
             val blob = cipher.doFinal(json.toString().toByteArray(Charsets.UTF_8))
-            prefs.edit()
-                .putString(KEY_IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
-                .putString(KEY_BLOB, Base64.encodeToString(blob, Base64.NO_WRAP))
-                .apply()
+            prefs.edit {
+                putString(KEY_IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+                putString(KEY_BLOB, Base64.encodeToString(blob, Base64.NO_WRAP))
+            }
         } finally {
             key.fill(0)
         }
     }
 
     override fun clear() {
-        prefs.edit().remove(KEY_IV).remove(KEY_BLOB).apply()
+        prefs.edit {
+            remove(KEY_IV)
+            remove(KEY_BLOB)
+        }
     }
 
     private fun decrypt(ivB64: String, blobB64: String): ByteArray {

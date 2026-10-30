@@ -36,4 +36,8 @@ interface DailyUsageTrackerDao {
     /** All tracker rows for the profile — the daily-maintenance sweep's read (§8 Step 8). */
     @Query("SELECT * FROM daily_usage_tracker WHERE profile_id = :profileId")
     suspend fun getForProfile(profileId: String): List<DailyUsageTracker>
+
+    /** ADR #240: the retained scope's counters, read from its recovery copy under its profile. */
+    @Query("SELECT * FROM daily_usage_tracker")
+    suspend fun all(): List<DailyUsageTracker>
 }

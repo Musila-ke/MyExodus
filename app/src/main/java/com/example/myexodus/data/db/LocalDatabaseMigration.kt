@@ -50,6 +50,9 @@ internal object LocalDatabaseMigration {
      *  journal marker above describes the install-wide migration, not the active identity. */
     private const val KEY_ACTIVE_HASH = "active_scope_uid_hash"
     private const val KEY_LAST_UID_HASH = "last_uid_hash"
+    /** ADR #239: the orphaned scope on offer, and which identity it was promised to (null: any). */
+    private const val KEY_RECOVERY_HASH = "recovery_scope_hash"
+    private const val KEY_RECOVERY_UID_HASH = "recovery_uid_hash"
     private const val KEY_OP_ID = "operation_id"
     private const val KEY_ACTIVATED_AT = "activated_at"
     private const val KEY_CLEANED = "legacy_cleaned"
@@ -124,6 +127,51 @@ internal object LocalDatabaseMigration {
 
     /** Domain-separated hash for a uid, so the session layer can compare pointers cheaply. */
     fun scopeHashOf(uid: String): String = uidHash(uid)
+
+    /**
+     * ADR #239: remembers a scope this install no longer serves but must not lose. [forUid]
+     * null means the next persistent account may take it (a guest signed out — that anonymous
+     * UID can never authenticate again).
+     */
+    fun recordRecoveryOffer(context: Context, retainedHash: String, forUid: String?) {
+        synchronized(lock) {
+            prefs(context).edit(commit = true) {
+                putString(KEY_RECOVERY_HASH, retainedHash)
+                if (forUid == null) remove(KEY_RECOVERY_UID_HASH) else putString(KEY_RECOVERY_UID_HASH, uidHash(forUid))
+            }
+        }
+    }
+
+    /** The retained scope still on offer for [uid], or null when none is (or it was taken). */
+    fun recoveryOffer(context: Context, uid: String?): String? = synchronized(lock) {
+        val prefs = prefs(context)
+        val hash = prefs.getString(KEY_RECOVERY_HASH, null) ?: return null
+        if (hash == effectiveScopeHash(context)) return null
+        val boundTo = prefs.getString(KEY_RECOVERY_UID_HASH, null)
+        if (boundTo != null && (uid == null || boundTo != uidHash(uid))) return null
+        if (!File(databaseDir(context), Scope(hash).rulesName).exists()) return null
+        hash
+    }
+
+    /** ADR #240: the offer only while an account owns it — an unbound copy keeps the card. */
+    fun boundRecoveryOffer(context: Context, uid: String?): String? = synchronized(lock) {
+        if (prefs(context).getString(KEY_RECOVERY_UID_HASH, null) == null) return null
+        recoveryOffer(context, uid)
+    }
+
+    /** Retires the offer; with [onlyIfHash], a newer offer recorded meanwhile is left alone. */
+    fun clearRecoveryOffer(context: Context, onlyIfHash: String? = null) {
+        synchronized(lock) {
+            val prefs = prefs(context)
+            if (onlyIfHash != null && prefs.getString(KEY_RECOVERY_HASH, null) != onlyIfHash) return
+            prefs.edit(commit = true) {
+                remove(KEY_RECOVERY_HASH)
+                remove(KEY_RECOVERY_UID_HASH)
+            }
+        }
+    }
+
+    private fun databaseDir(context: Context): File? = context.getDatabasePath("x").parentFile
 
     /**
      * Plan §7 step 20: points the next process start at [uid]'s stores. Never deletes anything —

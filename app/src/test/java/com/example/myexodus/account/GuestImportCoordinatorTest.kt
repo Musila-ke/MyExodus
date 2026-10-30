@@ -79,7 +79,9 @@ class GuestImportCoordinatorTest {
         recovery.resetAllData()
     }
 
-    private fun newCoordinator() = GuestImportCoordinator(
+    private fun newCoordinator(
+        onImported: (GuestQuarantineRecord) -> Unit = {},
+    ) = GuestImportCoordinator(
         auth,
         GuestTransitionCoordinator(auth, IdleJournal(), IdleApi(), FakeStager(), quarantine),
         factory,
@@ -87,6 +89,7 @@ class GuestImportCoordinatorTest {
         rules,
         GuestImportPlanner(),
         clock = { now },
+        onImported = onImported,
     )
 
     private fun record(
@@ -133,7 +136,7 @@ class GuestImportCoordinatorTest {
     )
 
     @Test
-    fun confirm_importsTheSnapshotIntoTheTargetDatabase_andJournalsTheOutcome() = runTest {
+    fun refresh_importsAConflictFreeSnapshot_andJournalsTheOutcome() = runTest {
         val guest = snapshot(
             streaks = listOf(
                 RecoveryStreak(
@@ -164,11 +167,8 @@ class GuestImportCoordinatorTest {
         )
         quarantine.records += record(guest)
 
+        // ADR #240: the transition's keep-my-data choice is the confirmation; no second tap.
         coordinator.refresh()
-        val confirming = coordinator.state.value as GuestImportState.Confirming
-        assertEquals(ImportSummary(7, 0, 0, 0), confirming.summary)
-
-        coordinator.confirm()
 
         assertEquals(GuestImportState.Imported(ImportSummary(7, 0, 0, 0), record(guest).purgeAtMs), coordinator.state.value)
         val db = factory.open()!!
@@ -189,6 +189,19 @@ class GuestImportCoordinatorTest {
     }
 
     @Test
+    fun aRecoveryRecord_autoImportsAndNotifiesItsOfferOwner() = runTest {
+        var imported: GuestQuarantineRecord? = null
+        val recovery = newCoordinator { imported = it }
+        val bound = record(snapshot()).copy(guestUid = "scope-" + "a".repeat(32))
+        quarantine.records += bound
+
+        recovery.refresh()
+
+        assertTrue(recovery.state.value is GuestImportState.Imported)
+        assertEquals("the offer is retired only after the rows committed", bound.guestUid, imported?.guestUid)
+    }
+
+    @Test
     fun aCrashBeforeTheJournalWrite_replaysToANoOp_andThenRecordsTheOutcome() = runTest {
         val guest = snapshot(
             attempts = listOf(AttemptLog(occurredAtEpochMillis = 55L, ruleId = "r1", blockedTarget = "com.x", outcome = "BLOCKED")),
@@ -199,7 +212,6 @@ class GuestImportCoordinatorTest {
         quarantine.saveResult = false
 
         coordinator.refresh()
-        coordinator.confirm()
 
         val failed = coordinator.state.value as GuestImportState.Failed
         assertEquals(ImportFailure.IMPORT_FAILED, failed.failure)
@@ -211,8 +223,6 @@ class GuestImportCoordinatorTest {
         quarantine.saveResult = true
         val restarted = newCoordinator()
         restarted.refresh()
-        assertTrue(restarted.state.value is GuestImportState.Confirming)
-        restarted.confirm()
 
         assertEquals(
             GuestImportState.Imported(ImportSummary(0, 0, 3, 0), original.purgeAtMs),
@@ -313,6 +323,13 @@ class GuestImportCoordinatorTest {
 
     @Test
     fun confirm_isIgnoredWhenTheTargetSessionChangedMidFlight() = runTest {
+        // A conflict keeps the card open, so the manual confirm path is reachable.
+        val db = factory.open()!!
+        repeat(RiskWindow.MAX_WINDOWS) {
+            db.riskWindowDao().insert(
+                RiskWindow(startMinute = 60 * it, endMinute = 60 * it + 30, daysMask = 127),
+            )
+        }
         quarantine.records += record(snapshot(
             riskWindows = listOf(RiskWindow(startMinute = 1200, endMinute = 1380, daysMask = 127)),
         ))
@@ -325,7 +342,6 @@ class GuestImportCoordinatorTest {
 
         coordinator.confirm()
 
-        assertTrue(factory.open()!!.riskWindowDao().all().isEmpty())
         assertNull(quarantine.records.single().importedAtMs)
     }
 

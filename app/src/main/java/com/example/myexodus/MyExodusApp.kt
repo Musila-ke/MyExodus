@@ -21,6 +21,7 @@ import com.example.myexodus.account.GuestImportCoordinator
 import com.example.myexodus.account.GuestTransitionCoordinator
 import com.example.myexodus.account.LegacyCachePurge
 import com.example.myexodus.account.LocalSessionManager
+import com.example.myexodus.account.ScopeRecoveryImporter
 import com.example.myexodus.accountability.state.LocalWipeDetector
 import com.example.myexodus.accountability.sync.AppCheckInstaller
 import com.example.myexodus.accountability.sync.PartnerNotifications
@@ -90,6 +91,8 @@ class MyExodusApp : Application(), Configuration.Provider {
     // Account plan §8.4: the post-switch import previews itself as soon as a bound quarantine
     // exists, so the import is never silently skipped after a restart.
     @Inject lateinit var guestImportCoordinator: GuestImportCoordinator
+    // ADR #240: a bound retained scope is staged at start and imported without a tap.
+    @Inject lateinit var scopeRecoveryImporter: ScopeRecoveryImporter
     // Account plan §7 step 10 / §12.4: the one session fence every remote operation consults.
     @Inject lateinit var localSessionManager: LocalSessionManager
 
@@ -213,6 +216,11 @@ class MyExodusApp : Application(), Configuration.Provider {
             applicationScope.launch {
                 rulesStoreFactory.open()
                 databaseMigration.runOnceIfNeeded()
+                // ADR #240: a bound retained scope restores itself; only a conflict, the
+                // portable-preferences opt-in, an unreadable copy, or an unbound offer waits.
+                if (unlocked && scopeRecoveryImporter.stageIfOffered()) {
+                    guestImportCoordinator.refresh()
+                }
                 // W7 session recovery (v2 M2.4 adapted): urge sessions a process death left
                 // STARTED past the 15-minute bound close as INTERRUPTED, once per launch.
                 runCatching { recoverySessions.interruptStale(System.currentTimeMillis()) }

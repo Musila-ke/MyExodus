@@ -51,6 +51,7 @@ import com.example.myexodus.account.GoogleCredentialOutcome
 import com.example.myexodus.account.GuestImportState
 import com.example.myexodus.account.GuestTransitionState
 import com.example.myexodus.account.ImportFailure
+import com.example.myexodus.account.RecoveryFailure
 import com.example.myexodus.account.TransitionFailure
 import com.example.myexodus.account.TransitionIntent
 import com.example.myexodus.account.TransitionStep
@@ -76,6 +77,7 @@ internal fun AccountPane(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val transition by viewModel.transition.collectAsStateWithLifecycle()
     val importState by viewModel.importState.collectAsStateWithLifecycle()
+    val recovery by viewModel.recovery.collectAsStateWithLifecycle()
     val cloudAccess by viewModel.cloudAccess.collectAsStateWithLifecycle()
     val isGuest = state is AuthState.GuestActive
     val context = LocalContext.current
@@ -93,6 +95,10 @@ internal fun AccountPane(
         // The app-level collector covers a closed pane; this covers a pane opened after the
         // transition completed while the collector's refresh found nothing bound yet.
         viewModel.refreshImport()
+    }
+    LaunchedEffect(state) {
+        // A sign-in that completes while the pane is open can surface a retained scope.
+        viewModel.refreshRecovery()
     }
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
@@ -171,6 +177,8 @@ internal fun AccountPane(
                 onRetry = viewModel::retryImport,
                 onDismiss = viewModel::dismissImport,
             )
+
+            RecoveryCard(state = recovery, onImport = viewModel::stageRecoveryImport)
 
             when (val current = state) {
                 AuthState.Initializing -> Box(
@@ -779,8 +787,9 @@ private fun ImportCard(
                 )
                 if (state.conflicts.isNotEmpty()) {
                     Text(
-                        stringResource(
-                            R.string.account_import_conflicts,
+                        pluralStringResource(
+                            R.plurals.account_import_conflicts,
+                            state.conflicts.sumOf { it.count },
                             state.conflicts.sumOf { it.count },
                         ),
                         style = MaterialTheme.typography.bodyMedium,
@@ -835,8 +844,9 @@ private fun ImportCard(
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
-                    stringResource(
-                        R.string.account_import_done_body,
+                    pluralStringResource(
+                        R.plurals.account_import_done_body,
+                        state.summary.inserted,
                         state.summary.inserted,
                         state.summary.deduplicated,
                         day(state.purgeAtMs),
@@ -876,6 +886,47 @@ private fun ImportCard(
                         Text(stringResource(R.string.account_dismiss))
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * ADR #239: data retained under an identity this account never imported. Staging hands the
+ * snapshot to the same dry run, atomic apply and seven-day undo as the guest import.
+ */
+@Composable
+private fun RecoveryCard(state: RecoveryUiState, onImport: () -> Unit) {
+    if (!state.offered) return
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                stringResource(R.string.account_recovery_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                stringResource(R.string.account_recovery_body),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            state.failure?.let {
+                Text(
+                    stringResource(
+                        when (it) {
+                            RecoveryFailure.UNREADABLE -> R.string.account_recovery_error_unreadable
+                            RecoveryFailure.STORE_UNAVAILABLE -> R.string.account_import_error_store
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Button(onClick = onImport) {
+                Text(stringResource(R.string.account_recovery_action))
             }
         }
     }

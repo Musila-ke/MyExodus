@@ -75,6 +75,8 @@ internal class FakeRuleUsageDao : RuleUsageDao() {
         return rows.values.filter { it.dayKey == dayKey }
     }
 
+    override suspend fun all(): List<RuleUsageDaily> = rows.values.toList()
+
     override suspend fun maxRevisions(): List<RuleRevision> {
         if (failLoad) throw IllegalStateException("db down")
         return rows.values.groupBy { it.ruleId }

@@ -38,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -486,7 +487,7 @@ class MainActivity : FragmentActivity() {
                 // and show the update-required message below it. This is a UX signal only —
                 // rules and callables enforce independently, so a failed read is not a bypass.
                 var updateRequired by remember { mutableStateOf<String?>(null) }
-                var compatibilityAttempt by remember { mutableStateOf(0) }
+                var compatibilityAttempt by remember { mutableIntStateOf(0) }
                 LaunchedEffect(compatibilityAttempt) {
                     // A failed read keeps the previous state: once blocked, a retry without
                     // connectivity must not unlock the app.

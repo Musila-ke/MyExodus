@@ -1361,13 +1361,19 @@
     <string name="account_import_title">Import your guest data</string>
     <string name="account_import_body">Your guest data is stored encrypted on this device. Review the counts and confirm — nothing is added until you do.</string>
     <string name="account_import_counts">To add: %1$d · Already here: %2$d · Updated rows: %3$d</string>
-    <string name="account_import_conflicts">%1$d records break data rules and can’t be imported. Nothing has been changed — you can keep this copy or delete it.</string>
+    <plurals name="account_import_conflicts">
+        <item quantity="one">%1$d record breaks data rules and can’t be imported. Nothing has been changed — you can keep this copy or delete it.</item>
+        <item quantity="other">%1$d records break data rules and can’t be imported. Nothing has been changed — you can keep this copy or delete it.</item>
+    </plurals>
     <string name="account_import_retention">A copy stays on this device for 7 days (until %1$s) so the import can be replayed. Replaying never restores the guest account or its partners.</string>
     <string name="account_import_portable">Also import recovery friction and override cooldown</string>
     <string name="account_import_confirm">Import data</string>
     <string name="account_import_working">Importing your data…</string>
     <string name="account_import_done_title">Guest data imported</string>
-    <string name="account_import_done_body">Added %1$d records; %2$d were already here. The encrypted copy stays until %3$s — deleting it now is permanent.</string>
+    <plurals name="account_import_done_body">
+        <item quantity="one">Added %1$d record; already here: %2$d. The encrypted copy stays until %3$s — deleting it now is permanent.</item>
+        <item quantity="other">Added %1$d records; already here: %2$d. The encrypted copy stays until %3$s — deleting it now is permanent.</item>
+    </plurals>
     <string name="account_import_delete">Delete quarantined data now</string>
     <string name="account_import_delete_title">Delete quarantined guest data?</string>
     <string name="account_import_delete_body">The encrypted copy on this device is permanently deleted. If it hasn’t been imported, that data is lost. This cannot be undone.</string>
@@ -1376,6 +1382,12 @@
     <string name="account_import_error_unreadable">The stored copy of your guest data can’t be opened, so it wasn’t imported. It has been left untouched on this device.</string>
     <string name="account_import_error_store">Your local database is unavailable right now, so nothing was imported. Try again.</string>
     <string name="account_import_error_generic">The import didn’t finish and nothing was changed. Try again.</string>
+
+    <!-- ADR #239: data retained under an identity this account never imported. -->
+    <string name="account_recovery_title">Data from a previous profile</string>
+    <string name="account_recovery_body">This device still holds data saved before this account was used on it, and it was never imported. Review the counts and confirm — nothing is added until you do.</string>
+    <string name="account_recovery_action">Import this data</string>
+    <string name="account_recovery_error_unreadable">The saved data on this device can’t be opened, so nothing was imported. It has been left untouched on this device.</string>
 
     <!-- Account plan §6.4/§6.5/§8.5: the backup passphrase and recovery key (Release 2). -->
     <string name="backup_key_title">Encrypted backup</string>

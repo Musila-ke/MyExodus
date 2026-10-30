@@ -184,6 +184,19 @@ class AppRulesStoreFactory(
     }
 
     /**
+     * ADR #239: opens a byte copy of another scope's rules file with that scope's own DEK, for
+     * the one-time import of a retained scope. Never cached, never reported into
+     * [DatabaseHealth], never touches the singleton handle — the caller closes it.
+     */
+    fun openRecoveryCopy(fileName: String, dekProvider: () -> ByteArray): AppRulesStore =
+        Room.databaseBuilder(appContext, AppRulesStore::class.java, fileName)
+            .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+            .setSingleConnectionPool()
+            .setDriver(KeyFetchingSQLCipherDriver(dekProvider))
+            .addMigrations(*ALL_MIGRATIONS)
+            .build()
+
+    /**
      * Brings a pre-encryption plaintext file up to the current schema before conversion:
      * Room runs migrations only when Room opens the file, and the conversion's shared-column
      * copy cannot invent NOT NULL columns added since the source's version.

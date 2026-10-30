@@ -16,6 +16,9 @@ import com.example.myexodus.account.GuestTransitionCoordinator
 import com.example.myexodus.account.CloudAccess
 import com.example.myexodus.account.GuestTransitionState
 import com.example.myexodus.account.LocalSessionManager
+import com.example.myexodus.account.RecoveryFailure
+import com.example.myexodus.account.RecoveryStage
+import com.example.myexodus.account.ScopeRecoveryImporter
 import com.example.myexodus.account.TransitionIntent
 import com.example.myexodus.account.TransitionStep
 import com.example.myexodus.accountability.sync.AccountCallables
@@ -23,8 +26,16 @@ import com.google.firebase.functions.FirebaseFunctions
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+
+/** ADR #239: a retained scope this account never imported, offered as a one-time import. */
+data class RecoveryUiState(
+    val offered: Boolean = false,
+    val failure: RecoveryFailure? = null,
+)
 
 /**
  * Release 1 (account plan §8.3): the Account pane's driver. Holds no identity state of its own —
@@ -40,6 +51,7 @@ class AccountViewModel @Inject constructor(
     private val guestImport: GuestImportCoordinator,
     private val functions: FirebaseFunctions,
     private val sessions: LocalSessionManager,
+    private val recoveryImporter: ScopeRecoveryImporter,
 ) : ViewModel() {
 
     val state: StateFlow<AuthState> = coordinator.state
@@ -49,6 +61,9 @@ class AccountViewModel @Inject constructor(
 
     /** Plan §9: READY unless the one-time legacy-cache purge failed this launch. */
     val cloudAccess: StateFlow<CloudAccess> = sessions.cloudAccess
+
+    private val _recovery = MutableStateFlow(RecoveryUiState())
+    val recovery: StateFlow<RecoveryUiState> = _recovery.asStateFlow()
 
     /**
      * Plan §8.7: the action a pending-writes refusal refers to. The discard button replays it
@@ -123,6 +138,26 @@ class AccountViewModel @Inject constructor(
     fun deleteQuarantine() = viewModelScope.launch { guestImport.deleteQuarantine() }
 
     fun dismissImport() = guestImport.dismiss()
+
+    /** ADR #239: offered only while a retained scope exists and is not already staged. */
+    fun refreshRecovery() = viewModelScope.launch {
+        val offered = state.value is AuthState.PersistentActive &&
+            sessions.recoveryOffer() != null && !recoveryImporter.pendingStaged()
+        _recovery.value = RecoveryUiState(offered = offered)
+    }
+
+    /** Stages the retained scope; the existing import dry run takes over from here. */
+    fun stageRecoveryImport() = viewModelScope.launch {
+        when (val stage = recoveryImporter.stageForImport()) {
+            RecoveryStage.Staged -> {
+                _recovery.value = RecoveryUiState(offered = false)
+                guestImport.refresh()
+            }
+            RecoveryStage.NotOffered -> _recovery.value = RecoveryUiState(offered = false)
+            is RecoveryStage.Failed ->
+                _recovery.value = RecoveryUiState(offered = true, failure = stage.failure)
+        }
+    }
 
     fun sendVerificationEmail() = viewModelScope.launch { coordinator.sendVerificationEmail() }
 

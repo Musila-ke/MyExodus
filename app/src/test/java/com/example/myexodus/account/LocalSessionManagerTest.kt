@@ -64,11 +64,13 @@ class LocalSessionManagerTest {
         initialGeneration: Long = 0,
         initialSignedOut: Boolean = false,
         initialPendingUnregister: String? = null,
+        initialPendingSwitch: Boolean = false,
         private val purged: Boolean = true,
     ) : SessionStore {
         var generationValue = initialGeneration
         var signedOutValue = initialSignedOut
         var pendingUnregisterValue = initialPendingUnregister
+        var pendingSwitchValue = initialPendingSwitch
 
         override fun generation(): Long = generationValue
         override fun setGeneration(value: Long) { generationValue = value }
@@ -77,16 +79,38 @@ class LocalSessionManagerTest {
         override fun pendingUnregisterUid(): String? = pendingUnregisterValue
         override fun setPendingUnregister(uid: String?) { pendingUnregisterValue = uid }
         override fun legacyCachePurged(): Boolean = purged
+        override fun pendingIdentitySwitch(): Boolean = pendingSwitchValue
+        override fun setPendingIdentitySwitch(value: Boolean) { pendingSwitchValue = value }
     }
 
     private class RecordingScopes(initialUid: String?) : DatabaseScopeSwitch {
         var hash: String? = initialUid?.let(LocalDatabaseMigration::scopeHashOf)
         val switches = mutableListOf<String>()
+        val recoveryOffers = mutableListOf<Pair<String, String?>>()
+        private var offer: String? = null
+        private var offerUid: String? = null
 
         override fun activeHash(): String? = hash
         override fun switchTo(uid: String) {
             switches += uid
             hash = LocalDatabaseMigration.scopeHashOf(uid)
+        }
+
+        override fun recordRecoveryOffer(retainedHash: String, forUid: String?) {
+            recoveryOffers += retainedHash to forUid
+            offer = retainedHash
+            offerUid = forUid
+        }
+
+        override fun recoveryOffer(uid: String?): String? =
+            offer.takeIf { offerUid == null || offerUid == uid }
+
+        override fun boundRecoveryOffer(uid: String?): String? =
+            recoveryOffer(uid).takeIf { offerUid != null }
+
+        override fun clearRecoveryOffer() {
+            offer = null
+            offerUid = null
         }
     }
 
@@ -122,6 +146,7 @@ class LocalSessionManagerTest {
         signedOut: Boolean = false,
         scopeUid: String? = null,
         pendingUnregister: String? = null,
+        pendingIdentitySwitch: Boolean = false,
         purged: Boolean = true,
         flushOk: Boolean = true,
         pushFails: Boolean = false,
@@ -130,6 +155,7 @@ class LocalSessionManagerTest {
         val store = InMemoryStore(
             initialSignedOut = signedOut,
             initialPendingUnregister = pendingUnregister,
+            initialPendingSwitch = pendingIdentitySwitch,
             purged = purged,
         )
         val scopes = RecordingScopes(scopeUid)
@@ -278,13 +304,71 @@ class LocalSessionManagerTest {
     }
 
     @Test
-    fun theCrashWindow_isReconciledAtStart() = runBlocking {
-        // The credential changed last process but the scope pointer never moved.
-        val h = Harness(member, scopeUid = "guest-1")
+    fun theCrashWindow_isReconciledAtStart_withoutARecoveryOffer() = runBlocking {
+        // The credential changed last process after this app's own beginTransition, but the
+        // process died before the scope pointer moved: the marker makes the switch expected.
+        val h = Harness(member, scopeUid = "guest-1", pendingIdentitySwitch = true)
         h.manager.onAppStart(this)
 
         assertEquals(listOf("member-1"), h.scopes.switches)
         assertEquals(LocalDatabaseMigration.scopeHashOf("member-1"), h.scopes.hash)
+        assertTrue("the transition owns the import decision", h.scopes.recoveryOffers.isEmpty())
+        assertFalse("the one-shot marker is consumed", h.store.pendingSwitchValue)
+    }
+
+    @Test
+    fun anUnmarkedIdentityChange_stillSwitchesTheScope_butOffersTheRetainedData() = runBlocking {
+        // ADR #239: something other than this app's transition changed the identity (a pre-R1.10
+        // build signing in). The pointer must move — no UID may open another scope — but the
+        // retained data is offered back instead of silently stranded.
+        val h = Harness(member, scopeUid = "guest-1")
+        h.manager.onAppStart(this)
+
+        assertEquals(listOf("member-1"), h.scopes.switches)
+        assertEquals(
+            listOf(LocalDatabaseMigration.scopeHashOf("guest-1") to "member-1"),
+            h.scopes.recoveryOffers,
+        )
+    }
+
+    @Test
+    fun beginTransition_marksTheSwitch_andAbortClearsIt() = runBlocking {
+        val h = Harness(guest, scopeUid = "guest-1")
+        h.manager.onAppStart(this)
+
+        h.manager.beginTransition(signOut = false)
+        assertTrue(h.store.pendingSwitchValue)
+
+        h.manager.abortTransition()
+        assertFalse(h.store.pendingSwitchValue)
+        assertTrue(h.scopes.recoveryOffers.isEmpty())
+    }
+
+    @Test
+    fun completeTransition_clearsTheSwitchMarker() = runBlocking {
+        val h = Harness(guest, scopeUid = "guest-1")
+        h.manager.onAppStart(this)
+
+        h.manager.beginTransition(signOut = false)
+        h.manager.completeTransition("member-1")
+
+        assertFalse(h.store.pendingSwitchValue)
+    }
+
+    @Test
+    fun aGuestSignOut_offersItsRetainedScopeToTheNextAccount() = runBlocking {
+        // An anonymous UID can never sign back in; without the offer its data would be
+        // unreachable even though the files are still on disk (ADR #239).
+        val h = Harness(guest, scopeUid = "guest-1")
+        h.manager.onAppStart(this)
+
+        h.manager.beginTransition(signOut = true)
+
+        assertEquals(
+            listOf(LocalDatabaseMigration.scopeHashOf("guest-1") to null),
+            h.scopes.recoveryOffers,
+        )
+        assertTrue("the retained database stays pointed at the guest scope", h.scopes.switches.isEmpty())
     }
 
     @Test

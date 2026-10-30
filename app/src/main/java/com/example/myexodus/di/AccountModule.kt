@@ -26,7 +26,10 @@ import com.example.myexodus.account.KeystoreGuestTransitionJournal
 import com.example.myexodus.account.LocalSessionManager
 import com.example.myexodus.account.PrefsSessionStore
 import com.example.myexodus.account.PushMapping
+import com.example.myexodus.account.KeystoreScopeSnapshotReader
 import com.example.myexodus.account.Relauncher
+import com.example.myexodus.account.ScopeRecoveryImporter
+import com.example.myexodus.account.ScopeSnapshotReader
 import com.example.myexodus.account.SessionCloud
 import com.example.myexodus.account.SessionFence
 import com.example.myexodus.account.SessionStore
@@ -88,14 +91,51 @@ object AccountModule {
     @Provides
     @Singleton
     fun provideGuestImportCoordinator(
+        @ApplicationContext context: Context,
         auth: AuthCoordinator,
         transition: GuestTransitionCoordinator,
         storeFactory: AppRulesStoreFactory,
         quarantine: GuestQuarantine,
         rules: RulesRepository,
         planner: GuestImportPlanner,
+        scopeRecovery: ScopeRecoveryImporter,
     ): GuestImportCoordinator =
-        GuestImportCoordinator(auth, transition, storeFactory, quarantine, rules, planner)
+        GuestImportCoordinator(auth, transition, storeFactory, quarantine, rules, planner) { record ->
+            if (ScopeRecoveryImporter.isRecoveryRecord(record)) {
+                // ADR #240: everything the same-device copy carries lands before its offer is
+                // retired; a failed restore keeps the offer so the next start retries.
+                val hash = record.guestUid.removePrefix(ScopeRecoveryImporter.RECOVERY_UID_PREFIX)
+                if (scopeRecovery.restoreLocalData(hash) != null) {
+                    LocalDatabaseMigration.clearRecoveryOffer(context, onlyIfHash = hash)
+                }
+            }
+        }
+
+    @Provides
+    @Singleton
+    fun provideScopeSnapshotReader(
+        @ApplicationContext context: Context,
+        storeFactory: AppRulesStoreFactory,
+    ): ScopeSnapshotReader = KeystoreScopeSnapshotReader(context, storeFactory)
+
+    @Provides
+    @Singleton
+    fun provideScopeRecoveryImporter(
+        sessions: LocalSessionManager,
+        auth: AuthCoordinator,
+        reader: ScopeSnapshotReader,
+        quarantine: GuestQuarantine,
+        storeFactory: AppRulesStoreFactory,
+        rules: RulesRepository,
+    ): ScopeRecoveryImporter = ScopeRecoveryImporter(
+        auth,
+        reader,
+        quarantine,
+        sessions::recoveryOffer,
+        storeFactory,
+        rules,
+        boundOffer = sessions::boundRecoveryOffer,
+    )
 
     @Provides
     @Singleton
@@ -112,6 +152,13 @@ object AccountModule {
         object : DatabaseScopeSwitch {
             override fun activeHash(): String? = LocalDatabaseMigration.effectiveScopeHash(context)
             override fun switchTo(uid: String) = LocalDatabaseMigration.switchScopeTo(context, uid)
+            override fun recordRecoveryOffer(retainedHash: String, forUid: String?) =
+                LocalDatabaseMigration.recordRecoveryOffer(context, retainedHash, forUid)
+            override fun recoveryOffer(uid: String?): String? =
+                LocalDatabaseMigration.recoveryOffer(context, uid)
+            override fun boundRecoveryOffer(uid: String?): String? =
+                LocalDatabaseMigration.boundRecoveryOffer(context, uid)
+            override fun clearRecoveryOffer() = LocalDatabaseMigration.clearRecoveryOffer(context)
         }
 
     /**
