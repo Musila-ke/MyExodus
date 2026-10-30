@@ -72,6 +72,18 @@ class BackupStagingTest {
     }
 
     @Test
+    fun aFirstRunWithNoStagingDirectoryStillWritesAndSeals() {
+        val root = java.io.File(temp.root, "absent")
+        val staging = BackupStaging(root)
+
+        staging.compressedFile("b1").writeText("x")
+        staging.objectFile("b1").writeText("y")
+
+        assertTrue(root.isDirectory)
+        assertEquals("x", staging.compressedFile("b1").readText())
+    }
+
+    @Test
     fun wipeRemovesEveryArtifactAndTheRoot() {
         val staging = BackupStaging(temp.root)
         staging.objectFile("active").writeText("x")

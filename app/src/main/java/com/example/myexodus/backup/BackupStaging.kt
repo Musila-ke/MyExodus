@@ -15,9 +15,15 @@ import javax.inject.Singleton
  */
 class BackupStaging(private val root: File) {
 
-    fun compressedFile(backupId: String): File = File(root, "$COMPRESSED_PREFIX$backupId.bin")
+    fun compressedFile(backupId: String): File = stagedFile("$COMPRESSED_PREFIX$backupId.bin")
 
-    fun objectFile(backupId: String): File = File(root, "$OBJECT_PREFIX$backupId.bin")
+    fun objectFile(backupId: String): File = stagedFile("$OBJECT_PREFIX$backupId.bin")
+
+    // A fresh install has no staging directory yet; FileOutputStream does not create parents.
+    private fun stagedFile(name: String): File {
+        root.mkdirs()
+        return File(root, name)
+    }
 
     /** §6.6 item 4: the restore download and its decrypted payload live in one directory. */
     fun restoreDir(backupId: String): File = File(root, "$RESTORE_PREFIX$backupId")

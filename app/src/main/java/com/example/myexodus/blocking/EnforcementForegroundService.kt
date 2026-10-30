@@ -172,6 +172,11 @@ class EnforcementForegroundService : Service() {
         // here too), paired with the destroy event when the stop is graceful — starts without
         // a stop are the kill-rate signal, stop events carry the uptime.
         serviceStartedElapsedRealtimeMs = SystemClock.elapsedRealtime()
+        // The FGS contract (5 s from startForegroundService) outranks everything below: a
+        // slow first-touch of Crashlytics or the CE prefs read put a cold start over it on a
+        // loaded device and the platform crashed the process (Lean_API34, 2026-10-31).
+        ProtectionNotifications.createChannels(this)
+        enterForeground()
         // Alive, but no authority computed yet: [livenessSnapshot] reads Unverifiable until
         // [start]'s refresh stamps one — never ACTIVE from a guess (§8.13).
         livenessRunning = true
@@ -182,8 +187,6 @@ class EnforcementForegroundService : Service() {
             "oem" to Build.MANUFACTURER,
             "api" to Build.VERSION.SDK_INT.toString(),
         )
-        ProtectionNotifications.createChannels(this)
-        enterForeground()
         // Path B's host: bare addView + TYPE_APPLICATION_OVERLAY on every device (the
         // accessibility token type is unavailable to a plain foreground service).
         usageOverlay = OverlayController(

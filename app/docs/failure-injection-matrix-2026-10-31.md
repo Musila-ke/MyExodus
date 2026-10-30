@@ -2,8 +2,26 @@
 
 Run 2026-10-31 against the Release 3 tree. Each plan bullet maps to the test that proves it.
 "JVM" = `:app:testDebugUnitTest`; "emulator" = Firebase/Storage emulator suites in
-`functions/emulator-test/`; "AVD" = API-37 emulator with GMS (`MyExodus_API37`); "X6532"
-= the physical review phone, `install -r` only, never wiped.
+`functions/emulator-test/`; "AVD" = API-37 emulator with GMS (`MyExodus_API37`);
+"Lean_API34" = the disposable API-34 AVD used as the second device for the real-backend restore leg
+(own App Check debug token); "X6532" = the physical review phone, `install -r` only, never wiped.
+
+## §12.3 — device matrix, one row per bullet
+
+Only two-physical-phone legs are blocked (one phone on hand); everything else has at least one
+real execution below. The AVD is not counted as an OEM device.
+
+| Plan requirement | What actually ran | Status |
+|---|---|---|
+| GMS physical device with a sideloaded signed release APK | X6532 (Infinix, GMS present, Android 14/API 34, armeabi-v7a) runs the current line, `install -r` only, never uninstalled since 2026-09-28. The APK is **debug-signed**: release signing is not configured yet (owner step, GitHub Releases cutover per ADR #171). | PARTIAL (debug-signed on a GMS physical) |
+| A second GMS OEM device (Samsung/Xiaomi or equivalent) | Not on hand. Blocked on hardware, per the owner's ruling on two-physical-device legs. | BLOCKED (hardware) |
+| One supported non-GMS device/ROM for email/password and core guest mode | Not on hand. | BLOCKED (hardware) |
+| Lowest supported RAM/ABI device, including 32-bit only if the support policy includes it | The X6532 is **32-bit-only** (`armeabi-v7a`) and ran every leg of this release — the 32-bit case is exercised on real hardware. RAM floor exercised: Lean_API34 at 2 GB ran the full real-backend backup/restore round trip and the R3.18 legs. No physical device below the X6532's RAM was available. | PASS (32-bit) / PARTIAL (RAM floor) |
+| At least one Android version at the actual minSdk and one current Android version | `minSdk = 26`; no API-26 device exists in the rig. Current versions: Android 14 on the X6532 and Lean_API34, API 37 on `MyExodus_API37`. | PARTIAL (current verified, minSdk-version not) |
+| Actual release-signing package/certificate configuration, not debug credentials only | Release-signing certificate is not configured yet; every verification above ran on debug-signed builds. | BLOCKED (owner release-signing step) |
+| Google sign-in must pass on supported GMS devices | `GOOGLE_WEB_CLIENT_ID` is still empty, so the Account pane correctly omits the Google button (ADR honest limit 2026-10-29). Needs the owner's Web OAuth client and a second GMS device's tap. Email/password is the verified path (real-backend sign-in on Lean_API34). | BLOCKED (owner OAuth client + second GMS device) |
+| Email/password, guest mode, backup/restore, in-app event refresh must not require Play services | Backup/restore + sign-in ran on Lean_API34 (plain Google-APIs image; no Play Store), and the local core (blocking, rules, usage) has no Play-services path in code. | PASS (design + AVD) |
+| App Check failures must not block v1 core functionality | App Check is referenced only in `AppCheckInstaller` (cloud-sync token install/check); blocking, rules and usage never consult it. Observed live: an unregistered debug token denied cloud calls with 403 while the app process stayed healthy. | PASS (code-checked + observed) |
 
 ## §12.4 — one row per bullet
 
@@ -37,3 +55,26 @@ Run 2026-10-31 against the Release 3 tree. Each plan bullet maps to the test tha
 ## Operational log (filled as each run completes)
 
 - 2026-10-31 — JVM suites, AVD instrumented suite, emulator suites, real-bucket round trip, gate enablement: see rows above and the ADRs (#245/#246) for timestamps.
+
+### 2026-10-31 — real-project backup/restore round trip (plan §13.3 items 2 and 4)
+
+Executed against the live project `myexodus-53804`, App Check token registered for the test
+build, `serverFeatureGates/backupUpload` enabled. Test account `r318.backup.20261031@example.com`
+(UID `PE8su1SWrVeJskdC4ODqedPdz7e2`), created on the device; email verified through the
+Identity Toolkit Admin API.
+
+| Leg | Evidence | Status |
+|---|---|---|
+| Storage rule cross-service lookup IAM (§13.3 item 2) | The first real upload was denied (`ERROR_NOT_AUTHORIZED`); the reservation document was live and correct, the bucket empty. Root cause: `service-913808045052@gcp-sa-firebasestorage.iam.gserviceaccount.com` lacked `roles/firebaserules.firestoreServiceAgent`, which Storage rules need for `firestore.get()`. Granted (etag-guarded `setIamPolicy`), verified by policy re-read; the very next upload wrote the object. Deployed Storage ruleset compared byte-for-byte with `storage.rules` — identical. | PASS |
+| Upload + manifest commit | Object `backups/PE8su1SWrVeJskdC4ODqedPdz7e2/c799c12c90fd06b6cbfb0588cc59ced4`, 601 B, generation `1793398522749469`. Pointer `users/PE8su1SWrVeJskdC4ODqedPdz7e2/backupControl/current` revision 1 and the manifest agree on backupId, objectBytes, generation and SHA-256 `c8563bd5…4ec4`; manifest carries compressedBytes 459, envelopeVersion 1, schemaVersion 1, null base (first backup). UI: “Backup complete”. | PASS |
+| Restore after app-data wipe (same AVD) | `pm clear` → fresh-install onboarding → sign in → key bundle fetched from the server → “Restore from cloud” → 24-word recovery key → download + authenticate (“Revision 1 · records: 5”) → confirm → app restarted with the DB swapped → Home shows “Days free from r318 habit, 1 day, Free since Oct 31”. `backupControl/activeRestore` released (404 after); pointer untouched (revision 1, same `updatedAt`). Blocks/usage/pairing correctly not restored. | PASS |
+| Restore on a second device | A second, independently installed AVD (Lean_API34, API 34, own App Check debug token) is the second device. Fresh install → sign in → key bundle fetched from the server ("Backup key is set up") → "Restore from cloud" → 24-word recovery key accepted → "Restore this cloud backup? Revision 1 · records: 5" (with "This phone has no backup history yet, so this revision number comes from the server") → restore → app restarted with the DB swapped → Home shows "Days free from r318 habit · 1 day · Free since Oct 31". Server state after: pointer untouched (revision 1, same backupId `c799c12c90fd06b6cbfb0588cc59ced4`, objectBytes 601, generation `1793398522749469`, SHA-256 `c8563bd5…4ec4`, same `updatedAt`), `backupControl/activeRestore` released (404). The first attempt was lost to the second FGS-deadline mechanism listed below; the leg passed on the rebuilt APK after the call-site fix. | PASS |
+| Firestore export (backup half of the runbook) | Bucket `myexodus-53804-firestore-exports` (US) created; `exportDocuments` to `gs://myexodus-53804-firestore-exports/exports/2026-10-31-r318` — operation SUCCESSFUL, 7 objects (~340 KB). | PASS |
+| Firestore import (restore half of the runbook) | **Not run and not runnable here**: the project has no staging environment; importing into `myexodus-53804` would merge a snapshot back over the owner's live data. The export above is the artifact a staging import would consume. | BLOCKED (no staging project) |
+
+### Device-found defects (fixed and re-verified in this run)
+
+| Defect | Evidence | Fix |
+|---|---|---|
+| First backup on a fresh install failed with “The backup couldn’t be prepared on this phone” (`STAGING_FAILED`) | `no_backup/backup-staging` does not exist on a fresh install and `BackupStaging` never created its root; `FileOutputStream` cannot create parent directories. Reproduced on the AVD before the fix; the staging phase passed after it. | `BackupStaging.stagedFile()` creates the root; regression `BackupStagingTest.aFirstRunWithNoStagingDirectoryStillWritesAndSeals`. |
+| Process crash on a loaded cold start: `ForegroundServiceDidNotStartInTimeException` ("Context.startForegroundService() did not then call Service.startForeground()"), twice — 2026-10-30 and again 2026-10-31 on the first fix | Two distinct mechanisms, both platform-deadline violations surfaced by host load. **Mechanism 1:** `crashReporting.nonFatal` (Crashlytics first touch + CE prefs read) ran inside `onCreate` between `startForegroundService` and `startForeground`. **Mechanism 2 — the one that survived fix 1:** service lifecycle callbacks dispatch on the app main thread, so with `MyExodusApp` calling `startForegroundService` during `onCreate`, the service-create message queues behind activity creation and first composition; evidence on Lean_API34 (pid 6753): `fgs-ensure` at 01:36:56.946, service created 01:37:20.232 (23 s later), fault raised at ~+5 s (01:37:02), thrown when the looper freed (01:37:21.557, "Skip duplicated ANR" 01:37:09). | Fix 1: `onCreate` creates the channels and calls `enterForeground()` before telemetry and setup. Fix 2 (the one that closes it): `MyExodusApp.kt` schedules `EnforcementForegroundService.ensureOnProcessStart` from the first main-looper idle turn (`Looper.myQueue().addIdleHandler`), so the service-create message runs immediately after the call instead of behind the activity launch. Verified on the same loaded AVD: `fgs-queued` 02:02:20.186 → Activity `setContent` 02:02:23.577 → `Fgs: foreground +421ms` at 02:02:33.742, crash buffer 0, no ANR. The platform deadline remains absolute for a service-create that itself arrives late (e.g. an `am startservice` fired 23 s before the looper frees) — that class is outside the app's control and is stated, not hidden (ADR #152 amendment, 2026-10-31). |

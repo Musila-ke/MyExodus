@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
+import android.os.Looper
 import android.os.UserManager
 import android.util.Log
 import android.view.accessibility.AccessibilityManager
@@ -293,9 +294,17 @@ class MyExodusApp : Application(), Configuration.Provider {
             // the ADR #149 watermark. Not a watchdog: ADR #105's rejected levers stay
             // rejected; the premise this revises is its "sticky restart covers the kill case".
             if (!underInstrumentation) {
-                EnforcementForegroundService.ensureOnProcessStart(this)
+                // The 5 s startForegroundService contract is serviced by this same main thread.
+                // Issued from onCreate, the service-create message sits behind the activity
+                // launch and first composition; a cold start past 5 s kills the process
+                // (Lean_API34 2026-10-31: create dispatched 23 s after the call). The first
+                // idle turn is when that message is guaranteed to run straight after the call.
+                Looper.myQueue().addIdleHandler {
+                    EnforcementForegroundService.ensureOnProcessStart(this@MyExodusApp)
+                    false
+                }
             }
-            startupTrace.lap("fgs-ensure")
+            startupTrace.lap("fgs-queued")
             // §8 Step 9: this boot's deferred reconciliation, if any (cold-start BOOT_COUNT
             // check + the locked-boot receiver's pending mark).
             reconcileBootIfNeeded()
