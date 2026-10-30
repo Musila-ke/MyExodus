@@ -337,8 +337,24 @@ with a reason. "Where" names the primary surfaces, not every call site.
   Cancel reconciles with server truth after a guard that runs before every mutating callable.
   **Honest limit:** §11.5's p95 < 2 s target is missed on the X6532 debug build (p50 ≈ 4.3 s,
   p95 ≈ 4.7–4.9 s); parameters were not weakened, and the release-build measurement is an open
-  owner decision. The backup *payload* — binary envelope, uploads, manifests, restore — remains
-  R2.13–R2.15.
+  owner decision. The upload/manifest and restore layers remain R2.14–R2.15.
+  **IMPLEMENTED snapshot envelope (R2.13, 2026-10-30, ADR #241):** the v1 binary object is
+  `MYEXBK01` + envelope version 1 + schema version + 16-byte backup ID + 16-byte ABK key ID +
+  fresh 12-byte payload and DEK-wrap nonces + the 48-byte DEK wrapper + the u64 payload
+  ciphertext length (tag included) + exactly that many bytes. The object carries no hash of
+  itself; authentication comes from the two exact §8.5 AAD layouts (byte-built, never JSON).
+  Each snapshot gets a fresh random DEK: the compressed payload is streamed through
+  AES-256-GCM under it, and the DEK is wrapped under the ABK with a distinct nonce and AAD, so
+  a DEK wrapper can never be replayed as a payload block. Serialization is newline-delimited
+  JSON records over one explicit entity allowlist shared with the guest quarantine (attempt and
+  session `eventSequence` never carried), compressed through deflate while enforcing the
+  100 MiB uncompressed / 20 MiB compressed / 5:1 expansion caps — an unrestorable object is
+  never produced; restore enforces the same bounds while inflating. The whole-object SHA-256 is
+  computed over the exact bytes for the manifest only. Decryption writes solely to an
+  app-private staging sink and reports success only after `doFinal()` verifies the tag; every
+  unknown magic/version, invalid length, truncation, trailing byte and tamper maps to a closed
+  rejection reason. `withAbk` holds the unwrapped ABK for exactly one operation and zeroes it
+  on every exit. Upload reservations/manifests remain R2.14; staging restore remains R2.15.
   **Same-device recovery is not backup (ADR #240, 2026-10-30).** The 2026-10-29 ruling still
   governs the backup blob and the portable quarantine: block rules, usage meters/ledger and
   pairing state never enter either. A retained scope is a different artifact — the previous

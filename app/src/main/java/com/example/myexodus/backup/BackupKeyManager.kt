@@ -167,6 +167,25 @@ class BackupKeyManager(
     }
 
     /**
+     * §6.4 item 5: unwraps the ABK for exactly one snapshot/restore operation and zeroes it on
+     * every exit. The block must not copy or persist the array; the current bundle stays the
+     * only durable copy of the wrapped key.
+     */
+    suspend fun <T> withAbk(
+        uid: String,
+        remote: RemoteBundle,
+        unlock: Unlock,
+        block: suspend (ByteArray) -> T,
+    ): T {
+        val abk = unlockAbk(uid, remote, unlock)
+        try {
+            return block(abk)
+        } finally {
+            abk.fill(0)
+        }
+    }
+
+    /**
      * §6.4: the KDF is CPU-bound and does not suspend, so a cancel during it is only visible at
      * the next explicit check — and it must win before a mutating callable leaves the device.
      * `FirebaseFunctions.call()` dispatches the request before `await()` can observe

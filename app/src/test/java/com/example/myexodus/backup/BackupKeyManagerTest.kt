@@ -268,6 +268,60 @@ class BackupKeyManagerTest {
     }
 
     @Test
+    fun withAbk_bothSecretsOpenTheSameKeyAndTheBufferIsZeroedOnExit() = runBlocking {
+        val created = manager.create(uid, passphrase)
+        var viaPassphrase: ByteArray? = null
+        var passphraseBuffer: ByteArray? = null
+        manager.withAbk(uid, created.remote, BackupKeyManager.Unlock.Passphrase(passphrase)) { abk ->
+            passphraseBuffer = abk
+            viaPassphrase = abk.copyOf()
+        }
+        var viaWords: ByteArray? = null
+        manager.withAbk(
+            uid,
+            created.remote,
+            BackupKeyManager.Unlock.RecoveryWords(created.recoveryWords.joinToString(" ")),
+        ) { abk ->
+            viaWords = abk.copyOf()
+        }
+
+        org.junit.Assert.assertArrayEquals(viaPassphrase, viaWords)
+        assertTrue(passphraseBuffer!!.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun withAbk_zeroesTheBufferEvenWhenTheOperationThrows() = runBlocking {
+        val created = manager.create(uid, passphrase)
+        var exposed: ByteArray? = null
+
+        runCatching {
+            manager.withAbk(uid, created.remote, BackupKeyManager.Unlock.Passphrase(passphrase)) { abk ->
+                exposed = abk
+                throw IllegalStateException("operation failed")
+            }
+        }
+
+        assertTrue(exposed!!.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun withAbk_wrongSecretIsRejectedBeforeTheBlockRuns() = runBlocking {
+        val created = manager.create(uid, passphrase)
+        var ran = false
+
+        val failure = assertFailure {
+            manager.withAbk(
+                uid,
+                created.remote,
+                BackupKeyManager.Unlock.Passphrase("WrongPass!234567"),
+            ) { ran = true }
+        }
+
+        assertEquals(BackupKeyFailure.WRONG_SECRET, failure)
+        assertTrue(!ran)
+    }
+
+    @Test
     fun load_rejectsUnexplainedRevisionRegression() = runBlocking {
         val created = manager.create(uid, passphrase)
         revisions.record(uid, 5)
