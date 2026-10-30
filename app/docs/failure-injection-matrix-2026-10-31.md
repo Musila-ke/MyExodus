@@ -55,6 +55,57 @@ real execution below. The AVD is not counted as an OEM device.
 ## Operational log (filled as each run completes)
 
 - 2026-10-31 — JVM suites, AVD instrumented suite, emulator suites, real-bucket round trip, gate enablement: see rows above and the ADRs (#245/#246) for timestamps.
+- 2026-10-31 — gradual flag enablement (§13.3 item 4): both server gates read live via the Firestore API —
+  `serverFeatureGates/backupUpload` `enabled: true` and `serverFeatureGates/guestTransition` `enabled: true`.
+  That is the internal-testing rollout the plan asks for at this stage; widening beyond the test account is the
+  owner's production call, and the rollback path is Monitoring §8.8 (gates off stop new begin/prepare, never deletion).
+
+### 2026-10-31 — cold-start and idle soak on Lean_API34 (task #43)
+
+15 force-stop → cold-start cycles followed by a 10-minute idle burn-in on the disposable
+API 34 AVD (`/tmp/lean-soak.sh`; samples `/tmp/lean-soak.tsv`, log `/tmp/lean-soak.log`).
+The APK under test is the debug build containing the idle-handler FGS fix.
+
+| Measure | Result |
+|---|---|
+| Cold starts (15/15 `Status: ok`) | min 5,270 ms · median 7,229 ms · max 8,943 ms (`am start -W` TotalTime) |
+| Foreground service after every start | `isForeground=true` in 15/15 cold samples and 5/5 idle samples |
+| Crashes (`logcat -b crash`, `Process:` lines) | 0 across the whole run |
+| ANRs | 0 across the whole run |
+| Process identity | Three distinct pids during cold cycles; one pid (9823) held from cold-15 through idle-5 — no restart, no watchdog kill |
+| Memory | TOTAL PSS 187,315 KB in a mid-run direct sample, 181,085 KB at the end (≈177 MB) after 15 cycles + 10 minutes; flat, no monotonic growth → no leak signal |
+| Host load | Cold cycles ran on an otherwise idle host; the idle phase overlapped the full JVM suite (2,385 tests) and the process still survived with the FGS alive — the adversarial half of the run |
+
+Honesty note: the in-loop `pss_kb` column is mis-parsed — it captured **TOTAL SWAP PSS**
+(182–353 KB), not TOTAL PSS, because the grep matched the swap row first. The correct
+TOTAL PSS values in the table above were taken directly with `dumpsys meminfo <pid>`.
+
+### 2026-10-31 — abuse probe against the deployed callables (task #43)
+
+Executed against `us-central1-myexodus-53804` with a disposable anonymous account and a
+debug App Check token registered for the test build (`/tmp/r3-abuse-probe.sh`; raw output
+kept as `/tmp/r3-abuse-probe.out`). Every callable enforces App Check; the account guard
+runs after input validation. Both orderings are deliberate: validation is cheap and
+rejects junk before any account read.
+
+| Call | Credentials sent | Result | Meaning |
+|---|---|---|---|
+| `beginBackup` `{}` | App Check only | HTTP 401 `sign-in required` (UNAUTHENTICATED) | No identity → refused at the callable boundary |
+| `beginBackup` `{}` | ID token only | HTTP 401 `Unauthenticated` | App Check enforcement rejects before the handler |
+| `beginBackup` `{}` | both | HTTP 400 `INVALID_INPUT` | Input validation runs before the account guard |
+| `initializeBackupKeyBundle` `{"bundle":{}}` | both | HTTP 400 `INVALID_BUNDLE` | Malformed key bundle refused |
+| `commitBackupManifest` `{"oops":1}` | both | HTTP 400 `INVALID_INPUT` | Unknown shape refused |
+| `requestAccountDeletion` `DELETE MY ACCOUNT` | both (anonymous) | HTTP 400 `PERSISTENT_ACCOUNT_REQUIRED` | Anonymous identities can never reach deletion |
+| `requestGuestDataDeletion` `DELETE` | both (anonymous) | HTTP 400 `CONFIRMATION_MISMATCH` | Wrong confirmation phrase refused |
+| `beginBackup` 100 KB junk | both | HTTP 400 `INVALID_INPUT` | Oversized payload refused before storage |
+| `beginBackup` valid shape | both (anonymous) | HTTP 400 `PERSISTENT_ACCOUNT_REQUIRED` | Anonymous guests hold no cloud backup slot |
+| `commitBackupManifest` valid shape | both (anonymous) | HTTP 400 `PERSISTENT_ACCOUNT_REQUIRED` | Same guard on commit |
+| cleanup `accounts:delete` | ID token | HTTP 200 `DeleteAccountResponse` | Probe account self-deleted; no residue |
+
+Four anonymous accounts left by two earlier aborted probe runs were removed with the
+Admin SDK (`/tmp/auth-probe-cleanup.js`, created within the prior 15 minutes only):
+`deleted: 4 failed: 0`. Older anonymous identities (emulator guest, owner devices) were
+not touched.
 
 ### 2026-10-31 — real-project backup/restore round trip (plan §13.3 items 2 and 4)
 

@@ -74,7 +74,8 @@ test('capability hash is deterministic SHA-256 hex and constant-time comparable'
   assert.strictEqual(hash, capabilityHashOf(CAP));
   assert.strictEqual(hash, crypto.createHash('sha256').update(CAP, 'utf8').digest('hex'));
   assert.strictEqual(hashesEqual(hash, capabilityHashOf(CAP)), true);
-  assert.strictEqual(hashesEqual(hash, capabilityHashOf(`${CAP.slice(0, 42)}A`)), false);
+  const flipped = `${CAP.slice(0, 42)}${CAP[42] === 'A' ? 'B' : 'A'}`;
+  assert.strictEqual(hashesEqual(hash, capabilityHashOf(flipped)), false);
   assert.strictEqual(hashesEqual(hash, hash.slice(0, 63)), false);
   assert.strictEqual(hashesEqual(null, hash), false);
 });
