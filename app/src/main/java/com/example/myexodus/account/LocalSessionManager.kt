@@ -3,6 +3,8 @@ package com.example.myexodus.account
 import android.content.Context
 import android.util.Log
 import androidx.core.content.edit
+import com.example.myexodus.backup.BackupRestoreMarkStore
+import com.example.myexodus.backup.BackupUploadSessionStore
 import com.example.myexodus.data.db.LocalDatabaseMigration
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -148,6 +150,10 @@ class LocalSessionManager @Inject constructor(
     private val push: PushMapping,
     private val workers: SessionWork,
     private val relauncher: Relauncher,
+    // §6.9.1: resumable upload metadata dies with the session it belongs to. Lazy because the
+    // secrets DataStore sits behind both and startup must not construct it pre-unlock.
+    private val uploadSessions: dagger.Lazy<BackupUploadSessionStore>,
+    private val restoreMarks: dagger.Lazy<BackupRestoreMarkStore>,
 ) : SessionFence, SessionTransitions {
 
     private enum class Phase { ACTIVE, TRANSITIONING, COMPLETING }
@@ -248,6 +254,11 @@ class LocalSessionManager @Inject constructor(
             return TransitionStart.Refused(TransitionRefusal.PENDING_WRITES)
         }
         discardApproved = false
+        if (signOut) {
+            // §6.9.1: the resumable upload metadata belongs to the session being signed out.
+            runCatching { uploadSessions.get().clear() }
+            runCatching { restoreMarks.get().clear() }
+        }
         synchronized(lock) {
             generation += 1
             store.setGeneration(generation)

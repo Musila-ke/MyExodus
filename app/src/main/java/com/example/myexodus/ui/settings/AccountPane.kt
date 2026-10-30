@@ -47,7 +47,11 @@ import com.example.myexodus.account.AuthFailure
 import com.example.myexodus.account.AuthProvider
 import com.example.myexodus.account.AuthState
 import com.example.myexodus.account.CloudAccess
+import com.example.myexodus.account.DeletionFailure
+import com.example.myexodus.account.DeletionPhrases
+import com.example.myexodus.account.DeletionState
 import com.example.myexodus.account.GoogleCredentialOutcome
+import com.example.myexodus.account.LocalRemovalInfo
 import com.example.myexodus.account.GuestImportState
 import com.example.myexodus.account.GuestTransitionState
 import com.example.myexodus.account.ImportFailure
@@ -79,6 +83,8 @@ internal fun AccountPane(
     val importState by viewModel.importState.collectAsStateWithLifecycle()
     val recovery by viewModel.recovery.collectAsStateWithLifecycle()
     val cloudAccess by viewModel.cloudAccess.collectAsStateWithLifecycle()
+    val deletion by viewModel.deletionState.collectAsStateWithLifecycle()
+    val removal by viewModel.removal.collectAsStateWithLifecycle()
     val isGuest = state is AuthState.GuestActive
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -90,6 +96,9 @@ internal fun AccountPane(
     var pendingSwitch by remember { mutableStateOf<PendingSwitch?>(null) }
     var showSwitchDialog by remember { mutableStateOf(false) }
     var showDeleteQuarantine by remember { mutableStateOf(false) }
+    var showDeleteAccount by remember { mutableStateOf(false) }
+    var showDeleteGuest by remember { mutableStateOf(false) }
+    var showRemoveLocal by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         // The app-level collector covers a closed pane; this covers a pane opened after the
@@ -99,6 +108,8 @@ internal fun AccountPane(
     LaunchedEffect(state) {
         // A sign-in that completes while the pane is open can surface a retained scope.
         viewModel.refreshRecovery()
+        // §6.9.3: the outbox/backup disclosure belongs to whichever identity is showing.
+        viewModel.refreshRemovalInfo()
     }
     LaunchedEffect(Unit) {
         viewModel.events.collect { event ->
@@ -122,6 +133,20 @@ internal fun AccountPane(
                 is GoogleCredentialOutcome.Success ->
                     if (reauth) viewModel.reauthenticateWithGoogle(result.idToken)
                     else viewModel.continueWithGoogle(result.idToken, switchAccount)
+                GoogleCredentialOutcome.Cancelled -> Unit
+                is GoogleCredentialOutcome.Unavailable -> {
+                    statusEvent = null
+                    statusFailure = result.failure
+                }
+            }
+        }
+    }
+
+    fun runGoogleDelete(phrase: String) {
+        scope.launch {
+            when (val result = viewModel.requestGoogleCredential(context)) {
+                is GoogleCredentialOutcome.Success ->
+                    viewModel.deleteAccountWithGoogle(phrase, result.idToken)
                 GoogleCredentialOutcome.Cancelled -> Unit
                 is GoogleCredentialOutcome.Unavailable -> {
                     statusEvent = null
@@ -160,6 +185,14 @@ internal fun AccountPane(
             if (cloudAccess != CloudAccess.READY) {
                 CloudBlockedCard(onRestart = viewModel::restartForCloudRecovery)
             }
+
+            DeletionCard(
+                state = deletion,
+                onSignOut = { viewModel.finishDeletionSignOut(false) },
+                onSignOutDiscarding = { viewModel.finishDeletionSignOut(true) },
+                onDiscardAndRetry = viewModel::discardAndRemoveLocalData,
+                onDismiss = viewModel::dismissDeletion,
+            )
 
             TransitionCard(
                 state = transition,
@@ -205,6 +238,8 @@ internal fun AccountPane(
                     state = current,
                     viewModel = viewModel,
                     onOpenBackupKey = onOpenBackupKey,
+                    onDeleteAccount = { showDeleteAccount = true },
+                    onRemoveLocal = { showRemoveLocal = true },
                 )
 
                 AuthState.SignedOut,
@@ -214,6 +249,9 @@ internal fun AccountPane(
                     prepared = transition is GuestTransitionState.Prepared,
                     googleAvailable = viewModel.googleAvailable,
                     viewModel = viewModel,
+                    retainedLocal = state is AuthState.SignedOut && removal?.retainedScope == true,
+                    onDeleteGuest = { showDeleteGuest = true },
+                    onRemoveLocal = { showRemoveLocal = true },
                     onSignIn = { email, password ->
                         if (transition is GuestTransitionState.Prepared || !isGuest) {
                             viewModel.signInWithEmail(email, password)
@@ -300,6 +338,218 @@ internal fun AccountPane(
             },
         )
     }
+
+    if (showDeleteAccount) {
+        DeleteAccountDialog(
+            providers = (state as? AuthState.PersistentActive)?.providers.orEmpty(),
+            googleAvailable = viewModel.googleAvailable,
+            onDismiss = { showDeleteAccount = false },
+            onPassword = { phrase, password ->
+                showDeleteAccount = false
+                viewModel.deleteAccount(phrase, password)
+            },
+            onGoogle = { phrase ->
+                showDeleteAccount = false
+                runGoogleDelete(phrase)
+            },
+        )
+    }
+
+    if (showDeleteGuest) {
+        GuestDeleteDialog(
+            onDismiss = { showDeleteGuest = false },
+            onDelete = { phrase ->
+                showDeleteGuest = false
+                viewModel.deleteGuestData(phrase)
+            },
+        )
+    }
+
+    if (showRemoveLocal) {
+        val retained = state is AuthState.SignedOut
+        RemoveLocalDialog(
+            info = removal,
+            retained = retained,
+            onDismiss = { showRemoveLocal = false },
+            onConfirm = {
+                showRemoveLocal = false
+                if (retained) viewModel.removeRetainedLocalData() else viewModel.removeLocalData()
+            },
+        )
+    }
+}
+
+/** §6.8.1: the typed phrase plus an actual provider reauthentication before the request. */
+@Composable
+private fun DeleteAccountDialog(
+    providers: Set<AuthProvider>,
+    googleAvailable: Boolean,
+    onDismiss: () -> Unit,
+    onPassword: (String, String) -> Unit,
+    onGoogle: (String) -> Unit,
+) {
+    var phrase by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    val phraseOk = phrase == DeletionPhrases.ACCOUNT
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.account_delete_dialog_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.account_delete_dialog_body))
+                OutlinedTextField(
+                    value = phrase,
+                    onValueChange = { phrase = it },
+                    label = { Text(stringResource(R.string.account_delete_phrase_label)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (AuthProvider.PASSWORD in providers) {
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text(stringResource(R.string.account_password_label)) },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    TextButton(
+                        onClick = { onPassword(phrase, password) },
+                        enabled = phraseOk && password.isNotEmpty(),
+                    ) {
+                        Text(
+                            stringResource(R.string.account_delete_confirm),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                if (googleAvailable) {
+                    TextButton(
+                        onClick = { onGoogle(phrase) },
+                        enabled = phraseOk,
+                    ) { Text(stringResource(R.string.account_delete_google)) }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.account_reauth_cancel)) }
+        },
+    )
+}
+
+/** §6.8.9: guests confirm twice before their anonymous data is deleted. */
+@Composable
+private fun GuestDeleteDialog(onDismiss: () -> Unit, onDelete: (String) -> Unit) {
+    var phrase by remember { mutableStateOf("") }
+    var secondStep by remember { mutableStateOf(false) }
+    val phraseOk = phrase == DeletionPhrases.GUEST
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                stringResource(
+                    if (secondStep) R.string.account_guest_delete_last_title
+                    else R.string.account_guest_delete_dialog_title,
+                ),
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    stringResource(
+                        if (secondStep) R.string.account_guest_delete_last_body
+                        else R.string.account_guest_delete_dialog_body,
+                    ),
+                )
+                if (!secondStep) {
+                    OutlinedTextField(
+                        value = phrase,
+                        onValueChange = { phrase = it },
+                        label = { Text(stringResource(R.string.account_guest_delete_phrase_label)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (secondStep) onDelete(phrase) else secondStep = true
+                },
+                enabled = secondStep || phraseOk,
+            ) {
+                Text(
+                    stringResource(
+                        if (secondStep) R.string.account_guest_delete_confirm
+                        else R.string.account_guest_delete_continue,
+                    ),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { if (secondStep) secondStep = false else onDismiss() }) {
+                Text(
+                    stringResource(
+                        if (secondStep) R.string.account_guest_delete_back
+                        else R.string.account_reauth_cancel,
+                    ),
+                )
+            }
+        },
+    )
+}
+
+/** §6.9.3: names what is on this device before it is erased, including what cannot come back. */
+@Composable
+private fun RemoveLocalDialog(
+    info: LocalRemovalInfo?,
+    retained: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.account_local_dialog_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.account_local_dialog_body))
+                when (info?.pendingEvents) {
+                    true -> Text(stringResource(R.string.account_local_pending_yes))
+                    false -> Text(stringResource(R.string.account_local_pending_no))
+                    null -> Text(stringResource(R.string.account_local_pending_unknown))
+                }
+                val revision = info?.backupRevision
+                when {
+                    info == null || !info.backupChecked ->
+                        Text(stringResource(R.string.account_local_backup_unknown))
+                    revision != null ->
+                        Text(stringResource(R.string.account_local_backup_revision, revision))
+                    else -> Text(stringResource(R.string.account_local_backup_none))
+                }
+                if (retained) Text(stringResource(R.string.account_local_retained_note))
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    stringResource(
+                        if (retained) R.string.account_local_retained_confirm
+                        else R.string.account_local_confirm,
+                    ),
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.account_reauth_cancel)) }
+        },
+    )
 }
 
 private sealed interface PendingSwitch {
@@ -313,6 +563,9 @@ private fun GuestAccount(
     prepared: Boolean,
     googleAvailable: Boolean,
     viewModel: AccountViewModel,
+    retainedLocal: Boolean,
+    onDeleteGuest: () -> Unit,
+    onRemoveLocal: () -> Unit,
     onSignIn: (String, String) -> Unit,
     onGoogle: () -> Unit,
 ) {
@@ -447,6 +700,55 @@ private fun GuestAccount(
             }
         }
     }
+
+    if (retainedLocal) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(R.string.account_local_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    stringResource(R.string.account_local_retained_body),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(onClick = onRemoveLocal) {
+                    Text(stringResource(R.string.account_local_action))
+                }
+            }
+        }
+    }
+
+    if (hasGuestUid) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(R.string.account_guest_delete_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    stringResource(R.string.account_guest_delete_body),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(onClick = onDeleteGuest) {
+                    Text(
+                        stringResource(R.string.account_guest_delete_action),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -454,6 +756,8 @@ private fun PersistentAccount(
     state: AuthState.PersistentActive,
     viewModel: AccountViewModel,
     onOpenBackupKey: () -> Unit,
+    onDeleteAccount: () -> Unit,
+    onRemoveLocal: () -> Unit,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -557,6 +861,53 @@ private fun PersistentAccount(
             )
             OutlinedButton(onClick = viewModel::signOut) {
                 Text(stringResource(R.string.account_sign_out))
+            }
+        }
+    }
+
+    // §6.9.3: local removal never touches the account, its backups or its partner connections.
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                stringResource(R.string.account_local_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                stringResource(R.string.account_local_body),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(onClick = onRemoveLocal) {
+                Text(stringResource(R.string.account_local_action))
+            }
+        }
+    }
+
+    // §6.8.1: the irreversible action, last and set apart, with its consequences named first.
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                stringResource(R.string.account_delete_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                stringResource(R.string.account_delete_body),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(onClick = onDeleteAccount) {
+                Text(
+                    stringResource(R.string.account_delete_action),
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
         }
     }
@@ -988,6 +1339,78 @@ private fun CloudBlockedCard(onRestart: () -> Unit) {
     }
 }
 
+/** §6.8/§6.9.3: the request's outcome; the blocked variant keeps the user moving after §8.7. */
+@Composable
+private fun DeletionCard(
+    state: DeletionState,
+    onSignOut: () -> Unit,
+    onSignOutDiscarding: () -> Unit,
+    onDiscardAndRetry: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    when (state) {
+        DeletionState.Idle -> Unit
+        DeletionState.Working ->
+            WorkingCard(stringResource(R.string.account_deletion_working))
+
+        is DeletionState.Accepted -> Surface(
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(
+                        if (state.signOutBlocked) R.string.account_deletion_blocked_title
+                        else R.string.account_deletion_accepted_title,
+                    ),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    stringResource(
+                        if (state.signOutBlocked) R.string.account_deletion_blocked_body
+                        else R.string.account_deletion_accepted_body,
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                TextButton(
+                    onClick = if (state.signOutBlocked) onSignOutDiscarding else onSignOut,
+                ) {
+                    Text(
+                        stringResource(
+                            if (state.signOutBlocked) R.string.account_deletion_sign_out_discard
+                            else R.string.account_deletion_sign_out,
+                        ),
+                    )
+                }
+            }
+        }
+
+        is DeletionState.Failed -> Surface(
+            color = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(deletionFailureRes(state.failure)),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (state.failure == DeletionFailure.PENDING_WRITES) {
+                        TextButton(onClick = onDiscardAndRetry) {
+                            Text(stringResource(R.string.account_pending_writes_discard))
+                        }
+                    }
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.account_dismiss)) }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun StatusCard(text: String) {
     Surface(
@@ -1061,4 +1484,21 @@ internal fun transitionFailureRes(failure: TransitionFailure): Int = when (failu
     TransitionFailure.CONFLICT,
     TransitionFailure.UNKNOWN,
     -> R.string.account_transition_error_generic
+}
+
+/** §6.8 failure copy: what happened, why, and the action; never server internals. */
+internal fun deletionFailureRes(failure: DeletionFailure): Int = when (failure) {
+    DeletionFailure.NETWORK -> R.string.account_delete_error_network
+    DeletionFailure.SIGN_IN_REQUIRED -> R.string.account_error_not_signed_in
+    DeletionFailure.REAUTH_REQUIRED -> R.string.account_delete_error_reauth
+    DeletionFailure.REAUTH_FAILED -> R.string.account_delete_error_reauth_failed
+    DeletionFailure.EMAIL_NOT_VERIFIED -> R.string.account_delete_error_unverified
+    DeletionFailure.PERSISTENT_ACCOUNT_REQUIRED -> R.string.account_delete_error_persistent
+    DeletionFailure.ANONYMOUS_ONLY -> R.string.account_delete_error_anonymous
+    DeletionFailure.CONFIRMATION_MISMATCH -> R.string.account_delete_error_phrase
+    DeletionFailure.INVALID_INPUT -> R.string.account_delete_error_input
+    DeletionFailure.DENIED -> R.string.account_delete_error_denied
+    DeletionFailure.SECURITY_CHECK_FAILED -> R.string.account_delete_error_security
+    DeletionFailure.PENDING_WRITES -> R.string.account_error_pending_writes
+    DeletionFailure.UNKNOWN -> R.string.account_error_generic
 }

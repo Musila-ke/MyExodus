@@ -9,6 +9,8 @@ import androidx.work.WorkManager
 import com.example.myexodus.MainActivity
 import com.example.myexodus.account.AuthOperations
 import com.example.myexodus.account.DatabaseScopeSwitch
+import com.example.myexodus.account.DeletionApi
+import com.example.myexodus.account.DeletionCallables
 import com.example.myexodus.account.FirebaseAuthOperations
 import com.example.myexodus.account.FirestoreSessionCloud
 import com.example.myexodus.account.AuthCoordinator
@@ -60,6 +62,12 @@ object AccountModule {
     @Provides
     @Singleton
     fun provideAuthOperations(): AuthOperations = FirebaseAuthOperations()
+
+    /** §6.8.2: the two deletion callables; the server reads the raw ID token itself. */
+    @Provides
+    @Singleton
+    fun provideDeletionApi(functions: FirebaseFunctions): DeletionApi =
+        DeletionCallables(functions)
 
     @Provides
     @Singleton

@@ -65,6 +65,12 @@ class BackupStaging(private val root: File) {
         }
     }
 
+    /** §6.9.3: local removal discards every staged artifact, the active operation included. */
+    fun wipe() {
+        root.listFiles()?.forEach { it.deleteRecursively() }
+        root.delete()
+    }
+
     companion object {
         /** Reserved for §6.6 restore staging; never deleted by the backup sweep. */
         const val RESTORE_PREFIX = "restore-"

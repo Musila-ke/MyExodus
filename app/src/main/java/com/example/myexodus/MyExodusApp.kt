@@ -17,6 +17,7 @@ import androidx.work.Configuration
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.example.myexodus.account.DeletionLocalData
 import com.example.myexodus.account.GuestImportCoordinator
 import com.example.myexodus.account.GuestTransitionCoordinator
 import com.example.myexodus.account.LegacyCachePurge
@@ -98,6 +99,9 @@ class MyExodusApp : Application(), Configuration.Provider {
     @Inject lateinit var localSessionManager: LocalSessionManager
     // Account plan §6.4 item 14: stale plaintext/compressed staging never survives a start.
     @Inject lateinit var backupStagingSweeper: BackupStagingSweeper
+    // Account plan §6.8/§6.9.3: a deletion accepted before the last restart erases local data
+    // before any store of that identity opens.
+    @Inject lateinit var deletionLocalData: DeletionLocalData
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -219,12 +223,22 @@ class MyExodusApp : Application(), Configuration.Provider {
         // INSERTs fail with "no such table" against an unprimed store (caught 2026-08-28 review).
         // Migration no-ops when already complete.
         if (!underInstrumentation) {
+            // Account plan §6.8/§6.9.3: an accepted deletion's purge must land before the scope
+            // decision below, or this process would reopen the store it is meant to erase.
+            if (unlocked) {
+                runCatching { deletionLocalData.purgePendingFiles() }
+                    .onFailure { Log.w(TAG, "pending local-data purge failed", it) }
+            }
             // Plan §8.1: scoped database paths must be active before any store opens. Sync on
             // purpose — the open below and every component's own open read the scope; the first
             // launch after the update copies three files, later launches read one pref.
             runCatching { LocalDatabaseMigration.start(this) }
                 .onFailure { Log.w(TAG, "local DB scope migration failed; legacy paths stay active", it) }
             applicationScope.launch {
+                if (unlocked) {
+                    runCatching { deletionLocalData.finishPendingPurge() }
+                        .onFailure { Log.w(TAG, "pending deletion local-state purge failed", it) }
+                }
                 rulesStoreFactory.open()
                 databaseMigration.runOnceIfNeeded()
                 // ADR #240: a bound retained scope restores itself; only a conflict, the
@@ -333,7 +347,15 @@ class MyExodusApp : Application(), Configuration.Provider {
             // adoption, then the migration, before the store open that reconcile triggers.
             purgeLegacyCacheIfUnlocked()
             localSessionManager.onAppStart(applicationScope)
-            if (!underInstrumentation) LocalDatabaseMigration.start(context)
+            if (!underInstrumentation) {
+                runCatching { deletionLocalData.purgePendingFiles() }
+                    .onFailure { Log.w(TAG, "pending local-data purge failed", it) }
+                LocalDatabaseMigration.start(context)
+                applicationScope.launch {
+                    runCatching { deletionLocalData.finishPendingPurge() }
+                        .onFailure { Log.w(TAG, "pending deletion local-state purge failed", it) }
+                }
+            }
             reconcileBootIfNeeded()
         }
     }

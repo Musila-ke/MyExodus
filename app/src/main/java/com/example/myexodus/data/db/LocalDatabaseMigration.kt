@@ -427,9 +427,11 @@ internal object LocalDatabaseMigration {
         }
     }
 
-    private fun deleteDatabaseFile(file: File) {
-        listOf("", "-wal", "-shm", "-journal").forEach { File(file.path + it).delete() }
-    }
+    private fun deleteDatabaseFile(file: File): Boolean =
+        listOf("", "-wal", "-shm", "-journal", ".lck").map { suffix ->
+            val target = File(file.path + suffix)
+            !target.exists() || target.delete()
+        }.all { it }
 
     private fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
@@ -473,6 +475,60 @@ internal object LocalDatabaseMigration {
             prefs(context).edit(commit = true) { putBoolean(KEY_CLEANED, true) }
             Log.i(TAG, "user reset: retained pre-scope copies and keys removed")
         }
+    }
+
+    /**
+     * Account plan §6.8/§6.9.3: erases one identity's local stores. The retained pre-scope
+     * copies hold the same person's data, so they go too — and only once every file is gone is
+     * the journal marker cleared, which keeps a failed delete from re-copying them later.
+     * Returns true when nothing is left to delete.
+     */
+    fun forgetScope(context: Context, uidHashValue: String): Boolean = synchronized(lock) {
+        val scope = Scope(uidHashValue)
+        val dbDir = context.getDatabasePath("x").parentFile
+        var deleted = true
+        if (dbDir != null) {
+            listOf(scope.rulesName, scope.activityName, scope.accountabilityName).forEach {
+                if (!deleteDatabaseFile(File(dbDir, it))) deleted = false
+            }
+            legacySources(dbDir).forEach { if (!deleteDatabaseFile(it)) deleted = false }
+        }
+        runCatching {
+            KeystoreWrappedDekManager(
+                context,
+                RulesStoreKeyManager.LEGACY_KEK_ALIAS + "_$uidHashValue",
+                RulesStoreKeyManager.LEGACY_PREFS + "_$uidHashValue",
+            ).deleteKeyMaterial()
+            KeystoreWrappedDekManager(
+                context,
+                ActivityLogKeyManager.LEGACY_KEK_ALIAS + "_$uidHashValue",
+                ActivityLogKeyManager.LEGACY_PREFS + "_$uidHashValue",
+            ).deleteKeyMaterial()
+        }.onFailure { Log.w(TAG, "scoped key deletion failed", it) }
+        if (deleted) {
+            resetLegacyKeys(context)
+            val prefs = prefs(context)
+            val scopePointsHere = prefs.getString(KEY_SCOPE_HASH, null) == uidHashValue
+            prefs.edit(commit = true) {
+                if (scopePointsHere) {
+                    remove(KEY_SCOPE_HASH)
+                    remove(KEY_ACTIVATED_AT)
+                }
+                if (prefs.getString(KEY_ACTIVE_HASH, null) == uidHashValue) remove(KEY_ACTIVE_HASH)
+                if (prefs.getString(KEY_LAST_UID_HASH, null) == uidHashValue) remove(KEY_LAST_UID_HASH)
+                if (prefs.getString(KEY_RECOVERY_HASH, null) == uidHashValue) {
+                    remove(KEY_RECOVERY_HASH)
+                    remove(KEY_RECOVERY_UID_HASH)
+                }
+                if (prefs.getString(KEY_RECOVERY_UID_HASH, null) == uidHashValue) {
+                    remove(KEY_RECOVERY_UID_HASH)
+                }
+                putBoolean(KEY_CLEANED, true)
+            }
+            if (activeScope?.uidHash == uidHashValue) activeScope = null
+        }
+        Log.i(TAG, "local data for uid hash ${uidHashValue.take(8)}… erased=$deleted")
+        deleted
     }
 
     /** The plan's bounded rollback copy: legacy files and their keys go after seven days. */

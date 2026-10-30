@@ -158,6 +158,18 @@ class KeystoreWrappedDekManager(
         prefs.edit { remove(KEY_DEK_IV); remove(KEY_DEK_BLOB) }
     }
 
+    /**
+     * Account plan §6.9.3: removes this instance's key material entirely — the wrapped DEK and
+     * the KEK alias. Only for an alias owned exclusively by the deleted identity; the legacy
+     * aliases shared by pre-scope stores use [resetKeyMaterial] instead.
+     */
+    fun deleteKeyMaterial() {
+        resetKeyMaterial()
+        runCatching {
+            KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }.deleteEntry(kekAlias)
+        }.onFailure { Log.w(TAG, "KEK alias deletion failed for $kekAlias", it) }
+    }
+
     private companion object {
         const val TAG = "MyExodusDb"
         const val ANDROID_KEYSTORE = "AndroidKeyStore"

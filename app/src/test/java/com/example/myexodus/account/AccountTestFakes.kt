@@ -13,6 +13,8 @@ internal class FakeAuthOps(initial: AuthIdentity?) : AuthOperations {
     var signInCalls = 0
     var signInGoogleCalls = 0
     var linkGoogleCalls = 0
+    var reauthEmailCalls = 0
+    var reauthGoogleCalls = 0
 
     fun become(next: AuthIdentity?) {
         identity = next
@@ -55,9 +57,13 @@ internal class FakeAuthOps(initial: AuthIdentity?) : AuthOperations {
     override suspend fun reloadAndRefreshToken(): AuthIdentity =
         identity ?: throw UnsupportedOperationException()
 
-    override suspend fun reauthenticateWithEmail(email: String, password: String) = Unit
+    override suspend fun reauthenticateWithEmail(email: String, password: String) {
+        reauthEmailCalls++
+    }
 
-    override suspend fun reauthenticateWithGoogle(idToken: String) = Unit
+    override suspend fun reauthenticateWithGoogle(idToken: String) {
+        reauthGoogleCalls++
+    }
 
     override suspend fun signOut() {
         identity = null

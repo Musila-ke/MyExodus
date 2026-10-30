@@ -1323,6 +1323,64 @@
     <string name="account_working">Working…</string>
     <string name="account_dismiss">OK</string>
 
+    <!-- Account plan §6.8/§6.9.3: deletion and local removal. Consequences are named before
+         the action; failures state what happened and the way forward, never server internals. -->
+    <string name="account_delete_title">Delete this account</string>
+    <string name="account_delete_body">Permanently deletes your profile, backups, signed-in devices and sign-in tokens, and ends your partner connections. Your partner may keep messages you already shared plus a minimal record of the connection. Copies of your data on other devices can\'t be recalled.</string>
+    <string name="account_delete_action">Delete account</string>
+    <string name="account_delete_dialog_title">Delete this account permanently?</string>
+    <string name="account_delete_dialog_body">This can\'t be undone. Type the phrase below, then confirm it\'s you with your sign-in method.</string>
+    <string name="account_delete_phrase_label">Type DELETE MY ACCOUNT to confirm</string>
+    <string name="account_delete_confirm">Delete permanently</string>
+    <string name="account_delete_google">Confirm with Google</string>
+
+    <string name="account_guest_delete_title">Delete my data</string>
+    <string name="account_guest_delete_body">Deletes this guest session\'s progress from our servers and this device. This can\'t be undone.</string>
+    <string name="account_guest_delete_action">Delete my data</string>
+    <string name="account_guest_delete_dialog_title">Delete this guest data?</string>
+    <string name="account_guest_delete_dialog_body">Everything recorded in this guest session is erased permanently. This can\'t be undone.</string>
+    <string name="account_guest_delete_phrase_label">Type DELETE MY DATA to confirm</string>
+    <string name="account_guest_delete_continue">Continue</string>
+    <string name="account_guest_delete_last_title">Last check</string>
+    <string name="account_guest_delete_last_body">Delete this guest session\'s progress now? There is no way to restore it afterwards.</string>
+    <string name="account_guest_delete_confirm">Delete permanently</string>
+    <string name="account_guest_delete_back">Back</string>
+
+    <string name="account_local_title">Remove local data</string>
+    <string name="account_local_body">Removes this account\'s encrypted data from this device only. Your account, backups and partner connections stay in the cloud.</string>
+    <string name="account_local_action">Remove from this device</string>
+    <string name="account_local_retained_body">This device still holds encrypted data from your last account. Removing it doesn\'t touch the account, its backups or its partner connections.</string>
+    <string name="account_local_dialog_title">Remove this device\'s copy?</string>
+    <string name="account_local_dialog_body">This device\'s encrypted database and keys are erased. The account, its backups and partner connections stay in the cloud.</string>
+    <string name="account_local_pending_yes">Some changes haven\'t been sent to the server yet. They will be lost.</string>
+    <string name="account_local_pending_no">No unsent changes.</string>
+    <string name="account_local_pending_unknown">Couldn\'t check for unsent changes.</string>
+    <string name="account_local_backup_revision">Last known backup: revision %1$d. Changes made after it will be lost.</string>
+    <string name="account_local_backup_none">No backup exists for this account. Local changes will be lost.</string>
+    <string name="account_local_backup_unknown">Backup status couldn\'t be checked.</string>
+    <string name="account_local_retained_note">Signing out kept this device\'s encrypted copy. This erases the database and its key; signing in again starts a fresh copy.</string>
+    <string name="account_local_confirm">Remove from this device</string>
+    <string name="account_local_retained_confirm">Remove remaining data</string>
+
+    <string name="account_deletion_working">Deleting…</string>
+    <string name="account_deletion_accepted_title">Deletion started</string>
+    <string name="account_deletion_accepted_body">Your account and data are scheduled for deletion. Sign out to finish on this device.</string>
+    <string name="account_deletion_blocked_title">Deletion started — finish signing out</string>
+    <string name="account_deletion_blocked_body">Some changes saved on this device haven\'t reached the server yet. Sign out now and discard them, or wait and try again.</string>
+    <string name="account_deletion_sign_out">Sign out now</string>
+    <string name="account_deletion_sign_out_discard">Discard unsent changes and sign out</string>
+
+    <string name="account_delete_error_network">Couldn\'t confirm the server\'s answer. The request may still complete on the server. Check your connection and retry in a moment.</string>
+    <string name="account_delete_error_reauth">For your security, confirm it\'s you again, then retry.</string>
+    <string name="account_delete_error_reauth_failed">Confirmation didn\'t succeed, so nothing was deleted. Check your details and try again.</string>
+    <string name="account_delete_error_unverified">Verify your email first, then delete the account.</string>
+    <string name="account_delete_error_persistent">This is a guest session. Use “Delete my data” instead.</string>
+    <string name="account_delete_error_anonymous">Guest deletion only applies to guest sessions. Sign in to delete a full account.</string>
+    <string name="account_delete_error_phrase">The confirmation phrase didn\'t match. Type it exactly as shown and try again.</string>
+    <string name="account_delete_error_input">The request was incomplete. Try again.</string>
+    <string name="account_delete_error_denied">The server refused this request and nothing was deleted. Try again, and contact support if it keeps happening.</string>
+    <string name="account_delete_error_security">This device couldn\'t be verified. Restart the app and try again.</string>
+
     <string name="account_transition_title">Switch to an existing account?</string>
     <string name="account_transition_body">Your guest progress can move into the account or be left behind — you choose. Either way, partner connections you made in guest mode end once you sign in, and this guest session can’t be restored afterwards.</string>
     <string name="account_transition_import">Import my progress</string>

@@ -133,6 +133,21 @@ class LocalSessionManagerTest {
         override fun relaunch() { relaunched++ }
     }
 
+    private class RecordingSessions : com.example.myexodus.backup.BackupUploadSessionStore {
+        var clears = 0
+        override suspend fun get() = null
+        override suspend fun save(session: com.example.myexodus.backup.BackupUploadSession) = Unit
+        override suspend fun markUploaded(backupId: String) = Unit
+        override suspend fun clear() { clears++ }
+    }
+
+    private class RecordingMarks : com.example.myexodus.backup.BackupRestoreMarkStore {
+        var clears = 0
+        override suspend fun get() = null
+        override suspend fun save(mark: com.example.myexodus.backup.BackupRestoreMark) = Unit
+        override suspend fun clear() { clears++ }
+    }
+
     private class FakeCloud(var flushOk: Boolean = true) : SessionCloud {
         var flushes = 0
         override suspend fun flushPendingWrites(timeoutMillis: Long): Boolean {
@@ -163,8 +178,11 @@ class LocalSessionManagerTest {
         val work = RecordingWork()
         val relauncher = RecordingRelauncher()
         val cloud = FakeCloud(flushOk)
+        val uploads = RecordingSessions()
+        val marks = RecordingMarks()
         val manager = LocalSessionManager(
             operations, cloud, store, scopes, push, work, relauncher,
+            dagger.Lazy { uploads }, dagger.Lazy { marks },
         )
     }
 

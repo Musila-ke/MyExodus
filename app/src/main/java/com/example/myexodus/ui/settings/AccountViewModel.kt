@@ -8,8 +8,12 @@ import com.example.myexodus.account.AccountOperation
 import com.example.myexodus.account.AuthCoordinator
 import com.example.myexodus.account.AuthEvent
 import com.example.myexodus.account.AuthState
+import com.example.myexodus.account.DeletionCoordinator
+import com.example.myexodus.account.DeletionCredential
+import com.example.myexodus.account.DeletionState
 import com.example.myexodus.account.GoogleCredentialOutcome
 import com.example.myexodus.account.GoogleCredentialProvider
+import com.example.myexodus.account.LocalRemovalInfo
 import com.example.myexodus.account.GuestImportCoordinator
 import com.example.myexodus.account.GuestImportState
 import com.example.myexodus.account.GuestTransitionCoordinator
@@ -52,6 +56,7 @@ class AccountViewModel @Inject constructor(
     private val functions: FirebaseFunctions,
     private val sessions: LocalSessionManager,
     private val recoveryImporter: ScopeRecoveryImporter,
+    private val deletion: DeletionCoordinator,
 ) : ViewModel() {
 
     val state: StateFlow<AuthState> = coordinator.state
@@ -64,6 +69,41 @@ class AccountViewModel @Inject constructor(
 
     private val _recovery = MutableStateFlow(RecoveryUiState())
     val recovery: StateFlow<RecoveryUiState> = _recovery.asStateFlow()
+
+    /** §6.8/§6.9.3: deletion and local-removal progress, plus the pre-removal disclosure. */
+    val deletionState: StateFlow<DeletionState> = deletion.state
+    private val _removal = MutableStateFlow<LocalRemovalInfo?>(null)
+    val removal: StateFlow<LocalRemovalInfo?> = _removal.asStateFlow()
+
+    fun deleteAccount(phrase: String, password: String) = viewModelScope.launch {
+        deletion.deleteAccount(phrase, DeletionCredential.Password(password))
+    }
+
+    fun deleteAccountWithGoogle(phrase: String, idToken: String) = viewModelScope.launch {
+        deletion.deleteAccount(phrase, DeletionCredential.Google(idToken))
+    }
+
+    fun deleteGuestData(phrase: String) = viewModelScope.launch { deletion.deleteGuestData(phrase) }
+
+    fun finishDeletionSignOut(discardQueuedWrites: Boolean) = viewModelScope.launch {
+        deletion.finishAcceptedSignOut(discardQueuedWrites)
+    }
+
+    fun removeLocalData() = viewModelScope.launch { deletion.removeLocalData() }
+
+    fun discardAndRemoveLocalData() {
+        coordinator.approvePendingWriteDiscard()
+        removeLocalData()
+    }
+
+    fun removeRetainedLocalData() = viewModelScope.launch { deletion.removeRetainedLocalData() }
+
+    fun refreshRemovalInfo() = viewModelScope.launch { _removal.value = deletion.removalInfo() }
+
+    fun dismissDeletion() {
+        deletion.reset()
+        refreshRemovalInfo()
+    }
 
     /**
      * Plan §8.7: the action a pending-writes refusal refers to. The discard button replays it

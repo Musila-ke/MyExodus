@@ -216,3 +216,48 @@ test('dms_install_state is invisible and unwritable to every client, even its ow
     assert.strictEqual(row.data().last_counter, 7);
   });
 });
+
+// --- deletion tombstones (account plan §6.8.3 / §8.2) ------------------------------------
+
+test('an accepted deletion denies every owner read and new push registration', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'deletionJobs/alice'), { uid: 'alice', phase: 'QUEUED' });
+    await setDoc(doc(db, 'pairing_tokens/tok1'), {
+      creatorUid: 'alice',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await setDoc(doc(db, mailbox('alice', 'own')), {
+      ...message('bob', 'pair-alice-bob'),
+      timestamp: new Date(),
+    });
+  });
+
+  // Profile, own mailbox, pair membership and pairing tokens are all closed to the owner.
+  await assertFails(getDoc(doc(alice, 'users/alice')));
+  await assertFails(getDoc(doc(alice, mailbox('alice', 'own'))));
+  await assertFails(getDoc(doc(alice, 'pairings/pair-alice-bob')));
+  await assertFails(getDoc(doc(alice, 'pairing_tokens/tok1')));
+
+  // A device cannot re-register under a deleting account.
+  await assertFails(
+    setDoc(doc(alice, 'users/alice/push_installations/inst-9'), {
+      provider: 'fcm',
+      token: 'token-1',
+      platform: 'android',
+      appVersion: '1.0.0',
+      updatedAt: serverTimestamp(),
+    }),
+  );
+
+  // The partner still reads the pair — only the requester's own tombstone is checked.
+  await assertSucceeds(getDoc(doc(bob, 'pairings/pair-alice-bob')));
+});
+
+test('only an ACTIVE profile is readable, even without a deletion job', async () => {
+  // beforeEach seeds users/deleting with status PENDING_DELETION and no job record.
+  const deleting = env.authenticatedContext('deleting').firestore();
+  await assertFails(getDoc(doc(deleting, 'users/deleting')));
+  await assertSucceeds(getDoc(doc(alice, 'users/alice')));
+  await assertFails(getDoc(doc(bob, 'users/alice')));
+});

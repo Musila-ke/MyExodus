@@ -5,8 +5,16 @@ import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.driver.AndroidSQLiteDriver
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.example.myexodus.account.DeletionLocalData
+import com.example.myexodus.accountability.state.AccountabilityDatabase
+import com.example.myexodus.backup.BackupRestoreMarkStore
+import com.example.myexodus.backup.BackupStaging
+import com.example.myexodus.backup.BackupUploadSessionStore
+import com.example.myexodus.backup.RemoteBackupAnchorStore
 import java.io.File
 import java.util.Arrays
+import javax.inject.Provider
+import kotlinx.coroutines.runBlocking
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
@@ -127,9 +135,42 @@ class LocalDatabaseMigrationInstrumentedTest {
         assertEquals(2L, encryptedCount(scopedRules, rulesDek, "restriction_rules"))
     }
 
+    /**
+     * §6.9.3's signed-out card names the account scope that sign-out retained. The journal scope
+     * is this install's own local/guest store — offering it as "your last account" was a live
+     * defect (AVD 2026-10-30: the card survived erasing the account's scope because the fallback
+     * hash is always non-null), and its action was a silent no-op while signed in as a guest.
+     */
     @Test
-    fun aDifferentUidNeverInheritsTheScope() {
-        val rulesDek = RulesStoreKeyManager(context).getOrCreateDek()
+    fun onlyASwitchedAccountScopeIsOfferedAsRetained() {
+        seedRules(legacyRulesFile(), RulesStoreKeyManager(context).getOrCreateDek())
+        assertTrue(LocalDatabaseMigration.migrateForTest(context, UID))
+        val local = DeletionLocalData(
+            context,
+            Provider { throw UnsupportedOperationException("uploads") },
+            Provider { throw UnsupportedOperationException("marks") },
+            Provider { throw UnsupportedOperationException("quarantine") },
+            Provider { throw UnsupportedOperationException("staging") },
+            Provider { throw UnsupportedOperationException("accountability") },
+            Provider { throw UnsupportedOperationException("anchors") },
+        )
+        assertFalse(
+            "the install's own local store must never be named as a signed-out account's data",
+            runBlocking { local.removalInfo() }.retainedScope,
+        )
+
+        LocalDatabaseMigration.switchScopeTo(context, OTHER_UID)
+        assertTrue(runBlocking { local.removalInfo() }.retainedScope)
+
+        assertTrue(LocalDatabaseMigration.forgetScope(context, scopeOf(OTHER_UID).uidHash))
+        assertFalse(
+            "erasing the retained account scope must take the card with it",
+            runBlocking { local.removalInfo() }.retainedScope,
+        )
+    }
+
+    @Test
+    fun aDifferentUidNeverInheritsTheScope() {        val rulesDek = RulesStoreKeyManager(context).getOrCreateDek()
         seedRules(legacyRulesFile(), rulesDek)
         assertTrue(LocalDatabaseMigration.migrateForTest(context, UID))
 
@@ -154,6 +195,46 @@ class LocalDatabaseMigrationInstrumentedTest {
         assertNull("a failed migration must not activate a scope", LocalDatabaseMigration.scopeOrNull())
         assertTrue("the source must never be deleted on a key failure", legacyRulesFile().exists())
         assertFalse(File(databaseDir(), scopeOf(UID).rulesName).exists())
+    }
+
+    /**
+     * Plan §6.8/§6.9.3: deleting one identity erases its scoped stores, the retained pre-scope
+     * copies of the same person's data, and the pointers that would let a later account adopt
+     * the path. Nothing here outlives the purge.
+     */
+    @Test
+    fun forgetScopeErasesTheScopeTheRetainedCopiesAndThePointers() {
+        val rulesDek = RulesStoreKeyManager(context).getOrCreateDek()
+        val activityDek = ActivityLogKeyManager(context).getOrCreateKey()
+        seedRules(legacyRulesFile(), rulesDek)
+        seedActivity(legacyActivityFile(), activityDek)
+        seedPlainAccountability(legacyAccountabilityFile())
+        assertTrue(LocalDatabaseMigration.migrateForTest(context, UID))
+        val scope = scopeOf(UID)
+        val scopedRules = File(databaseDir(), scope.rulesName)
+        assertTrue(scopedRules.exists())
+        // SQLCipher's zero-byte lock file is written next to the store; it must not outlive it.
+        File(scopedRules.path + ".lck").writeBytes(ByteArray(0))
+        val otherScope = scopeOf(OTHER_UID)
+        val otherRules = File(databaseDir(), otherScope.rulesName)
+        otherRules.writeText("another identity")
+
+        assertTrue(LocalDatabaseMigration.forgetScope(context, scope.uidHash))
+
+        assertTrue("another identity's stores are not this purge's business", otherRules.exists())
+        assertFalse(scopedRules.exists())
+        assertFalse(File(scopedRules.path + ".lck").exists())
+        assertFalse(File(databaseDir(), scope.activityName).exists())
+        assertFalse(File(databaseDir(), scope.accountabilityName).exists())
+        assertFalse("the retained copy belongs to the same identity", legacyRulesFile().exists())
+        assertFalse(legacyActivityFile().exists())
+        assertFalse(legacyAccountabilityFile().exists())
+        assertNull(LocalDatabaseMigration.scopeOrNull())
+        assertNull(LocalDatabaseMigration.effectiveScopeHash(context))
+        assertFalse(
+            scopedKeyManager(RulesStoreKeyManager.LEGACY_KEK_ALIAS, RulesStoreKeyManager.LEGACY_PREFS, scope)
+                .hasWrappedKey(),
+        )
     }
 
     @Test

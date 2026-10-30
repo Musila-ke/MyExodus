@@ -126,7 +126,12 @@ with a reason. "Where" names the primary surfaces, not every call site.
   persists the signed-out choice, and deletes the push mapping while the old UID still owns the
   token; completion cancels account-scoped work and restarts the process. A signed-out install
   never mints a guest; signing in again reopens the same retained scope. Explicit local-data
-  removal with unsent/unbacked-up confirmation is **not built** — open item, no plan step yet.
+  removal with unsent/unbacked-up confirmation is **IMPLEMENTED (R3.16, 2026-10-30, ADR #244)**:
+  the signed-in pane offers "Remove local data" and the signed-out pane offers the same action
+  only while a **switched account scope** is retained — the journal hash is this install's own
+  local/guest store, never "your last account". The dialog names unsent outbox events and the
+  last known backup revision before the destructive button. Sign-out deletes no key; only this
+  removal action deletes the encrypted database and its UID-scoped Keystore alias.
 - **A4. Account switching.** Recommended: single account per install; switching wipes local data and
   re-syncs from the account. Multi-account profiles would require a Room schema change and are
   rejected unless a real need appears.
@@ -260,6 +265,26 @@ with a reason. "Where" names the primary surfaces, not every call site.
   Local data and keys are wiped on the deleting device afterwards (B4/G2). Cover `cleanup.js`,
   `mailbox-retention.js`, `partner-sos-scheduler.js`, `dms-processor.js`. Today only pair-level
   deletion exists.
+
+  **IMPLEMENTED (R3.16, 2026-10-30, ADR #244).** `requestAccountDeletion` / `requestGuestDataDeletion`
+  (callable, App Check, 60 s) verify a raw token with revocation checking, `auth_time` ≤ 300 s, a
+  uid match, a verified email on password identities and a persistent account (guests: anonymous
+  only), then write `deletionJobs/{uid}` (`ACCOUNT_DELETE` / `GUEST_DELETE`) and the profile's
+  `PENDING_DELETION` in one transaction before any side effect. `processAccountDeletion`
+  (`onTaskDispatched`, 12 attempts, 300 s) re-runs disable-and-revoke on every pass and advances
+  QUEUED → PAIRS → STORAGE → PRIVATE → PROFILE → AUTH → COMPLETED, paginating pairs, scrubbing
+  names from the deterministic system events, recursively deleting private subcollections,
+  mailboxes and reservations, and treating Auth user-not-found as success. COMPLETED requires a
+  final `verifyPurge`; `reconcileDeletionJobs` (*/15 min) re-enqueues stale jobs and deletes a
+  COMPLETED tombstone only after 30 days; `onAuthUserDeleted` writes an `AUTH_DELETION_BACKSTOP`
+  job. The client half (`DeletionCoordinator` / `DeletionLocalData`) reauthenticates, calls the
+  callable, writes the local purge marker, signs out, and purges the marked identity's scoped
+  stores, retained copies and UID-exclusive aliases only while signed out, clearing the marker only
+  after every delete succeeds. Device-proven on the disposable API-37 AVD (three COMPLETED jobs,
+  client Working → sign-out → relaunch → purge); every identity-destructive leg stays off the
+  X6532 by owner ruling. Honest limits: the 30-day tombstone is retained metadata by design, a
+  callable cold start can outlive the client's 60 s window (the job, not the client, is
+  authoritative), and no two-phone partner deletion leg exists because the emulator cannot pair.
 - **E3. Firestore rules.** New profile doc; keep member-gating; keep App Check enforcement on
   Firestore (identitytoolkit stays unenforced by design).
 - **E4. Server-held names (only if DMS copy must name the person).** Minimal profile fields fetched

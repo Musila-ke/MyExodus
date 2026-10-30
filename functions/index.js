@@ -149,7 +149,15 @@ function createRegisterPairing({ attestationVerifier = verifyAttestation } = {})
       };
 
       const result = await db.runTransaction(async (tx) => {
-        const snap = await tx.get(ref);
+        // §6.8.3: the deletion tombstone wins over a still-valid ID token — a registration
+        // in flight when deletion is accepted must never create a new pairing document.
+        const [snap, deletionSnap] = await Promise.all([
+          tx.get(ref),
+          tx.get(db.doc(`deletionJobs/${auth.uid}`)),
+        ]);
+        if (deletionSnap.exists) {
+          throw new HttpsError('permission-denied', 'ACCOUNT_DELETING');
+        }
         const existing = snap.exists ? snap.data() : null;
 
         if (existing && existing.status === 'active') {
@@ -408,3 +416,29 @@ exports._createExtendBackupReservationHandler = createExtendBackupReservationHan
 exports._createBeginBackupRestoreHandler = createBeginBackupRestoreHandler;
 exports._createEndBackupRestoreHandler = createEndBackupRestoreHandler;
 exports._createCommitBackupManifestHandler = createCommitBackupManifestHandler;
+
+// Account plan §6.8 / §7 step 16: recent-auth-verified deletion, the Cloud Tasks cleanup
+// worker, the 15-minute reconciler and the out-of-band Auth deletion backstop.
+// `_create*Handler` are the emulator suite's seams (injected db/Auth/bucket/enqueue/clock).
+const {
+  createRequestAccountDeletion,
+  createRequestGuestDataDeletion,
+  createProcessAccountDeletion,
+  createReconcileDeletionJobs,
+  createAuthDeletionBackstop,
+  createRequestAccountDeletionHandler,
+  createRequestGuestDataDeletionHandler,
+  createProcessAccountDeletionHandler,
+  createReconcileDeletionJobsHandler,
+  createAuthDeletionBackstopHandler,
+} = require('./account-deletion');
+exports.requestAccountDeletion = createRequestAccountDeletion({ db });
+exports.requestGuestDataDeletion = createRequestGuestDataDeletion({ db });
+exports.processAccountDeletion = createProcessAccountDeletion({ db });
+exports.reconcileDeletionJobs = createReconcileDeletionJobs({ db });
+exports.onAuthUserDeleted = createAuthDeletionBackstop({ db });
+exports._createRequestAccountDeletionHandler = createRequestAccountDeletionHandler;
+exports._createRequestGuestDataDeletionHandler = createRequestGuestDataDeletionHandler;
+exports._createProcessAccountDeletionHandler = createProcessAccountDeletionHandler;
+exports._createReconcileDeletionJobsHandler = createReconcileDeletionJobsHandler;
+exports._createAuthDeletionBackstopHandler = createAuthDeletionBackstopHandler;

@@ -26,7 +26,11 @@ service cloud.firestore {
     // be tampered with client-side. The losing racer in a mutual unpair is an idempotent
     // success inside the callable.
     match /pairings/{pairId} {
-      allow read: if request.auth != null && request.auth.uid in resource.data.members;
+      // §6.8.3: an accepted deletion disables every client read, including this one — the
+      // requester's own tombstone is the check (each member is evaluated as the requester).
+      allow read: if request.auth != null
+        && request.auth.uid in resource.data.members
+        && !exists(/databases/$(database)/documents/deletionJobs/$(request.auth.uid));
       allow create, update, delete: if false;
 
       // Backend-originated lifecycle events only (account plan §4.3/§8.2). Participants may
@@ -53,7 +57,8 @@ service cloud.firestore {
       // RATE_LIMITED is not a network failure). The author already wrote every field here
       // (content, ciphertext, pairId); only "was it relayed" is newly visible. Same
       // author-read shape as the ack rule below.
-      allow read: if request.auth.uid == recipientUid
+      allow read: if (request.auth.uid == recipientUid
+          && !exists(/databases/$(database)/documents/deletionJobs/$(recipientUid)))
         || resource.data.senderUid == request.auth.uid;
       // Append is callable-only (Release 0 step 2/3). Immutable after create; deletion is
       // exclusively the scheduled cleanup function's job (AD-18b). A client must never be
@@ -70,10 +75,14 @@ service cloud.firestore {
       // rule error. The author already knows the message content; only "was it processed"
       // is newly visible, which is exactly the evidence AD-13b defines.
       match /acks/{installationId} {
-        allow read: if request.auth.uid == recipientUid
+        allow read: if (request.auth.uid == recipientUid
+            && !exists(/databases/$(database)/documents/deletionJobs/$(recipientUid)))
           || (exists(/databases/$(database)/documents/mailboxes/$(recipientUid)/messages/$(messageId))
               && get(/databases/$(database)/documents/mailboxes/$(recipientUid)/messages/$(messageId)).data.senderUid == request.auth.uid);
+        // §6.8.3: an accepted deletion stops new acks as well — the device can no longer
+        // write under an account that is PENDING_DELETION.
         allow create: if request.auth.uid == recipientUid
+          && !exists(/databases/$(database)/documents/deletionJobs/$(recipientUid))
           && request.resource.data.keys().hasOnly(['ackedAt'])
           && request.resource.data.ackedAt == request.time;
         allow update, delete: if false;
@@ -146,7 +155,12 @@ service cloud.firestore {
     // `initializeUserProfile` and future lifecycle callables (Admin SDK); clients never
     // write it. This match is document-level — subcollections keep their own rules below.
     match /users/{uid} {
-      allow read: if request.auth != null && request.auth.uid == uid;
+      // §6.8.3: only an ACTIVE, not-deleting owner may read the profile. The tombstone check
+      // comes first so PENDING_DELETION is denied even before the worker removes the row.
+      allow read: if request.auth != null
+        && request.auth.uid == uid
+        && resource.data.status == 'ACTIVE'
+        && !exists(/databases/$(database)/documents/deletionJobs/$(uid));
       allow write: if false;
     }
 
@@ -155,8 +169,10 @@ service cloud.firestore {
     // pushEligible (SOS §8.12) is optional so pre-SOS clients keep registering; when present
     // it is a capability snapshot, never authority.
     match /users/{uid}/push_installations/{installationId} {
-      allow read: if request.auth.uid == uid;
+      allow read: if request.auth.uid == uid
+        && !exists(/databases/$(database)/documents/deletionJobs/$(uid));
       allow create, update: if request.auth.uid == uid
+        && !exists(/databases/$(database)/documents/deletionJobs/$(uid))
         && request.resource.data.keys().hasOnly(
              ['provider', 'token', 'platform', 'appVersion', 'pushEligible', 'updatedAt', 'createdAt'])
         && request.resource.data.provider in ['fcm', 'hms']
@@ -169,7 +185,8 @@ service cloud.firestore {
         && (!request.resource.data.keys().hasAny(['pushEligible'])
             || request.resource.data.pushEligible is bool)
         && request.resource.data.updatedAt == request.time;
-      allow delete: if request.auth.uid == uid;
+      allow delete: if request.auth.uid == uid
+        && !exists(/databases/$(database)/documents/deletionJobs/$(uid));
     }
 
     // Pairing rendezvous (user-ruled 2026-09-18: the SAS/QR public-key exchange stays as
@@ -185,8 +202,10 @@ service cloud.firestore {
     match /pairing_tokens/{tokenId} {
       allow create, update: if false;
       allow read: if request.auth != null
+        && !exists(/databases/$(database)/documents/deletionJobs/$(request.auth.uid))
         && (resource == null || resource.data.expiresAt > request.time);
       allow delete: if request.auth != null
+        && !exists(/databases/$(database)/documents/deletionJobs/$(request.auth.uid))
         && (resource == null || resource.data.expiresAt > request.time);
     }
 
