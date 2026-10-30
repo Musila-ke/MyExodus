@@ -3,9 +3,9 @@ package com.example.myexodus.backup
 import com.example.myexodus.account.GuestSnapshot
 import com.example.myexodus.account.SessionFence
 import com.example.myexodus.account.SessionFingerprint
+import com.example.myexodus.account.isEmpty
 import com.example.myexodus.backup.BackupHighWater.Advance
 import com.example.myexodus.backup.BackupKeyManager.Unlock
-import com.google.firebase.storage.StorageException
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -347,7 +347,10 @@ class BackupUploader(
         } catch (e: Exception) {
             persistUri(session, issued.get(), persisted.get())
             throw if (e is BackupUploadException) e
-            else BackupUploadException(storageFailure(e), cause = e)
+            else BackupUploadException(
+                storageFailure(e, BackupUploadFailure.BACKUP_RESERVATION_EXPIRED),
+                cause = e,
+            )
         }
     }
 
@@ -447,10 +450,6 @@ class BackupUploader(
         return data
     }
 
-    private fun GuestSnapshot.isEmpty(): Boolean =
-        habits.isEmpty() && streaks.isEmpty() && milestones.isEmpty() && attempts.isEmpty() &&
-            sessions.isEmpty() && coaching.isEmpty() && riskWindows.isEmpty() && policy == null
-
     private fun requireFence(): SessionFingerprint =
         fence.current() ?: throw BackupUploadException(BackupUploadFailure.SIGN_IN_REQUIRED)
 
@@ -480,21 +479,6 @@ class BackupUploader(
         is BackupAnchorUnavailableException ->
             BackupUploadException(BackupUploadFailure.LOCAL_STATE_UNAVAILABLE, cause = e)
         else -> BackupUploadException(BackupUploadFailure.UNKNOWN, cause = e)
-    }
-
-    private fun storageFailure(e: Exception): BackupUploadFailure = when {
-        e is BackupUploadException -> e.failure
-        e is StorageException -> when (e.errorCode) {
-            StorageException.ERROR_NOT_AUTHENTICATED -> BackupUploadFailure.SIGN_IN_REQUIRED
-            StorageException.ERROR_NOT_AUTHORIZED -> BackupUploadFailure.DENIED
-            // The reserved upload/session is gone (expired or superseded): start over.
-            StorageException.ERROR_OBJECT_NOT_FOUND -> BackupUploadFailure.BACKUP_RESERVATION_EXPIRED
-            StorageException.ERROR_RETRY_LIMIT_EXCEEDED,
-            StorageException.ERROR_UNKNOWN,
-            -> BackupUploadFailure.NETWORK
-            else -> BackupUploadFailure.UNKNOWN
-        }
-        else -> BackupUploadFailure.UNKNOWN
     }
 
     private companion object {

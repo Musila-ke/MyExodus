@@ -15,6 +15,8 @@ const {
   validateBeginInput,
   validateCommitInput,
   validateExtendInput,
+  validateRestoreInput,
+  restoreGuardActive,
   classifyBase,
   advanceReservationWindow,
   reservationExpired,
@@ -26,6 +28,7 @@ const {
   PATHS,
   RESERVATION_MAX_MS,
   RESERVATION_TTL_MS,
+  RESTORE_GUARD_TTL_MS,
 } = require('../backup-manifest-logic');
 
 const sha = (fill = 'a') => fill.repeat(64);
@@ -270,4 +273,27 @@ test('object paths are the only place a backup id and uid meet', () => {
     `backupReservations/uid-1/reservations/${backupId()}`,
   );
   assert.strictEqual(PATHS.manifest('uid-1', backupId()), `users/uid-1/backupManifests/${backupId()}`);
+  assert.strictEqual(PATHS.activeRestore('uid-1'), 'users/uid-1/backupControl/activeRestore');
+});
+
+test('the restore pin accepts exactly one valid backup id', () => {
+  assert.deepStrictEqual(validateRestoreInput({ backupId: backupId() }), { ok: true });
+  assert.strictEqual(validateRestoreInput({ backupId: backupId(), extra: 1 }).reason, 'INVALID_INPUT');
+  assert.strictEqual(validateRestoreInput(null).reason, 'INVALID_INPUT');
+  assert.strictEqual(validateRestoreInput({ backupId: '../x' }).reason, 'INVALID_BACKUP_ID');
+});
+
+test('only a live restore pin exempts an object from retention', () => {
+  const nowMs = 1_800_000_000_000;
+  const live = {
+    backupId: backupId(),
+    objectPath: PATHS.object('uid-1', backupId()),
+    expiresAtMs: nowMs + RESTORE_GUARD_TTL_MS,
+  };
+  assert.strictEqual(restoreGuardActive(live, nowMs), true);
+  assert.strictEqual(restoreGuardActive({ ...live, expiresAtMs: nowMs }, nowMs), false);
+  assert.strictEqual(restoreGuardActive({ ...live, expiresAtMs: nowMs - 1 }, nowMs), false);
+  assert.strictEqual(restoreGuardActive({ ...live, expiresAtMs: undefined }, nowMs), false);
+  assert.strictEqual(restoreGuardActive({ backupId: live.backupId }, nowMs), false);
+  assert.strictEqual(restoreGuardActive(null, nowMs), false);
 });

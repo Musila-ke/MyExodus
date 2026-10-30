@@ -27,6 +27,18 @@ enum class BackupUploadFailure {
     BACKUP_OBJECT_MISSING,
     BACKUP_OBJECT_MISMATCH,
 
+    /** §6.6 item 2: the account has no committed snapshot to restore. */
+    NO_CLOUD_BACKUP,
+
+    /** §6.6 items 2/7: pointer, manifest or envelope disagreed; nothing was written. */
+    REMOTE_BACKUP_INVALID,
+
+    /** §6.6 item 6: authenticated bytes failed to decompress or parse; staging is deleted. */
+    PAYLOAD_CORRUPT,
+
+    /** §6.6 item 5: the GCM tag did not verify; only staging ever saw the bytes. */
+    PAYLOAD_TAMPERED,
+
     /** No active local profile: never upload an empty snapshot over a real cloud backup. */
     NO_LOCAL_DATA,
 
@@ -82,16 +94,102 @@ data class ExtendReservationResult(val expiresAtMs: Long, val extended: Boolean)
 
 data class CommitManifestResult(val revision: Long, val sha256: String, val replayed: Boolean)
 
-/** The manifest callables and the owner-readable pointer (§8.6). Production is [FirestoreBackupManifestApi]. */
+/**
+ * §6.6 items 2-4: the current pointer and its immutable manifest, cross-checked and narrowed to
+ * values a restore may trust. [objectPath] is rebuilt from the authenticated UID and the backup
+ * ID, never adopted from the server.
+ */
+data class RemoteSnapshot(
+    val pair: BackupPair,
+    val backupId: String,
+    val objectPath: String,
+    val generation: String,
+    val objectBytes: Long,
+    val compressedBytes: Long,
+    val schemaVersion: Int,
+    val envelopeVersion: Int,
+) {
+    companion object {
+        private val BACKUP_ID = Regex("^[0-9a-f]{32}$")
+
+        /** Both documents must describe one snapshot identically, or the restore never starts. */
+        internal fun fromWire(
+            uid: String,
+            pointer: Map<String, Any?>,
+            manifest: Map<String, Any?>?,
+        ): RemoteSnapshot {
+            fun invalid(): Nothing =
+                throw BackupUploadException(BackupUploadFailure.REMOTE_BACKUP_INVALID)
+            val backupId = pointer["backupId"] as? String
+            val revision = (pointer["revision"] as? Number)?.toLong()
+            val sha256 = pointer["sha256"] as? String
+            val generation = pointer["generation"] as? String
+            val objectBytes = (pointer["objectBytes"] as? Number)?.toLong()
+            val schemaVersion = (pointer["schemaVersion"] as? Number)?.toInt()
+            if (backupId == null || !BACKUP_ID.matches(backupId) ||
+                revision == null || revision < 1 ||
+                sha256 == null || !isSha256Hex(sha256) ||
+                generation.isNullOrBlank() ||
+                objectBytes == null || objectBytes !in 1..BackupEnvelope.MAX_OBJECT_BYTES ||
+                schemaVersion == null || schemaVersion < 1
+            ) {
+                invalid()
+            }
+            val path = "backups/$uid/$backupId"
+            if (pointer["objectPath"] != path) invalid()
+            if (manifest == null) invalid()
+            val compressedBytes = (manifest["compressedBytes"] as? Number)?.toLong()
+            val envelopeVersion = (manifest["envelopeVersion"] as? Number)?.toInt()
+            if (manifest["backupId"] != backupId ||
+                (manifest["revision"] as? Number)?.toLong() != revision ||
+                manifest["sha256"] != sha256 ||
+                manifest["objectPath"] != path ||
+                manifest["generation"] != generation ||
+                (manifest["objectBytes"] as? Number)?.toLong() != objectBytes ||
+                (manifest["schemaVersion"] as? Number)?.toInt() != schemaVersion
+            ) {
+                invalid()
+            }
+            if (envelopeVersion != BackupEnvelope.VERSION ||
+                compressedBytes == null ||
+                compressedBytes !in 1..BackupEnvelope.MAX_COMPRESSED_BYTES ||
+                objectBytes != compressedBytes + BackupEnvelope.HEADER_BYTES + BackupEnvelope.TAG_BYTES
+            ) {
+                invalid()
+            }
+            return RemoteSnapshot(
+                pair = BackupPair(revision, sha256),
+                backupId = backupId,
+                objectPath = path,
+                generation = generation,
+                objectBytes = objectBytes,
+                compressedBytes = compressedBytes,
+                schemaVersion = schemaVersion,
+                envelopeVersion = envelopeVersion,
+            )
+        }
+    }
+}
+
+/** The manifest callables and the owner-readable pointer (§8.6/§6.6). Production is [FirestoreBackupManifestApi]. */
 interface BackupManifestApi {
     /** The current server pointer, or null when the account has no committed snapshot. */
     suspend fun current(uid: String): BackupPair?
+
+    /** §6.6 item 2: the current pointer plus its manifest, or null when none was committed. */
+    suspend fun snapshot(uid: String): RemoteSnapshot?
 
     suspend fun begin(request: BeginBackupRequest): BeginBackupResult
 
     suspend fun extend(backupId: String): ExtendReservationResult
 
     suspend fun commit(backupId: String, sha256: String, objectBytes: Long): CommitManifestResult
+
+    /** §6.6 item 6: pins the object against retention while this device restores it. */
+    suspend fun beginRestore(backupId: String)
+
+    /** Best effort; a lost clear only pins the object until the server-side guard expires. */
+    suspend fun endRestore(backupId: String)
 }
 
 /**
@@ -113,10 +211,28 @@ class FirestoreBackupManifestApi(
         } else {
             val revision = (snapshot.get("revision") as? Number)?.toLong()
             val sha256 = snapshot.get("sha256") as? String
-            if (revision == null || sha256 == null || revision < 1 || !isSha256(sha256)) {
+            if (revision == null || sha256 == null || revision < 1 || !isSha256Hex(sha256)) {
                 throw BackupUploadException(BackupUploadFailure.UNKNOWN)
             }
             BackupPair(revision, sha256)
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: BackupUploadException) {
+        throw e
+    } catch (e: Exception) {
+        throw BackupUploadException(failureOf(e), cause = e)
+    }
+
+    override suspend fun snapshot(uid: String): RemoteSnapshot? = try {
+        val pointer = firestore.document("users/$uid/backupControl/current").get().await()
+        if (!pointer.exists()) {
+            null
+        } else {
+            val backupId = pointer.get("backupId") as? String
+                ?: throw BackupUploadException(BackupUploadFailure.REMOTE_BACKUP_INVALID)
+            val manifest = firestore.document("users/$uid/backupManifests/$backupId").get().await()
+            RemoteSnapshot.fromWire(uid, pointer.data.orEmpty(), manifest.data)
         }
     } catch (e: CancellationException) {
         throw e
@@ -184,6 +300,14 @@ class FirestoreBackupManifestApi(
         return CommitManifestResult(revision, stored, response["replayed"] == true)
     }
 
+    override suspend fun beginRestore(backupId: String) {
+        call("beginBackupRestore", mapOf("backupId" to backupId))
+    }
+
+    override suspend fun endRestore(backupId: String) {
+        call("endBackupRestore", mapOf("backupId" to backupId))
+    }
+
     private suspend fun call(name: String, data: Map<String, Any?>): Map<*, *> = try {
         functions.getHttpsCallable(name).call(data).await().data as? Map<*, *>
             ?: throw BackupUploadException(BackupUploadFailure.UNKNOWN)
@@ -217,6 +341,8 @@ class FirestoreBackupManifestApi(
             "BACKUP_RESERVATION_EXPIRED" -> BackupUploadFailure.BACKUP_RESERVATION_EXPIRED
             "BACKUP_OBJECT_MISSING" -> BackupUploadFailure.BACKUP_OBJECT_MISSING
             "BACKUP_OBJECT_MISMATCH" -> BackupUploadFailure.BACKUP_OBJECT_MISMATCH
+            "NO_CLOUD_BACKUP" -> BackupUploadFailure.NO_CLOUD_BACKUP
+            "BACKUP_NOT_CURRENT" -> BackupUploadFailure.BACKUP_CONFLICT
             "INVALID_INPUT", "INVALID_BACKUP_ID", "INVALID_SCHEMA_VERSION", "INVALID_BASE",
             "INVALID_REPLACE", "INVALID_SHA256", "INVALID_OBJECT_SIZE", "BACKUP_TOO_LARGE",
             -> BackupUploadFailure.BACKUP_INVALID_REQUEST
@@ -260,7 +386,8 @@ class FirestoreBackupManifestApi(
     }
 
     private fun wireRevision(value: Long): Int = wireInt(value)
-
-    private fun isSha256(value: String): Boolean =
-        value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' }
 }
+
+/** Lowercase hex SHA-256, the wire form the server stores and the client recomputes. */
+internal fun isSha256Hex(value: String): Boolean =
+    value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' }

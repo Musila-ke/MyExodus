@@ -18,6 +18,10 @@ interface MilestoneEventDao {
     @Query("SELECT * FROM milestone_events")
     suspend fun getAll(): List<MilestoneEvent>
 
+    /** §6.6 item 7: the staging restore replaces the logical tables wholesale. */
+    @Query("DELETE FROM milestone_events")
+    suspend fun deleteAll()
+
     /** Merges the facts of a deduplicated streak into the row that already exists (§6.3.4). */
     @Update suspend fun update(event: MilestoneEvent)
 

@@ -2,6 +2,7 @@ package com.example.myexodus.backup
 
 import android.net.Uri
 import com.google.firebase.storage.FirebaseStorage
+import com.google.firebase.storage.StorageException
 import com.google.firebase.storage.StorageMetadata
 import java.io.File
 import kotlin.coroutines.resume
@@ -55,4 +56,23 @@ class FirebaseObjectUploader(
     private companion object {
         const val CONTENT_TYPE = "application/octet-stream"
     }
+}
+
+/**
+ * §8.6/§6.6: Storage failures map to one closed vocabulary for both directions. A missing
+ * object means an expired upload reservation for a write and a missing file for a read, so
+ * the caller names that one code; it is retryable either way.
+ */
+internal fun storageFailure(e: Throwable, notFound: BackupUploadFailure): BackupUploadFailure = when {
+    e is BackupUploadException -> e.failure
+    e is StorageException -> when (e.errorCode) {
+        StorageException.ERROR_NOT_AUTHENTICATED -> BackupUploadFailure.SIGN_IN_REQUIRED
+        StorageException.ERROR_NOT_AUTHORIZED -> BackupUploadFailure.DENIED
+        StorageException.ERROR_OBJECT_NOT_FOUND -> notFound
+        StorageException.ERROR_RETRY_LIMIT_EXCEEDED,
+        StorageException.ERROR_UNKNOWN,
+        -> BackupUploadFailure.NETWORK
+        else -> BackupUploadFailure.UNKNOWN
+    }
+    else -> BackupUploadFailure.UNKNOWN
 }

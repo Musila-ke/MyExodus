@@ -387,16 +387,24 @@ exports._createUpdateBackupKeyBundleHandler = createUpdateBackupKeyBundleHandler
 const {
   createBeginBackup,
   createExtendBackupReservation,
+  createBeginBackupRestore,
+  createEndBackupRestore,
   createCommitBackupManifest,
   createBeginBackupHandler,
   createExtendBackupReservationHandler,
+  createBeginBackupRestoreHandler,
+  createEndBackupRestoreHandler,
   createCommitBackupManifestHandler,
   createCleanupBackupOrphans,
 } = require('./backup-manifest');
 exports.beginBackup = createBeginBackup({ db });
 exports.extendBackupReservation = createExtendBackupReservation({ db });
+exports.beginBackupRestore = createBeginBackupRestore({ db });
+exports.endBackupRestore = createEndBackupRestore({ db });
 exports.commitBackupManifest = createCommitBackupManifest({ db });
 exports.cleanupBackupOrphans = createCleanupBackupOrphans({ db });
 exports._createBeginBackupHandler = createBeginBackupHandler;
 exports._createExtendBackupReservationHandler = createExtendBackupReservationHandler;
+exports._createBeginBackupRestoreHandler = createBeginBackupRestoreHandler;
+exports._createEndBackupRestoreHandler = createEndBackupRestoreHandler;
 exports._createCommitBackupManifestHandler = createCommitBackupManifestHandler;

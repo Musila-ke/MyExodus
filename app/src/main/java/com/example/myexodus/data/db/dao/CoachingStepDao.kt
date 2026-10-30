@@ -22,6 +22,10 @@ interface CoachingStepDao {
     @Query("SELECT * FROM coaching_step WHERE profile_id = :profileId ORDER BY step_order ASC")
     suspend fun getForProfile(profileId: String): List<CoachingStep>
 
+    /** §6.6 item 7: the staging restore replaces the logical tables wholesale. */
+    @Query("DELETE FROM coaching_step")
+    suspend fun deleteAll()
+
     /** v2 FR-6 caps are per kind: ≤5 steps, ≤5 If-Then, ≤5 Values. */
     @Query("SELECT count(*) FROM coaching_step WHERE profile_id = :profileId AND kind = :kind")
     suspend fun countForKind(profileId: String, kind: String): Long

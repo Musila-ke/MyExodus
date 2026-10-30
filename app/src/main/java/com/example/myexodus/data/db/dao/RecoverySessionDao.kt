@@ -22,6 +22,14 @@ interface RecoverySessionDao {
     @Query("SELECT * FROM recovery_session")
     suspend fun getAll(): List<RecoverySession>
 
+    /** §6.6 item 7: the staging restore replaces the logical tables wholesale. */
+    @Query("DELETE FROM recovery_session")
+    suspend fun deleteAll()
+
+    /** Sessions return with the same ids, but their events were never in the snapshot. */
+    @Query("DELETE FROM recovery_mirror_link")
+    suspend fun deleteAllLinks()
+
     @Query(
         "SELECT * FROM recovery_session ORDER BY started_at_epoch_ms DESC " +
             "LIMIT :limit OFFSET :offset",

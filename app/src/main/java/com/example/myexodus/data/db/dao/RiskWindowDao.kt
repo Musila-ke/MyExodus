@@ -28,4 +28,8 @@ interface RiskWindowDao {
 
     @Query("SELECT count(*) FROM risk_window")
     suspend fun count(): Long
+
+    /** §6.6 item 7: the staging restore replaces the logical tables wholesale. */
+    @Query("DELETE FROM risk_window")
+    suspend fun deleteAll()
 }

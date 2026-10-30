@@ -35,10 +35,20 @@ class AppRulesStoreFactory(
 
     /** How the currently/last-opened file is sealed; drives [currentDriver] and restore logic. */
     @Volatile private var encryptedMode = false
+
+    /** §6.6 item 8: set only for the two renames, so no caller can reopen an empty file between them. */
+    @Volatile private var swapping = false
+
+    /**
+     * §6.6 item 8: true while a staging file exists for a live operation, so a concurrent
+     * [open] does not sweep it. Process death clears the flag and the next start reclaims it.
+     */
+    @Volatile private var stagingActive = false
     private val lock = Any()
 
     /** Thread-safe; returns null when the open failed into a defined recovery state. */
     fun open(): AppRulesStore? = synchronized(lock) {
+        if (swapping) return@synchronized null
         database ?: openInternal()?.also {
             // Fresh open only — a cached hit is silent (ADR #153 cold-start attribution).
             database = it
@@ -76,6 +86,7 @@ class AppRulesStoreFactory(
     }
 
     private fun openInternal(): AppRulesStore? {
+        recoverInterruptedSwap()
         recoveryManager.checkOrphanedCorruptFiles()
 
         val outcome = encryption
@@ -106,10 +117,16 @@ class AppRulesStoreFactory(
                 when {
                     pendingUpgrade -> healthStore.set(DatabaseHealth.EncryptionUpgradePending)
                     recoveryManager.hasOrphanedCorruptFiles() -> healthStore.set(DatabaseHealth.RecoverableDataFound)
-                    else -> healthStore.set(DatabaseHealth.Ready)
+                    else -> {
+                        healthStore.set(DatabaseHealth.Ready)
+                        // §6.6 item 9: the pre-restore copy is dropped only after the swapped
+                        // file opened and proved intact.
+                        finishRestoreCleanup()
+                    }
                 }
             }
         } catch (e: SQLiteDatabaseCorruptException) {
+            if (usePreRestoreCopy()) return openInMode(encrypted, pendingUpgrade)
             if (restorePlaintextIfPossible()) return openPlaintextAfterRestore()
             Log.w(TAG, "Rules DB open classified ConfirmedCorruption; recreating fresh", e)
             encryptedMode = encryption != null
@@ -122,11 +139,13 @@ class AppRulesStoreFactory(
                 null
             }
         } catch (e: SQLiteException) {
+            if (usePreRestoreCopy()) return openInMode(encrypted, pendingUpgrade)
             if (restorePlaintextIfPossible()) return openPlaintextAfterRestore()
             Log.e(TAG, "Rules DB open failed with SQLiteException", e)
             healthStore.set(healthFor(e))
             null
         } catch (e: Throwable) {
+            if (usePreRestoreCopy()) return openInMode(encrypted, pendingUpgrade)
             if (restorePlaintextIfPossible()) return openPlaintextAfterRestore()
             Log.e(TAG, "Rules DB open failed", e)
             healthStore.set(healthFor(e))
@@ -181,6 +200,166 @@ class AppRulesStoreFactory(
             .addCallback(createCallback)
         if (encrypted) builder.setDriver(requireNotNull(encryption).newDriver())
         return builder.build()
+    }
+
+    /**
+     * §6.6 item 7: closes the active handle, folds its WAL into the main file and copies the
+     * sealed file beside it. The returned store is the staging database — the caller replaces
+     * its logical tables, verifies it, then either swaps it in ([swapInRestore]) or discards
+     * it ([discardRestoreStaging]). Closing is what makes the byte copy a consistent snapshot;
+     * after any abort the caller reopens the untouched file with [open].
+     */
+    fun stageRestoreCopy(): AppRulesStore = synchronized(lock) {
+        val active = appContext.getDatabasePath(LocalDatabaseMigration.rulesDbName(appContext))
+        val store = database ?: openInternal()
+            ?: throw IllegalStateException("active rules database is unavailable")
+        store.close()
+        database = null
+        truncateCheckpoint(active)
+        deleteSidecars(active)
+        val staging = appContext.getDatabasePath(restoreDbName())
+        deleteDb(staging)
+        stagingActive = true
+        try {
+            active.copyTo(staging, overwrite = true)
+            buildStaging(restoreDbName())
+        } catch (e: Exception) {
+            deleteDb(staging)
+            stagingActive = false
+            throw e
+        }
+    }
+
+    /** §6.6 item 7: the staged file must open cleanly and pass both integrity checks. */
+    fun verifyRestoreStaging(): Boolean = runCatching {
+        integrityAndForeignKeysOk(appContext.getDatabasePath(restoreDbName()).absolutePath)
+    }.getOrDefault(false)
+
+    /**
+     * §6.6 item 8: two renames under the factory lock. The active file is moved aside first,
+     * so a failed second rename puts it back; a crash between the two is healed by
+     * [recoverInterruptedSwap] on the next start.
+     */
+    fun swapInRestore(): Boolean = synchronized(lock) {
+        val active = appContext.getDatabasePath(LocalDatabaseMigration.rulesDbName(appContext))
+        val previous = appContext.getDatabasePath(previousDbName())
+        val staging = appContext.getDatabasePath(restoreDbName())
+        swapping = true
+        try {
+            // A concurrent open() may have cached a handle on the active file; closing it here
+            // keeps every later write off the inode that is about to become the previous copy.
+            database?.close()
+            database = null
+            deleteDb(previous)
+            deleteSidecars(staging)
+            if (!active.renameTo(previous)) return@synchronized false
+            if (!staging.renameTo(active)) {
+                previous.renameTo(active)
+                return@synchronized false
+            }
+            stagingActive = false
+            true
+        } finally {
+            swapping = false
+        }
+    }
+
+    /** §6.6 item 6: the untouched active file stays exactly where it was. */
+    fun discardRestoreStaging() = synchronized(lock) {
+        deleteDb(appContext.getDatabasePath(restoreDbName()))
+        stagingActive = false
+    }
+
+    private fun buildStaging(name: String): AppRulesStore {
+        val db = build(
+            encrypted = encryptedMode,
+            databaseName = name,
+            journalMode = RoomDatabase.JournalMode.TRUNCATE,
+        )
+        runBlocking { db.restrictionRuleDao().getActiveRules() }
+        return db
+    }
+
+    /** No readers exist while Room is closed, so TRUNCATE can fold the WAL into the main file. */
+    private fun truncateCheckpoint(active: File) {
+        currentDriver().open(active.absolutePath).use { connection ->
+            connection.prepare("PRAGMA wal_checkpoint(TRUNCATE)").use { it.step() }
+        }
+    }
+
+    private fun integrityAndForeignKeysOk(path: String): Boolean {
+        return currentDriver().open(path).use { connection ->
+            var rows = 0
+            connection.prepare("PRAGMA integrity_check").use { stmt ->
+                while (stmt.step()) {
+                    if (stmt.getText(0) != "ok") return false
+                    rows++
+                }
+            }
+            if (rows == 0) return false
+            connection.prepare("PRAGMA foreign_key_check").use { stmt ->
+                if (stmt.step()) return false
+            }
+            true
+        }
+    }
+
+    /**
+     * §6.6 item 8: heals a process death between the two renames — the pre-restore file is the
+     * only good copy then. A staging file never survives: its snapshot was memory-only.
+     */
+    private fun recoverInterruptedSwap() {
+        val active = appContext.getDatabasePath(LocalDatabaseMigration.rulesDbName(appContext))
+        val previous = appContext.getDatabasePath(previousDbName())
+        if (!active.exists()) {
+            if (previous.exists()) {
+                Log.w(TAG, "Interrupted restore swap: restoring the pre-restore database")
+                previous.renameTo(active)
+            }
+            deleteSidecars(active)
+        }
+        if (!stagingActive) deleteDb(appContext.getDatabasePath(restoreDbName()))
+    }
+
+    /**
+     * §6.6 item 9: a restored file that no longer opens yields to the pre-restore copy. The
+     * failed file goes through the existing corrupt-file path so it stays recoverable; the
+     * caller retries the open against the restored previous copy.
+     */
+    private fun usePreRestoreCopy(): Boolean {
+        val previous = appContext.getDatabasePath(previousDbName())
+        if (stagingActive || !previous.exists()) return false
+        val active = appContext.getDatabasePath(LocalDatabaseMigration.rulesDbName(appContext))
+        recoveryManager.renameCorruptRules()
+        deleteSidecars(active)
+        if (!previous.renameTo(active)) return false
+        Log.w(TAG, "Restored database failed to open; pre-restore copy restored")
+        return true
+    }
+
+    /** §6.6 item 9: bounded cleanup — only a healthy swapped-in file retires its predecessor. */
+    private fun finishRestoreCleanup() {
+        val previous = appContext.getDatabasePath(previousDbName())
+        if (!previous.exists()) return
+        if (runCatching { integrityAndForeignKeysOk(dbPath()) }.getOrDefault(false)) {
+            deleteDb(previous)
+            Log.i(TAG, "Restored database verified; pre-restore copy removed")
+        }
+    }
+
+    private fun restoreDbName(): String = LocalDatabaseMigration.rulesDbName(appContext) + RESTORE_SUFFIX
+
+    private fun previousDbName(): String = LocalDatabaseMigration.rulesDbName(appContext) + PREVIOUS_SUFFIX
+
+    private fun deleteDb(file: File) {
+        deleteSidecars(file)
+        file.delete()
+    }
+
+    private fun deleteSidecars(file: File) {
+        for (suffix in SIDECARS) {
+            File(file.parentFile, file.name + suffix).delete()
+        }
     }
 
     /**
@@ -251,6 +430,9 @@ class AppRulesStoreFactory(
     companion object {
         const val DB_NAME = "myexodus_rules.db"
         private const val TAG = "MyExodusDb"
+        private const val RESTORE_SUFFIX = ".restore"
+        private const val PREVIOUS_SUFFIX = ".restore-previous"
+        private val SIDECARS = arrayOf("-wal", "-shm", "-journal")
 
         val MIGRATION_9_10 = object : Migration(9, 10) {
             override suspend fun migrate(connection: SQLiteConnection) {

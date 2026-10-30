@@ -20,6 +20,10 @@ const RESERVATION_MAX_MS = 7 * 24 * 60 * 60 * 1000;
 const EXTENSION_HORIZON_MS = RESERVATION_INACTIVITY_MS;
 // §8.6: orphan objects wait at least 24 hours after their reservation expires.
 const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
+// §6.6 item 6: a restore pin shields one object from retention while it downloads. The
+// bound keeps a crashed restore from pinning forever; a 21 MiB download fits an hour many
+// times over, and endBackupRestore clears the pin on every normal path.
+const RESTORE_GUARD_TTL_MS = 60 * 60 * 1000;
 // §8.6: the current pointer plus two prior successful snapshots.
 const RETAINED_SNAPSHOTS = 3;
 
@@ -94,6 +98,17 @@ function validateExtendInput(data) {
   if (!hasExactKeys(data, ['backupId'])) return { ok: false, reason: 'INVALID_INPUT' };
   if (!isBackupId(data.backupId)) return { ok: false, reason: 'INVALID_BACKUP_ID' };
   return { ok: true };
+}
+
+function validateRestoreInput(data) {
+  return validateExtendInput(data);
+}
+
+/** §6.6 item 6: only a live pin exempts an object from retention. */
+function restoreGuardActive(record, nowMs) {
+  if (!record || typeof record.objectPath !== 'string') return false;
+  const expires = typeof record.expiresAtMs === 'number' ? record.expiresAtMs : 0;
+  return expires > nowMs;
 }
 
 function normalizePair(revision, sha256) {
@@ -252,6 +267,7 @@ module.exports = {
   RESERVATION_MAX_MS,
   RESERVATION_TTL_MS,
   ORPHAN_GRACE_MS,
+  RESTORE_GUARD_TTL_MS,
   RETAINED_SNAPSHOTS,
   isBackupId,
   isSha256,
@@ -259,6 +275,8 @@ module.exports = {
   validateBeginInput,
   validateCommitInput,
   validateExtendInput,
+  validateRestoreInput,
+  restoreGuardActive,
   classifyBase,
   samePair,
   advanceReservationWindow,

@@ -39,6 +39,14 @@ interface AttemptLogDao {
     @Query("SELECT * FROM attempt_log")
     suspend fun getAll(): List<AttemptLog>
 
+    /** §6.6 item 7: the staging restore replaces the logical tables wholesale. */
+    @Query("DELETE FROM attempt_log")
+    suspend fun deleteAll()
+
+    /** Restored attempts get fresh auto-generated ids, so old per-pair links point nowhere. */
+    @Query("DELETE FROM attempt_mirror_link")
+    suspend fun deleteAllLinks()
+
     /**
      * §14 reconcile: attempts not yet mirrored to THIS pair, oldest first (ADR #111). The
      * link table — not `event_sequence` — is what the pending check reads, so one pair's

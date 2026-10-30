@@ -15,6 +15,9 @@
 //                            immutable manifest and the pointer in one transaction against
 //                            the reservation's anchor. Client hashes are compared, never
 //                            trusted, and the stored hash is the server-computed one.
+//   beginBackupRestore       §6.6 item 6: pins one committed snapshot against retention
+//                            while a device downloads it; one live pin per UID, one hour.
+//   endBackupRestore         clears the pin; idempotent and harmless to lose (the pin expires).
 //   cleanupBackupOrphans     daily: expired reservations older than the 24-hour grace lose
 //                            their unreferenced object; idempotent and reference-checked.
 //
@@ -34,11 +37,14 @@ const {
   ORPHAN_GRACE_MS,
   RESERVATION_TTL_MS,
   RESERVATION_MAX_MS,
+  RESTORE_GUARD_TTL_MS,
   HEARTBEAT_MIN_MS,
   PATHS,
   validateBeginInput,
   validateCommitInput,
   validateExtendInput,
+  validateRestoreInput,
+  restoreGuardActive,
   classifyBase,
   samePair,
   advanceReservationWindow,
@@ -268,6 +274,71 @@ function createExtendBackupReservationHandler({ db, now = () => Date.now() }) {
   };
 }
 
+/** §6.6 item 6: one live pin per UID shields the snapshot a device is restoring. */
+function createBeginBackupRestoreHandler({ db, now = () => Date.now() }) {
+  return async function beginBackupRestoreHandler(request) {
+    const auth = requireAuth(request);
+    const validation = validateRestoreInput(request.data);
+    if (!validation.ok) {
+      logger.warn('beginBackupRestore rejected', { reason: validation.reason });
+      throw new HttpsError('invalid-argument', validation.reason);
+    }
+    const { backupId } = request.data;
+    const nowMs = now();
+    const uid = auth.uid;
+    const restoreRef = db.doc(PATHS.activeRestore(uid));
+    const manifestRef = db.doc(PATHS.manifest(uid, backupId));
+
+    return db.runTransaction(async (tx) => {
+      await requireBackupAccount(tx, db, auth);
+      const manifestSnap = await tx.get(manifestRef);
+      if (!manifestSnap.exists) {
+        throw new HttpsError('failed-precondition', 'NO_CLOUD_BACKUP');
+      }
+      const restoreSnap = await tx.get(restoreRef);
+      if (restoreSnap.exists
+        && restoreSnap.get('backupId') === backupId
+        && restoreGuardActive(restoreSnap.data(), nowMs)) {
+        return { backupId, expiresAtMs: restoreSnap.get('expiresAtMs'), replayed: true };
+      }
+      // A newer restore supersedes the previous pin; the UID never shields two objects.
+      const expiresAtMs = nowMs + RESTORE_GUARD_TTL_MS;
+      tx.set(restoreRef, {
+        uid,
+        backupId,
+        objectPath: manifestSnap.get('objectPath'),
+        startedAtMs: nowMs,
+        expiresAtMs,
+        expiresAt: Timestamp.fromMillis(expiresAtMs),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      logger.info('beginBackupRestore', { uidHash: hashForLog(uid) });
+      return { backupId, expiresAtMs, replayed: false };
+    });
+  };
+}
+
+/**
+ * §6.6 item 6: clearing the pin is best effort — a lost clear only pins the object until
+ * the one-hour guard expires — so this handler never fails on unrelated account state.
+ */
+function createEndBackupRestoreHandler({ db }) {
+  return async function endBackupRestoreHandler(request) {
+    const auth = requireAuth(request);
+    const validation = validateRestoreInput(request.data);
+    if (!validation.ok) {
+      logger.warn('endBackupRestore rejected', { reason: validation.reason });
+      throw new HttpsError('invalid-argument', validation.reason);
+    }
+    const { backupId } = request.data;
+    const restoreRef = db.doc(PATHS.activeRestore(auth.uid));
+    const snap = await restoreRef.get();
+    const cleared = snap.exists && snap.get('backupId') === backupId;
+    if (cleared) await restoreRef.delete();
+    return { backupId, cleared };
+  };
+}
+
 /**
  * §8.6: the backend reads the reserved object generation itself. The client hash and any
  * custom metadata are claims; the stored manifest hash is computed here.
@@ -453,9 +524,9 @@ function createCommitBackupManifestHandler({ db, bucket, now = () => Date.now() 
 /**
  * §8.6: retain the current pointer plus two prior successful snapshots. A snapshot is only
  * deleted when nothing references it: not the pointer, not a retained manifest, not a live
- * reservation, not an active restore record (R2.15 writes one while it downloads).
+ * reservation, not a live restore pin (§6.6 item 6; the pin itself expires after an hour).
  */
-async function applyRetention({ db, bucket, uid, currentBackupId }) {
+async function applyRetention({ db, bucket, uid, currentBackupId, nowMs = Date.now() }) {
   try {
     const snap = await db.collection(PATHS.manifests(uid)).orderBy('revision', 'desc').limit(20).get();
     const manifests = snap.docs.map((doc) => ({ backupId: doc.id, ...doc.data() }));
@@ -463,7 +534,9 @@ async function applyRetention({ db, bucket, uid, currentBackupId }) {
     if (doomed.length === 0) return;
 
     const restoreSnap = await db.doc(PATHS.activeRestore(uid)).get();
-    const activeRestorePath = restoreSnap.exists ? restoreSnap.get('objectPath') : null;
+    const activeRestorePath = restoreSnap.exists && restoreGuardActive(restoreSnap.data(), nowMs)
+      ? restoreSnap.get('objectPath')
+      : null;
     for (const backupId of doomed) {
       const manifest = manifests.find((m) => m.backupId === backupId);
       if (!manifest || manifest.objectPath === activeRestorePath) continue;
@@ -546,6 +619,20 @@ function createExtendBackupReservation({ db } = {}) {
   );
 }
 
+function createBeginBackupRestore({ db } = {}) {
+  return onCall(
+    { region: REGION, enforceAppCheck: true, maxInstances: 10, timeoutSeconds: 30 },
+    createBeginBackupRestoreHandler({ db: db || getFirestore() }),
+  );
+}
+
+function createEndBackupRestore({ db } = {}) {
+  return onCall(
+    { region: REGION, enforceAppCheck: true, maxInstances: 10, timeoutSeconds: 30 },
+    createEndBackupRestoreHandler({ db: db || getFirestore() }),
+  );
+}
+
 function createCommitBackupManifest({ db, bucket } = {}) {
   return onCall(
     { region: REGION, enforceAppCheck: true, maxInstances: 10, timeoutSeconds: 60, memory: '512MiB' },
@@ -575,10 +662,14 @@ function createCleanupBackupOrphans({ db, bucket } = {}) {
 module.exports = {
   createBeginBackup,
   createExtendBackupReservation,
+  createBeginBackupRestore,
+  createEndBackupRestore,
   createCommitBackupManifest,
   createCleanupBackupOrphans,
   createBeginBackupHandler,
   createExtendBackupReservationHandler,
+  createBeginBackupRestoreHandler,
+  createEndBackupRestoreHandler,
   createCommitBackupManifestHandler,
   createCleanupBackupOrphansHandler,
   verifyObject,

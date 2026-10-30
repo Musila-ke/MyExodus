@@ -4,12 +4,17 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.room3.withReadTransaction
+import com.example.myexodus.account.Relauncher
 import com.example.myexodus.account.SessionFence
 import com.example.myexodus.account.readGuestSnapshot
 import com.example.myexodus.backup.BackupKeyApi
 import com.example.myexodus.backup.BackupKeyManager
 import com.example.myexodus.backup.BackupManifestApi
+import com.example.myexodus.backup.BackupObjectDownloader
 import com.example.myexodus.backup.BackupObjectUploader
+import com.example.myexodus.backup.BackupRestoreMarkStore
+import com.example.myexodus.backup.BackupRestores
+import com.example.myexodus.backup.BackupRestorer
 import com.example.myexodus.backup.BackupRevisionStore
 import com.example.myexodus.backup.BackupSnapshotReader
 import com.example.myexodus.backup.BackupStaging
@@ -19,13 +24,16 @@ import com.example.myexodus.backup.BackupUploadSessionStore
 import com.example.myexodus.backup.BackupUploader
 import com.example.myexodus.backup.BackupUploads
 import com.example.myexodus.backup.BackupWordlists
+import com.example.myexodus.backup.DataStoreBackupRestoreMarkStore
 import com.example.myexodus.backup.DataStoreBackupRevisionStore
 import com.example.myexodus.backup.DataStoreBackupUploadSessionStore
+import com.example.myexodus.backup.FirebaseObjectDownloader
 import com.example.myexodus.backup.FirebaseObjectUploader
 import com.example.myexodus.backup.FirestoreBackupKeyApi
 import com.example.myexodus.backup.FirestoreBackupManifestApi
 import com.example.myexodus.backup.RemoteBackupAnchorStore
 import com.example.myexodus.backup.RoomBackupAnchorStore
+import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.functions.FirebaseFunctions
@@ -37,6 +45,8 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 
 /** Release 2 (account plan §4.1/§8.5/§7 step 12): the ABK key-bundle seams. */
 @Module
@@ -119,6 +129,51 @@ object BackupModule {
                 ?: throw BackupUploadException(BackupUploadFailure.LOCAL_STATE_UNAVAILABLE)
             db.withReadTransaction { readGuestSnapshot(db) }
         }
+
+    @Provides @Singleton @IoDispatcher
+    fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
+
+    @Provides @Singleton @WorkDispatcher
+    fun provideWorkDispatcher(): CoroutineDispatcher = Dispatchers.Default
+
+    /** §6.6 item 4: the restore's Storage read seam. */
+    @Provides
+    @Singleton
+    fun provideBackupObjectDownloader(storage: FirebaseStorage): BackupObjectDownloader =
+        FirebaseObjectDownloader(storage)
+
+    /** §6.6 item 9: the completion the relaunched process shows the user. */
+    @Provides
+    @Singleton
+    fun provideBackupRestoreMarkStore(
+        dataStore: DataStore<Preferences>,
+    ): BackupRestoreMarkStore = DataStoreBackupRestoreMarkStore(dataStore)
+
+    @Provides
+    @Singleton
+    fun provideBackupRestorer(
+        keys: BackupKeyManager,
+        manifest: BackupManifestApi,
+        anchors: RemoteBackupAnchorStore,
+        staging: BackupStaging,
+        downloads: BackupObjectDownloader,
+        storeFactory: AppRulesStoreFactory,
+        fence: SessionFence,
+        rules: RulesRepository,
+        mark: BackupRestoreMarkStore,
+        relauncher: Relauncher,
+    ): BackupRestores = BackupRestorer(
+        keys = keys,
+        manifest = manifest,
+        anchors = anchors,
+        staging = staging,
+        downloads = downloads,
+        storeFactory = storeFactory,
+        fence = fence,
+        rules = rules,
+        mark = mark,
+        relauncher = relauncher,
+    )
 
     @Provides
     @Singleton

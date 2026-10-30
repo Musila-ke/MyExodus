@@ -19,6 +19,26 @@ class BackupStaging(private val root: File) {
 
     fun objectFile(backupId: String): File = File(root, "$OBJECT_PREFIX$backupId.bin")
 
+    /** §6.6 item 4: the restore download and its decrypted payload live in one directory. */
+    fun restoreDir(backupId: String): File = File(root, "$RESTORE_PREFIX$backupId")
+
+    fun restoreObjectFile(backupId: String): File = File(restoreDir(backupId), "object.bin")
+
+    fun restorePayloadFile(backupId: String): File = File(restoreDir(backupId), "payload.bin")
+
+    /**
+     * §6.6 item 6: an interrupted restore's files are unauthenticated or incomplete by
+     * construction (the snapshot only lives in memory), so only the operation naming [keepBackupId]
+     * survives. Best effort, like [sweep].
+     */
+    fun pruneRestore(keepBackupId: String?) {
+        val keep = keepBackupId?.let { restoreDir(it).name }
+        root.listFiles()?.forEach { file ->
+            if (!file.name.startsWith(RESTORE_PREFIX) || file.name == keep) return@forEach
+            file.deleteRecursively()
+        }
+    }
+
     /**
      * §6.4 item 14: the serialized/compressed staging file must be gone before the upload starts.
      * One retry covers a transient FS error; a file that survives both attempts fails the
@@ -62,6 +82,8 @@ class BackupStagingSweeper @Inject constructor(
     suspend fun sweep() {
         val keep = runCatching { sessions.get()?.backupId }.getOrNull()
         staging.sweep(keep)
+        // A restore never resumes across process death: its decrypted snapshot was in memory.
+        staging.pruneRestore(null)
     }
 }
 

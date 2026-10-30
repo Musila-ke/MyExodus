@@ -23,6 +23,10 @@ interface RecoveryStreakDao {
     @Query("SELECT * FROM recovery_streak")
     suspend fun getAll(): List<RecoveryStreak>
 
+    /** §6.6 item 7: the staging restore replaces the logical tables wholesale. */
+    @Query("DELETE FROM recovery_streak")
+    suspend fun deleteAll()
+
     /** Habits with a live (non-relapsed) streak — boot reconciliation's work list (§8 Step 4). */
     @Query("SELECT DISTINCT habit_id FROM recovery_streak WHERE relapsed_at IS NULL")
     suspend fun activeHabitIds(): List<String>

@@ -49,8 +49,10 @@ import com.example.myexodus.account.AuthState
 import com.example.myexodus.backup.BackupKeyFailure
 import com.example.myexodus.backup.BackupKeyManager.Unlock
 import com.example.myexodus.backup.BackupProgress
+import com.example.myexodus.backup.BackupRestoreMark
 import com.example.myexodus.backup.BackupUploadFailure
 import com.example.myexodus.backup.PassphrasePolicy
+import com.example.myexodus.backup.RestoreProgress
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.SecureSurface
 
@@ -68,6 +70,8 @@ internal fun BackupKeyScreen(
     val status by viewModel.status.collectAsStateWithLifecycle()
     val operation by viewModel.operation.collectAsStateWithLifecycle()
     val backup by viewModel.backup.collectAsStateWithLifecycle()
+    val restore by viewModel.restore.collectAsStateWithLifecycle()
+    val completedRestore by viewModel.completedRestore.collectAsStateWithLifecycle()
     val auth by viewModel.authState.collectAsStateWithLifecycle()
     val active = auth as? AuthState.PersistentActive
     val verificationRequired = active != null &&
@@ -126,6 +130,8 @@ internal fun BackupKeyScreen(
                                     viewModel = viewModel,
                                     operation = operation,
                                     backup = backup,
+                                    restore = restore,
+                                    completedRestore = completedRestore,
                                 )
                             }
                     }
@@ -249,7 +255,7 @@ private fun SetupFlow(viewModel: BackupKeyViewModel) {
     )
 }
 
-private enum class ManageMode { NONE, BACKUP, CHANGE_PASSPHRASE, ROTATE_RECOVERY }
+private enum class ManageMode { NONE, BACKUP, RESTORE, CHANGE_PASSPHRASE, ROTATE_RECOVERY }
 
 private enum class UnlockMode { PASSPHRASE, RECOVERY }
 
@@ -258,6 +264,8 @@ private fun ManageFlow(
     viewModel: BackupKeyViewModel,
     operation: BackupKeyViewModel.Operation,
     backup: BackupKeyViewModel.Backup,
+    restore: BackupKeyViewModel.Restore,
+    completedRestore: BackupRestoreMark?,
 ) {
     var mode by rememberSaveable { mutableStateOf(ManageMode.NONE) }
     // Collapse a finished sub-flow once its operation returns to idle (§6.5 re-unlock included).
@@ -282,10 +290,16 @@ private fun ManageFlow(
         body = stringResource(R.string.backup_key_configured_body),
     )
 
+    if (completedRestore != null) {
+        RestoreCompletedCard(mark = completedRestore, onDismiss = viewModel::dismissCompletedRestore)
+    }
     BackupStatusCard(backup = backup, viewModel = viewModel)
+    RestoreStatusCard(restore = restore, viewModel = viewModel)
 
     val busy = backup is BackupKeyViewModel.Backup.Running ||
-        backup is BackupKeyViewModel.Backup.Replace
+        backup is BackupKeyViewModel.Backup.Replace ||
+        restore is BackupKeyViewModel.Restore.Running ||
+        restore is BackupKeyViewModel.Restore.Preview
     if (!busy) {
         when (mode) {
             ManageMode.NONE -> Surface(
@@ -299,6 +313,10 @@ private fun ManageFlow(
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text(stringResource(R.string.backup_now_button)) }
                     OutlinedButton(
+                        onClick = { mode = ManageMode.RESTORE },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(stringResource(R.string.backup_restore_button)) }
+                    OutlinedButton(
                         onClick = { mode = ManageMode.CHANGE_PASSPHRASE },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text(stringResource(R.string.backup_key_change)) }
@@ -309,9 +327,22 @@ private fun ManageFlow(
                 }
             }
 
-            ManageMode.BACKUP -> BackupForm(
-                viewModel = viewModel,
+            ManageMode.BACKUP -> UnlockForm(
+                title = stringResource(R.string.backup_now_button),
+                note = stringResource(R.string.backup_now_note),
+                hint = stringResource(R.string.backup_now_unlock_hint),
+                action = stringResource(R.string.backup_now_button),
                 onCancel = { mode = ManageMode.NONE },
+                onSubmit = viewModel::backUpNow,
+            )
+
+            ManageMode.RESTORE -> UnlockForm(
+                title = stringResource(R.string.backup_restore_button),
+                note = stringResource(R.string.backup_restore_note),
+                hint = stringResource(R.string.backup_restore_unlock_hint),
+                action = stringResource(R.string.backup_restore_action),
+                onCancel = { mode = ManageMode.NONE },
+                onSubmit = viewModel::restoreFromCloud,
             )
 
             ManageMode.CHANGE_PASSPHRASE -> ChangePassphraseForm(
@@ -441,18 +472,193 @@ private fun backupProgressText(progress: BackupProgress): String = when (progres
     BackupProgress.Committing -> stringResource(R.string.backup_now_committing)
 }
 
-/** §6.4 item 5: the secret unlocks exactly this one snapshot and is cleared on submit. */
+/** §6.6 items 4-9: progress, the staged summary, the explicit choice, and the outcome. */
 @Composable
-private fun BackupForm(
+private fun RestoreStatusCard(
+    restore: BackupKeyViewModel.Restore,
     viewModel: BackupKeyViewModel,
+) {
+    when (restore) {
+        BackupKeyViewModel.Restore.Idle -> Unit
+
+        is BackupKeyViewModel.Restore.Running -> Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(restoreProgressText(restore.progress), style = MaterialTheme.typography.bodyMedium)
+                TextButton(
+                    onClick = viewModel::cancelRestore,
+                    modifier = Modifier.align(Alignment.End),
+                ) { Text(stringResource(R.string.backup_now_cancel)) }
+            }
+        }
+
+        is BackupKeyViewModel.Restore.Preview -> RestorePreviewCard(preview = restore, viewModel = viewModel)
+
+        BackupKeyViewModel.Restore.Applied -> StatusCard(
+            stringResource(R.string.backup_restore_applied),
+        )
+
+        is BackupKeyViewModel.Restore.Failed -> Surface(
+            color = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(backupUploadFailureRes(restore.failure)),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (restore.retryable) {
+                        TextButton(onClick = viewModel::retryRestore) {
+                            Text(stringResource(R.string.backup_now_retry))
+                        }
+                    }
+                    TextButton(onClick = viewModel::dismissRestoreFailure) {
+                        Text(stringResource(R.string.account_dismiss))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * §6.6 item 8: the summary the user must see before the swap, with Keep Local as the default
+ * and the destructive choice never pre-selected. Keep Local and Cancel both exit without
+ * restoring — the labels answer different questions ("my data is fine" vs "stop this").
+ */
+@Composable
+private fun RestorePreviewCard(
+    preview: BackupKeyViewModel.Restore.Preview,
+    viewModel: BackupKeyViewModel,
+) {
+    val summary = preview.summary
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                stringResource(R.string.backup_restore_summary_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                stringResource(
+                    R.string.backup_restore_summary_body,
+                    preview.revision,
+                    summary.total,
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                stringResource(
+                    R.string.backup_restore_summary_details,
+                    summary.habits,
+                    summary.streaks,
+                    summary.milestones,
+                    summary.attempts,
+                    summary.sessions,
+                    summary.coaching,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (summary.hasPolicy) {
+                Text(
+                    stringResource(R.string.backup_restore_summary_policy),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                stringResource(R.string.backup_restore_warning),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            if (preview.serverReported) {
+                Text(
+                    stringResource(R.string.backup_restore_server_reported),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Button(
+                onClick = viewModel::discardRestore,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(stringResource(R.string.backup_restore_keep_local)) }
+            OutlinedButton(
+                onClick = viewModel::confirmRestore,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(stringResource(R.string.backup_restore_confirm)) }
+            TextButton(
+                onClick = viewModel::discardRestore,
+                modifier = Modifier.align(Alignment.End),
+            ) { Text(stringResource(R.string.backup_key_cancel)) }
+        }
+    }
+}
+
+/** §6.6 item 9: shown once by the relaunched process, then cleared. */
+@Composable
+private fun RestoreCompletedCard(mark: BackupRestoreMark, onDismiss: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                stringResource(R.string.backup_restore_done_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                stringResource(R.string.backup_restore_done_body, mark.revision),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.align(Alignment.End),
+            ) { Text(stringResource(R.string.account_dismiss)) }
+        }
+    }
+}
+
+@Composable
+private fun restoreProgressText(progress: RestoreProgress): String = when (progress) {
+    is RestoreProgress.Downloading -> {
+        val percent = if (progress.total > 0) {
+            (progress.transferred * 100 / progress.total).toInt()
+        } else {
+            0
+        }
+        stringResource(R.string.backup_restore_downloading, percent.coerceIn(0, 100))
+    }
+    RestoreProgress.Verifying -> stringResource(R.string.backup_restore_verifying)
+    RestoreProgress.Staging -> stringResource(R.string.backup_restore_staging)
+}
+
+/** §6.4 item 5: the secret unlocks exactly this one operation and is cleared on submit. */
+@Composable
+private fun UnlockForm(
+    title: String,
+    note: String,
+    hint: String,
+    action: String,
     onCancel: () -> Unit,
+    onSubmit: (Unlock) -> Unit,
 ) {
     var unlockMode by rememberSaveable { mutableStateOf(UnlockMode.PASSPHRASE) }
     var secret by remember { mutableStateOf("") }
 
-    FormCard(title = stringResource(R.string.backup_now_button)) {
+    FormCard(title = title) {
         Text(
-            stringResource(R.string.backup_now_note),
+            note,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -486,7 +692,7 @@ private fun BackupForm(
             )
         }
         Text(
-            stringResource(R.string.backup_now_unlock_hint),
+            hint,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -499,10 +705,10 @@ private fun BackupForm(
                     } else {
                         Unlock.RecoveryWords(secret)
                     }
-                    viewModel.backUpNow(unlock)
+                    onSubmit(unlock)
                     secret = ""
                 },
-            ) { Text(stringResource(R.string.backup_now_button)) }
+            ) { Text(action) }
             TextButton(onClick = onCancel) { Text(stringResource(R.string.backup_key_cancel)) }
         }
     }
@@ -918,6 +1124,10 @@ internal fun backupUploadFailureRes(failure: BackupUploadFailure): Int = when (f
     BackupUploadFailure.STAGING_FAILED -> R.string.backup_now_error_staging
     BackupUploadFailure.LOCAL_STATE_UNAVAILABLE -> R.string.backup_now_error_local
     BackupUploadFailure.PAYLOAD_TOO_LARGE -> R.string.backup_now_error_too_large
+    BackupUploadFailure.NO_CLOUD_BACKUP -> R.string.backup_restore_error_none
+    BackupUploadFailure.REMOTE_BACKUP_INVALID -> R.string.backup_restore_error_invalid
+    BackupUploadFailure.PAYLOAD_CORRUPT -> R.string.backup_restore_error_corrupt
+    BackupUploadFailure.PAYLOAD_TAMPERED -> R.string.backup_restore_error_tampered
     BackupUploadFailure.SIGN_IN_REQUIRED -> R.string.account_error_not_signed_in
     BackupUploadFailure.DENIED -> R.string.backup_now_error_denied
     BackupUploadFailure.NETWORK -> R.string.account_error_network

@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.account.AuthCoordinator
 import com.example.myexodus.account.AuthIdentity
 import com.example.myexodus.account.AuthOperations
+import com.example.myexodus.account.SessionFingerprint
 import com.example.myexodus.backup.BackupCrypto
 import com.example.myexodus.backup.BackupKeyApi
 import com.example.myexodus.backup.BackupKeyBundle
@@ -13,6 +14,9 @@ import com.example.myexodus.backup.BackupKeyManager
 import com.example.myexodus.backup.BackupKeyManager.Unlock
 import com.example.myexodus.backup.BackupPair
 import com.example.myexodus.backup.BackupProgress
+import com.example.myexodus.backup.BackupRestoreMark
+import com.example.myexodus.backup.BackupRestoreMarkStore
+import com.example.myexodus.backup.BackupRestores
 import com.example.myexodus.backup.BackupRevisionStore
 import com.example.myexodus.backup.BackupUploadException
 import com.example.myexodus.backup.BackupUploadFailure
@@ -20,15 +24,21 @@ import com.example.myexodus.backup.BackupUploader
 import com.example.myexodus.backup.BackupUploads
 import com.example.myexodus.backup.BackupWordlists
 import com.example.myexodus.backup.RemoteBundle
+import com.example.myexodus.backup.RestorePreview
+import com.example.myexodus.backup.RestoreProgress
+import com.example.myexodus.backup.RestoreSummary
 import com.example.myexodus.backup.WrappedKey
 import com.example.myexodus.ui.home.MainDispatcherRule
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -159,13 +169,64 @@ class BackupKeyViewModelTest {
         ),
     )
 
+    private class FakeRestores : BackupRestores {
+        var applies = 0
+        var discards = 0
+        var prepares = 0
+        var failWith: BackupUploadException? = null
+        var preview = RestorePreview(
+            fingerprint = SessionFingerprint("uid-fixture", 1),
+            pair = BackupPair(4, "sha-4"),
+            summary = RestoreSummary(
+                habits = 1, streaks = 0, milestones = 0, attempts = 0,
+                sessions = 0, coaching = 1, riskWindows = 0, hasPolicy = false,
+            ),
+            serverReported = true,
+        )
+
+        override suspend fun prepare(
+            unlock: Unlock,
+            onProgress: (RestoreProgress) -> Unit,
+        ): RestorePreview {
+            prepares++
+            failWith?.let { throw it }
+            return preview
+        }
+
+        override suspend fun apply(preview: RestorePreview) {
+            applies++
+        }
+
+        override suspend fun discard() {
+            discards++
+        }
+    }
+
+    private class FakeMarks : BackupRestoreMarkStore {
+        var mark: BackupRestoreMark? = null
+        override suspend fun get() = mark
+        override suspend fun save(mark: BackupRestoreMark) {
+            this.mark = mark
+        }
+
+        override suspend fun clear() {
+            mark = null
+        }
+    }
+
     private fun TestScope.viewModel(
         api: FakeApi,
         uploads: FakeUploads = FakeUploads(),
+        restores: FakeRestores = FakeRestores(),
+        marks: FakeMarks = FakeMarks(),
     ): BackupKeyViewModel {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val manager = BackupKeyManager(api, FakeRevisions(), BackupWordlists(context))
-        val vm = BackupKeyViewModel(manager, uploads, AuthCoordinator(FakeOperations()))
+        val vm = BackupKeyViewModel(
+            manager, uploads, AuthCoordinator(FakeOperations()), restores, marks,
+            ioDispatcher = mainDispatcherRule.testDispatcher,
+            workDispatcher = mainDispatcherRule.testDispatcher,
+        )
         pumpUntil { vm.status.value !is BackupKeyViewModel.Status.Loading }
         return vm
     }
@@ -252,12 +313,17 @@ class BackupKeyViewModelTest {
         val vm = viewModel(configured(), uploads)
         assertEquals(BackupKeyViewModel.Status.Configured(9), vm.status.value)
 
-        vm.backUpNow(Unlock.Passphrase(passphrase))
-        pumpUntil {
-            (vm.backup.value as? BackupKeyViewModel.Backup.Running)?.progress ==
-                BackupProgress.Uploading(50, 100)
+        // Virtual time completes the whole flow in one drain, so record the published states
+        // eagerly instead of polling for an intermediate one.
+        val seen = mutableListOf<BackupKeyViewModel.Backup>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            vm.backup.collect { seen += it }
         }
+        vm.backUpNow(Unlock.Passphrase(passphrase))
         pumpUntil { vm.backup.value is BackupKeyViewModel.Backup.Succeeded }
+        assertTrue(
+            seen.contains(BackupKeyViewModel.Backup.Running(BackupProgress.Uploading(50, 100))),
+        )
         assertEquals(7, (vm.backup.value as BackupKeyViewModel.Backup.Succeeded).revision)
         assertEquals(listOf<BackupPair?>(null), uploads.replaces)
 
@@ -410,5 +476,56 @@ class BackupKeyViewModelTest {
         assertEquals(BackupUploadFailure.SIGN_IN_REQUIRED, failed.failure)
         assertFalse(failed.retryable)
         assertEquals(0, uploads.replaces.size)
+    }
+
+    @Test
+    fun aPreparedRestoreIsShownOnceThenApplied() = runTest {
+        val restores = FakeRestores()
+        val vm = viewModel(FakeApi(), restores = restores)
+
+        vm.restoreFromCloud(Unlock.Passphrase(passphrase))
+        pumpUntil { vm.restore.value is BackupKeyViewModel.Restore.Preview }
+
+        val preview = vm.restore.value as BackupKeyViewModel.Restore.Preview
+        assertTrue(preview.serverReported)
+        assertEquals(4, preview.revision)
+        assertEquals(2, preview.summary.total)
+
+        vm.confirmRestore()
+        pumpUntil { vm.restore.value is BackupKeyViewModel.Restore.Applied }
+        assertEquals(1, restores.applies)
+    }
+
+    @Test
+    fun aNonRetryableRestoreFailureDropsTheSecret() = runTest {
+        val restores = FakeRestores().apply {
+            failWith = BackupUploadException(BackupUploadFailure.PAYLOAD_TAMPERED)
+        }
+        val vm = viewModel(FakeApi(), restores = restores)
+
+        vm.restoreFromCloud(Unlock.Passphrase(passphrase))
+        pumpUntil { vm.restore.value is BackupKeyViewModel.Restore.Failed }
+
+        val failed = vm.restore.value as BackupKeyViewModel.Restore.Failed
+        assertEquals(BackupUploadFailure.PAYLOAD_TAMPERED, failed.failure)
+        assertFalse(failed.retryable)
+
+        // Without the unlock secret a retry has nothing to re-run with.
+        vm.retryRestore()
+        runCurrent()
+        assertTrue(vm.restore.value is BackupKeyViewModel.Restore.Failed)
+        assertEquals(1, restores.prepares)
+    }
+
+    @Test
+    fun theCompletionCardIsShownOnceAndCleared() = runTest {
+        val marks = FakeMarks().apply { mark = BackupRestoreMark(uid, 4, "sha-4", 1L) }
+        val vm = viewModel(FakeApi(), marks = marks)
+        pumpUntil { vm.completedRestore.value != null }
+
+        vm.dismissCompletedRestore()
+
+        assertNull(vm.completedRestore.value)
+        pumpUntil { marks.mark == null }
     }
 }

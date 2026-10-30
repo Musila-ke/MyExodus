@@ -28,6 +28,11 @@ data class GuestSnapshot(
     val policy: RecoveryPolicy?,
 )
 
+/** §6.4 item 12: an empty payload is never uploaded and a restore never activates one. */
+fun GuestSnapshot.isEmpty(): Boolean =
+    habits.isEmpty() && streaks.isEmpty() && milestones.isEmpty() && attempts.isEmpty() &&
+        sessions.isEmpty() && coaching.isEmpty() && riskWindows.isEmpty() && policy == null
+
 /** Dry-run and result counts (plan §8.4: inserted, deduplicated and conflicting). */
 data class ImportSummary(
     val inserted: Int,

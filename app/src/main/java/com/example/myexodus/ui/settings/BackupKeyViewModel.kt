@@ -10,16 +10,26 @@ import com.example.myexodus.backup.BackupKeyManager
 import com.example.myexodus.backup.BackupKeyManager.Unlock
 import com.example.myexodus.backup.BackupPair
 import com.example.myexodus.backup.BackupProgress
+import com.example.myexodus.backup.BackupRestoreMark
+import com.example.myexodus.backup.BackupRestoreMarkStore
+import com.example.myexodus.backup.BackupRestores
 import com.example.myexodus.backup.BackupUploadException
 import com.example.myexodus.backup.BackupUploadFailure
 import com.example.myexodus.backup.BackupUploads
 import com.example.myexodus.backup.PassphrasePolicy
 import com.example.myexodus.backup.RemoteBundle
+import com.example.myexodus.backup.RestorePreview
+import com.example.myexodus.backup.RestoreProgress
+import com.example.myexodus.backup.RestoreSummary
+import com.example.myexodus.di.IoDispatcher
+import com.example.myexodus.di.WorkDispatcher
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlin.coroutines.cancellation.CancellationException
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,6 +46,10 @@ class BackupKeyViewModel @Inject constructor(
     private val manager: BackupKeyManager,
     private val uploader: BackupUploads,
     private val auth: AuthCoordinator,
+    private val restores: BackupRestores,
+    private val marks: BackupRestoreMarkStore,
+    @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
+    @WorkDispatcher private val workDispatcher: CoroutineDispatcher,
 ) : ViewModel() {
 
     sealed interface Status {
@@ -72,18 +86,51 @@ class BackupKeyViewModel @Inject constructor(
     private val _backup = MutableStateFlow<Backup>(Backup.Idle)
     val backup: StateFlow<Backup> = _backup.asStateFlow()
 
+    /** §6.6 items 4-9: the restore flow as the pane presents it. */
+    sealed interface Restore {
+        data object Idle : Restore
+        data class Running(val progress: RestoreProgress) : Restore
+        /** §6.6 item 8: the staged snapshot, awaiting an explicit choice; nothing is swapped yet. */
+        data class Preview(
+            val summary: RestoreSummary,
+            val revision: Long,
+            /** §6.6 item 10: a new device has no trusted anchor; the revision is server-reported. */
+            val serverReported: Boolean,
+        ) : Restore
+        data object Applied : Restore
+        data class Failed(val failure: BackupUploadFailure, val retryable: Boolean) : Restore
+    }
+
+    private val _restore = MutableStateFlow<Restore>(Restore.Idle)
+    val restore: StateFlow<Restore> = _restore.asStateFlow()
+
+    /** §6.6 item 9: the completion the relaunched process shows once, then clears. */
+    private val _completedRestore = MutableStateFlow<BackupRestoreMark?>(null)
+    val completedRestore: StateFlow<BackupRestoreMark?> = _completedRestore.asStateFlow()
+
     val authState: StateFlow<AuthState> = auth.state
 
     private var remote: RemoteBundle? = null
     private var job: Job? = null
     private var backupJob: Job? = null
+    private var restoreJob: Job? = null
     // Held only while one backup flow runs: the ABK unwrap secret and the pointer the user
     // explicitly confirmed. Never persisted, dropped on every terminal outcome.
     private var pendingUnlock: Unlock? = null
     private var pendingReplace: BackupPair? = null
+    // The staged snapshot apply() swaps in; only a Preview state ever holds one.
+    private var pendingPreview: RestorePreview? = null
+    private var pendingRestoreUnlock: Unlock? = null
+    // §6.6 item 8: leaving the pane abandons the staged copy even though viewModelScope is dead.
+    private val cleanupScope = CoroutineScope(SupervisorJob() + ioDispatcher)
 
     init {
         refresh()
+        viewModelScope.launch {
+            _completedRestore.value = withContext(ioDispatcher) {
+                runCatching { marks.get() }.getOrNull()
+            }
+        }
     }
 
     /** §8.5: a known device that sees an older revision than its anchor fails closed. */
@@ -167,6 +214,121 @@ class BackupKeyViewModel @Inject constructor(
         _backup.value = Backup.Idle
     }
 
+    /** §6.6 items 2-8: fetches, proves and stages the cloud snapshot; no local data changes yet. */
+    fun restoreFromCloud(unlock: Unlock) {
+        pendingRestoreUnlock = unlock
+        startRestore(unlock)
+    }
+
+    /** §6.6 item 8: the only irreversible step; the process relaunches on success. */
+    fun confirmRestore() {
+        val preview = pendingPreview ?: return
+        if (_restore.value !is Restore.Preview) return
+        pendingPreview = null
+        restoreJob?.cancel()
+        restoreJob = viewModelScope.launch {
+            try {
+                withContext(ioDispatcher) { restores.apply(preview) }
+                pendingRestoreUnlock = null
+                _restore.value = Restore.Applied
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // apply() already discarded staging and reopened the active file.
+                _restore.value = Restore.Failed(
+                    (e as? BackupUploadException)?.failure ?: BackupUploadFailure.STAGING_FAILED,
+                    retryable = true,
+                )
+            }
+        }
+    }
+
+    /** §6.6 item 8: Keep Local and Cancel both exit without restoring; both are non-destructive. */
+    fun discardRestore() {
+        if (_restore.value is Restore.Running) return
+        restoreJob?.cancel()
+        restoreJob = viewModelScope.launch {
+            runCatching { withContext(ioDispatcher) { restores.discard() } }
+            abandonRestore()
+        }
+    }
+
+    /** A running restore stops; the restorer deletes every staged byte before returning. */
+    fun cancelRestore() {
+        if (_restore.value !is Restore.Running) return
+        restoreJob?.cancel()
+        restoreJob = viewModelScope.launch {
+            runCatching { withContext(ioDispatcher) { restores.discard() } }
+            abandonRestore()
+        }
+    }
+
+    fun retryRestore() {
+        val unlock = pendingRestoreUnlock ?: return
+        startRestore(unlock)
+    }
+
+    fun dismissRestoreFailure() {
+        pendingRestoreUnlock = null
+        _restore.value = Restore.Idle
+    }
+
+    /** §6.6 item 9: the completion card is shown once per relaunch, then cleared for good. */
+    fun dismissCompletedRestore() {
+        if (_completedRestore.value == null) return
+        _completedRestore.value = null
+        viewModelScope.launch { runCatching { withContext(ioDispatcher) { marks.clear() } } }
+    }
+
+    private fun startRestore(unlock: Unlock) {
+        restoreJob?.cancel()
+        if (persistentUid() == null) {
+            pendingRestoreUnlock = null
+            _restore.value = Restore.Failed(BackupUploadFailure.SIGN_IN_REQUIRED, retryable = false)
+            return
+        }
+        restoreJob = viewModelScope.launch {
+            _restore.value = Restore.Running(RestoreProgress.Downloading(0, 0))
+            try {
+                // The ABK unwrap runs Argon2 and the download hashes the object: never on main.
+                val preview = withContext(workDispatcher) {
+                    restores.prepare(unlock) { progress ->
+                        _restore.value = Restore.Running(progress)
+                    }
+                }
+                pendingPreview = preview
+                pendingRestoreUnlock = null
+                _restore.value = Restore.Preview(
+                    summary = preview.summary,
+                    revision = preview.pair.revision,
+                    serverReported = preview.serverReported,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: BackupUploadException) {
+                val retryable = e.failure in RESTORE_RETRYABLE
+                if (!retryable) pendingRestoreUnlock = null
+                _restore.value = Restore.Failed(e.failure, retryable)
+            } catch (e: Exception) {
+                pendingRestoreUnlock = null
+                _restore.value = Restore.Failed(BackupUploadFailure.UNKNOWN, retryable = false)
+            }
+        }
+    }
+
+    private fun abandonRestore() {
+        pendingPreview = null
+        pendingRestoreUnlock = null
+        _restore.value = Restore.Idle
+    }
+
+    /** §6.6 item 8: an abandoned confirmation never leaves a staged copy behind. */
+    override fun onCleared() {
+        if (pendingPreview != null) {
+            cleanupScope.launch { runCatching { restores.discard() } }
+        }
+    }
+
     /** Drops the mnemonic from memory; the screen only offers this after acknowledgement. */
     fun acknowledgeReveal() {
         if (_operation.value is Operation.Reveal) _operation.value = Operation.Idle
@@ -206,7 +368,7 @@ class BackupKeyViewModel @Inject constructor(
             try {
                 // The ABK unwrap runs Argon2: never on the main thread. Network and disk work
                 // inside the uploader suspends or hops to IO itself.
-                val result = withContext(Dispatchers.Default) {
+                val result = withContext(workDispatcher) {
                     uploader.backup(bundle, unlock, replace) { progress ->
                         _backup.value = Backup.Running(progress)
                     }
@@ -257,7 +419,7 @@ class BackupKeyViewModel @Inject constructor(
             }
             try {
                 // Argon2 is CPU-heavy and the callables suspend: neither runs on the main thread.
-                withContext(Dispatchers.Default) { block(uid) }
+                withContext(workDispatcher) { block(uid) }
                 if (_operation.value is Operation.Working) _operation.value = Operation.Idle
             } catch (e: BackupKeyException) {
                 _operation.value = Operation.Failed(e.failure)
@@ -279,7 +441,7 @@ class BackupKeyViewModel @Inject constructor(
 
     private suspend fun statusFromServer(uid: String) {
         try {
-            val loaded = withContext(Dispatchers.IO) { manager.load(uid) }
+            val loaded = withContext(ioDispatcher) { manager.load(uid) }
             remote = loaded
             _status.value = if (loaded == null) Status.NotSetUp else Status.Configured(loaded.revision)
         } catch (e: BackupKeyException) {
@@ -306,6 +468,14 @@ class BackupKeyViewModel @Inject constructor(
             BackupUploadFailure.BACKUP_RESERVATION_EXPIRED,
             BackupUploadFailure.BACKUP_OBJECT_MISSING,
             BackupUploadFailure.BACKUP_OBJECT_MISMATCH,
+        )
+
+        /** §6.6 item 6: a damaged or tampered snapshot is never retried; the rest are. */
+        val RESTORE_RETRYABLE = setOf(
+            BackupUploadFailure.NETWORK,
+            BackupUploadFailure.BACKUP_OBJECT_MISSING,
+            BackupUploadFailure.STAGING_FAILED,
+            BackupUploadFailure.LOCAL_STATE_UNAVAILABLE,
         )
     }
 }

@@ -1,5 +1,6 @@
 package com.example.myexodus.backup
 
+import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.RemoteBackupAnchor
 
@@ -56,8 +57,15 @@ interface RemoteBackupAnchorStore {
  * high-water mark fails instead of persisting.
  */
 class RoomBackupAnchorStore(
-    private val storeFactory: AppRulesStoreFactory,
+    private val openStore: suspend () -> AppRulesStore?,
 ) : RemoteBackupAnchorStore {
+
+    constructor(storeFactory: AppRulesStoreFactory) : this({ storeFactory.open() })
+
+    /** §6.6 item 7: the restore writes its anchor into the staging file before the swap. */
+    companion object {
+        fun on(store: AppRulesStore) = RoomBackupAnchorStore { store }
+    }
 
     override suspend fun read(): BackupAnchors {
         val row = dao().get() ?: return BackupAnchors()
@@ -106,6 +114,6 @@ class RoomBackupAnchorStore(
         )
     }
 
-    private fun dao() = storeFactory.open()?.remoteBackupAnchorDao()
+    private suspend fun dao() = openStore()?.remoteBackupAnchorDao()
         ?: throw BackupAnchorUnavailableException()
 }

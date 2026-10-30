@@ -83,6 +83,12 @@ class BackupUploaderTest {
 
         override suspend fun current(uid: String): BackupPair? = pointer
 
+        override suspend fun snapshot(uid: String): RemoteSnapshot? = null
+
+        override suspend fun beginRestore(backupId: String) = Unit
+
+        override suspend fun endRestore(backupId: String) = Unit
+
         override suspend fun begin(request: BeginBackupRequest): BeginBackupResult {
             begins += request
             return BeginBackupResult(

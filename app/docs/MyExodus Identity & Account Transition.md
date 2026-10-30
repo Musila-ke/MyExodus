@@ -337,7 +337,8 @@ with a reason. "Where" names the primary surfaces, not every call site.
   Cancel reconciles with server truth after a guard that runs before every mutating callable.
   **Honest limit:** §11.5's p95 < 2 s target is missed on the X6532 debug build (p50 ≈ 4.3 s,
   p95 ≈ 4.7–4.9 s); parameters were not weakened, and the release-build measurement is an open
-  owner decision. The upload/manifest and restore layers remain R2.14–R2.15.
+  owner decision. The upload/manifest layer is R2.14 (ADR #242); staging restore is R2.15
+  (ADR #243).
   **IMPLEMENTED snapshot envelope (R2.13, 2026-10-30, ADR #241):** the v1 binary object is
   `MYEXBK01` + envelope version 1 + schema version + 16-byte backup ID + 16-byte ABK key ID +
   fresh 12-byte payload and DEK-wrap nonces + the 48-byte DEK wrapper + the u64 payload
@@ -373,8 +374,28 @@ with a reason. "Where" names the primary surfaces, not every call site.
   denies every update/delete. The Account pane's Encrypted backup card has a Back up now form
   (passphrase or recovery words, held in memory only until the flow ends), live progress,
   cancel, a retry that reuses the held secret, and a Replace / Keep the cloud backup choice
-  when the server names a conflicting pointer. Staging restore remains R2.15; the success copy
-  ("restore it on a new phone") becomes fully true only with R2.15 in the same release.
+  when the server names a conflicting pointer. The success copy ("restore it on a new phone")
+  is backed by the R2.15 restore below.
+  **IMPLEMENTED staging restore (R2.15, 2026-10-30, ADR #243):** `BackupRestorer.prepare`
+  fences the session and refuses a rollback or equivocation against this device's high-water
+  pair before any download; the current pointer and manifest must describe one snapshot
+  identically (path rebuilt from the authenticated UID, 32-hex backup ID, exact size relation).
+  `beginBackupRestore` pins the object against retention server-side (one live pin per UID,
+  1-hour TTL, replay-idempotent, superseded by a different backup ID, cleared by
+  `endBackupRestore`), the object is downloaded to app-private staging and must match the
+  manifest's length and SHA-256 before the ABK is even unwrapped, and no payload byte is parsed
+  until the GCM tag verifies. The authenticated payload is validated as a logical graph (unique
+  IDs, milestone→streak membership, risk-window cap, non-empty), then written into a byte copy
+  of the active database: only the eight logical tables are replaced (restored rows remapped to
+  the active profile; per-habit pair consent survives), and rules, usage, pairing, profile,
+  policy version and recovery state stay. The staging file must pass `integrity_check` and
+  `foreign_key_check` before the active pointer is swapped by two renames, with the pre-restore
+  copy kept until the swapped file opens cleanly and a completion mark persisted before the
+  relaunch. The preview card shows the revision and counts, defaults to `Keep Local`, offers
+  `Restore Cloud Snapshot` and `Cancel`, and states that blocks, screen-time history and the
+  partner pairing stay; a device with no anchor is told the revision is what the service
+  reports (§6.6 item 10). Every failure path ends the pin, deletes the attempt's staging and
+  reopens the untouched active file.
   **Same-device recovery is not backup (ADR #240, 2026-10-30).** The 2026-10-29 ruling still
   governs the backup blob and the portable quarantine: block rules, usage meters/ledger and
   pairing state never enter either. A retained scope is a different artifact — the previous

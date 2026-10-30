@@ -45,6 +45,10 @@ interface HabitProgressDao {
     @Query("SELECT * FROM habit_progress")
     suspend fun getAll(): List<HabitProgress>
 
+    /** §6.6 item 7: the staging restore replaces the logical tables wholesale. */
+    @Query("DELETE FROM habit_progress")
+    suspend fun deleteAll()
+
     /** All habits of a profile, deterministic display order (multi-habit switcher). */
     @Query(
         "SELECT * FROM habit_progress WHERE profile_id = :profileId " +
