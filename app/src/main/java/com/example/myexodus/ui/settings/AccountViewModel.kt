@@ -175,6 +175,15 @@ class AccountViewModel @Inject constructor(
 
     fun retryImport() = viewModelScope.launch { guestImport.refresh() }
 
+    /** §6.4 item 8(b): merge the guest rows here, leaving the cloud snapshot untouched. */
+    fun mergeImportLocally() = viewModelScope.launch { guestImport.mergeIntoThisDeviceOnly() }
+
+    /** §6.4 item 8(a): preserve this phone's rows, then open the restore flow. */
+    fun preserveLocalThenRestore(openRestore: () -> Unit) = viewModelScope.launch {
+        guestImport.preserveLocalForRestore()
+        openRestore()
+    }
+
     fun deleteQuarantine() = viewModelScope.launch { guestImport.deleteQuarantine() }
 
     fun dismissImport() = guestImport.dismiss()

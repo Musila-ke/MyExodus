@@ -1440,6 +1440,17 @@
     <string name="account_import_error_unreadable">The stored copy of your guest data can’t be opened, so it wasn’t imported. It has been left untouched on this device.</string>
     <string name="account_import_error_store">Your local database is unavailable right now, so nothing was imported. Try again.</string>
     <string name="account_import_error_generic">The import didn’t finish and nothing was changed. Try again.</string>
+    <string name="account_import_error_cloud_conflict">This account’s backup changed in a way MyExodus can’t verify, so your guest data has not been imported. Nothing was lost. Try again later.</string>
+    <string name="account_import_error_cloud_unavailable">MyExodus couldn’t check this account’s backup because the connection failed, so nothing was imported yet. Check your connection and try again.</string>
+    <string name="account_import_restore_title">Restore your backup first</string>
+    <string name="account_import_restore_body">This account already has a backup on MyExodus, and this phone isn’t using it yet. Restore that backup, then your guest data will be added here. Nothing has been imported yet.</string>
+    <string name="account_import_restore_action">Restore backup</string>
+    <string name="account_import_check_again">Check again</string>
+    <string name="account_import_conflict_title">This account’s backup is newer</string>
+    <string name="account_import_conflict_body">This account already has a newer backup in the cloud, and this phone holds data that isn’t in it. Your guest data hasn’t been imported yet. Choose what to do first — nothing has changed so far.</string>
+    <string name="account_import_conflict_restore">Restore the backup, then merge</string>
+    <string name="account_import_conflict_merge">Merge into this phone only</string>
+    <string name="account_import_conflict_upload_note">Until the backup is restored or replaced, this phone won’t upload new backups.</string>
 
     <!-- ADR #239: data retained under an identity this account never imported. -->
     <string name="account_recovery_title">Data from a previous profile</string>

@@ -114,6 +114,15 @@ fun interface Relauncher {
 }
 
 /**
+ * §14 "repeated account-switch cache-clear failures": the purge runs before Hilt exists, so it
+ * cannot report through [com.example.myexodus.telemetry.CrashReporting] itself; the manager
+ * reports the stuck state once the opt-out is known.
+ */
+fun interface SessionTelemetry {
+    fun report(event: String)
+}
+
+/**
  * Account plan §4.1/§7 step 20/§8.7: owns the local session facts and the switch choreography
  * that the identity change itself cannot.
  *
@@ -150,6 +159,7 @@ class LocalSessionManager @Inject constructor(
     private val push: PushMapping,
     private val workers: SessionWork,
     private val relauncher: Relauncher,
+    private val telemetry: SessionTelemetry,
     // §6.9.1: resumable upload metadata dies with the session it belongs to. Lazy because the
     // secrets DataStore sits behind both and startup must not construct it pre-unlock.
     private val uploadSessions: dagger.Lazy<BackupUploadSessionStore>,
@@ -198,6 +208,7 @@ class LocalSessionManager @Inject constructor(
             initialized = true
             operations.observeIdentity(::onIdentityObserved)
         }
+        if (_cloudAccess.value != CloudAccess.READY) telemetry.report(EVENT_CLOUD_BLOCKED)
         scope.launch {
             val pending = store.pendingUnregisterUid() ?: return@launch
             val current = operations.currentIdentity()?.uid
@@ -251,6 +262,7 @@ class LocalSessionManager @Inject constructor(
         val flushed = cloud.flushPendingWrites(PENDING_WRITES_TIMEOUT_MS)
         if (!flushed && !discardApproved) {
             synchronized(lock) { phase = Phase.ACTIVE }
+            telemetry.report(EVENT_PENDING_WRITES_BLOCKED)
             return TransitionStart.Refused(TransitionRefusal.PENDING_WRITES)
         }
         discardApproved = false
@@ -353,6 +365,8 @@ class LocalSessionManager @Inject constructor(
 
     private companion object {
         const val TAG = "MyExodusSession"
+        const val EVENT_CLOUD_BLOCKED = "session_cloud_blocked"
+        const val EVENT_PENDING_WRITES_BLOCKED = "session_pending_writes_blocked"
         /** §8.7 needs a bounded wait; 5 s is long enough for an ordinary flush, short enough
          *  that a wedged queue surfaces the explicit-discard choice instead of hanging. */
         const val PENDING_WRITES_TIMEOUT_MS = 5_000L

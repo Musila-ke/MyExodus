@@ -209,6 +209,11 @@ internal fun AccountPane(
                 onDelete = { showDeleteQuarantine = true },
                 onRetry = viewModel::retryImport,
                 onDismiss = viewModel::dismissImport,
+                onOpenBackupKey = onOpenBackupKey,
+                onMergeLocally = viewModel::mergeImportLocally,
+                onRestoreAndMerge = {
+                    viewModel.preserveLocalThenRestore(onOpenBackupKey)
+                },
             )
 
             RecoveryCard(state = recovery, onImport = viewModel::stageRecoveryImport)
@@ -1101,6 +1106,9 @@ private fun ImportCard(
     onDelete: () -> Unit,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
+    onOpenBackupKey: () -> Unit,
+    onMergeLocally: () -> Unit,
+    onRestoreAndMerge: () -> Unit,
 ) {
     val context = LocalContext.current
     fun day(ms: Long): String =
@@ -1180,6 +1188,76 @@ private fun ImportCard(
                         )
                     }
                 }
+            }
+        }
+
+        is GuestImportState.PendingRestore -> Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(R.string.account_import_restore_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    stringResource(R.string.account_import_restore_body),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    stringResource(R.string.account_import_retention, day(state.purgeAtMs)),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onOpenBackupKey) {
+                        Text(stringResource(R.string.account_import_restore_action))
+                    }
+                    TextButton(onClick = onRetry) {
+                        Text(stringResource(R.string.account_import_check_again))
+                    }
+                }
+            }
+        }
+
+        is GuestImportState.BaseConflict -> Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(R.string.account_import_conflict_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    stringResource(R.string.account_import_conflict_body),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    stringResource(R.string.account_import_retention, day(state.purgeAtMs)),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(onClick = onRestoreAndMerge) {
+                    Text(stringResource(R.string.account_import_conflict_restore))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = onMergeLocally) {
+                        Text(stringResource(R.string.account_import_conflict_merge))
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Text(stringResource(R.string.account_dismiss))
+                    }
+                }
+                Text(
+                    stringResource(R.string.account_import_conflict_upload_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
 
@@ -1288,6 +1366,8 @@ internal fun importFailureRes(failure: ImportFailure): Int = when (failure) {
     ImportFailure.UNREADABLE -> R.string.account_import_error_unreadable
     ImportFailure.STORE_UNAVAILABLE -> R.string.account_import_error_store
     ImportFailure.IMPORT_FAILED -> R.string.account_import_error_generic
+    ImportFailure.CLOUD_CONFLICT -> R.string.account_import_error_cloud_conflict
+    ImportFailure.CLOUD_UNAVAILABLE -> R.string.account_import_error_cloud_unavailable
 }
 
 @Composable

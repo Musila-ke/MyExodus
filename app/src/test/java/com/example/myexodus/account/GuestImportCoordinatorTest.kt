@@ -3,6 +3,10 @@ package com.example.myexodus.account
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.myexodus.backup.BackupPair
+import com.example.myexodus.backup.BackupUploadFailure
+import com.example.myexodus.backup.ImportCloudGuard
+import com.example.myexodus.backup.ImportCloudVerdict
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.RulesSnapshotPublisher
 import com.example.myexodus.data.db.ActivityLogKeyManager
@@ -52,6 +56,7 @@ class GuestImportCoordinatorTest {
     private lateinit var quarantine: FakeQuarantine
     private lateinit var ops: FakeAuthOps
     private lateinit var auth: AuthCoordinator
+    private lateinit var cloudGuard: FakeCloudGuard
     private lateinit var coordinator: GuestImportCoordinator
 
     @Before
@@ -71,6 +76,7 @@ class GuestImportCoordinatorTest {
         quarantine = FakeQuarantine()
         ops = FakeAuthOps(accountMemberUser)
         auth = AuthCoordinator(ops)
+        cloudGuard = FakeCloudGuard()
         coordinator = newCoordinator()
     }
 
@@ -88,6 +94,7 @@ class GuestImportCoordinatorTest {
         quarantine,
         rules,
         GuestImportPlanner(),
+        cloudGuard,
         clock = { now },
         onImported = onImported,
     )
@@ -343,6 +350,141 @@ class GuestImportCoordinatorTest {
         coordinator.confirm()
 
         assertNull(quarantine.records.single().importedAtMs)
+    }
+
+    @Test
+    fun aCloudSnapshotThatIsNotMaterialized_blocksTheImportUntilItIsRestored() = runTest {
+        val guest = snapshot()
+        quarantine.records += record(guest)
+        cloudGuard.verdict = ImportCloudVerdict.RestoreRequired(BackupPair(3, "b".repeat(64)))
+
+        coordinator.refresh()
+
+        assertEquals(
+            GuestImportState.PendingRestore(record(guest).purgeAtMs, 3),
+            coordinator.state.value,
+        )
+        assertNull(quarantine.records.single().importedAtMs)
+        assertTrue(factory.open()!!.habitProgressDao().getForProfile("local").isEmpty())
+
+        // §9: after the restore the same refresh path resumes the import with no extra tap.
+        cloudGuard.verdict = ImportCloudVerdict.Materialized
+        coordinator.refresh()
+
+        assertEquals(
+            GuestImportState.Imported(ImportSummary(1, 0, 0, 0), record(guest).purgeAtMs),
+            coordinator.state.value,
+        )
+        assertEquals(1, factory.open()!!.habitProgressDao().getForProfile("local").size)
+    }
+
+    @Test
+    fun aConfirmReChecksTheCloudAndStopsOnAHardConflict() = runTest {
+        val db = factory.open()!!
+        repeat(RiskWindow.MAX_WINDOWS) {
+            db.riskWindowDao().insert(
+                RiskWindow(startMinute = 60 * it, endMinute = 60 * it + 30, daysMask = 127),
+            )
+        }
+        quarantine.records += record(snapshot(
+            riskWindows = listOf(RiskWindow(startMinute = 1200, endMinute = 1380, daysMask = 127)),
+        ))
+        coordinator.refresh()
+        assertTrue(coordinator.state.value is GuestImportState.Confirming)
+
+        cloudGuard.verdict =
+            ImportCloudVerdict.HardStop(BackupUploadFailure.REMOTE_BACKUP_ROLLBACK)
+        coordinator.confirm()
+
+        assertEquals(
+            GuestImportState.Failed(ImportFailure.CLOUD_CONFLICT, null),
+            coordinator.state.value,
+        )
+        assertNull(quarantine.records.single().importedAtMs)
+    }
+
+    @Test
+    fun anUnverifiableCloudBase_isNeverImportedInto() = runTest {
+        quarantine.records += record(snapshot())
+        cloudGuard.verdict = ImportCloudVerdict.Unavailable
+
+        coordinator.refresh()
+
+        assertEquals(
+            GuestImportState.Failed(ImportFailure.CLOUD_UNAVAILABLE, null),
+            coordinator.state.value,
+        )
+        assertNull(quarantine.records.single().importedAtMs)
+        assertTrue(factory.open()!!.habitProgressDao().getForProfile("local").isEmpty())
+    }
+
+    @Test
+    fun localDataWithANewerCloudSnapshot_offersTheConflictChoice() = runTest {
+        val db = factory.open()!!
+        rules.ensureActiveProfile()
+        db.habitProgressDao().insert(habit("lh1", "Alcohol").copy(profileId = "local"))
+        quarantine.records += record(snapshot())
+        cloudGuard.verdict = ImportCloudVerdict.RestoreRequired(BackupPair(3, "b".repeat(64)))
+
+        coordinator.refresh()
+
+        assertEquals(
+            GuestImportState.BaseConflict(record(snapshot()).purgeAtMs, 3),
+            coordinator.state.value,
+        )
+        assertEquals(1, db.habitProgressDao().getForProfile("local").size)
+        assertNull(quarantine.records.single().importedAtMs)
+    }
+
+    @Test
+    fun mergeIntoThisDeviceOnly_importsTheGuestRows_andLeavesTheCloudSnapshotAlone() = runTest {
+        val db = factory.open()!!
+        rules.ensureActiveProfile()
+        db.habitProgressDao().insert(habit("lh1", "Alcohol").copy(profileId = "local"))
+        quarantine.records += record(snapshot())
+        val remote = BackupPair(3, "b".repeat(64))
+        cloudGuard.verdict = ImportCloudVerdict.RestoreRequired(remote)
+        coordinator.refresh()
+        assertTrue(coordinator.state.value is GuestImportState.BaseConflict)
+
+        coordinator.mergeIntoThisDeviceOnly()
+
+        assertTrue(coordinator.state.value is GuestImportState.Imported)
+        assertEquals(2, db.habitProgressDao().getForProfile("local").size)
+        assertEquals(now, quarantine.records.single().importedAtMs)
+        // §6.4 item 8(b): the cloud pointer is left exactly as it was.
+        assertEquals(ImportCloudVerdict.RestoreRequired(remote), cloudGuard.verdict)
+    }
+
+    @Test
+    fun preserveLocalForRestore_thenBothSnapshotsImportAfterTheCloudIsMaterialized() = runTest {
+        val db = factory.open()!!
+        rules.ensureActiveProfile()
+        db.habitProgressDao().insert(habit("lh1", "Alcohol").copy(profileId = "local"))
+        quarantine.records += record(snapshot())
+        cloudGuard.verdict = ImportCloudVerdict.RestoreRequired(BackupPair(3, "b".repeat(64)))
+        coordinator.refresh()
+        assertTrue(coordinator.state.value is GuestImportState.BaseConflict)
+
+        coordinator.preserveLocalForRestore()
+
+        val marker = quarantine.records.single { it.guestUid.startsWith("localbase-") }
+        assertEquals("member-1", marker.targetUid)
+        assertEquals(listOf("Alcohol"), marker.snapshot.habits.map { it.targetIdentifier })
+        assertNull(marker.importedAtMs)
+
+        cloudGuard.verdict = ImportCloudVerdict.Materialized
+        coordinator.refresh()
+
+        assertTrue(coordinator.state.value is GuestImportState.Imported)
+        assertTrue("every copy merged", quarantine.records.all { it.importedAtMs == now })
+        assertEquals(2, db.habitProgressDao().getForProfile("local").size)
+    }
+
+    private class FakeCloudGuard(
+        var verdict: ImportCloudVerdict = ImportCloudVerdict.NoCloudSnapshot,
+    ) : ImportCloudGuard {
+        override suspend fun check(uid: String): ImportCloudVerdict = verdict
     }
 
     private class FakeKeyManager : DatabaseKeyManager {

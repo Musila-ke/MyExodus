@@ -89,6 +89,14 @@ function createFakeAuth(users) {
       state.users.delete(uid);
       state.deleted.push(uid);
     },
+    async getUser(uid) {
+      if (!state.users.has(uid)) {
+        const e = new Error('no user');
+        e.code = 'auth/user-not-found';
+        throw e;
+      }
+      return { uid };
+    },
   };
 }
 
@@ -136,7 +144,7 @@ async function clearAll() {
     'users', 'deletionJobs', 'mailboxes', 'relay-dispatch', 'backupReservations',
     'dms_install_state', 'dms_notification_outbox', 'guestTransitions',
     'guestTransitionLeases', 'pairing_tokens', 'rate-limits', 'eventRateLimits',
-    'pairings', 'nudgePushQueue',
+    'pairings', 'nudgePushQueue', 'serverFeatureGates',
   ]) {
     await db.recursiveDelete(db.collection(collection));
   }
@@ -259,7 +267,7 @@ function handlers() {
       db, authAdmin: fakeAuth, bucket, now: () => nowMs,
     }),
     reconcile: createReconcileDeletionJobsHandler({
-      db, enqueueTask: enqueueSpy.enqueue, now: () => nowMs,
+      db, authAdmin: fakeAuth, enqueueTask: enqueueSpy.enqueue, now: () => nowMs,
     }),
     backstop: createAuthDeletionBackstopHandler({ db, enqueueTask: enqueueSpy.enqueue }),
   };
@@ -528,6 +536,62 @@ test('reconciliation stops requeueing at the cap', async () => {
   });
   await reconcile();
   assert.deepStrictEqual(enqueueSpy.calls, []);
+});
+
+test('a completed tombstone with a live Auth user is replaced by a fresh job', async () => {
+  // §14 "Auth/profile mismatches": the uid was recreated out of band after "deletion".
+  const { reconcile } = handlers();
+  await db.doc(`deletionJobs/${USER}`).set({
+    uid: USER, kind: 'ACCOUNT_DELETE', phase: PHASES.COMPLETED,
+    updatedAt: Timestamp.fromMillis(nowMs - 60 * 60 * 1000),
+    completedAt: Timestamp.fromMillis(nowMs - 60 * 1000),
+  });
+
+  await reconcile();
+
+  const job = (await db.doc(`deletionJobs/${USER}`).get()).data();
+  assert.strictEqual(job.phase, PHASES.QUEUED);
+  assert.strictEqual(job.requeueCount, 0);
+  assert.deepStrictEqual(enqueueSpy.calls, [USER]);
+});
+
+test('a pending profile with no deletion job is converged, not left denying forever', async () => {
+  const { reconcile } = handlers();
+  await db.doc(`users/${USER}`).set({ status: 'PENDING_DELETION' });
+  await db.doc(`users/${PARTNER}`).set({ status: 'PENDING_DELETION' });
+  await db.doc(`deletionJobs/${PARTNER}`).set({ uid: PARTNER, phase: PHASES.PAIRS });
+
+  await reconcile();
+
+  const job = (await db.doc(`deletionJobs/${USER}`).get()).data();
+  assert.strictEqual(job.phase, PHASES.QUEUED);
+  assert.strictEqual(job.kind, 'ACCOUNT_DELETE');
+  assert.deepStrictEqual(enqueueSpy.calls, [USER]);
+});
+
+test('server feature gates off never disable deletion or reconciliation', async () => {
+  // §12.5/§13.5: a rollback closes new backup/transition mutations; deletion, revocation
+  // and cleanup must keep working.
+  await seedWorld();
+  await db.doc('serverFeatureGates/backupUpload').set({ enabled: false });
+  await db.doc('serverFeatureGates/guestTransition').set({ enabled: false });
+  const { requestAccount, process, reconcile } = handlers();
+
+  await requestAccount(request(USER, encodeToken(USER, { authTime: nowSec() }), {
+    confirmation: ACCOUNT_CONFIRMATION,
+  }));
+  assert.ok(fakeAuth.state.disabled.has(USER), 'revocation happens regardless of gates');
+  await process({ data: { uid: USER } });
+  assert.strictEqual((await db.doc(`deletionJobs/${USER}`).get()).get('phase'), PHASES.COMPLETED);
+
+  // The reconciler still requeues stuck work with every gate closed.
+  enqueueSpy.calls.length = 0;
+  await db.doc('deletionJobs/stuckUser').set({
+    uid: 'stuckUser', kind: 'ACCOUNT_DELETE', phase: PHASES.PAIRS,
+    updatedAt: Timestamp.fromMillis(nowMs - 60 * 60 * 1000),
+  });
+  await reconcile();
+  assert.deepStrictEqual(enqueueSpy.calls, ['stuckUser']);
 });
 
 // --- out-of-band backstop -----------------------------------------------------------------

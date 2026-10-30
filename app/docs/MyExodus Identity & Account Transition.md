@@ -28,9 +28,13 @@ ADR #235) and step 10 (session fencing / Firestore–FCM teardown / one-time leg
 ADR #236) are implemented, JVM-verified and device-run on the API-37 AVD. Step 11 (encrypted
 quarantine + additive logical guest import with a crash-safe journal, ADR #237) is implemented,
 JVM-verified (2,187 tests) and device-run on the API-37 AVD (IMPORT and DISCARD both proven
-end-to-end; evidence in ADR #237). Release 1's remaining work is
-Release 2 (backup/restore), whose §6.2.8 import-vs-backup conflict machinery is recorded in
-ADR #237 as an explicit obligation for #38/#42/#37.
+end-to-end; evidence in ADR #237). Release 2 (backup/restore) is
+implemented and JVM-verified (ADRs #238/#241/#242). §6.2.8's import-vs-backup conflict
+machinery — the obligation ADR #237 recorded for #38/#42/#37 — is implemented (ADR #246):
+every import path now checks the target's cloud pointer first, refuses to merge into a
+database that is not the current snapshot, and surfaces IMPORT_PENDING (restore first, empty
+target) or the §6.4 item 8 choice when the target holds local rows — restore then merge both,
+merge into this phone only, or decide later — with a hard stop on rollback/equivocation.
 
 ---
 
@@ -280,7 +284,10 @@ with a reason. "Where" names the primary surfaces, not every call site.
   job. The client half (`DeletionCoordinator` / `DeletionLocalData`) reauthenticates, calls the
   callable, writes the local purge marker, signs out, and purges the marked identity's scoped
   stores, retained copies and UID-exclusive aliases only while signed out, clearing the marker only
-  after every delete succeeds. Device-proven on the disposable API-37 AVD (three COMPLETED jobs,
+  after every delete succeeds. The same reconciler also converges the two §14 Auth/profile
+  mismatches (R3.17, ADR #245): a COMPLETED tombstone whose Auth user exists again is replaced
+  atomically by a fresh QUEUED job, and a `PENDING_DELETION` profile with no job gets the missing
+  job — both alert through `auth_profile_mismatches`. Device-proven on the disposable API-37 AVD (three COMPLETED jobs,
   client Working → sign-out → relaunch → purge); every identity-destructive leg stays off the
   X6532 by owner ruling. Honest limits: the 30-day tombstone is retained metadata by design, a
   callable cold start can outlive the client's 60 s window (the job, not the client, is
@@ -345,6 +352,18 @@ with a reason. "Where" names the primary surfaces, not every call site.
   the target has no selected habit, so a fresh target shows the import on Home without ever
   overriding an existing choice. Device-proven both branches; the observed uids/hashes are
   recorded in ADR #237.
+  **IMPLEMENTED import-vs-backup guard (2026-10-30, ADR #246):** before any dry run or write,
+  `ManifestImportCloudGuard` compares the target's server backup pointer with this device's
+  materialized/high-water anchors. No cloud snapshot or a materialized one imports normally; a
+  newer snapshot this device never materialized shows `Restore your backup first` with
+  restore/check-again actions and resumes automatically afterwards; a rollback or equivocation
+  is a hard `CLOUD_CONFLICT` with no merge or replacement; an unreadable pointer is
+  `CLOUD_UNAVAILABLE`. In every blocked state the quarantine and the target database are
+  untouched, and backup upload is already refused by its own base check. When the target
+  already holds user rows and the cloud snapshot is newer, the card offers the §6.4 item 8
+  choice instead of restore-only: (a) restore the backup after staging a copy of this phone's
+  rows, then import both additively; (b) merge the guest rows into this phone and leave the
+  cloud pointer untouched (no new uploads until restore or replacement); (c) decide later.
   **IMPLEMENTED key recovery (R2.12, 2026-10-30, ADR #238):** a random 32-byte ABK is wrapped
   twice — AES-256-GCM under an Argon2id KEK (`m=32768 KiB`, `t=3`, `p=1`, fresh 16-byte salt;
   BouncyCastle `bcprov-jdk18on` 1.85.2) for the passphrase, and under an HKDF-SHA-256 KEK for a

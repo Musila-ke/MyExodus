@@ -461,8 +461,45 @@ function createProcessAccountDeletionHandler({
 
 // --- reconciler + backstop ---------------------------------------------------------------
 
+/** §14: "deleted" can only be true while the Auth user is gone. */
+async function authUserExists(authAdmin, uid) {
+  try {
+    await authAdmin.getUser(uid);
+    return true;
+  } catch (e) {
+    if (isNotFound(e)) return false;
+    throw e;
+  }
+}
+
+function queuedJob(uid, kind) {
+  return {
+    uid,
+    kind,
+    operationId: crypto.randomUUID(),
+    phase: PHASES.QUEUED,
+    requeueCount: 0,
+    requestedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+}
+
+async function enqueueOrLog(enqueueTask, uid) {
+  try {
+    await enqueueTask(uid);
+    return true;
+  } catch (e) {
+    logger.error('deletion requeue failed', {
+      uidHash: hashForLog(uid),
+      reason: e && e.message ? e.message : 'unknown',
+    });
+    return false;
+  }
+}
+
 function createReconcileDeletionJobsHandler({
   db,
+  authAdmin,
   enqueueTask = enqueueDeletionTask,
   now = () => Date.now(),
 }) {
@@ -476,25 +513,42 @@ function createReconcileDeletionJobsHandler({
 
     let requeued = 0;
     let purged = 0;
+    let mismatches = 0;
     for (const doc of stale.docs) {
       const job = doc.data();
-      if (shouldPurgeTombstone(job, nowMs)) {
-        // §6.8.8: the 30-day tombstone ages out only after the Auth user is gone.
-        await db.recursiveDelete(doc.ref);
-        purged += 1;
+      if (isComplete(job)) {
+        // §6.8.10/§14: a COMPLETED tombstone whose Auth user lives again is a lie — the uid
+        // was recreated out of band after "deletion". Replace the tombstone with a fresh job
+        // rather than trusting it, and let the normal worker purge and delete Auth again.
+        let live;
+        try {
+          live = await authUserExists(authAdmin, doc.id);
+        } catch (e) {
+          logger.error('auth profile mismatch check failed', {
+            uidHash: hashForLog(doc.id),
+            reason: e && e.message ? e.message : 'unknown',
+          });
+          continue;
+        }
+        if (live) {
+          await doc.ref.set(queuedJob(doc.id, job.kind || KINDS.ACCOUNT));
+          if (await enqueueOrLog(enqueueTask, doc.id)) requeued += 1;
+          logger.error('auth profile mismatch: completed job with live auth', {
+            uidHash: hashForLog(doc.id),
+          });
+          mismatches += 1;
+          continue;
+        }
+        if (shouldPurgeTombstone(job, nowMs)) {
+          // §6.8.8: the 30-day tombstone ages out only after the Auth user is gone.
+          await db.recursiveDelete(doc.ref);
+          purged += 1;
+        }
         continue;
       }
       if (!shouldReconcile(job, nowMs)) continue;
       const requeueCount = (job.requeueCount || 0) + 1;
-      try {
-        await enqueueTask(doc.id);
-        requeued += 1;
-      } catch (e) {
-        logger.error('deletion requeue failed', {
-          uidHash: hashForLog(doc.id),
-          reason: e && e.message ? e.message : 'unknown',
-        });
-      }
+      if (await enqueueOrLog(enqueueTask, doc.id)) requeued += 1;
       await doc.ref.set({
         requeueCount,
         updatedAt: FieldValue.serverTimestamp(),
@@ -504,6 +558,31 @@ function createReconcileDeletionJobsHandler({
           uidHash: hashForLog(doc.id),
           phase: job.phase,
           requeueCount,
+        });
+      }
+    }
+
+    // §14: the acceptance transaction always writes the profile and the job together, so a
+    // PENDING_DELETION profile with no job is a damaged/operator-made state that would deny
+    // every cloud operation forever. Converge it by creating the job that should exist.
+    const pending = await db.collection('users')
+      .where('status', '==', 'PENDING_DELETION')
+      .limit(50)
+      .get();
+    for (const doc of pending.docs) {
+      try {
+        if ((await db.doc(`deletionJobs/${doc.id}`).get()).exists) continue;
+        // Only the account path sets PENDING_DELETION; guest deletion never writes a profile.
+        await db.doc(`deletionJobs/${doc.id}`).set(queuedJob(doc.id, KINDS.ACCOUNT));
+        if (await enqueueOrLog(enqueueTask, doc.id)) requeued += 1;
+        logger.error('auth profile mismatch: pending profile without job', {
+          uidHash: hashForLog(doc.id),
+        });
+        mismatches += 1;
+      } catch (e) {
+        logger.error('auth profile mismatch check failed', {
+          uidHash: hashForLog(doc.id),
+          reason: e && e.message ? e.message : 'unknown',
         });
       }
     }
@@ -519,8 +598,8 @@ function createReconcileDeletionJobsHandler({
       });
     }
 
-    if (requeued + purged > 0) {
-      logger.info('deletion reconciliation', { scanned: stale.size, requeued, purged });
+    if (requeued + purged + mismatches > 0) {
+      logger.info('deletion reconciliation', { scanned: stale.size, requeued, purged, mismatches });
     }
   };
 }
@@ -593,7 +672,7 @@ function createProcessAccountDeletion({ db, authAdmin, bucket } = {}) {
   );
 }
 
-function createReconcileDeletionJobs({ db } = {}) {
+function createReconcileDeletionJobs({ db, authAdmin } = {}) {
   return onSchedule(
     {
       region: REGION,
@@ -602,7 +681,10 @@ function createReconcileDeletionJobs({ db } = {}) {
       maxInstances: 1,
       timeoutSeconds: 300,
     },
-    createReconcileDeletionJobsHandler({ db: db || getFirestore() }),
+    createReconcileDeletionJobsHandler({
+      db: db || getFirestore(),
+      authAdmin: authAdmin || getAuth(),
+    }),
   );
 }
 

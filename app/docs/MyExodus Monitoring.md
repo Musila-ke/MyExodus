@@ -185,3 +185,116 @@ Verification that a flip took effect (live-verified 2026-10-22):
 - Client side: a denied send leaves its outbox row pending with jittered exponential backoff capped at 6 h; it drains after re-enable. A denied send does **not** raise the OPD #30 re-pair card (that card only observes pairing-document read denials, which this switch does not touch).
 
 Rollback evidence and the measured rollout criteria are in plan Appendix S12; the decision record is ADR #207.
+
+## 8. Release 3 operational rail — deletion / backup / transition metrics, alerts, runbooks and rollback (plan step 17, ADR #245)
+
+*Built 2026-10-30 against the deployed `myexodus-53804` project through the Logging/Monitoring APIs (no console clicks). Every metric and policy below was created, then read back; the log filters were replayed against real entries where such entries exist (46 real `cloud_run_revision` entries from 2026-10-23 → 2026-10-30 matched the deletion/backup/transition/registration filter; 14 × `account deletion completed`, 2 × `account deletion accepted`, 1 × `guest data deletion accepted`, 9 × `prepareGuestTransition`, 9 × `finalizeGuestTransition`, 4 × `initializeBackupKeyBundle`, 4 × `updateBackupKeyBundle`, 3 × `deletion reconciliation`).*
+
+The code rail added with this step (same ADR): the 15-minute reconciler now also detects the two §14 **Auth/profile mismatches** — a COMPLETED tombstone whose Auth user exists again (replaced atomically by a fresh QUEUED job, never deleted-then-created) and a `PENDING_DELETION` profile with no job (converged by creating the missing job). Both alert at ERROR and are counted by `auth_profile_mismatches`. `commitBackupManifest` now logs `commitBackupManifest object rejected` when `verifyObject` refuses an object, giving the hash-failure metric a real anchor. Session-pane blockers now report `session_cloud_blocked` / `session_pending_writes_blocked` non-fatals (the pre-Hilt purge cannot report itself — it runs before the telemetry opt-out is known).
+
+### 8.0 Metric inventory (log-based; `resource.type="cloud_run_revision"`; DELTA/INT64 except where noted)
+
+| Metric (`logging.googleapis.com/user/…`) | Anchor log line(s) | Consumer |
+|---|---|---|
+| `deletion_accepted` | `account deletion accepted`, `guest data deletion accepted` | dashboard lifecycle |
+| `deletion_completed` | `account deletion completed` | dashboard lifecycle |
+| `deletion_purge_incomplete` | `deletion purge incomplete; task will retry` | policy 8.1 |
+| `deletion_job_stuck` | `deletion job stuck; manual intervention required` | policy 8.1 |
+| `deletion_enqueue_failures` | `deletion requeue failed`, `auth deletion backstop enqueue failed` | policy 8.6 |
+| `deletion_rejections` | `requestAccountDeletion rejected`, `requestGuestDataDeletion rejected` | dashboard (storm coverage is the existing callable policy) |
+| `auth_profile_mismatches` | `auth profile mismatch: completed job with live auth`, `…pending profile without job`, `auth profile mismatch check failed` | policy 8.3 |
+| `stale_guest_transitions` | `stale unfinalized guest transitions` | dashboard |
+| `backup_reservations` | `beginBackup` | dashboard |
+| `backup_committed` | `commitBackupManifest` | dashboard |
+| `backup_commit_conflicts` | `commitBackupManifest conflict` | dashboard |
+| `backup_manifest_hash_failures` | `commitBackupManifest object rejected` | policy 8.2 |
+| `backup_rejections` | `beginBackup rejected` | dashboard |
+| `backup_retention_failures` | `backup retention failed`, `backup retention object delete failed` | policy 8.4 |
+| `backup_orphan_failures` | `backup orphan object delete failed` | policy 8.4 |
+| `backup_orphan_scans_nonzero` | `backup orphan cleanup` where `jsonPayload.scanned>0` | policy 8.4 |
+| `backup_orphan_scan_scanned` (DISTRIBUTION, `EXTRACT(jsonPayload.scanned)`) | `backup orphan cleanup` | explorer (bucket sizes) |
+| `guest_transitions_prepared` / `…_finalized` / `…_cancelled` / `…_expired` | `prepareGuestTransition` / `finalizeGuestTransition` / `cancelGuestTransition` / `prepareGuestTransition expired` | dashboard |
+| `pair_registrations` / `pair_registration_rejections` | `registerPairing` / `registerPairing rejected` | dashboard (storm alert = existing policy `9334481852107082372`) |
+
+All 22 counters + the distribution metric were created via `logging.googleapis.com/v2/projects/myexodus-53804/metrics` PUT and read back present. A log-based metric updates within ~2 minutes of a matching entry; the aggregate has no data (not zero) until the first match — that is normal, not drift.
+
+### 8.1 Policy `3380314823292222848` — deletion job stuck or repeatedly retrying (ERROR)
+
+- **Conditions (OR):** `deletion_job_stuck` sum over 1800 s > 0 (the 12-requeue cap fires exactly once per job); `deletion_purge_incomplete` sum over 3600 s > 3 (a phase retried more than three times in an hour).
+- **Operational SLO (defined here, referenced by §14):** acceptance → COMPLETED within **30 minutes**. The worker retries every few minutes up to 12 attempts (1 h cap); the reconciler re-enqueues a job stale for 10 minutes. Past 30 minutes without COMPLETED, a human reads the job.
+- **Diagnose:** Firestore → `deletionJobs/{uid}`: `phase`, `requeueCount`, `updatedAt`. Storage-phase stalls are usually a bucket-permission or generation-mismatch error; PAIRS stalls are Firestore pagination/transaction errors. Logging filter `jsonPayload.message:"deletion"` around the job's window gives the phase error text (uid hashed).
+- **Remediate:** fix the underlying cause (permissions, quota, code), then let the reconciler re-enqueue — **never** hand-delete the `deletionJobs/{uid}` document while the Auth user exists or holds data; that would abandon a half purge. If the Auth user is already gone and the job is wedged on an unreachable phase, the reconciler's next pass still re-enqueues; a job at the cap logs `deletion job stuck` and requires the manual fix above.
+- **Verify:** the job reaches COMPLETED, `deletion_completed` increments, and the Auth user is gone (`getUser` → not-found).
+
+### 8.2 Policy `15389505154354957982` — backup manifest hash verification failures (ERROR)
+
+- **Condition:** `backup_manifest_hash_failures` sum over 3600 s > 0.
+- **Diagnose:** the warn line carries the uid hash and the HttpsError message (`BACKUP_OBJECT_MISSING`, `BACKUP_OBJECT_MISMATCH`, `BACKUP_TRANSFER_INVALID`). Compare the reservation's `objectBytes`/path with the GCS object metadata (`gsutil ls -L`-equivalent via the Storage API) — a mismatch means the client uploaded different bytes than it declared, or the object was replaced between upload and commit.
+- **Remediate:** the manifest was **not** committed, so the pointer still names the previous committed revision; nothing is lost. Have the client retry the upload (a fresh reservation) or fix the client-side hash/size computation. Never hand-write a manifest.
+- **Verify:** the next `commitBackupManifest` logs at INFO with a revision, and `backup_committed` increments.
+
+### 8.3 Policy `15389505154354958125` — Auth/profile mismatch detected (ERROR)
+
+- **Condition:** `auth_profile_mismatches` sum over 3600 s > 0.
+- **What it means:** the reconciler either (a) found a COMPLETED tombstone whose Auth user exists again — the uid was recreated out of band after "deletion" — and replaced the tombstone with a fresh QUEUED job; (b) found a `PENDING_DELETION` profile with no job (damaged/operator state that would deny cloud operations forever) and created the missing job; or (c) could not read Auth for a uid (logged separately, retried next pass).
+- **Diagnose:** `deletionJobs/{uid}` now exists at QUEUED for (a)/(b); confirm the follow-up job completes. For (a), check who recreated the Auth user (Admin console audit / `firebase auth:export`) — recreation of a deleted uid is never expected from this app.
+- **Remediate:** let the converged job run; if recreation keeps happening, stop the recreating actor first (the reconciler will keep replacing tombstones for as long as the uid lives).
+- **Verify:** job COMPLETED, Auth uid absent, the next reconciliation pass logs nothing for that uid.
+
+### 8.4 Policy `2631685325467471086` — backup retention/orphan cleanup failing or orphans accumulating (WARNING)
+
+- **Conditions (OR):** `backup_retention_failures` sum over 6 h > 0; `backup_orphan_failures` sum over 6 h > 0; `backup_orphan_scans_nonzero` sum over 24 h > 20.
+- **Diagnose:** both failure lines carry a uid hash. Delete failures are usually GCS permission/generation races (the code deletes `ifGenerationMatch` and treats 404 as success). `backup orphan cleanup` logs `{scanned, cleaned}` on every pass — repeated passes with `scanned > 0` and `cleaned: 0` mean deletions are silently failing (the failure line says which step).
+- **Remediate:** restore the service account's `storage.objects.delete` capability on the bucket; if an object is stuck on a generation guard, delete that exact generation by hand (this is the safe manual path — object identity is exact). Retention never deletes a manifest that is current or pinned by a live restore; deleting objects by hand must follow the same rule.
+- **Verify:** the next `backup orphan cleanup` pass reports `cleaned == scanned`, and the metric stops growing.
+
+### 8.5 Policy `16442835332106904175` — unexpected backup storage growth (WARNING)
+
+- **Condition:** `storage.googleapis.com/storage/total_bytes` (GAUGE, `gcs_bucket` = `myexodus-53804.firebasestorage.app`) ALIGN_MAX 86400 s > 512 MiB. This is an **absolute cap, not a delta** — the Monitoring API rejects `ALIGN_DELTA` on a GAUGE/DOUBLE metric (learned live while creating the policy), and a percent-change condition is undefined from zero. 512 MiB is many multiples of the data envelope: 21 MiB max object × 3 retained objects per account.
+- **Diagnose:** list the bucket prefix by uid (`backups/{uid}/`) and compare object counts to active accounts (Firestore `users` count). Orphans (no manifest/reservation) should already have been swept by the 6-hour cleanup; hundreds of uncommitted uploads point at a client retry loop, which also shows as `backup_orphan_scans_nonzero` and `backup_commit_conflicts`.
+- **Remediate:** fix the upload loop at the client, let the orphan sweep catch up, and (only after confirming no manifest references them) delete stray generations.
+- **Verify:** total_bytes plateaus; `backup_orphan_scans_nonzero` returns to zero.
+
+### 8.6 Policy `14722285015033791067` — deletion task or enqueue failures (WARNING)
+
+- **Conditions (OR):** Cloud Tasks `queue/task_attempt_count` with `response_code != "ok"` for `processAccountDeletion`, sum over 3600 s > 3; `deletion_enqueue_failures` sum over 3600 s > 0.
+- **Diagnose:** Cloud Tasks console/API for the queue shows the task's last response (5xx = worker crash/timeout, 429 = dispatch concurrency/queue throttling, 403 = service-account permission). Enqueue failures are logged with the reason string (`deletion requeue failed` / `auth deletion backstop enqueue failed`) and are recoverable — the job document is durable and the reconciler retries.
+- **Remediate:** for dispatch failures, check the worker's logs for the same window (phase errors surface as `deletion purge incomplete`); for permission errors, restore the Cloud Tasks enqueuer role. Do **not** delete the queue: the reconciler would recreate tasks but the queue's retry config is part of the RFC contract.
+- **Verify:** non-ok attempts stop; `deletion_completed` increments for the affected job(s).
+
+### 8.7 Client-only rails (no server trace — honest limit)
+
+Two §14 alert items observe things the server cannot see. They are Crashlytics non-fatals, not Cloud Monitoring metrics:
+
+| §14 item | Event | Why no server rail |
+|---|---|---|
+| Spike in rules permission denials after Release 0 | `firestore_denied` (via `awaitReportingDenial`, already wired) | Firestore evaluates rules on the client SDK path and denies without reaching any Admin handler; Logging has no per-denial entry. |
+| Repeated account-switch cache-clear failures | `session_cloud_blocked`, `session_pending_writes_blocked` (added with this step) | The legacy-cache purge runs in `Application.onCreate` **before Hilt**, so it cannot use the opt-out-aware `CrashReporting`; the manager reports the blocked state once startup has read the opt-out. |
+
+Crashlytics velocity alerts (e.g. "more than N events of issue X in an hour") are configured **in the Firebase console only** — the Crashlytics API exposes no alert-policy resource. Owner action (one minute): console → Crashlytics → each issue above → Set alert. This is recorded as an owner-side step, not silently claimed as an API-created alert. The existing `callable_rejections` storm policy (item 8 in §4) still covers every callable-layer rejection, so a rules-only regression is the only class with no server-side proxy.
+
+### 8.8 Rollback procedures (§13.5)
+
+**Server gates (the only rollback control that covers every installed build).** Two Firestore documents, flipped through the REST recipe already used for the partner kill switch (§7):
+
+```
+PATCH https://firestore.googleapis.com/v1/projects/myexodus-53804/databases/(default)/documents/serverFeatureGates/backupUpload?updateMask.fieldPaths=enabled
+{"fields":{"enabled":{"booleanValue":false}}}      // restore: true
+PATCH …/documents/serverFeatureGates/guestTransition?updateMask.fieldPaths=enabled
+```
+
+- `backupUpload` off → new `beginBackup`, reservation extension and `commitBackupManifest` are denied `FEATURE_DISABLED` (`requireGate` inside each transaction). **Restore (`beginBackupRestore`/`endBackupRestore`), retention and orphan cleanup are not gated** — a rollback stops new backups while leaving read/restore and cleanup working.
+- `guestTransition` off → `prepareGuestTransition` denied `GUEST_TRANSITION_DISABLED`; **finalize and cancel stay available**, so an in-flight transition can complete or cancel rather than being stranded.
+- **Deletion is never gated.** `account-deletion.js` contains no `requireGate` call; the gate-independence test in `emulator-test/account-deletion.emulator.js` (`server feature gates off never disable deletion or reconciliation`) drives acceptance → worker → reconciler with both gates `false` and proves revocation, COMPLETED and requeue still happen. Disabling deletion, revocation, task enqueue or cleanup is **out of bounds for any rollback**.
+
+**What a rollback must not do.**
+
+- Do not roll `firestore.rules` back to the pre-R0 insecure profile/pair rules. Roll back clients/functions while retaining safe authorization; a rollback that needs loosened rules is not a permitted rollback.
+- Do not delete the `deletionJobs` collection, `processAccountDeletion` queue, or scheduled reconciler to "stop" anything — those are the cleanup guarantees.
+- Do not revoke the service account's Storage/Tasks roles to disable a feature; that breaks cleanup (8.4/8.6).
+
+**Client / APK.** Record per deployed APK: version code, minimum supported version and the exact feature set. Keep the previous signed APK available in the direct-distribution channel (GitHub Releases, ADR #171; Play is not used — ADR #15). Client-side flags exist for UX but are **not** rollback controls by themselves; the server gates above are. No self-updater exists or is added here (§13.5).
+
+**Minimum client version record.** When a client rollout must be reverted, bump `clientCompatibility/current` (`{ minimumVersionCode, updateMessage }`, published in R0) so older clients fail closed on server mutations rather than writing against a rolled-back contract. The read path, caching and fail-open/closed behavior are documented in `account-release0-inventory.md`.
+
+**Verification after any rollback:** gates read back with `enabled:false`; a backup call returns `FEATURE_DISABLED`; a deletion request still accepts, revokes and completes (the emulator test above is the permanent regression); no policy in this section is disabled — the monitoring rail itself is never rolled back.

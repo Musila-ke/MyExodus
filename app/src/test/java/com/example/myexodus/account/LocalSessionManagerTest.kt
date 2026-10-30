@@ -133,6 +133,11 @@ class LocalSessionManagerTest {
         override fun relaunch() { relaunched++ }
     }
 
+    private class RecordingTelemetry : SessionTelemetry {
+        val events = mutableListOf<String>()
+        override fun report(event: String) { events += event }
+    }
+
     private class RecordingSessions : com.example.myexodus.backup.BackupUploadSessionStore {
         var clears = 0
         override suspend fun get() = null
@@ -177,11 +182,12 @@ class LocalSessionManagerTest {
         val push = RecordingPush(fail = pushFails)
         val work = RecordingWork()
         val relauncher = RecordingRelauncher()
+        val telemetry = RecordingTelemetry()
         val cloud = FakeCloud(flushOk)
         val uploads = RecordingSessions()
         val marks = RecordingMarks()
         val manager = LocalSessionManager(
-            operations, cloud, store, scopes, push, work, relauncher,
+            operations, cloud, store, scopes, push, work, relauncher, telemetry,
             dagger.Lazy { uploads }, dagger.Lazy { marks },
         )
     }
@@ -251,6 +257,7 @@ class LocalSessionManagerTest {
             TransitionStart.Refused(TransitionRefusal.PENDING_WRITES),
             h.manager.beginTransition(signOut = false),
         )
+        assertEquals(listOf("session_pending_writes_blocked"), h.telemetry.events)
         assertEquals(SessionFingerprint("guest-1", 0), h.manager.current())
         assertEquals(0L, h.store.generationValue)
         assertTrue(h.push.unregistered.isEmpty())
@@ -425,6 +432,7 @@ class LocalSessionManagerTest {
         h.manager.onAppStart(this)
 
         assertEquals(CloudAccess.BLOCKED, h.manager.cloudAccess.value)
+        assertEquals("§14 repeated account-switch cache-clear failures", listOf("session_cloud_blocked"), h.telemetry.events)
         assertFalse(h.manager.isCloudReady())
         assertNull(h.manager.current())
         assertFalse(h.manager.mayMintGuest())

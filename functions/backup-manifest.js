@@ -435,12 +435,23 @@ function createCommitBackupManifestHandler({ db, bucket, now = () => Date.now() 
       return reservation;
     });
 
-    const { sha256, generation } = await verifyObject({
-      bucket,
-      reservation: reservationRefData,
-      declaredSha256,
-      declaredBytes: objectBytes,
-    });
+    let verified;
+    try {
+      verified = await verifyObject({
+        bucket,
+        reservation: reservationRefData,
+        declaredSha256,
+        declaredBytes: objectBytes,
+      });
+    } catch (e) {
+      // §14 "backup manifest hash failures": the metric anchors on this line.
+      logger.warn('commitBackupManifest object rejected', {
+        uidHash: hashForLog(uid),
+        reason: e && e.message ? e.message : 'unknown',
+      });
+      throw e;
+    }
+    const { sha256, generation } = verified;
 
     return db.runTransaction(async (tx) => {
       await requireBackupAccount(tx, db, auth);

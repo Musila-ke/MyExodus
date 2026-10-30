@@ -35,12 +35,17 @@ import com.example.myexodus.account.ScopeSnapshotReader
 import com.example.myexodus.account.SessionCloud
 import com.example.myexodus.account.SessionFence
 import com.example.myexodus.account.SessionStore
+import com.example.myexodus.account.SessionTelemetry
 import com.example.myexodus.account.SessionTransitions
 import com.example.myexodus.account.SessionWork
 import com.example.myexodus.accountability.sync.FirestoreSchema
 import com.example.myexodus.accountability.sync.PARTNER_SYNC_WORK_NAME
 import com.example.myexodus.accountability.sync.PushInstallationRegistrar
 import com.example.myexodus.accountability.sync.awaitReportingDenial
+import com.example.myexodus.backup.BackupManifestApi
+import com.example.myexodus.backup.ImportCloudGuard
+import com.example.myexodus.backup.ManifestImportCloudGuard
+import com.example.myexodus.backup.RemoteBackupAnchorStore
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.LocalDatabaseMigration
@@ -98,6 +103,13 @@ object AccountModule {
 
     @Provides
     @Singleton
+    fun provideImportCloudGuard(
+        manifest: BackupManifestApi,
+        anchors: RemoteBackupAnchorStore,
+    ): ImportCloudGuard = ManifestImportCloudGuard(manifest, anchors)
+
+    @Provides
+    @Singleton
     fun provideGuestImportCoordinator(
         @ApplicationContext context: Context,
         auth: AuthCoordinator,
@@ -106,9 +118,10 @@ object AccountModule {
         quarantine: GuestQuarantine,
         rules: RulesRepository,
         planner: GuestImportPlanner,
+        cloudGuard: ImportCloudGuard,
         scopeRecovery: ScopeRecoveryImporter,
     ): GuestImportCoordinator =
-        GuestImportCoordinator(auth, transition, storeFactory, quarantine, rules, planner) { record ->
+        GuestImportCoordinator(auth, transition, storeFactory, quarantine, rules, planner, cloudGuard) { record ->
             if (ScopeRecoveryImporter.isRecoveryRecord(record)) {
                 // ADR #240: everything the same-device copy carries lands before its offer is
                 // retired; a failed restore keeps the offer so the next start retries.
@@ -193,6 +206,12 @@ object AccountModule {
     fun provideSessionWork(@ApplicationContext context: Context): SessionWork = SessionWork {
         WorkManager.getInstance(context).cancelUniqueWork(PARTNER_SYNC_WORK_NAME)
     }
+
+    /** §14: the stuck-session rails ride the same opt-out-aware non-fatal channel as the rest. */
+    @Provides
+    @Singleton
+    fun provideSessionTelemetry(crashReporting: CrashReporting): SessionTelemetry =
+        SessionTelemetry { event -> crashReporting.nonFatal(event) }
 
     /**
      * The switch completes with a process restart: it is the only teardown that provably leaves
