@@ -42,6 +42,10 @@ data class RestrictionRule(
     @ColumnInfo(name = "assigned_pair_id") val assignedPairId: String? = null,
     @ColumnInfo(name = "backup_pair_id") val backupPairId: String? = null,
     @ColumnInfo(name = "streak_pair_id") val streakPairId: String? = null,
+    /** Owner mandate 2026-10-31: rules created together live in one named batch. Membership
+     *  rides on each rule (denormalized name) so the partner-facing identity needs no join. */
+    @ColumnInfo(name = "batch_id") val batchId: String? = null,
+    @ColumnInfo(name = "batch_name") val batchName: String? = null,
 )
 
 /**

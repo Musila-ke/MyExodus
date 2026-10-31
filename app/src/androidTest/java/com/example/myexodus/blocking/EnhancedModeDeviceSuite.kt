@@ -16,6 +16,7 @@ import com.example.myexodus.MainActivity
 import com.example.myexodus.data.db.ActivityLogKeyManager
 import com.example.myexodus.data.db.AndroidDatabaseKeyManager
 import com.example.myexodus.data.db.DatabaseHealthStore
+import com.example.myexodus.data.db.IS_EMULATOR
 import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.data.db.RulesStoreKeyManager
 import com.example.myexodus.data.db.entity.RestrictionRule
@@ -23,6 +24,7 @@ import com.example.myexodus.data.db.entity.UserProfile
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertTrue
+import org.junit.Assume
 import org.junit.Before
 
 /**
@@ -101,6 +103,18 @@ abstract class EnhancedModeDeviceSuite {
                 lastCycleAt = SystemClock.elapsedRealtime()
             }
             SystemClock.sleep(500)
+        }
+        // Instrumentation cannot bind the service off the real handset: on the Lean_API34
+        // AVD (2026-10-31) the executeShellCommand writes never land and a manual adb enable
+        // during instrumentation still produced no bind attempt, while adb + normal launch
+        // binds. Skip — never fail — on an emulator, in @Before, so no test body's
+        // resetData() runs; the physical device keeps the hard failure below.
+        if (IS_EMULATOR) {
+            Assume.assumeTrue(
+                "Enhanced Mode device matrix needs the real a11y bind; an AVD cannot bind " +
+                    "it under instrumentation — run this physical-device suite on a handset",
+                false,
+            )
         }
         fail(
             "BlockerAccessibilityService never connected after ${cycles} cycles " +

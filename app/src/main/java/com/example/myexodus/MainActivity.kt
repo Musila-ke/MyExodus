@@ -159,6 +159,14 @@ class MainActivity : FragmentActivity() {
      *  selects it before showing Home so the splash card belongs to the right habit. */
     private var requestedHabit by mutableStateOf<String?>(null)
 
+    /** ADR #193 deep link: a plan notification names the plan it is about, and the tap opens
+     *  that plan — the Partner tab's Plans subpage with the detail already shown. */
+    private var requestedPlan by mutableStateOf<String?>(null)
+
+    /** Owner report 2026-10-31: a partner notification names ONE partner; its tap must show
+     *  that partner's dashboard, never whichever roster entry happened to be selected. */
+    private var requestedPartner by mutableStateOf<String?>(null)
+
     /** Which surface sent the user to the Recovery tab (block screen vs. widget). Labels the
      *  session rows the visit creates (v3 W7 `RecoverySession.entry`). */
     private var requestedRecoveryEntry by mutableStateOf<String?>(null)
@@ -197,6 +205,8 @@ class MainActivity : FragmentActivity() {
         requestedTab = intent.getStringExtra(EXTRA_START_TAB)
         requestedHabit = intent.getStringExtra(EXTRA_START_HABIT)
         requestedRecoveryEntry = intent.getStringExtra(EXTRA_RECOVERY_ENTRY)
+        requestedPlan = intent.getStringExtra(EXTRA_OPEN_PLAN)
+        requestedPartner = intent.getStringExtra(EXTRA_OPEN_PARTNER)
         handlePartnerNudgeIntent(intent)
     }
 
@@ -476,6 +486,8 @@ class MainActivity : FragmentActivity() {
         requestedTab = intent.getStringExtra(EXTRA_START_TAB)
         requestedHabit = intent.getStringExtra(EXTRA_START_HABIT)
         requestedRecoveryEntry = intent.getStringExtra(EXTRA_RECOVERY_ENTRY)
+        requestedPlan = intent.getStringExtra(EXTRA_OPEN_PLAN)
+        requestedPartner = intent.getStringExtra(EXTRA_OPEN_PARTNER)
         handlePartnerNudgeIntent(intent)
         startPartnerLiveSync()
         startPartnerSigningHeal()
@@ -774,6 +786,10 @@ class MainActivity : FragmentActivity() {
                         onTabConsumed = { requestedTab = null },
                         requestedHabit = requestedHabit,
                         onHabitConsumed = { requestedHabit = null },
+                        requestedPlan = requestedPlan,
+                        onPlanConsumed = { requestedPlan = null },
+                        requestedPartner = requestedPartner,
+                        onPartnerConsumed = { requestedPartner = null },
                         planRepository = recoveryPlanRepository,
                         rulesRepository = rulesRepository,
                         habitRepository = habitRepository,
@@ -1215,6 +1231,12 @@ class MainActivity : FragmentActivity() {
         /** Milestone notification deep link: which habit's Home to show. */
         const val EXTRA_START_HABIT = "extra_start_habit"
 
+        /** ADR #193 deep link: the partner plan the notification was about. */
+        const val EXTRA_OPEN_PLAN = "extra_open_plan"
+
+        /** Owner report 2026-10-31: the exact partner a notification was about. */
+        const val EXTRA_OPEN_PARTNER = "extra_open_partner"
+
         /** Which surface opened the Recovery tab — a `RecoverySession.ENTRY_*` constant. */
         const val EXTRA_RECOVERY_ENTRY = "extra_recovery_entry"
 
@@ -1238,6 +1260,10 @@ class MainActivity : FragmentActivity() {
         /** #26: tunnel paused/revoked notifications land here — the Rules screen holds the
          *  activation row whose tap re-opens the system consent dialog. */
         const val TAB_RULES = NavKeys.RULES
+
+        /** ADR #193: shared-plan notifications land on the Partner tab, whose Plans subpage
+         *  holds the checklist the alert is about. */
+        const val TAB_PARTNER = NavKeys.PARTNER
 
         private const val TAG = "MyExodus"
     }

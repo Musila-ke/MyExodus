@@ -97,7 +97,7 @@ import com.example.myexodus.domainusage.RuleUsageDao
         PartnerRuleChange::class,
         RemoteBackupAnchor::class,
     ],
-    version = 22,
+    version = 23,
     exportSchema = true,
 )
 abstract class AppRulesStore : RoomDatabase() {

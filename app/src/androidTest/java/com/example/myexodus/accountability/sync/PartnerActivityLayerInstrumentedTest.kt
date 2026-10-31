@@ -76,7 +76,7 @@ class PartnerActivityLayerInstrumentedTest {
         runBlocking {
             val context = ApplicationProvider.getApplicationContext<Context>()
             val ep = EntryPointAccessors.fromApplication(context, RoundTripTestEntryPoint::class.java)
-            assertWarmSigningWindow(ep.signer())
+            assumePartnerHarness(ep)
 
             val uidA = FirebaseAuth.getInstance().currentUser?.uid
                 ?: error("no signed-in identity — launch the app once (anonymous auth) and re-run")
@@ -307,7 +307,7 @@ class PartnerActivityLayerInstrumentedTest {
     fun doorbell_foregroundMailboxWriteDeliversWithoutAnExplicitPass(): Unit = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val ep = EntryPointAccessors.fromApplication(context, RoundTripTestEntryPoint::class.java)
-        assertWarmSigningWindow(ep.signer())
+        assumePartnerHarness(ep)
 
         val uidA = FirebaseAuth.getInstance().currentUser?.uid
             ?: error("no signed-in identity — launch the app once (anonymous auth) and re-run")

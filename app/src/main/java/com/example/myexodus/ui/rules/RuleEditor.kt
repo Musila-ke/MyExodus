@@ -756,7 +756,7 @@ fun RuleEditorScreen(
 /** One assignee option: radio + name + what assigning means. The same selection grammar the
  *  partner roster uses (#96), so "which partner is chosen" looks identical everywhere. */
 @Composable
-private fun PartnerChoiceRow(
+internal fun PartnerChoiceRow(
     title: String,
     hint: String,
     selected: Boolean,
@@ -790,7 +790,7 @@ private fun PartnerChoiceRow(
 /** One blocking mechanism row: title + hint + switch. Disabled rows keep their checked
  *  state — the value survives while another mechanism overrides it. */
 @Composable
-private fun ModeRow(
+internal fun ModeRow(
     title: String,
     hint: String,
     checked: Boolean,
@@ -824,7 +824,7 @@ private fun ModeRow(
 }
 
 @Composable
-private fun LimitNumberField(
+internal fun LimitNumberField(
     label: String,
     value: String,
     onChange: (String) -> Unit,
@@ -841,7 +841,7 @@ private fun LimitNumberField(
 }
 
 @Composable
-private fun SectionCard(content: @Composable () -> Unit) {
+internal fun SectionCard(content: @Composable () -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = MaterialTheme.shapes.medium,
@@ -855,7 +855,7 @@ private fun SectionCard(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun EndsRow(expiresAt: Long, onChange: (Long) -> Unit) {
+internal fun EndsRow(expiresAt: Long, onChange: (Long) -> Unit) {
     var picking by remember { mutableStateOf(false) }
     // Settings-row grammar, the LinkRow family in single-line form. Design history (owner,
     // 2026-10-04): the bare "Ends · Never" text row read as a static statement and the owner

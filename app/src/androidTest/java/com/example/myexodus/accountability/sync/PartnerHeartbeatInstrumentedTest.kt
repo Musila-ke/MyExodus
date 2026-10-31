@@ -19,6 +19,7 @@ import com.example.myexodus.accountability.RoundTripTestEntryPoint
 import com.example.myexodus.accountability.monitoring.PartnerHeartbeatClient
 import com.example.myexodus.accountability.monitoring.StandbyBucket
 import com.example.myexodus.accountability.serialization.MonitoringState
+import com.example.myexodus.data.db.IS_EMULATOR
 import com.example.myexodus.data.db.entity.DeviceLiveness
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
@@ -30,6 +31,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -195,6 +197,10 @@ class PartnerHeartbeatInstrumentedTest {
      */
     @Test
     fun workManagerFallback_beatsWithoutTheForegroundService(): Unit = runBlocking {
+        Assume.assumeFalse(
+            "host force-stop + 15-minute floor choreography is a X6532 run, not a suite leg",
+            IS_EMULATOR,
+        )
         val context = ApplicationProvider.getApplicationContext<Context>()
         val ep = EntryPointAccessors.fromApplication(context, RoundTripTestEntryPoint::class.java)
         AppCheckTestSupport.useDebugProviderIfRequested(FirebaseApp.getInstance())
@@ -277,6 +283,10 @@ class PartnerHeartbeatInstrumentedTest {
      */
     @Test
     fun noNetwork_beatFailsBurnsItsCounter_andTheNextOnlineBeatRecovers(): Unit = runBlocking {
+        Assume.assumeFalse(
+            "the host drives airplane mode and the leg needs the main leg's liveness row first",
+            IS_EMULATOR,
+        )
         val context = ApplicationProvider.getApplicationContext<Context>()
         val ep = EntryPointAccessors.fromApplication(context, RoundTripTestEntryPoint::class.java)
         AppCheckTestSupport.useDebugProviderIfRequested(FirebaseApp.getInstance())

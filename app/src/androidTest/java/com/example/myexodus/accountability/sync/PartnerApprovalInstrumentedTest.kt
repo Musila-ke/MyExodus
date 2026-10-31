@@ -14,7 +14,6 @@ import com.example.myexodus.R
 import com.example.myexodus.accountability.PartnerTestIdentity
 import com.example.myexodus.accountability.RoundTripTestEntryPoint
 import com.example.myexodus.accountability.approval.ApprovalFlow
-import com.example.myexodus.accountability.crypto.AccountabilitySigner
 import com.example.myexodus.accountability.enrollment.EnrollmentTranscript
 import com.example.myexodus.accountability.enrollment.PairingFlow
 import com.example.myexodus.accountability.enrollment.PairingToken
@@ -37,7 +36,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -77,6 +75,7 @@ class PartnerApprovalInstrumentedTest {
     fun requestTravelsResponderDecidesResponseApplies(): Unit = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val ep = EntryPointAccessors.fromApplication(context, RoundTripTestEntryPoint::class.java)
+        assumePartnerHarness(ep)
 
         val uidA = FirebaseAuth.getInstance().currentUser?.uid
             ?: error("no signed-in identity — launch the app once (anonymous auth) and re-run")
@@ -86,9 +85,6 @@ class PartnerApprovalInstrumentedTest {
             eventCipher = ep.eventCipher(),
             epochStore = ep.identityEpochStore(),
         )
-        assertWarmSigningWindow(ep.signer(), "A")
-        assertWarmSigningWindow(identity.signer, "B")
-
         // A real responder granted this through the system dialog when they first used the app;
         // the test grants it over shell so the tray assertion below never depends on whichever
         // manual grant the device happens to carry.
@@ -278,20 +274,6 @@ class PartnerApprovalInstrumentedTest {
         ParcelFileDescriptor.AutoCloseInputStream(
             ui.executeShellCommand("pm grant ${context.packageName} ${Manifest.permission.POST_NOTIFICATIONS}"),
         ).use { it.readBytes() }
-    }
-
-    private fun assertWarmSigningWindow(signer: AccountabilitySigner, who: String) {
-        val signature = signer.beginSign()
-        signature.update("warm-window-probe".toByteArray())
-        try {
-            signer.finishSign(signature)
-        } catch (e: Exception) {
-            fail(
-                "$who's signing window is cold — tap \"Warm signing window\" in PairingTestActivity " +
-                    "(adb shell am start -n com.example.myexodus/.accountability.PairingTestActivity) " +
-                    "and re-run. Cause: ${e.message}",
-            )
-        }
     }
 
     private fun log(message: String) = Log.i(TAG, message)

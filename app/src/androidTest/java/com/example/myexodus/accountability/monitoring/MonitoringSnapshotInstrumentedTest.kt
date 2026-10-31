@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.myexodus.accountability.RoundTripTestEntryPoint
 import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.sync.AppCheckTestSupport
+import com.example.myexodus.accountability.sync.assumePresent
 import com.example.myexodus.data.db.entity.PairProfileSharing
 import com.google.firebase.FirebaseApp
 import dagger.hilt.android.EntryPointAccessors
@@ -40,9 +41,10 @@ class MonitoringSnapshotInstrumentedTest {
         // The consent leg must ride a pair the server still answers for, or the pass silently
         // skips it and the snapshot would never be built — probe exactly as the pass does.
         val resolver = ep.pairUidResolver()
-        val enrollment = ep.enrollmentDao().all()
-            .firstOrNull { resolver.resolve(it.pairId) != null }
-            ?: error("no resolvable enrollment: run the pairing harness first")
+        val enrollment = assumePresent(
+            ep.enrollmentDao().all().firstOrNull { resolver.resolve(it.pairId) != null },
+            "no resolvable enrollment: run the pairing harness first",
+        )
         log("RESULT monitor=PAIR ${enrollment.pairId}")
         val sharing = store.pairSharingDao()
         val previous = sharing.profileFor(enrollment.pairId)

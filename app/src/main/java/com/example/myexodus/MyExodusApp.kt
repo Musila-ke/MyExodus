@@ -48,7 +48,9 @@ import com.example.myexodus.data.db.DatabaseHealth
 import com.example.myexodus.data.db.DatabaseHealthStore
 import com.example.myexodus.data.db.DatabaseMigration
 import com.example.myexodus.data.db.LocalDatabaseMigration
+import com.example.myexodus.domainusage.AndroidDomainUsageHost
 import com.example.myexodus.recovery.RecoverySessionRepository
+import com.example.myexodus.streaks.StreakNotifications
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.telemetry.StartupTrace
 import com.example.myexodus.widget.ProtectionSnapshotWriter
@@ -175,6 +177,12 @@ class MyExodusApp : Application(), Configuration.Provider {
         // Owner ruling 2026-10-28: check-in is automatic; retire the old visible
         // "check-in reminder" channel (the server now sends a silent liveness probe).
         PartnerNotifications.deleteLegacyCheckinChannel(this)
+        // Owner report 2026-10-31: retired channel ids were still listed in system settings
+        // beside their replacements because cleanup ran only on the new id's first post.
+        // Create-or-clean at startup so the list never shows a dead duplicate.
+        StreakNotifications.ensureMilestonesChannel(this)
+        AndroidDomainUsageHost.ensureStatusChannel(this)
+        EnhancedModeHealthMonitor.ensureChannel(this)
         startupTrace.lap("channels")
         // Decision 12 opt-out: FirebaseInitProvider ran before this call, so this is what the
         // stored preference overrides from the first moment of each process.

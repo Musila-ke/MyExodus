@@ -202,6 +202,37 @@
     <string name="partner_event_text">Open MyExodus to see what changed.</string>
     <string name="partner_message_title_named">%1$s sent you a message</string>
     <string name="partner_message_quoted">“%1$s”</string>
+    <!-- §8.4 RULE_CONTROL (owner report 2026-10-31): a rule this device was assigned to
+         changed. The wire carries only the verb (never an app name), so the body names the
+         change alone. Unlocked tray copy; the lockscreen keeps partner_event_* plain forms. -->
+    <string name="partner_rule_event_title_named">Rule update from %1$s</string>
+    <string name="partner_rule_event_created">You were added as accountability partner on a new rule.</string>
+    <string name="partner_rule_event_assigned">You were added as accountability partner on a rule.</string>
+    <string name="partner_rule_event_unassigned">You were removed from a rule you watched.</string>
+    <string name="partner_rule_event_updated">A rule you watch was changed.</string>
+    <string name="partner_rule_event_disabled">A rule you watch was turned off.</string>
+    <string name="partner_rule_event_deleted">A rule you watch was deleted.</string>
+    <string name="partner_rule_event_expired">A rule you watch ended — its set duration ran out.</string>
+    <!-- Wire v2 identity (ADR #227): the body names what changed. Three shapes: a standalone
+         rule, a member inside a named batch, and the batch itself (with its item count). -->
+    <string name="partner_rule_event_added_labeled">You were added as accountability partner on %1$s.</string>
+    <string name="partner_rule_event_updated_labeled">%1$s was changed.</string>
+    <string name="partner_rule_event_disabled_labeled">%1$s was turned off.</string>
+    <string name="partner_rule_event_deleted_labeled">%1$s was deleted.</string>
+    <string name="partner_rule_event_unassigned_labeled">You were removed from %1$s.</string>
+    <string name="partner_rule_event_expired_labeled">%1$s ended — its set duration ran out.</string>
+    <string name="partner_rule_event_added_in_batch">You were added as accountability partner on %1$s in the %2$s batch.</string>
+    <string name="partner_rule_event_updated_in_batch">%1$s was changed in the %2$s batch.</string>
+    <string name="partner_rule_event_disabled_in_batch">%1$s was turned off in the %2$s batch.</string>
+    <string name="partner_rule_event_deleted_in_batch">%1$s was deleted from the %2$s batch.</string>
+    <string name="partner_rule_event_unassigned_in_batch">You were removed from %1$s in the %2$s batch.</string>
+    <string name="partner_rule_event_expired_in_batch">%1$s ended in the %2$s batch — its set duration ran out.</string>
+    <string name="partner_rule_event_added_batched">You were added as accountability partner on the %1$s batch (%2$d items).</string>
+    <string name="partner_rule_event_updated_batched">The %1$s batch was changed (%2$d items).</string>
+    <string name="partner_rule_event_disabled_batched">The %1$s batch was turned off (%2$d items).</string>
+    <string name="partner_rule_event_deleted_batched">The %1$s batch was deleted (%2$d items).</string>
+    <string name="partner_rule_event_unassigned_batched">You were removed from the %1$s batch (%2$d items).</string>
+    <string name="partner_rule_event_expired_batched">The %1$s batch ended — its set duration ran out (%2$d items).</string>
     <!-- Owner mandate 2026-10-04: a relapse/milestone alert states which streak and when,
          using the wire-v2 fields (ADR #134). Unlocked copy only — the plain forms above stay
          the lockscreen public version (FR-13). Pre-v2 bodies lack the fields and degrade to
@@ -312,6 +343,48 @@
         <item quantity="other">%1$d rules will be deleted permanently. This can’t be undone.</item>
     </plurals>
     <string name="rules_cleanup_confirm">Remove</string>
+
+    <!-- Batch creation (owner mandate 2026-10-31): a named group of apps/websites created
+         together under one partner, so the partner reads "Social media", not N opaque rules. -->
+    <string name="rules_add_batch">Add batch</string>
+    <string name="batch_new_title">New batch</string>
+    <string name="batch_name_label">Batch name</string>
+    <string name="batch_name_hint">e.g. Social media</string>
+    <string name="batch_name_missing">Give this batch a name. Your partner sees this name.</string>
+    <string name="batch_items_title">What’s in this batch?</string>
+    <string name="batch_items_missing">Add at least one app or website.</string>
+    <string name="batch_apps_label">Apps</string>
+    <string name="batch_apps_add">Add apps</string>
+    <string name="batch_apps_empty">No apps yet.</string>
+    <string name="batch_websites_label">Websites</string>
+    <string name="batch_website_hint">example.com</string>
+    <string name="batch_website_add">Add site</string>
+    <string name="batch_websites_empty">No websites yet.</string>
+    <string name="batch_website_invalid">That doesn’t look like a website address. Try example.com.</string>
+    <string name="batch_duplicate">“%1$s” is already in your block list.</string>
+    <string name="batch_item_error">“%1$s”: %2$s</string>
+    <string name="batch_remove_item">Remove %1$s</string>
+    <string name="batch_save">Create batch</string>
+    <string name="batch_saving">Creating…</string>
+    <string name="batch_partner_hint">They’re told about this batch and any attempts it blocks.</string>
+    <plurals name="batch_item_count">
+        <item quantity="one">%1$d item</item>
+        <item quantity="other">%1$d items</item>
+    </plurals>
+    <string name="rules_batch_pause">Pause %1$s</string>
+    <string name="rules_batch_resume">Resume %1$s</string>
+    <string name="rules_batch_remove_partner">Remove partner</string>
+    <string name="rules_batch_delete">Delete batch</string>
+    <string name="rules_batch_delete_title">Delete this batch?</string>
+    <plurals name="rules_batch_delete_body">
+        <item quantity="one">“%1$s” and its 1 rule will be removed and stop blocking immediately.</item>
+        <item quantity="other">“%1$s” and its %2$d rules will be removed and stop blocking immediately.</item>
+    </plurals>
+    <string name="rules_batch_watched_by">Watched by %1$s</string>
+    <string name="rules_batches_header">Batches</string>
+    <!-- The app picker's multi-select variant (batch creation). -->
+    <string name="picker_multi_title">Add apps to the batch</string>
+    <string name="picker_multi_add">Add %1$d</string>
 
     <!-- Rule editor -->
     <string name="editor_new_app">New app block</string>
@@ -628,7 +701,10 @@
          hub, and moves identity, sync detail, recent activity and unpair behind these three. -->
     <string name="partner_tile_requests">Requests</string>
     <string name="partner_tile_activity">Activity</string>
-    <string name="partner_tile_sharing">Sharing</string>
+    <!-- Owner ruling 2026-10-31 ("each page has its own responsibility"): this page is the
+         viewer's side of the partnership — what THEY share with the partner — and the label
+         says whose side it is. -->
+    <string name="partner_tile_sharing">You share</string>
     <string name="partner_tile_pairing">Pairing</string>
     <string name="partner_tile_sharing_none">Nothing shared</string>
     <!-- Owner ask 2026-10-21: the hub groups everything time-boxed under one heading instead of
@@ -639,6 +715,12 @@
     <string name="partner_tile_requests_none">None waiting</string>
     <string name="partner_tile_requests_waiting" tools:ignore="PluralsCandidate">%1$d waiting</string>
     <string name="partner_tile_activity_week" tools:ignore="PluralsCandidate">%1$d this week</string>
+    <!-- Owner report 2026-10-31: a one-day shared streak read "1 days free". -->
+    <plurals name="partner_tile_activity_days">
+        <item quantity="one">%1$d day free</item>
+        <item quantity="other">%1$d days free</item>
+    </plurals>
+    <string name="partner_tile_activity_none">Nothing shared</string>
     <string name="partner_tile_never_synced">Never synced</string>
     <string name="partner_tile_synced">Synced %1$s</string>
     <!-- Partner plans (owner ask 2026-10-21, ADR #193): a checklist one user writes and the
@@ -647,6 +729,18 @@
     <string name="partner_tile_plans_none">None yet</string>
     <string name="partner_tile_plans_todo">%1$d to do</string>
     <string name="partner_tile_plans_all_done">All done</string>
+    <string name="partner_tile_rules">Rules &amp; blocks</string>
+    <string name="partner_tile_rules_none">None shared with you yet</string>
+    <plurals name="partner_tile_rules_changes">
+        <item quantity="one">%1$d change</item>
+        <item quantity="other">%1$d changes</item>
+    </plurals>
+    <string name="partner_rules_empty_title">No rule updates yet</string>
+    <string name="partner_rules_empty_body">When a rule or batch you watch is created, changed, turned off, or ends, it shows up here.</string>
+    <plurals name="partner_rules_count">
+        <item quantity="one">%1$d rule update</item>
+        <item quantity="other">%1$d rule updates</item>
+    </plurals>
     <string name="partner_plans_title">Plans</string>
     <string name="partner_plans_intro">A plan is a short checklist. A partner can write one for you, and you can write your own.</string>
     <string name="partner_plans_from_header">From your partner</string>
@@ -681,7 +775,9 @@
     <string name="partner_plans_need_title">Give the plan a title.</string>
     <string name="partner_plans_need_task">Add at least one task.</string>
     <string name="partner_plans_edit">Edit</string>
-    <string name="partner_plans_author_hint">Your partner checks these off; their progress shows here.</string>
+    <!-- Names the person who checks it (owner feedback 2026-10-31): "partner" alone read as
+         the restricted user, and the word made who-does-what ambiguous. -->
+    <string name="partner_plans_author_hint">%1$s checks these off; their progress shows here.</string>
     <string name="partner_plans_recipient_hint">Checked items are shared back with %1$s.</string>
     <string name="partner_plans_updated">Updated %1$s</string>
     <!-- Partner-plan alert (ADR #193): only the unlocked copy names the plan. -->
@@ -721,6 +817,10 @@
     <string name="partner_activity_today">Today</string>
     <string name="partner_activity_week">This week</string>
     <string name="partner_activity_empty">No shared activity in the last 7 days.</string>
+    <!-- Owner report 2026-10-31: an all-zero page read as broken. Name the two causes apart —
+         nothing has ever been shared, or sharing is on and this week was simply quiet. -->
+    <string name="partner_activity_none_shared">Nothing has been shared with you yet. This page fills in when your partner turns on sharing.</string>
+    <string name="partner_activity_shared_state">Days free: %1$d · Relapses logged: %2$d</string>
     <!-- §7 Step 11 delta: the partner's shared aggregate. Days free is the dominant number;
          activity time and sync time are ALWAYS separate lines (§8.11) — a quiet partner is not
          a broken sync. -->
@@ -735,7 +835,7 @@
     <string name="partner_summary_relapses">Relapses logged</string>
     <string name="partner_summary_coaching_label">Coaching items</string>
     <string name="partner_summary_last_event">Last shared %1$s</string>
-    <string name="partner_summary_no_events">Nothing shared yet. You\'ll see their streak here once they log something.</string>
+    <string name="partner_summary_no_events">Nothing shared yet. This shows what your partner chooses to share — streaks, relapses and milestones.</string>
     <string name="partner_summary_partial">Some history is missing, so these numbers may be behind.</string>
     <string name="partner_summary_pinned_label">Their message to you</string>
     <!-- §7 Step 7 / §8.13 device monitoring: their app's own encrypted status report. Kept
@@ -784,6 +884,9 @@
     <string name="partner_compose_needs_sharing_body">Encouragement to %1$s carries your latest progress summary, so it can only send while at least one streak is shared with them.</string>
     <string name="partner_compose_body">They\'ll see this on their home screen. Keep it short and kind.</string>
     <string name="partner_compose_action">Write a message</string>
+    <!-- Owner ruling 2026-10-31: the viewer's sharing decisions are their own page's business;
+         from the partner's activity page the route appears only when a send is attempted. -->
+    <string name="partner_compose_open_sharing">Change what you share</string>
     <string name="partner_compose_hint">Your message</string>
     <string name="partner_compose_send">Send</string>
     <string name="partner_compose_cancel">Cancel</string>
@@ -828,6 +931,12 @@
     <string name="partner_rule_updated">Updated</string>
     <string name="partner_rule_disabled">Turned off</string>
     <string name="partner_rule_deleted">Deleted</string>
+    <string name="partner_rule_expired">Ended</string>
+    <string name="partner_rule_in_batch">%1$s batch</string>
+    <plurals name="partner_rule_item_count">
+        <item quantity="one">%1$d item</item>
+        <item quantity="other">%1$d items</item>
+    </plurals>
     <string name="partner_chain_catching_up_title">Catching up</string>
     <string name="partner_chain_catching_up_body">Some recent events are still coming in. This usually clears up on its own.</string>
     <string name="partner_chain_incomplete_title">Some history missing</string>

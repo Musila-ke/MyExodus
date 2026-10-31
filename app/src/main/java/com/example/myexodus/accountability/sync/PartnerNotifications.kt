@@ -15,6 +15,9 @@ import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.PlanWire
+import com.example.myexodus.accountability.serialization.RuleChange
+import com.example.myexodus.accountability.serialization.RuleIdentity
+import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.notifications.NotificationTapTarget
 import com.example.myexodus.ui.partner.shortKeyId
@@ -194,14 +197,16 @@ object PartnerNotifications {
         manager.deleteNotificationChannel(CHANNEL_PARTNER_NUDGES_V2)
     }
 
-    /** Partner-activity alert. The per-pair id collapses one partner's burst into a single
-     *  tray entry; `onlyAlertOnce` additionally keeps that burst to one alert (a
-     *  partner-activity pull can append several events at once) — the trade is that further
-     *  updates while the user leaves the notification untouched are silent, which is the
-     *  non-spammy side of §11.7. Unlocked copy names the sender and, for a wire-v2 relapse
-     *  or milestone, states which streak and when it happened (owner mandate 2026-10-04); a
-     *  motivational message shows the message itself (owner feedback 2026-10-01). The
-     *  lockscreen public version stays generic (FR-13) — none of the rich copy reaches it. */
+    /** Partner-activity alert. The per-pair tag/id collapses one partner's events into a single
+     *  tray entry. Every post alerts — owner ruling 2026-10-31: the tray entry was updating
+     *  silently for a new message/relapse because the post carried FLAG_ONLY_ALERT_ONCE, and
+     *  "it is in the shade but never appeared on screen" is the observed defect. §11.7's
+     *  one-alert burst rule is superseded for partner events: each event a partner chose to
+     *  share is worth a heads-up, and the single replace-in-place entry still prevents tray
+     *  stacking. Unlocked copy names the sender and, for a wire-v2 relapse or milestone,
+     *  states which streak and when it happened (owner mandate 2026-10-04); a motivational
+     *  message shows the message itself (owner feedback 2026-10-01). The lockscreen public
+     *  version stays generic (FR-13) — none of the rich copy reaches it. */
     fun notifyPartnerEvent(context: Context, pairId: String, partnerName: String, payload: EventPayload) {
         val rich = when (payload.type) {
             EventPayload.TYPE_RELAPSE_RECORDED ->
@@ -231,10 +236,6 @@ object PartnerNotifications {
             idFor(NOTIF_PARTNER_EVENT, pairId),
             R.string.partner_event_title,
             R.string.partner_event_text,
-            // Owner requirement: an edit to a plan must alert, not silently repaint a tray
-            // entry the user has not tapped yet. Plan publishes are rare; activity bursts
-            // keep the one-alert rule.
-            onlyAlertOnce = payload.type != PlanWire.TYPE_PLAN_PUBLISHED,
             // The rich title is only claimed when its details are actually present — a
             // pre-wire-v2 sender's relapse degrades to the generic named copy, never a title
             // that promises a streak name the body cannot show.
@@ -245,7 +246,101 @@ object PartnerNotifications {
             },
             namedText = richBody,
             tag = partnerTag("event", pairId),
+            // Owner report 2026-10-31: the plan alert opened Home, where the plan is not even
+            // reachable — the tap must land on the plan it names.
+            openPlanId = payload.plan?.planId
+                ?.takeIf { payload.type == PlanWire.TYPE_PLAN_PUBLISHED },
+            openPairId = pairId,
         )
+    }
+
+    /** §8.4 RULE_CONTROL (owner report 2026-10-31): a rule the partner assigned this device to
+     *  changed — and the sender's promise is "you'll be told", so the feed row alone was not
+     *  delivery. The wire carries the rule's UUID and a closed verb only (CBOR allowlist), so
+     *  the copy names the change, never the app. Same per-pair tray entry as other partner
+     *  events; the tap lands on the Partner tab where the change is listed. */
+    fun notifyRuleChanged(
+        context: Context,
+        pairId: String,
+        partnerName: String,
+        change: RuleChange,
+        identity: RuleIdentity?,
+    ) {
+        post(
+            context,
+            CHANNEL_ACCOUNTABILITY_EVENTS,
+            context.getString(R.string.partner_channel_activity_name),
+            NotificationManager.IMPORTANCE_HIGH,
+            idFor(NOTIF_PARTNER_EVENT, pairId),
+            R.string.partner_event_title,
+            R.string.partner_event_text,
+            namedTitle = context.getString(R.string.partner_rule_event_title_named, partnerName),
+            namedText = ruleEventBody(context, change, identity),
+            tag = partnerTag("event", pairId),
+            openPartnerTab = true,
+            openPairId = pairId,
+        )
+    }
+
+    /** The body names the rule/batch the wire identified; a pre-v2 sender keeps the generic
+     *  copy. A batch row states its item count; a member row names its parent batch. */
+    private fun ruleEventBody(context: Context, change: RuleChange, identity: RuleIdentity?): String {
+        if (identity == null) {
+            return context.getString(
+                when (change) {
+                    RuleChange.CREATED -> R.string.partner_rule_event_created
+                    RuleChange.ASSIGNED -> R.string.partner_rule_event_assigned
+                    RuleChange.UNASSIGNED -> R.string.partner_rule_event_unassigned
+                    RuleChange.UPDATED -> R.string.partner_rule_event_updated
+                    RuleChange.DISABLED -> R.string.partner_rule_event_disabled
+                    RuleChange.DELETED -> R.string.partner_rule_event_deleted
+                    RuleChange.EXPIRED -> R.string.partner_rule_event_expired
+                },
+            )
+        }
+        val label = identity.label
+        if (identity.targetType == RuleTargetType.BATCH) {
+            val counted = identity.itemCount ?: 0L
+            return context.getString(
+                when (change) {
+                    RuleChange.CREATED, RuleChange.ASSIGNED -> R.string.partner_rule_event_added_batched
+                    RuleChange.UPDATED -> R.string.partner_rule_event_updated_batched
+                    RuleChange.DISABLED -> R.string.partner_rule_event_disabled_batched
+                    RuleChange.DELETED -> R.string.partner_rule_event_deleted_batched
+                    RuleChange.UNASSIGNED -> R.string.partner_rule_event_unassigned_batched
+                    RuleChange.EXPIRED -> R.string.partner_rule_event_expired_batched
+                },
+                label,
+                counted,
+            )
+        }
+        val batch = identity.batchLabel
+        return if (batch == null) {
+            context.getString(
+                when (change) {
+                    RuleChange.CREATED, RuleChange.ASSIGNED -> R.string.partner_rule_event_added_labeled
+                    RuleChange.UPDATED -> R.string.partner_rule_event_updated_labeled
+                    RuleChange.DISABLED -> R.string.partner_rule_event_disabled_labeled
+                    RuleChange.DELETED -> R.string.partner_rule_event_deleted_labeled
+                    RuleChange.UNASSIGNED -> R.string.partner_rule_event_unassigned_labeled
+                    RuleChange.EXPIRED -> R.string.partner_rule_event_expired_labeled
+                },
+                label,
+            )
+        } else {
+            context.getString(
+                when (change) {
+                    RuleChange.CREATED, RuleChange.ASSIGNED -> R.string.partner_rule_event_added_in_batch
+                    RuleChange.UPDATED -> R.string.partner_rule_event_updated_in_batch
+                    RuleChange.DISABLED -> R.string.partner_rule_event_disabled_in_batch
+                    RuleChange.DELETED -> R.string.partner_rule_event_deleted_in_batch
+                    RuleChange.UNASSIGNED -> R.string.partner_rule_event_unassigned_in_batch
+                    RuleChange.EXPIRED -> R.string.partner_rule_event_expired_in_batch
+                },
+                label,
+                batch,
+            )
+        }
     }
 
     /** Wire v2 (ADR #134): "«streak» · ended a N-day streak · «when»"; null when the sender's
@@ -277,11 +372,11 @@ object PartnerNotifications {
     /** A verified disable-approval request arrived — the responder's actionable item.
      *  Plan Step 16 channel spec: `approval_requests` is HIGH importance. */
     fun notifyApprovalRequest(context: Context, pairId: String, partnerName: String) =
-        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_APPROVAL_REQUEST, pairId), R.string.approval_request_title, R.string.approval_request_text, namedTitle = context.getString(R.string.approval_request_title_named, partnerName), tag = partnerTag("request", pairId))
+        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_APPROVAL_REQUEST, pairId), R.string.approval_request_title, R.string.approval_request_text, namedTitle = context.getString(R.string.approval_request_title_named, partnerName), tag = partnerTag("request", pairId), openPairId = pairId)
 
     /** The partner answered our request — informational. */
     fun notifyApprovalDecision(context: Context, pairId: String, partnerName: String) =
-        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_APPROVAL_DECISION, pairId), R.string.approval_decision_title, R.string.approval_decision_text, namedTitle = context.getString(R.string.approval_decision_title_named, partnerName), tag = partnerTag("decision", pairId))
+        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_APPROVAL_DECISION, pairId), R.string.approval_decision_title, R.string.approval_decision_text, namedTitle = context.getString(R.string.approval_decision_title_named, partnerName), tag = partnerTag("decision", pairId), openPairId = pairId)
 
     /** #16: the partner ended the partnership and this device's shared data was shredded — the
      *  responder is told who, when, and that the erase happened (owner-observed defect: the
@@ -359,9 +454,11 @@ object PartnerNotifications {
         textRes: Int,
         namedTitle: String? = null,
         namedText: String? = null,
-        onlyAlertOnce: Boolean = false,
         tag: String? = null,
         pushNudgeId: String? = null,
+        openPlanId: String? = null,
+        openPartnerTab: Boolean = false,
+        openPairId: String? = null,
     ) {
         if (!NotificationAccess.canPost(context)) return
         // Create only when missing (device-observed 2026-10-04, both rig devices): re-creating
@@ -375,7 +472,9 @@ object PartnerNotifications {
             channelManager.createNotificationChannel(NotificationChannel(channelId, channelName, importance))
         }
         // Owner ask 2026-10-01: the tap lands on Home — the pinned message card (messages)
-        // and the day hero live there, so that is where the partner event is visible. The
+        // and the day hero live there, so that is where the partner event is visible. A plan
+        // event is the exception (owner report 2026-10-31): it lands on the plan itself,
+        // because Home does not even reach the Plans surface. The
         // request code is this object's own (extras don't count toward PendingIntent
         // identity, and the shared code 0 would let this post rewrite Protection's
         // Settings-landing extras on the same MainActivity intent). Extras also don't make
@@ -386,7 +485,22 @@ object PartnerNotifications {
         val openAppIntent = Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             .setData(NotificationTapTarget.of(tag ?: "id-$notificationId"))
-            .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_HOME)
+            .putExtra(
+                MainActivity.EXTRA_START_TAB,
+                if (openPlanId != null || openPartnerTab || openPairId != null) {
+                    MainActivity.TAB_PARTNER
+                } else {
+                    MainActivity.TAB_HOME
+                },
+            )
+        if (openPlanId != null) {
+            openAppIntent.putExtra(MainActivity.EXTRA_OPEN_PLAN, openPlanId)
+        }
+        // Owner report 2026-10-31: a tap must land on the pair the post concerns, even when
+        // another roster entry is selected — the extra switches PartnerScreen's selection.
+        if (openPairId != null) {
+            openAppIntent.putExtra(MainActivity.EXTRA_OPEN_PARTNER, openPairId)
+        }
         if (pushNudgeId != null) {
             openAppIntent
                 .putExtra(PartnerNudgePush.TYPE_KEY, PartnerNudgePush.TYPE_PARTNER_NUDGE)
@@ -420,7 +534,6 @@ object PartnerNotifications {
                     .setContentText(context.getString(textRes))
                     .build(),
             )
-            .setOnlyAlertOnce(onlyAlertOnce)
             .setContentIntent(openApp)
             .build()
         val manager = NotificationManagerCompat.from(context)

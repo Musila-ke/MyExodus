@@ -7,11 +7,15 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.myexodus.MainActivity
 import com.example.myexodus.R
 import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.PlanBody
 import com.example.myexodus.accountability.serialization.PlanWire
+import com.example.myexodus.accountability.serialization.RuleChange
+import com.example.myexodus.accountability.serialization.RuleIdentity
+import com.example.myexodus.accountability.serialization.RuleTargetType
 import java.text.DateFormat
 import java.util.Date
 import org.junit.Assert.assertEquals
@@ -98,26 +102,37 @@ class PartnerNotificationsTest {
     }
 
     /**
-     * §11.7 burst coalescing: a pull can append several events at once, and one fixed id already
-     * collapses them into a single tray entry — `onlyAlertOnce` keeps that burst to one *alert*
-     * on the partner-alert channel. Approval items must still alert every time (they are
-     * actionable and never burst), so the flag is per-call, not global.
+     * Owner ruling 2026-10-31: every partner event must alert on screen. A second event for
+     * the same pair still replaces the one tray entry (fixed tag/id) but may not carry
+     * FLAG_ONLY_ALERT_ONCE — that flag was the observed reason a new message updated the
+     * shade silently. Approval items keep their own alert-every-time contract.
      */
     @Test
-    fun partnerEvent_alertOnceDuringABurst_butApprovalAlwaysAlerts() {
+    fun partnerEvent_alertsOnEveryPost_andReplacesTheTrayEntry() {
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
 
         PartnerNotifications.notifyPartnerEvent(
             context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_STREAK_UPDATED),
+        )
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_RELAPSE_RECORDED),
         )
         PartnerNotifications.notifyApprovalRequest(context, PAIR_ID, PARTNER_NAME)
 
         val partnerEvent = manager.activeNotifications.first {
             it.id == PartnerNotifications.idFor(PartnerNotifications.NOTIF_PARTNER_EVENT, PAIR_ID)
         }
-        assertTrue(
-            "partner-activity bursts alert once",
-            partnerEvent.notification.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0,
+        assertEquals(
+            "a new partner event must alert, never update the shade silently",
+            0,
+            partnerEvent.notification.flags and Notification.FLAG_ONLY_ALERT_ONCE,
+        )
+        assertEquals(
+            "one partner still owns exactly one activity tray entry",
+            1,
+            manager.activeNotifications.count {
+                it.id == PartnerNotifications.idFor(PartnerNotifications.NOTIF_PARTNER_EVENT, PAIR_ID)
+            },
         )
         val approval = manager.activeNotifications.first {
             it.id == PartnerNotifications.idFor(PartnerNotifications.NOTIF_APPROVAL_REQUEST, PAIR_ID)
@@ -647,6 +662,11 @@ class PartnerNotificationsTest {
             context.getString(R.string.partner_milestone_title_named, PARTNER_NAME),
             notification.extras.getString(Notification.EXTRA_TITLE),
         )
+        // A partner event lands on that partner's activity, whichever roster entry is selected.
+        val tap = shadowOf(notification.contentIntent).savedIntent
+        assertEquals(MainActivity.TAB_PARTNER, tap.getStringExtra(MainActivity.EXTRA_START_TAB))
+        assertEquals(PAIR_ID, tap.getStringExtra(MainActivity.EXTRA_OPEN_PARTNER))
+        assertNull(tap.getStringExtra(MainActivity.EXTRA_OPEN_PLAN))
         assertEquals(
             context.getString(
                 R.string.partner_event_time_suffix,
@@ -694,6 +714,79 @@ class PartnerNotificationsTest {
         assertEquals(
             context.getString(R.string.partner_event_title),
             notification.publicVersion!!.extras.getString(Notification.EXTRA_TITLE),
+        )
+        // Owner report 2026-10-31: the tap opened Home, where the plan is unreachable. It must
+        // land on the Partner tab with the named plan already open.
+        val tap = shadowOf(notification.contentIntent).savedIntent
+        assertEquals(MainActivity.TAB_PARTNER, tap.getStringExtra(MainActivity.EXTRA_START_TAB))
+        assertEquals(plan.planId, tap.getStringExtra(MainActivity.EXTRA_OPEN_PLAN))
+    }
+
+    /** §8.4 owner report 2026-10-31: assigning a partner to a rule produced a feed row and no
+     *  alert — the event never reached the notify path. Every verb must post the named copy,
+     *  and the tap must land on the Partner tab where the change is listed. */
+    @Test
+    fun ruleChanged_everyVerbPostsNamedCopy_andOpensThePartnerTab() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        val expected = mapOf(
+            RuleChange.CREATED to R.string.partner_rule_event_created,
+            RuleChange.ASSIGNED to R.string.partner_rule_event_assigned,
+            RuleChange.UNASSIGNED to R.string.partner_rule_event_unassigned,
+            RuleChange.UPDATED to R.string.partner_rule_event_updated,
+            RuleChange.DISABLED to R.string.partner_rule_event_disabled,
+            RuleChange.DELETED to R.string.partner_rule_event_deleted,
+        )
+        for ((change, body) in expected) {
+            PartnerNotifications.notifyRuleChanged(context, PAIR_ID, PARTNER_NAME, change, null)
+
+            val notification = manager.activeNotifications.last().notification
+            assertEquals(
+                context.getString(R.string.partner_rule_event_title_named, PARTNER_NAME),
+                notification.extras.getString(Notification.EXTRA_TITLE),
+            )
+            assertEquals(context.getString(body), notification.extras.getString(Notification.EXTRA_TEXT))
+            val tap = shadowOf(notification.contentIntent).savedIntent
+            assertEquals(MainActivity.TAB_PARTNER, tap.getStringExtra(MainActivity.EXTRA_START_TAB))
+            assertNull(tap.getStringExtra(MainActivity.EXTRA_OPEN_PLAN))
+            // Owner report 2026-10-31: the tap must select the pair the post concerns.
+            assertEquals(PAIR_ID, tap.getStringExtra(MainActivity.EXTRA_OPEN_PARTNER))
+            // One replace-in-place entry per pair: the six posts never stack.
+            assertEquals(1, manager.activeNotifications.size)
+        }
+    }
+
+    /** Owner report 2026-10-31 ("what have I been added to?"): the body names the app, and a
+     *  member of a named batch names the batch; a batch-level row states its size. */
+    @Test
+    fun ruleChanged_namedIdentityAndBatchContext() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyRuleChanged(
+            context, PAIR_ID, PARTNER_NAME, RuleChange.CREATED,
+            RuleIdentity(label = "Instagram", targetType = RuleTargetType.APP, batchLabel = "Social media"),
+        )
+        assertEquals(
+            context.getString(R.string.partner_rule_event_added_in_batch, "Instagram", "Social media"),
+            manager.activeNotifications.last().notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+
+        PartnerNotifications.notifyRuleChanged(
+            context, PAIR_ID, PARTNER_NAME, RuleChange.CREATED,
+            RuleIdentity(label = "Social media", targetType = RuleTargetType.BATCH, itemCount = 4),
+        )
+        assertEquals(
+            context.getString(R.string.partner_rule_event_added_batched, "Social media", 4),
+            manager.activeNotifications.last().notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+
+        PartnerNotifications.notifyRuleChanged(
+            context, PAIR_ID, PARTNER_NAME, RuleChange.EXPIRED,
+            RuleIdentity(label = "TikTok", targetType = RuleTargetType.APP),
+        )
+        assertEquals(
+            context.getString(R.string.partner_rule_event_expired_labeled, "TikTok"),
+            manager.activeNotifications.last().notification.extras.getString(Notification.EXTRA_TEXT),
         )
     }
 

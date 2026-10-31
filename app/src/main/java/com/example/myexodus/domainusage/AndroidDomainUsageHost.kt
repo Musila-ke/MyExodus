@@ -60,14 +60,7 @@ class AndroidDomainUsageHost(private val context: Context) : DomainUsageHost {
         if (notificationsDenied()) return
         try {
             val nm = context.getSystemService(NotificationManager::class.java) ?: return
-            nm.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    context.getString(R.string.domain_usage_channel_name),
-                    NotificationManager.IMPORTANCE_HIGH,
-                ),
-            )
-            nm.deleteNotificationChannel(CHANNEL_ID_LEGACY)
+            ensureStatusChannel(context)
             nm.notify(
                 id,
                 NotificationCompat.Builder(context, CHANNEL_ID)
@@ -115,11 +108,27 @@ class AndroidDomainUsageHost(private val context: Context) : DomainUsageHost {
         return permissionDenied || !NotificationManagerCompat.from(context).areNotificationsEnabled()
     }
 
-    private companion object {
+    companion object {
         // Versioned: importance cannot be raised on an existing channel (owner report
         // 2026-10-29 — warnings stayed in the tray).
         const val CHANNEL_ID = "domain_usage_status_v1"
         const val CHANNEL_ID_LEGACY = "domain_usage_status"
+
+        /** Created at startup so system settings never lists the retired `domain_usage_status`
+         *  id beside this one (owner report 2026-10-31: duplicate channel entries). Create-only. */
+        fun ensureStatusChannel(context: Context) {
+            val manager = context.getSystemService(NotificationManager::class.java) ?: return
+            if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+                manager.createNotificationChannel(
+                    NotificationChannel(
+                        CHANNEL_ID,
+                        context.getString(R.string.domain_usage_channel_name),
+                        NotificationManager.IMPORTANCE_HIGH,
+                    ),
+                )
+            }
+            manager.deleteNotificationChannel(CHANNEL_ID_LEGACY)
+        }
         const val NOTIFICATION_ID = 2
         const val WARNING_NOTIFICATION_ID = 3
     }

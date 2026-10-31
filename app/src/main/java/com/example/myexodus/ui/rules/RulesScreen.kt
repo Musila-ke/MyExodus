@@ -9,6 +9,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -101,6 +103,7 @@ import kotlinx.coroutines.withContext
 
 private const val ROUTE_LIST = "list"
 private const val ROUTE_EDIT = "edit"
+private const val ROUTE_BATCH = "batch"
 
 private const val TAG = "RulesScreen"
 
@@ -207,6 +210,17 @@ fun RulesScreen(
     }
 
     var confirmCleanup by remember { mutableStateOf(false) }
+    var confirmDeleteBatch by remember { mutableStateOf<PendingBatchDelete?>(null) }
+    // Batch master switches carry the same optimistic-with-revert contract as a rule's.
+    var pendingBatchPause by remember { mutableStateOf(emptyMap<String, Boolean>()) }
+    LaunchedEffect(rules, pendingBatchPause) {
+        if (pendingBatchPause.isNotEmpty()) {
+            pendingBatchPause = pendingBatchPause.filterNot { (batchId, want) ->
+                val members = rules.orEmpty().filter { it.batchId == batchId }
+                members.isNotEmpty() && members.all { it.isEnabled == want }
+            }
+        }
+    }
 
     // Category presets (owner request 2026-10-21). The sheet is open while categoryId is
     // non-null; a confirmed list is held in pendingPresetSites only while the engine-off
@@ -262,6 +276,7 @@ fun RulesScreen(
     // until the tunnel is on, so the same blocker drives the editor's warning and save prompt.
     val engineWatched = hasLiveWebsite ||
         (route == ROUTE_EDIT && editTargetType == "WEBSITE") ||
+        route == ROUTE_BATCH ||
         presetCategoryId != null
     val engineBlocker = if (engineWatched) {
         VpnLifecycle.websiteEngineBlocker(VpnLifecycle.consented(context), DnsSinkholeVpnService.state)
@@ -384,6 +399,28 @@ fun RulesScreen(
             }
         }
 
+        ROUTE_BATCH -> when {
+            loadState == RulesLoad.Failed -> RulesLoadError(
+                onRetry = { loadRetry++ },
+                onBack = { route = ROUTE_LIST },
+                modifier = modifier,
+            )
+            rules == null -> RulesLoading(modifier = modifier)
+            else -> BatchEditorScreen(
+                existingRules = rules.orEmpty(),
+                partners = partners,
+                repository = repository,
+                usageAccountingEngine = usageAccountingEngine,
+                platformUsage = platformUsage,
+                psl = psl,
+                websiteEngineBlocker = engineBlocker,
+                websiteLimitsMode = websiteLimitsMode,
+                onEnableWebsiteEngine = enableWebsiteEngine,
+                onDone = { route = ROUTE_LIST },
+                modifier = modifier,
+            )
+        }
+
         else -> when (val loaded = loadState) {
             RulesLoad.Loading -> RulesLoading(modifier = modifier)
             RulesLoad.Failed -> RulesLoadError(
@@ -442,6 +479,43 @@ fun RulesScreen(
                         }
                     },
                     onCleanup = { confirmCleanup = true },
+                    onAddBatch = { route = ROUTE_BATCH },
+                    pendingBatchPause = pendingBatchPause,
+                    onToggleBatch = { batchId, enable ->
+                        val members = rules.orEmpty().filter { it.batchId == batchId }
+                        pendingBatchPause = pendingBatchPause + (batchId to enable)
+                        scope.launch(Dispatchers.IO) {
+                            runCatching { repository.setBatchEnabled(batchId, enable) }
+                                .onSuccess {
+                                    // Same counting seam as a single rule's resume (OPD #28(a)).
+                                    if (enable) {
+                                        members
+                                            .filter { it.targetType == "APP" && it.dailyLimitMs > 0L }
+                                            .forEach { member ->
+                                                runCatching {
+                                                    usageAccountingEngine.reconcileWithPlatform(
+                                                        member.blockedPackage,
+                                                        platformUsage.todayForegroundMs(member.blockedPackage),
+                                                    )
+                                                }.onFailure { Log.w(TAG, "Platform usage reconcile failed", it) }
+                                            }
+                                    }
+                                }
+                                .onFailure { failure ->
+                                    pendingBatchPause = pendingBatchPause - batchId
+                                    errorMessage = notSavedMessage(failure, context)
+                                }
+                        }
+                    },
+                    onRemoveBatchPartner = { batchId ->
+                        scope.launch(Dispatchers.IO) {
+                            runCatching { repository.removeBatchPartner(batchId) }
+                                .onFailure { errorMessage = notSavedMessage(it, context) }
+                        }
+                    },
+                    onDeleteBatch = { batch ->
+                        confirmDeleteBatch = PendingBatchDelete(batch.batchId, batch.name, batch.members.size)
+                    },
                     modifier = modifier,
                 )
             }
@@ -451,7 +525,8 @@ fun RulesScreen(
     // #18 cleanup (#rule list's "Remove all"): one confirm, then the batch delete. Count is
     // read at confirm time, so the dialog copy can never disagree with what's deleted.
     if (confirmCleanup) {
-        val doomed = rules.orEmpty().filter { !it.isEnabled }
+        // Batch members leave as one batch (their card's Delete batch), never one by one.
+        val doomed = rules.orEmpty().filter { !it.isEnabled && it.batchId == null }
         AlertDialog(
             onDismissRequest = { confirmCleanup = false },
             title = { Text(stringResource(R.string.rules_cleanup_title)) },
@@ -473,6 +548,39 @@ fun RulesScreen(
             },
             dismissButton = {
                 TextButton(onClick = { confirmCleanup = false }) { Text(stringResource(R.string.rules_cancel)) }
+            },
+        )
+    }
+
+    confirmDeleteBatch?.let { doomed ->
+        AlertDialog(
+            onDismissRequest = { confirmDeleteBatch = null },
+            title = { Text(stringResource(R.string.rules_batch_delete_title)) },
+            text = {
+                Text(
+                    pluralStringResource(
+                        R.plurals.rules_batch_delete_body, doomed.count, doomed.name, doomed.count,
+                    ),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDeleteBatch = null
+                    scope.launch(Dispatchers.IO) {
+                        runCatching { repository.deleteBatch(doomed.batchId) }
+                            .onFailure { errorMessage = notSavedMessage(it, context) }
+                    }
+                }) {
+                    Text(
+                        stringResource(R.string.rules_batch_delete),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteBatch = null }) {
+                    Text(stringResource(R.string.rules_cancel))
+                }
             },
         )
     }
@@ -615,6 +723,7 @@ private fun EditorUnavailable(onBack: () -> Unit, modifier: Modifier = Modifier)
  */
 internal val RULES_CARD_MAX_HEIGHT = 480.dp
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RulesList(
     rules: List<RestrictionRule>,
@@ -636,6 +745,11 @@ private fun RulesList(
     onEdit: (RestrictionRule) -> Unit,
     onTogglePause: (RestrictionRule, Boolean) -> Unit,
     onCleanup: () -> Unit,
+    onAddBatch: () -> Unit,
+    pendingBatchPause: Map<String, Boolean>,
+    onToggleBatch: (batchId: String, enable: Boolean) -> Unit,
+    onRemoveBatchPartner: (batchId: String) -> Unit,
+    onDeleteBatch: (BatchGroup) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val sidePadding: Dp = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
@@ -646,9 +760,25 @@ private fun RulesList(
     }
     val appsHeader = stringResource(R.string.rules_apps_header)
     val websitesHeader = stringResource(R.string.rules_websites_header)
+    val batchesHeader = stringResource(R.string.rules_batches_header)
     val deactivatedHeader = stringResource(R.string.rules_deactivated_header)
     val deactivatedCaption = stringResource(R.string.rules_deactivated_caption)
     val cleanupLabel = stringResource(R.string.rules_cleanup)
+    // Batch members are managed through their batch card, never as loose rows: one card per
+    // named batch (apps and websites together), with the master switch and their one partner.
+    val batches = remember(rules) {
+        rules.filter { it.batchId != null }
+            .groupBy { it.batchId!! }
+            .map { (batchId, members) ->
+                BatchGroup(
+                    batchId = batchId,
+                    name = members.firstNotNullOfOrNull { it.batchName?.takeIf(String::isNotBlank) }
+                        ?: batchId,
+                    members = members,
+                    assignedPairId = members.firstOrNull()?.assignedPairId,
+                )
+            }
+    }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -689,7 +819,7 @@ private fun RulesList(
             }
         }
         item(key = "add") {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 AddButton(
                     label = stringResource(R.string.rules_add_app),
                     onClick = onAddApp,
@@ -698,15 +828,36 @@ private fun RulesList(
                     label = stringResource(R.string.rules_add_website),
                     onClick = onAddWebsite,
                 )
+                AddButton(
+                    label = stringResource(R.string.rules_add_batch),
+                    onClick = onAddBatch,
+                )
             }
         }
         // Owner directive 2026-10-21: each section renders its own state — the Apps and
         // Websites sections exist even when empty and say what they hold. Deactivated stays
         // hidden when empty: it is a cleanup area derived from the other two, not a third
         // destination, and a "nothing paused" card would only add weight.
-        val appRules = rules.filter { it.targetType == "APP" && it.isEnabled }
-        val websiteRules = rules.filter { it.targetType == "WEBSITE" && it.isEnabled }
-        val deactivated = rules.filter { !it.isEnabled }
+        val appRules = rules.filter { it.targetType == "APP" && it.isEnabled && it.batchId == null }
+        val websiteRules = rules.filter { it.targetType == "WEBSITE" && it.isEnabled && it.batchId == null }
+        val deactivated = rules.filter { !it.isEnabled && it.batchId == null }
+
+        if (batches.isNotEmpty()) {
+            sectionHeader(header = batchesHeader, key = "batches")
+            itemsIndexed(batches, key = { _, batch -> "batch-${batch.batchId}" }) { _, batch ->
+                val enabled = pendingBatchPause[batch.batchId] ?: batch.members.any { it.isEnabled }
+                BatchCard(
+                    batch = batch,
+                    partners = partners,
+                    enabled = enabled,
+                    awaitingWrite = pendingBatchPause.containsKey(batch.batchId),
+                    nowMillis = nowMillis,
+                    onToggle = { onToggleBatch(batch.batchId, it) },
+                    onRemovePartner = { onRemoveBatchPartner(batch.batchId) },
+                    onDelete = { onDeleteBatch(batch) },
+                )
+            }
+        }
 
         sectionHeader(header = appsHeader, key = "apps")
         item(key = "apps-body") {
@@ -801,6 +952,158 @@ private fun LazyListScope.sectionHeader(
             )
             trailing?.invoke()
         }
+    }
+}
+
+/** A named batch as its Rules-page card shows it (owner mandate 2026-10-31). */
+internal data class BatchGroup(
+    val batchId: String,
+    val name: String,
+    val members: List<RestrictionRule>,
+    val assignedPairId: String?,
+)
+
+private data class PendingBatchDelete(val batchId: String, val name: String, val count: Int)
+
+/**
+ * One named batch: everything that goes together stays together — the name the partner sees,
+ * its items, its one partner, and the master switch. Members are not loose rows: pausing here
+ * is one batch-level event ("Social media was turned off"), not N rule events.
+ */
+@Composable
+private fun BatchCard(
+    batch: BatchGroup,
+    partners: List<ReachOutTarget>,
+    enabled: Boolean,
+    awaitingWrite: Boolean,
+    nowMillis: Long,
+    onToggle: (Boolean) -> Unit,
+    onRemovePartner: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val supervisor = partners.firstOrNull { it.pairId == batch.assignedPairId }
+    val unsupervised = batch.assignedPairId != null && supervisor == null
+    val pauseLabel = stringResource(R.string.rules_batch_pause, batch.name)
+    val resumeLabel = stringResource(R.string.rules_batch_resume, batch.name)
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        batch.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = if (enabled) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        pluralStringResource(
+                            R.plurals.batch_item_count, batch.members.size, batch.members.size,
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    when {
+                        supervisor != null -> Text(
+                            stringResource(R.string.rules_batch_watched_by, supervisor.name),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        unsupervised -> Text(
+                            stringResource(R.string.rules_unsupervised),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        partners.isNotEmpty() -> Text(
+                            stringResource(R.string.rules_not_shared),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = onToggle,
+                    enabled = !awaitingWrite,
+                    modifier = Modifier.semantics {
+                        contentDescription = if (enabled) pauseLabel else resumeLabel
+                    },
+                )
+            }
+            LazyColumn(Modifier.heightIn(max = RULES_CARD_MAX_HEIGHT)) {
+                itemsIndexed(batch.members, key = { _, member -> member.ruleId }) { index, member ->
+                    if (index > 0) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = APP_MARK_SIZE + 16.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant,
+                        )
+                    }
+                    BatchMemberRow(rule = member, nowMillis = nowMillis)
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (batch.assignedPairId != null) {
+                    TextButton(onClick = onRemovePartner) {
+                        Text(stringResource(R.string.rules_batch_remove_partner))
+                    }
+                }
+                TextButton(onClick = onDelete) {
+                    Text(
+                        stringResource(R.string.rules_batch_delete),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BatchMemberRow(rule: RestrictionRule, nowMillis: Long) {
+    val label = rememberAppLabel(rule.blockedPackage)
+    val res = LocalResources.current
+    val state = remember(rule, nowMillis, res) { ruleRowState(rule, nowMillis, res) }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        AppMark(
+            packageName = if (rule.targetType == "WEBSITE") null else rule.blockedPackage,
+            fallback = if (rule.targetType == "WEBSITE") Icons.Default.Language else Icons.Default.Apps,
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = if (rule.isEnabled) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                scheduleSummary(rule, res),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        state.label?.let { StatePill(label = it, active = state.active && rule.isEnabled) }
     }
 }
 

@@ -750,6 +750,9 @@ object AccountabilityModule {
             hasPriorPairingKeys = keystore::hasPairCanary,
             // OPD #30(b): the denied-pairing flag the resolver records, read for the re-pair card.
             pairingDeniedAt = reachability::deniedAt,
+            // Owner report 2026-10-31: a successfully answered pairing read also counts as
+            // "synced" for the tile, so a quiet pair cannot read "Never synced" forever.
+            pairingContactAt = reachability::contactAt,
             rejectionsSince = db.outboxDao()::rejectionCountSince,
             // §7 Step 11: a local Room read of the partner's shared aggregate — the dashboard
             // never waits on Firestore for a number the mailbox already delivered (plan §1).
@@ -824,6 +827,7 @@ object AccountabilityModule {
 
     @Provides @Singleton
     fun providePartnerSyncCoordinator(
+        @ApplicationContext context: Context,
         enrollmentDao: EnrollmentDao,
         storeFactory: AppRulesStoreFactory,
         creator: EventCreator,
@@ -862,6 +866,7 @@ object AccountabilityModule {
         checkIn = { force -> heartbeat.checkIn(force) },
         syncAvailabilityConsent = { pairId, enabled -> dms.syncConsent(pairId, enabled) },
         fence = sessionFence,
+        resolveRuleLabel = { _, target -> com.example.myexodus.ui.appLabel(context, target) },
     )
 
     /** Plan Step 8 (§8.10/§8.11): the DMS client half — consent convergence onto the authoritative
@@ -1076,11 +1081,27 @@ object AccountabilityModule {
                 }
             },
             // Step 7 receive half: a monitoring snapshot is recipient-local state, not an
-            // alert — it never reaches the notification path. Rule lifecycle bodies are the
-            // same shape: the pair's local feed row is the whole delivery.
+            // alert — it never reaches the notification path. A rule lifecycle body is both:
+            // the feed row (RuleControlReceiver) plus an alert (owner report 2026-10-31 —
+            // "added a partner to a rule, the partner saw nothing"). Notify only when a row was
+            // actually stored, so a mailbox redelivery cannot double-post.
             onAccountabilityEvent = { pairId, senderKeyId, event, _ ->
                 monitoringReceiver.onEvent(pairId, senderKeyId, event)
-                ruleControlReceiver.onEvent(pairId, event)
+                val change = event.ruleChange
+                val stored = runCatching { ruleControlReceiver.onEvent(pairId, event) }
+                    .onFailure { Log.w(TAG, "rule change store failed pairId=$pairId", it) }
+                    .getOrDefault(false)
+                if (stored && change != null) {
+                    enrollmentDao.getByPairId(pairId)?.let { enrollment ->
+                        runCatching {
+                            PartnerNotifications.notifyRuleChanged(
+                                context, pairId, displayNameOf(enrollment), change, event.ruleIdentity,
+                            )
+                        }.onFailure {
+                            Log.w(TAG, "rule change notification failed pairId=$pairId", it)
+                        }
+                    }
+                }
             },
         )
     }

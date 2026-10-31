@@ -35,6 +35,23 @@ object StreakNotifications {
     internal fun milestoneTag(streakId: String, milestoneDay: Int): String =
         "streak_milestone:$streakId:$milestoneDay"
 
+    /** Created at startup so system settings never lists the retired `streak_milestones` id
+     *  beside this one (owner report 2026-10-31: duplicate channel entries). Create-only —
+     *  re-creating an existing channel must never rewrite the user's chosen importance. */
+    fun ensureMilestonesChannel(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        if (manager.getNotificationChannel(CHANNEL_MILESTONES) == null) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_MILESTONES,
+                    context.getString(R.string.streaks_milestone_channel_name),
+                    NotificationManager.IMPORTANCE_HIGH,
+                ),
+            )
+        }
+        manager.deleteNotificationChannel(CHANNEL_MILESTONES_LEGACY)
+    }
+
     // Suppressed: the gate is NotificationAccess.canPost (the only way in), which lint can't
     // trace through a helper.
     @SuppressLint("MissingPermission")
@@ -46,16 +63,7 @@ object StreakNotifications {
         habitId: String,
     ) {
         if (!NotificationAccess.canPost(context)) return
-        context.getSystemService(NotificationManager::class.java).apply {
-            createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_MILESTONES,
-                    context.getString(R.string.streaks_milestone_channel_name),
-                    NotificationManager.IMPORTANCE_HIGH,
-                ),
-            )
-            deleteNotificationChannel(CHANNEL_MILESTONES_LEGACY)
-        }
+        ensureMilestonesChannel(context)
         // Lands on Home with the right habit displayed (multi-habit): the splash card renders
         // at the top of Home for the *displayed* habit, so the tap both switches to this
         // habit's Home and shows its card — never another habit's. Extras don't count toward

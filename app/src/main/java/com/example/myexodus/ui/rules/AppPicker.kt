@@ -3,6 +3,7 @@ package com.example.myexodus.ui.rules
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -26,12 +28,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
@@ -134,4 +138,109 @@ private fun AppPickerRow(app: AppEntry, onClick: () -> Unit) {
             overflow = TextOverflow.Ellipsis,
         )
     }
+}
+
+/**
+ * Multi-select variant for a batch (owner mandate 2026-10-31): one review of every app going
+ * into the batch. [exclude] hides packages already blocked by an existing rule — picking one
+ * would only produce a duplicate the save must reject.
+ */
+@Composable
+internal fun AppMultiPickerDialog(
+    exclude: Set<String>,
+    onConfirm: (Set<String>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    var apps by remember { mutableStateOf<List<AppEntry>?>(null) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var selected by rememberSaveable(
+        stateSaver = listSaver(save = { it.toList() }, restore = { it.toSet() }),
+    ) { mutableStateOf(emptySet<String>()) }
+
+    LaunchedEffect(Unit) {
+        apps = withContext(Dispatchers.IO) { loadLaunchableApps(context) }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.picker_multi_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text(stringResource(R.string.picker_search)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                when (val loaded = apps) {
+                    null -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(28.dp))
+                    }
+                    else -> {
+                        val available = remember(loaded, exclude) { loaded.filter { it.packageName !in exclude } }
+                        val visible = remember(available, query) {
+                            val needle = query.trim().lowercase()
+                            if (needle.isEmpty()) available
+                            else available.filter { it.label.lowercase().contains(needle) }
+                        }
+                        when {
+                            available.isEmpty() -> Text(
+                                stringResource(R.string.picker_none),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            visible.isEmpty() -> Text(
+                                stringResource(R.string.picker_no_match, query.trim()),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            else -> LazyColumn(Modifier.heightIn(max = 400.dp)) {
+                                items(visible, key = { it.packageName }) { app ->
+                                    val checked = app.packageName in selected
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .toggleable(
+                                                value = checked,
+                                                role = Role.Checkbox,
+                                                onValueChange = { want ->
+                                                    selected = if (want) selected + app.packageName
+                                                    else selected - app.packageName
+                                                },
+                                            )
+                                            .padding(vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    ) {
+                                        Checkbox(checked = checked, onCheckedChange = null)
+                                        AppMark(packageName = app.packageName, fallback = Icons.Default.Apps)
+                                        Text(
+                                            app.label,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(selected) },
+                enabled = selected.isNotEmpty(),
+            ) {
+                Text(stringResource(R.string.picker_multi_add, selected.size))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.rules_cancel)) }
+        },
+    )
 }

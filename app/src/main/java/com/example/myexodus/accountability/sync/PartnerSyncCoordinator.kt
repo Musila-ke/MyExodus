@@ -20,6 +20,8 @@ import com.example.myexodus.accountability.serialization.PlanBody
 import com.example.myexodus.accountability.serialization.PlanTaskBody
 import com.example.myexodus.accountability.serialization.PlanWire
 import com.example.myexodus.accountability.serialization.RuleChange
+import com.example.myexodus.accountability.serialization.RuleIdentity
+import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.accountability.state.ChainStateStore
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
@@ -110,6 +112,10 @@ class PartnerSyncCoordinator(
      * The JVM default keeps the coordinator's own contract testable without a session.
      */
     private val fence: SessionFence = SessionFence.Unfenced,
+    /** Human name for a target as this device shows it. Only v1 journal rows queued before
+     *  the identity upgrade need it — v2 rows carry their label, and a rule that no longer
+     *  exists keeps the contract's neutral fallback. */
+    private val resolveRuleLabel: (targetType: String, target: String) -> String = { _, target -> target },
 ) {
 
     data class SyncReport(
@@ -365,7 +371,7 @@ class PartnerSyncCoordinator(
         if (profileConsent?.shareCheckins == true) {
             val since = maxOf(sinceMs, profileConsent.checkinsEnabledSinceMs)
             for (attempt in attempts.pendingEventCreation(pairId, since, RECONCILE_BATCH)) {
-                when (val emit = emitActivity(pairId, "attempt ${attempt.id}", eventText(attempt))) {
+                when (val emit = emitActivity(pairId, "attempt ${attempt.id}", eventText(attempt, store))) {
                     is Emit.Created -> { attempts.linkEvent(attempt.id, pairId, emit.sequence); linked++ }
                     Emit.Duplicate, Emit.Skip -> Unit
                     Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
@@ -710,6 +716,7 @@ class PartnerSyncCoordinator(
         val ruleId = row.ruleId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
             ?: return Emit.Skip
         val change = row.ruleChange?.let(RuleChange::fromWire) ?: return Emit.Skip
+        val identity = row.ruleIdentityOrNull() ?: legacyRuleIdentity(row)
         val signature = try {
             signer.beginSign()
         } catch (e: Exception) {
@@ -729,6 +736,7 @@ class PartnerSyncCoordinator(
                                 ruleId = ruleId,
                                 change = change,
                                 occurredAtMillis = row.occurredAtMinute * 60_000L,
+                                identity = identity,
                             ),
                         )
                     },
@@ -788,9 +796,27 @@ class PartnerSyncCoordinator(
         data object Stop : Emit
     }
 
-    private fun eventText(attempt: AttemptLog): String = when (attempt.outcome) {
-        AttemptLog.OUTCOME_OVERRIDE -> "override:${attempt.blockedTarget}"
-        else -> "blocked:${attempt.blockedTarget}"
+    /** v1 journal rows queued before the identity upgrade: the rule row still names the
+     *  target, so resolve it now rather than send the broken generic copy the upgrade fixed. */
+    private suspend fun legacyRuleIdentity(row: PartnerEventJournal): RuleIdentity {
+        val rule = runCatching {
+            storeFactory.open()?.restrictionRuleDao()?.getById(row.ruleId.orEmpty())
+        }.getOrNull() ?: return RuleIdentity(label = "Restriction rule", targetType = RuleTargetType.APP)
+        return RuleIdentity.of(
+            targetType = rule.targetType,
+            target = rule.blockedPackage,
+            label = resolveRuleLabel(rule.targetType, rule.blockedPackage),
+            batchName = rule.batchName,
+        )
+    }
+
+    /** Attempt text: what was blocked/overridden, plus the batch when the rule belongs to one
+     *  (owner mandate 2026-10-31 — the partner must know the attempt targets batch content). */
+    private suspend fun eventText(attempt: AttemptLog, store: AppRulesStore): String {
+        val verb = if (attempt.outcome == AttemptLog.OUTCOME_OVERRIDE) "override:" else "blocked:"
+        val rule = runCatching { store.restrictionRuleDao().getById(attempt.ruleId) }.getOrNull()
+        val batch = rule?.batchName?.let(AccountabilityEventWire::sanitizeRuleLabel)?.takeIf { it.isNotBlank() }
+        return if (batch == null) "$verb${attempt.blockedTarget}" else "$verb${attempt.blockedTarget}|$batch"
     }
 
     private companion object {
@@ -911,6 +937,11 @@ class PairUidResolver(
         if (partner == null) {
             Log.w(TAG, "pair $pairId: no other member (members=${(members as? List<*>)?.size ?: "not a list"})")
             return null
+        }
+        // A fully resolved pairing read is the server-answered "up to date" proof the dashboard
+        // needs when no event has ever been received. A cache-served copy proves nothing.
+        if (snapshot.metadata.isFromCache.not()) {
+            reachability.markContact(pairId, System.currentTimeMillis())
         }
         return uid to partner
     }

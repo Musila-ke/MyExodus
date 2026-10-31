@@ -5,11 +5,14 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.example.myexodus.data.db.IS_EMULATOR
 import com.example.myexodus.data.db.entity.RestrictionRule
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -42,6 +45,18 @@ class StartupScaleDeviceTest {
         EntryPointAccessors.fromApplication(
             context.applicationContext,
             EnhancedModeTestEntryPoint::class.java,
+        )
+    }
+
+    @Before
+    fun physicalDeviceOnly() {
+        // The legs are host-choreographed (seed -> cold-start capture -> cleanup, one method
+        // per run) and need a persisted profile with baseline rules. A full-suite AVD run has
+        // neither, so it must skip — never seed 4,000 rows into a disposable store and fail
+        // the baseline assert.
+        Assume.assumeFalse(
+            "Startup-scale legs need the X6532 host capture; an AVD has no seeded baseline",
+            IS_EMULATOR,
         )
     }
 

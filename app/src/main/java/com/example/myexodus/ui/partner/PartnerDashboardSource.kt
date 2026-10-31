@@ -18,8 +18,14 @@ import java.time.ZoneId
 /**
  * One selectable reach-out recipient (owner ruling 2026-10-23): the SOS dialog names exactly
  * one partner per send — never a fan-out, and never a hidden stored "SOS partner".
+ * [pairedAtEpochMillis] lets a chooser tell apart two pairs that share a label — harness
+ * leftovers and a live pair can both read "X6532C".
  */
-data class ReachOutTarget(val pairId: String, val name: String)
+data class ReachOutTarget(
+    val pairId: String,
+    val name: String,
+    val pairedAtEpochMillis: Long? = null,
+)
 
 /**
  * The dashboard's read model (plan §7 items 12-13, FR3/§11): built entirely from local state —
@@ -55,6 +61,11 @@ class PartnerDashboardSource(
      *  Only a definitive server denial is ever written here (see `isDefinitiveDenial`), so an
      *  offline device never raises the re-pair card. */
     private val pairingDeniedAt: (pairId: String) -> Long? = { null },
+    /** Owner report 2026-10-31: the last server-answered read of this pairing. Without it the
+     *  card's "last synced" came only from the received-event watermark, which stays null until
+     *  the partner shares something — so a healthy pair with nothing to receive read "Never
+     *  synced" forever, contradicting the Check now success right above it. */
+    private val pairingContactAt: (pairId: String) -> Long? = { null },
     /** Owner ask 2026-10-01: the writer's own last composed message to this pair, read back
      *  from the local journal — the Activity subpage shows the sender what they sent. */
     private val latestSentMessage: suspend (pairId: String) -> String? = { null },
@@ -110,11 +121,12 @@ class PartnerDashboardSource(
         // A key-material failure (unreadable keystore entry, corrupt DER) must not strand
         // the screen on Loading — it degrades to "no decodable rows", the honest reading.
         val decode = runCatching { decoderFor(enrollment) }.getOrElse { { _: ByteArray -> null } }
+        val ruleRows = runCatching { ruleChanges(enrollment.pairId) }.getOrElse { emptyList() }
         val alerts = rows.mapNotNull { row ->
             runCatching { decode(row.envelope) }
                 .getOrNull()
                 ?.let { alertOf(it, row.createdAtEpochMillis) }
-        } + runCatching { ruleChanges(enrollment.pairId) }.getOrElse { emptyList() }
+        } + ruleRows
             .filter { it.occurredAtMinute * 60_000L >= nowMillis - WEEK_MILLIS }
             .mapNotNull(::ruleChangeAlert)
         val chainHead = head(enrollment.pairId, enrollment.partnerSigningKeyId)
@@ -143,13 +155,29 @@ class PartnerDashboardSource(
                     )
                 },
             pairedAtEpochMillis = enrollment.createdAtEpochMillis,
-            lastSyncedAtEpochMillis = enrollment.mailboxWatermarkTsEpochMillis,
-            freshness = syncFreshness(enrollment.mailboxWatermarkTsEpochMillis, nowMillis),
+            // "Last synced" is the later of the received-event watermark and the last
+            // server-answered pairing read: a healthy pass with nothing to receive must clear
+            // the "Never synced" verdict instead of leaving it forever (owner report 2026-10-31).
+            lastSyncedAtEpochMillis = maxOf(
+                enrollment.mailboxWatermarkTsEpochMillis ?: 0L,
+                runCatching { pairingContactAt(enrollment.pairId) }.getOrNull() ?: 0L,
+            ).takeIf { it > 0L },
+            freshness = syncFreshness(
+                maxOf(
+                    enrollment.mailboxWatermarkTsEpochMillis ?: 0L,
+                    runCatching { pairingContactAt(enrollment.pairId) }.getOrNull() ?: 0L,
+                ).takeIf { it > 0L },
+                nowMillis,
+            ),
             chainStatus = chainStatusFor(
                 repairState = chainHead?.repairState ?: ChainHead.REPAIR_NONE,
                 forked = chainHead?.forked ?: false,
             ),
             alerts = summarizeAlerts(alerts, startOfLocalDay(nowMillis, zone)),
+            // The dedicated rules page (owner mandate 2026-10-31: "an organized page listing
+            // rules/batches") shows the full 30-day retention, not the feed's week preview.
+            ruleHistory = ruleRows.mapNotNull(::ruleChangeAlert)
+                .filterIsInstance<PartnerAlert.RuleChanged>(),
             sentMessageText = runCatching { latestSentMessage(enrollment.pairId) }.getOrNull(),
             approvals = approvalRows,
             activity = runCatching { partnerActivity(enrollment.pairId) }.getOrNull(),
@@ -207,7 +235,7 @@ class PartnerDashboardSource(
     suspend fun pairRoster(): List<ReachOutTarget> =
         runCatching { enrollments() }.getOrNull().orEmpty()
             .sortedByDescending { it.createdAtEpochMillis }
-            .map { ReachOutTarget(it.pairId, displayNameOf(it)) }
+            .map { ReachOutTarget(it.pairId, displayNameOf(it), it.createdAtEpochMillis) }
 
     /**
      * The reach-out dialog's recipient list (owner ruling 2026-10-23): the §19.5 target first,
@@ -220,7 +248,7 @@ class PartnerDashboardSource(
             .sortedByDescending { it.createdAtEpochMillis }
         val target = all.targetEnrollment(selectedPairId) ?: return emptyList()
         return (listOf(target) + all.filter { it.pairId != target.pairId })
-            .map { ReachOutTarget(it.pairId, displayNameOf(it)) }
+            .map { ReachOutTarget(it.pairId, displayNameOf(it), it.createdAtEpochMillis) }
     }
 
     internal companion object {
@@ -264,6 +292,9 @@ sealed interface PartnerDashboardUi {
         val freshness: SyncFreshness,
         val chainStatus: PartnerChainStatus,
         val alerts: AlertSummary,
+        /** Received rule/batch lifecycle rows, newest first, full retention — the Rules
+         *  subpage's list. The feed itself only previews the week ([alerts]). */
+        val ruleHistory: List<PartnerAlert.RuleChanged> = emptyList(),
         /** Owner ask 2026-10-01: the last message this user wrote to this partner (journal
          *  read-back); null = nothing sent yet. */
         val sentMessageText: String? = null,

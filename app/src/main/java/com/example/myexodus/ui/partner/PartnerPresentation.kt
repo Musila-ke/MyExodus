@@ -2,6 +2,7 @@ package com.example.myexodus.ui.partner
 
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.RuleChange
+import com.example.myexodus.accountability.serialization.RuleIdentity
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.data.db.entity.PartnerRuleChange
@@ -77,6 +78,9 @@ sealed interface PartnerAlert {
         val target: String,
         val isOverride: Boolean,
         override val atEpochMillis: Long,
+        /** The named batch the rule belongs to; null for a standalone rule (v2 attempt text
+         *  carries it after a `|`). */
+        val batchLabel: String? = null,
     ) : PartnerAlert
 
     data class Recovery(
@@ -100,11 +104,13 @@ sealed interface PartnerAlert {
         override val atEpochMillis: Long,
     ) : PartnerAlert
 
-    /** §8.4 RULE_CONTROL: the wire carries the rule's UUID and a closed change verb only, so
-     *  the row names the change and never an app or free text (the CBOR allowlist forbids it). */
+    /** §8.4 RULE_CONTROL: the change verb plus the wire-v2 identity of what changed (a rule
+     *  label, or a named batch with its item count). A pre-v2 row carries no identity and
+     *  renders the generic copy. */
     data class RuleChanged(
         val change: RuleChange,
         override val atEpochMillis: Long,
+        val identity: RuleIdentity? = null,
     ) : PartnerAlert
 }
 
@@ -112,7 +118,7 @@ sealed interface PartnerAlert {
  *  rather than rendered as a wrong one. */
 fun ruleChangeAlert(row: PartnerRuleChange): PartnerAlert? =
     RuleChange.fromWire(row.ruleChange)?.let {
-        PartnerAlert.RuleChanged(it, row.occurredAtMinute * 60_000L)
+        PartnerAlert.RuleChanged(it, row.occurredAtMinute * 60_000L, row.ruleIdentityOrNull())
     }
 
 /**
@@ -122,12 +128,22 @@ fun ruleChangeAlert(row: PartnerRuleChange): PartnerAlert? =
  * being presented as something it is not.
  */
 fun parseActivityText(text: String, atEpochMillis: Long): PartnerAlert? = when {
-    text.startsWith("override:") -> PartnerAlert.AppActivity(text.removePrefix("override:"), true, atEpochMillis)
-    text.startsWith("blocked:") -> PartnerAlert.AppActivity(text.removePrefix("blocked:"), false, atEpochMillis)
+    text.startsWith("override:") -> appActivity(text.removePrefix("override:"), true, atEpochMillis)
+    text.startsWith("blocked:") -> appActivity(text.removePrefix("blocked:"), false, atEpochMillis)
     else -> RecoveryMirror.parse(text)?.let { (technique, outcome) ->
         PartnerAlert.Recovery(technique, outcome, atEpochMillis)
     }
 }
+
+/** Attempt text is "<target>" or v2 "<target>|<batch name>" — the batch name is the rule's
+ *  own sanitized name, so only the first delimiter splits. */
+private fun appActivity(raw: String, isOverride: Boolean, atEpochMillis: Long): PartnerAlert.AppActivity =
+    PartnerAlert.AppActivity(
+        target = raw.substringBefore('|'),
+        isOverride = isOverride,
+        atEpochMillis = atEpochMillis,
+        batchLabel = raw.substringAfter('|', "").takeIf { it.isNotBlank() },
+    )
 
 /**
  * One decoded payload as a feed row. Wire-v2 kinds (ADR #134) render from their `stateAfter`

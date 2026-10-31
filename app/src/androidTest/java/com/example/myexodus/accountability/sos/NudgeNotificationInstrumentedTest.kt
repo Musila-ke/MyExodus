@@ -13,12 +13,16 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
 import com.example.myexodus.MainActivity
 import com.example.myexodus.R
 import com.example.myexodus.accountability.sync.PartnerMessagingService
 import com.example.myexodus.accountability.sync.PartnerNotifications
 import com.example.myexodus.accountability.sync.PartnerNudgePush
 import com.example.myexodus.notifications.NotificationAccess
+import com.example.myexodus.settings.SetupStateStore
 import com.google.firebase.messaging.RemoteMessage
 import java.util.UUID
 import org.junit.After
@@ -67,8 +71,17 @@ class NudgeNotificationInstrumentedTest {
     private val manager: NotificationManager
         get() = context.getSystemService(NotificationManager::class.java)
 
+    private val setupState: SetupStateStore get() = SetupStateStore(context)
+
+    private var setupSeenBefore = false
+
     @Before
     fun notificationsAvailable() {
+        // The tap bullet asserts Home renders (the class precondition). Set the setup-complete
+        // marker rather than depending on ambient device state — a clean AVD otherwise boots
+        // the protection wizard and never composes Home. Restored in @After.
+        setupSeenBefore = setupState.setupSeen
+        setupState.setupSeen = true
         shell("pm grant ${context.packageName} android.permission.POST_NOTIFICATIONS")
         setAppNotificationsEnabled(true)
         PartnerNotifications.cancelPartnerNudge(context)
@@ -78,6 +91,15 @@ class NudgeNotificationInstrumentedTest {
     @After
     fun clearTray() {
         PartnerNotifications.cancelPartnerNudge(context)
+        // The cancel is asynchronous on the framework side. Left unwaited, it can be processed
+        // after the NEXT test posts to the same tag/id and silently evict that entry — the
+        // 2026-10-31 full-suite run failed the tap leg exactly this way (cancel submitted at
+        // 03.314, next post at 03.389, NotificationService processed the cancel at 03.743).
+        val deadline = SystemClock.elapsedRealtime() + 5_000
+        while (SystemClock.elapsedRealtime() < deadline && nudgeEntries().isNotEmpty()) {
+            SystemClock.sleep(50)
+        }
+        setupState.setupSeen = setupSeenBefore
     }
 
     // --- §12.3 bullet 1 ---------------------------------------------------------------------
@@ -186,7 +208,23 @@ class NudgeNotificationInstrumentedTest {
         finishAnyMainActivity()
 
         messagingService().onMessageReceived(nudgeMessage(UUID.randomUUID().toString()))
-        nudgeEntries().single().notification.contentIntent.send()
+        assertTrue("the nudge must reach the tray before the tap drive", nudgeEntries().isNotEmpty())
+        // A synthetic contentIntent.send() is blocked by AOSP background-activity-launch
+        // hardening (Lean_API34, 2026-10-31: "Background activity launch blocked …
+        // originatingPendingIntent … NOTIFICATION_SERVICE"); only a real user tap carries the
+        // NotificationManagerService allowlist. Drive the actual tap through SystemUI.
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        device.pressHome()
+        device.openNotification()
+        val entry = device.wait(
+            Until.findObject(By.textContains(context.getString(R.string.partner_nudge_title))),
+            10_000,
+        ) ?: run {
+            device.pressBack()
+            fail("the posted nudge never appeared in the notification shade")
+            error("unreachable")
+        }
+        entry.click()
 
         val activity = waitForMainActivity()
         assertNull(

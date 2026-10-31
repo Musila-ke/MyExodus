@@ -209,6 +209,13 @@ fun AppShell(
     onTabConsumed: () -> Unit = {},
     requestedHabit: String? = null,
     onHabitConsumed: () -> Unit = {},
+    /** ADR #193: the plan a notification named — consumed by the Partner tab's Plans surface. */
+    requestedPlan: String? = null,
+    onPlanConsumed: () -> Unit = {},
+    /** Owner report 2026-10-31: the exact partner a notification named — the Partner tab
+     *  selects it before painting, so the tap never shows a different roster entry. */
+    requestedPartner: String? = null,
+    onPartnerConsumed: () -> Unit = {},
     planRepository: RecoveryPlanRepository,
     /** Settings → Coaching plan: the editor resolves the active profile through this. */
     rulesRepository: RulesRepository,
@@ -482,6 +489,10 @@ fun AppShell(
                         onRenameUser = onRenameUser,
                         onSendMessage = onSendMessage,
                         onLoadPartnerStatus = onLoadPartnerStatus,
+                        requestedPlanId = requestedPlan,
+                        onPlanConsumed = onPlanConsumed,
+                        requestedPairId = requestedPartner,
+                        onPairConsumed = onPartnerConsumed,
                         modifier = contentModifier,
                     )
                     contentTab == 5 -> SettingsScreen(

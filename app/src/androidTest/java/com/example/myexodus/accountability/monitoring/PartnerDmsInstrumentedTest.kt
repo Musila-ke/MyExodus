@@ -10,7 +10,7 @@ import com.example.myexodus.accountability.RoundTripTestEntryPoint
 import com.example.myexodus.accountability.enrollment.EnrollmentTranscript
 import com.example.myexodus.accountability.sync.AppCheckTestSupport
 import com.example.myexodus.accountability.sync.PartnerNotifications
-import com.example.myexodus.accountability.sync.assertWarmSigningWindow
+import com.example.myexodus.accountability.sync.assumePartnerHarness
 import com.example.myexodus.accountability.sync.harnessLog
 import com.example.myexodus.accountability.sync.pairDeviceWith
 import com.example.myexodus.data.db.entity.PairProfileSharing
@@ -72,6 +72,7 @@ class PartnerDmsInstrumentedTest {
         harnessLog("RESULT channel=HIGH id=${channel.id}")
 
         val ep = EntryPointAccessors.fromApplication(context, RoundTripTestEntryPoint::class.java)
+        assumePartnerHarness(ep)
         val uidA = FirebaseAuth.getInstance().currentUser?.uid
             ?: error("no signed-in identity — launch the app once (anonymous auth) and re-run")
         val identity = PartnerTestIdentity(
@@ -80,9 +81,6 @@ class PartnerDmsInstrumentedTest {
             eventCipher = ep.eventCipher(),
             epochStore = ep.identityEpochStore(),
         )
-        assertWarmSigningWindow(ep.signer())
-        assertWarmSigningWindow(identity.signer)
-
         AppCheckTestSupport.useDebugProviderIfRequested(FirebaseApp.getInstance(), identity.app)
         val uidB = identity.signIn()
         val pairId = EnrollmentTranscript.durablePairIdOf(uidA, uidB)

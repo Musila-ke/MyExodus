@@ -128,14 +128,7 @@ class EnhancedModeHealthMonitor @Inject constructor(
 
     private fun notifyDisabled() {
         val manager = appContext.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_ID,
-                appContext.getString(R.string.enhanced_mode_health_channel_name),
-                NotificationManager.IMPORTANCE_HIGH,
-            ),
-        )
-        manager.deleteNotificationChannel(CHANNEL_ID_LEGACY)
+        ensureChannel(appContext)
         val notification = NotificationCompat.Builder(appContext, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(appContext.getString(R.string.enhanced_mode_health_disabled_title))
@@ -161,5 +154,22 @@ class EnhancedModeHealthMonitor @Inject constructor(
         // Longer than any observed update/reboot re-bind (4.6 s on X6532); the fallback keeps
         // blocking either way, so the alert is not time-critical.
         internal const val DISABLED_ALERT_DELAY_MILLIS = 15_000L
+
+        /** Created at startup so system settings never lists the retired
+         *  `enhanced_mode_health` id beside this one (owner report 2026-10-31: duplicate
+         *  channel entries). Create-only. */
+        fun ensureChannel(context: Context) {
+            val manager = context.getSystemService(NotificationManager::class.java) ?: return
+            if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+                manager.createNotificationChannel(
+                    NotificationChannel(
+                        CHANNEL_ID,
+                        context.getString(R.string.enhanced_mode_health_channel_name),
+                        NotificationManager.IMPORTANCE_HIGH,
+                    ),
+                )
+            }
+            manager.deleteNotificationChannel(CHANNEL_ID_LEGACY)
+        }
     }
 }

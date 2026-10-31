@@ -28,7 +28,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,18 +66,23 @@ private data class EditorTarget(val planId: String?, val pairId: String?)
 @Composable
 fun PartnerPlansScreen(
     planRepository: PartnerPlanRepository,
-    loadPartnerNames: suspend () -> Map<String, String>,
+    loadPartners: suspend () -> List<ReachOutTarget>,
     onBack: () -> Unit,
+    /** Hoisted so a notification tap can open a named plan before this surface composes. */
+    openPlanId: String? = null,
+    onOpenPlan: (String?) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
     var plans by remember { mutableStateOf<List<PartnerPlan>>(emptyList()) }
     var tasksByPlan by remember { mutableStateOf<Map<String, List<PartnerPlanTask>>>(emptyMap()) }
-    var names by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // The live pairs, newest first — with the pairing date, so two users sharing a label are
+    // still distinguishable when choosing who a plan is for.
+    var partners by remember { mutableStateOf<List<ReachOutTarget>>(emptyList()) }
+    val names = partners.associate { it.pairId to it.name }
     var loaded by remember { mutableStateOf(false) }
     // True = the store refused the read. An empty list is a real answer; this is not.
     var unavailable by remember { mutableStateOf(false) }
-    var openPlanId by rememberSaveable { mutableStateOf<String?>(null) }
     var editorTarget by remember { mutableStateOf<EditorTarget?>(null) }
     var askingForWhom by remember { mutableStateOf(false) }
     // null = no notice; true = saved locally; false = saved for the partner.
@@ -92,13 +96,13 @@ fun PartnerPlansScreen(
                 Triple(
                     allPlans,
                     if (allPlans == null) emptyList() else planRepository.allTasks(),
-                    runCatching { loadPartnerNames() }.getOrDefault(emptyMap()),
+                    runCatching { loadPartners() }.getOrDefault(emptyList()),
                 )
             }.getOrNull()
         }
         plans = snapshot?.first.orEmpty()
         tasksByPlan = snapshot?.second.orEmpty().groupBy { it.planId }
-        names = snapshot?.third.orEmpty()
+        partners = snapshot?.third.orEmpty()
         unavailable = snapshot == null || snapshot.first == null
         loaded = true
     }
@@ -124,7 +128,7 @@ fun PartnerPlansScreen(
 
     BackHandler(enabled = editorTarget != null) { editorTarget = null }
     BackHandler(enabled = editorTarget == null && openPlanId != null) {
-        openPlanId = null
+        onOpenPlan(null)
         savedNotice = null
     }
 
@@ -155,7 +159,7 @@ fun PartnerPlansScreen(
             },
             onSaved = { planId ->
                 editorTarget = null
-                openPlanId = planId
+                onOpenPlan(planId)
                 savedNotice = pairId == null
                 reloadKey++
             },
@@ -173,7 +177,7 @@ fun PartnerPlansScreen(
                 ?: stringResource(R.string.partner_plans_unknown_partner),
             savedNotice = savedNotice,
             onBack = {
-                openPlanId = null
+                onOpenPlan(null)
                 savedNotice = null
             },
             onEdit = { editorTarget = EditorTarget(openPlan.planId, openPlan.pairId) },
@@ -235,21 +239,21 @@ fun PartnerPlansScreen(
                             plans = plans.filter { !it.authored && it.pairId != null },
                             tasksByPlan = tasksByPlan,
                             names = names,
-                            onOpen = { openPlanId = it },
+                            onOpen = onOpenPlan,
                         )
                         PlanSection(
                             header = stringResource(R.string.partner_plans_given_header),
                             plans = plans.filter { it.authored && it.pairId != null },
                             tasksByPlan = tasksByPlan,
                             names = names,
-                            onOpen = { openPlanId = it },
+                            onOpen = onOpenPlan,
                         )
                         PlanSection(
                             header = stringResource(R.string.partner_plans_mine_header),
                             plans = plans.filter { it.pairId == null },
                             tasksByPlan = tasksByPlan,
                             names = names,
-                            onOpen = { openPlanId = it },
+                            onOpen = onOpenPlan,
                         )
                     }
                 }
@@ -263,15 +267,27 @@ fun PartnerPlansScreen(
             title = { Text(stringResource(R.string.partner_plans_for_whom)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    names.forEach { (pairId, name) ->
+                    partners.forEach { partner ->
                         TextButton(
                             onClick = {
                                 askingForWhom = false
-                                editorTarget = EditorTarget(null, pairId)
+                                editorTarget = EditorTarget(null, partner.pairId)
                             },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(name)
+                            Column(Modifier.weight(1f)) {
+                                Text(partner.name)
+                                partner.pairedAtEpochMillis?.let { pairedAt ->
+                                    Text(
+                                        stringResource(
+                                            R.string.partner_users_since,
+                                            pairedOnText(pairedAt),
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
                         }
                     }
                     TextButton(
@@ -392,7 +408,10 @@ private fun PlanDetail(
             Text(
                 when {
                     plan.pairId == null -> stringResource(R.string.partner_plans_local)
-                    plan.authored -> stringResource(R.string.partner_plans_author_hint)
+                    plan.authored -> stringResource(
+                        R.string.partner_plans_author_hint,
+                        partnerName,
+                    )
                     else -> stringResource(R.string.partner_plans_recipient_hint, partnerName)
                 },
                 style = MaterialTheme.typography.bodyMedium,

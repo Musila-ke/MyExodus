@@ -11,7 +11,7 @@ import com.example.myexodus.accountability.enrollment.EnrollmentTranscript
 import com.example.myexodus.accountability.sync.AppCheckTestSupport
 import com.example.myexodus.accountability.sync.PartnerNotifications
 import com.example.myexodus.accountability.sync.PartnerNudgePush
-import com.example.myexodus.accountability.sync.assertWarmSigningWindow
+import com.example.myexodus.accountability.sync.assumePartnerHarness
 import com.example.myexodus.accountability.sync.harnessLog
 import com.example.myexodus.accountability.sync.pairDeviceWith
 import com.example.myexodus.notifications.NotificationAccess
@@ -69,7 +69,7 @@ class NudgeInboxDeviceInstrumentedTest {
     fun cardFromFirestore_ackAll_clearsIt_andRetiresTheTray(): Unit = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val ep = EntryPointAccessors.fromApplication(context, RoundTripTestEntryPoint::class.java)
-        assertWarmSigningWindow(ep.signer())
+        assumePartnerHarness(ep)
 
         val uidA = FirebaseAuth.getInstance().currentUser?.uid
             ?: error("no signed-in identity — launch the app once (anonymous auth) and re-run")

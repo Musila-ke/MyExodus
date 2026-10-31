@@ -1,6 +1,7 @@
 package com.example.myexodus.di
 
 import android.content.Context
+import com.example.myexodus.accountability.sync.enqueuePartnerSyncNow
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.RulesSnapshotPublisher
 import com.example.myexodus.data.db.ActivityLogKeyManager
@@ -89,7 +90,13 @@ object DatabaseModule {
 
     @Provides @Singleton
     fun provideRulesRepository(
+        @ApplicationContext context: Context,
         storeFactory: AppRulesStoreFactory,
         publisher: RulesSnapshotPublisher,
-    ): RulesRepository = RulesRepository(storeFactory, publisher)
+    ): RulesRepository = RulesRepository(
+        storeFactory,
+        publisher,
+        onJournaled = { enqueuePartnerSyncNow(context) },
+        labelOf = { _, target -> com.example.myexodus.ui.appLabel(context, target) },
+    )
 }

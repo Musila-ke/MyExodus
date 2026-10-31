@@ -1343,6 +1343,127 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * v22 → v23 (owner mandate 2026-10-31): rule identity travels with the change and
+         * named batches group rules. Additive only — every existing row keeps its meaning and
+         * its null identity; a queued v1 journal row still delivers (the emitter resolves its
+         * label from the rule row).
+         */
+        val MIGRATION_22_23 = object : Migration(22, 23) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE restriction_rules ADD COLUMN batch_id TEXT",
+                ).use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE restriction_rules ADD COLUMN batch_name TEXT",
+                ).use { it.step() }
+                listOf(
+                    "ALTER TABLE partner_event_journal ADD COLUMN rule_label TEXT",
+                    "ALTER TABLE partner_event_journal ADD COLUMN rule_target_type TEXT",
+                    "ALTER TABLE partner_event_journal ADD COLUMN rule_item_count INTEGER",
+                    "ALTER TABLE partner_event_journal ADD COLUMN rule_batch_label TEXT",
+                    "ALTER TABLE partner_rule_change ADD COLUMN rule_label TEXT",
+                    "ALTER TABLE partner_rule_change ADD COLUMN rule_target_type TEXT",
+                    "ALTER TABLE partner_rule_change ADD COLUMN rule_item_count INTEGER",
+                    "ALTER TABLE partner_rule_change ADD COLUMN rule_batch_label TEXT",
+                ).forEach { connection.prepare(it).use { stmt -> stmt.step() } }
+            }
+        }
+
+        /** v23 rollback (older build reinstalled): table rebuilds remove the identity and
+         *  batch columns while every rule and journal row survives. */
+        val MIGRATION_23_22 = object : Migration(23, 22) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS restriction_rules_old (" +
+                        "rule_id TEXT NOT NULL, profile_id TEXT NOT NULL, " +
+                        "blocked_package TEXT NOT NULL, target_type TEXT NOT NULL, " +
+                        "is_always_on INTEGER NOT NULL, daily_limit_ms INTEGER NOT NULL, " +
+                        "time_range_start INTEGER, time_range_end INTEGER, " +
+                        "active_days_of_week TEXT NOT NULL, timezone TEXT NOT NULL DEFAULT 'UTC', " +
+                        "block_expires_at INTEGER NOT NULL, severity_level TEXT NOT NULL, " +
+                        "is_enabled INTEGER NOT NULL DEFAULT 1, assigned_pair_id TEXT, " +
+                        "backup_pair_id TEXT, streak_pair_id TEXT, PRIMARY KEY(rule_id), " +
+                        "FOREIGN KEY(profile_id) REFERENCES user_profile(user_id), " +
+                        "CONSTRAINT blocked_package_not_self " +
+                        "CHECK (TRIM(LOWER(blocked_package)) != 'com.example.myexodus'), " +
+                        "CONSTRAINT severity_valid " +
+                        "CHECK (severity_level IN ('LOW','MEDIUM','HIGH','CRITICAL')))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO restriction_rules_old (rule_id, profile_id, blocked_package, " +
+                        "target_type, is_always_on, daily_limit_ms, time_range_start, time_range_end, " +
+                        "active_days_of_week, timezone, block_expires_at, severity_level, is_enabled, " +
+                        "assigned_pair_id, backup_pair_id, streak_pair_id) " +
+                        "SELECT rule_id, profile_id, blocked_package, target_type, is_always_on, " +
+                        "daily_limit_ms, time_range_start, time_range_end, active_days_of_week, " +
+                        "timezone, block_expires_at, severity_level, is_enabled, " +
+                        "assigned_pair_id, backup_pair_id, streak_pair_id FROM restriction_rules",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE restriction_rules").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE restriction_rules_old RENAME TO restriction_rules",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS " +
+                        "index_restriction_rules_profile_id_blocked_package " +
+                        "ON restriction_rules (profile_id, blocked_package)",
+                ).use { it.step() }
+
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_event_journal_old (" +
+                        "event_id TEXT NOT NULL, category TEXT NOT NULL, " +
+                        "occurred_at_minute INTEGER NOT NULL, monitoring_state TEXT, " +
+                        "outbox_age_bucket TEXT, schema_version INTEGER NOT NULL, " +
+                        "created_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL, " +
+                        "rule_id TEXT, rule_change TEXT, route_pair_id TEXT, " +
+                        "PRIMARY KEY(event_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO partner_event_journal_old (event_id, category, " +
+                        "occurred_at_minute, monitoring_state, outbox_age_bucket, schema_version, " +
+                        "created_at_ms, expires_at_ms, rule_id, rule_change, route_pair_id) " +
+                        "SELECT event_id, category, occurred_at_minute, monitoring_state, " +
+                        "outbox_age_bucket, schema_version, created_at_ms, expires_at_ms, " +
+                        "rule_id, rule_change, route_pair_id FROM partner_event_journal",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE partner_event_journal").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE partner_event_journal_old RENAME TO partner_event_journal",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_event_journal_created_at_ms " +
+                        "ON partner_event_journal (created_at_ms)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_event_journal_expires_at_ms " +
+                        "ON partner_event_journal (expires_at_ms)",
+                ).use { it.step() }
+
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_rule_change_old (" +
+                        "pair_id TEXT NOT NULL, event_id TEXT NOT NULL, rule_id TEXT NOT NULL, " +
+                        "rule_change TEXT NOT NULL, occurred_at_minute INTEGER NOT NULL, " +
+                        "received_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL, " +
+                        "PRIMARY KEY(pair_id, event_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO partner_rule_change_old (pair_id, event_id, rule_id, rule_change, " +
+                        "occurred_at_minute, received_at_ms, expires_at_ms) " +
+                        "SELECT pair_id, event_id, rule_id, rule_change, occurred_at_minute, " +
+                        "received_at_ms, expires_at_ms FROM partner_rule_change",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE partner_rule_change").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE partner_rule_change_old RENAME TO partner_rule_change",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_rule_change_occurred_at_minute " +
+                        "ON partner_rule_change (occurred_at_minute)",
+                ).use { it.step() }
+            }
+        }
+
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override suspend fun migrate(connection: SQLiteConnection) {
                 // Recovery resource UI (plan v3 W7): the urge/recovery session log and the
@@ -1559,7 +1680,7 @@ class AppRulesStoreFactory(
             MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21,
             MIGRATION_10_9, MIGRATION_12_11, MIGRATION_13_12, MIGRATION_14_13, MIGRATION_15_14,
             MIGRATION_16_15, MIGRATION_17_16, MIGRATION_18_17, MIGRATION_19_18, MIGRATION_20_19,
-            MIGRATION_21_20, MIGRATION_21_22, MIGRATION_22_21,
+            MIGRATION_21_20, MIGRATION_21_22, MIGRATION_22_21, MIGRATION_22_23, MIGRATION_23_22,
         )
     }
 }

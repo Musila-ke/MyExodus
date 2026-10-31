@@ -6,6 +6,8 @@ import androidx.room3.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.accountability.serialization.AccountabilityEventWire
 import com.example.myexodus.accountability.serialization.RuleChange
+import com.example.myexodus.accountability.serialization.RuleIdentity
+import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.data.db.ActivityLogKeyManager
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
@@ -72,7 +74,7 @@ class RuleLifecycleStressTest {
     fun assignmentChurn_atVolume_journalsOneCorrectChainPerPair() = runBlocking {
         seedProfile()
         var clock = BASE_MS
-        val repository = RulesRepository(factory, RulesSnapshotPublisher(context, factory)) { clock }
+        val repository = RulesRepository(factory, RulesSnapshotPublisher(context, factory), now = { clock })
         val journalDao = factory.open()!!.partnerEventJournalDao()
 
         repeat(RULE_COUNT) { i ->
@@ -129,7 +131,7 @@ class RuleLifecycleStressTest {
     fun legacyNonUuidRuleId_assignmentStillStores_butJournalsNothing() = runBlocking {
         seedProfile()
         var clock = BASE_MS
-        val repository = RulesRepository(factory, RulesSnapshotPublisher(context, factory)) { clock }
+        val repository = RulesRepository(factory, RulesSnapshotPublisher(context, factory), now = { clock })
         val store = factory.open()!!
 
         val legacy = appRule("com.example.legacy", ruleId = "legacy-rule-1")
@@ -252,7 +254,7 @@ class RuleLifecycleStressTest {
     fun pre1970Clock_ruleWriteStillLands_journalSilentlySkip() = runBlocking {
         seedProfile()
         var clock = -61_000L
-        val repository = RulesRepository(factory, RulesSnapshotPublisher(context, factory)) { clock }
+        val repository = RulesRepository(factory, RulesSnapshotPublisher(context, factory), now = { clock })
         val store = factory.open()!!
         val ruleId = UUID.randomUUID().toString()
 
@@ -286,6 +288,7 @@ class RuleLifecycleStressTest {
         routePairId = pairId,
         occurredAtMinute = AccountabilityEventWire.minuteOf(createdAtMs),
         createdAtMs = createdAtMs,
+        identity = RuleIdentity(label = "Example app", targetType = RuleTargetType.APP),
     )
 
     private suspend fun seedProfile() {

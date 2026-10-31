@@ -58,7 +58,7 @@ class PartnerRoundTripInstrumentedTest {
 
         // Stage 0 — one warm biometric window covers every signature below (A's SyncRequest,
         // B's transcript + proof).
-        assertWarmSigningWindow(ep.signer())
+        assumePartnerHarness(ep)
 
         val uidA = FirebaseAuth.getInstance().currentUser?.uid
             ?: error("no signed-in identity — launch the app once (anonymous auth) and re-run")

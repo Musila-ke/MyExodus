@@ -51,6 +51,9 @@ abstract class RestrictionRuleDao {
     @Query("SELECT * FROM restriction_rules WHERE profile_id = :profileId AND blocked_package = :packageName LIMIT 1")
     abstract suspend fun getByProfileAndPackage(profileId: String, packageName: String): RestrictionRule?
 
+    @Query("SELECT * FROM restriction_rules WHERE batch_id = :batchId ORDER BY blocked_package COLLATE NOCASE")
+    abstract suspend fun getByBatch(batchId: String): List<RestrictionRule>
+
     /** Rule 4: the CHECK constraint rejects the app's own package; translate to a typed exception. */
     suspend fun insert(rule: RestrictionRule) = translate { insertRaw(rule) }
 
@@ -92,6 +95,45 @@ abstract class RestrictionRuleDao {
         journal: List<PartnerEventJournal>,
     ) {
         delete(rule)
+        versionDao.bump()
+        journal.forEach { journalDao.insert(it) }
+    }
+
+    // Batch writes (owner mandate 2026-10-31): all members and the ONE batch-level journal
+    // row commit together, so the partner can never learn about half a batch.
+
+    @Transaction
+    open suspend fun insertBatchAndBump(
+        rules: List<RestrictionRule>,
+        versionDao: PolicyVersionDao,
+        journalDao: PartnerEventJournalDao,
+        journal: List<PartnerEventJournal>,
+    ) {
+        rules.forEach { insert(it) }
+        versionDao.bump()
+        journal.forEach { journalDao.insert(it) }
+    }
+
+    @Transaction
+    open suspend fun updateBatchAndBump(
+        rules: List<RestrictionRule>,
+        versionDao: PolicyVersionDao,
+        journalDao: PartnerEventJournalDao,
+        journal: List<PartnerEventJournal>,
+    ) {
+        rules.forEach { update(it) }
+        versionDao.bump()
+        journal.forEach { journalDao.insert(it) }
+    }
+
+    @Transaction
+    open suspend fun deleteBatchAndBump(
+        rules: List<RestrictionRule>,
+        versionDao: PolicyVersionDao,
+        journalDao: PartnerEventJournalDao,
+        journal: List<PartnerEventJournal>,
+    ) {
+        rules.forEach { delete(it) }
         versionDao.bump()
         journal.forEach { journalDao.insert(it) }
     }

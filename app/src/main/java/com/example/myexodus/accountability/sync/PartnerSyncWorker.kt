@@ -6,7 +6,9 @@ import androidx.hilt.work.HiltWorker
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -98,6 +100,27 @@ fun enqueuePartnerSync(context: Context) {
 
 /** internal (not private): the instrumented execution-leg test re-enqueues this same work. */
 internal const val PARTNER_SYNC_WORK_NAME = "partner-sync"
+
+/**
+ * One immediate pass after a local rule mutation (owner report 2026-10-31): the rule journal
+ * row exists the moment the write commits, but only a sync pass turns it into a partner
+ * event — the periodic cadence would otherwise delay the partner's alert by up to 15 minutes.
+ * KEEP, so a pass already running is never duplicated (the row is still picked up by it).
+ */
+fun enqueuePartnerSyncNow(context: Context) {
+    val request = OneTimeWorkRequestBuilder<PartnerSyncWorker>()
+        .setConstraints(
+            Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
+        )
+        .build()
+    WorkManager.getInstance(context).enqueueUniqueWork(
+        PARTNER_SYNC_NOW_WORK_NAME,
+        ExistingWorkPolicy.KEEP,
+        request,
+    )
+}
+
+internal const val PARTNER_SYNC_NOW_WORK_NAME = "partner-sync-now"
 
 /** The wake input key — shared with [PartnerMessagingService] so the producer and consumer of
  *  the wake payload can never drift apart. */

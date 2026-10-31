@@ -21,6 +21,8 @@ import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.serialization.OutboxAgeBucket
 import com.example.myexodus.accountability.serialization.RuleChange
+import com.example.myexodus.accountability.serialization.RuleIdentity
+import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.accountability.serialization.decodePayload
 import com.example.myexodus.accountability.serialization.decodeSigned
 import com.example.myexodus.accountability.serialization.eventHash
@@ -1387,6 +1389,10 @@ class PartnerSyncCoordinatorTest {
                 routePairId = routePairId,
                 occurredAtMinute = AccountabilityEventWire.minuteOf(createdAtMs),
                 createdAtMs = createdAtMs,
+                identity = RuleIdentity(
+                    label = "Example app",
+                    targetType = RuleTargetType.APP,
+                ),
             ),
         )
         return eventId

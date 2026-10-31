@@ -39,7 +39,10 @@ class AccountabilityEventContractTest {
     private val ruleUuid = UUID.fromString("89abcdef-0123-4567-89ab-cdef01234567")
 
     private fun ruleChange(change: RuleChange = RuleChange.ASSIGNED) =
-        AccountabilityEventWire.ruleControl(id, 7, ruleUuid, change, now)
+        AccountabilityEventWire.ruleControl(
+            id, 7, ruleUuid, change, now,
+            RuleIdentity(label = "Example app", targetType = RuleTargetType.APP),
+        )
 
     private fun raw(vararg entries: Pair<String, CBORObject>): ByteArray =
         CanonicalCbor.encodeMap(entries.toList())
@@ -209,7 +212,11 @@ class AccountabilityEventContractTest {
         )
         assertNull(
             AccountabilityEventWire.decodeOrNull(
-                raw(*entries.map { if (it.first == "v") "v" to CanonicalCbor.int(2) else it }.toTypedArray()),
+                raw(
+                    *entries.map {
+                        if (it.first == "v") "v" to CanonicalCbor.int(AccountabilityEventWire.SCHEMA_VERSION + 1L) else it
+                    }.toTypedArray(),
+                ),
             ),
         )
         assertNull(

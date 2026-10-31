@@ -6,6 +6,8 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.accountability.serialization.AccountabilityEventCategory
 import com.example.myexodus.accountability.serialization.AccountabilityEventWire
 import com.example.myexodus.accountability.serialization.RuleChange
+import com.example.myexodus.accountability.serialization.RuleIdentity
+import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.data.db.ActivityLogKeyManager
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.DatabaseHealthStore
@@ -66,6 +68,7 @@ class RuleControlReceiverTest {
         ruleId = ruleId,
         change = change,
         occurredAtMillis = nowMs,
+        identity = RuleIdentity(label = "Example app", targetType = RuleTargetType.APP),
     )
 
     private suspend fun rows(pairId: String) =

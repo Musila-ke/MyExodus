@@ -36,7 +36,7 @@ internal fun RecoveryManager.resetAllDataEmulatorOnly() {
 /** For `@After` cleanup that must not touch a handset even when the body was skipped. */
 internal fun onSanctionedEmulator(): Boolean = IS_EMULATOR
 
-private val IS_EMULATOR =
+internal val IS_EMULATOR =
     Build.FINGERPRINT.contains("generic", ignoreCase = true) ||
         Build.FINGERPRINT.contains("emulator", ignoreCase = true) ||
         Build.FINGERPRINT.contains("sdk_gphone", ignoreCase = true) ||

@@ -10,6 +10,8 @@ import com.example.myexodus.accountability.serialization.AccountabilityEventWire
 import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.serialization.OutboxAgeBucket
 import com.example.myexodus.accountability.serialization.RuleChange
+import com.example.myexodus.accountability.serialization.RuleIdentity
+import com.example.myexodus.accountability.serialization.RuleTargetType
 import java.util.UUID
 
 /**
@@ -51,6 +53,12 @@ data class PartnerEventJournal(
     /** RULE_CONTROL rows only: canonical UUID text, never a package name. */
     @ColumnInfo(name = "rule_id") val ruleId: String? = null,
     @ColumnInfo(name = "rule_change") val ruleChange: String? = null,
+    /** Bounded v2 identity (schema v23): what the partner is told changed. v1 rows carry
+     *  nulls and the emitter resolves the name from the rule row when it still exists. */
+    @ColumnInfo(name = "rule_label") val ruleLabel: String? = null,
+    @ColumnInfo(name = "rule_target_type") val ruleTargetType: String? = null,
+    @ColumnInfo(name = "rule_item_count") val ruleItemCount: Long? = null,
+    @ColumnInfo(name = "rule_batch_label") val ruleBatchLabel: String? = null,
     /** RULE_CONTROL rows only: the assigned pair the envelope is routed to. */
     @ColumnInfo(name = "route_pair_id") val routePairId: String? = null,
     @ColumnInfo(name = "schema_version") val schemaVersion: Int,
@@ -66,8 +74,10 @@ data class PartnerEventJournal(
         require(parsed.kind != AccountabilityEventKind.GAP_MARKER) {
             "gap markers are built from chain evidence, not journaled"
         }
-        require(schemaVersion == AccountabilityEventWire.SCHEMA_VERSION) {
-            "journal schema version is not the live contract"
+        // v1 rows are accepted on read: they were queued before the v2 identity upgrade and
+        // must still deliver (the emitter resolves their label from the rule row).
+        require(schemaVersion in 1..AccountabilityEventWire.SCHEMA_VERSION) {
+            "journal schema version is not a live contract"
         }
         require(occurredAtMinute >= 1) { "occurred-at minute must be positive" }
         if (parsed.kind == AccountabilityEventKind.MONITORING_STATUS) {
@@ -92,6 +102,22 @@ data class PartnerEventJournal(
             require(monitoringState == null && outboxAgeBucket == null) {
                 "rule journal rows carry no monitoring fields"
             }
+            if (schemaVersion == AccountabilityEventWire.SCHEMA_VERSION) {
+                requireNotNull(ruleTargetType?.let(RuleTargetType::fromWire)) {
+                    "v2 rule journal rows need a target type"
+                }
+                RuleIdentity(
+                    label = requireNotNull(ruleLabel) { "v2 rule journal rows need a label" },
+                    targetType = requireNotNull(RuleTargetType.fromWire(ruleTargetType)),
+                    itemCount = ruleItemCount,
+                    batchLabel = ruleBatchLabel,
+                )
+            } else {
+                require(ruleLabel == null && ruleTargetType == null &&
+                    ruleItemCount == null && ruleBatchLabel == null) {
+                    "v1 rule journal rows carry no identity"
+                }
+            }
         } else {
             require(monitoringState == null && outboxAgeBucket == null) {
                 "block events carry no monitoring fields"
@@ -100,6 +126,18 @@ data class PartnerEventJournal(
                 "block events carry no rule fields"
             }
         }
+    }
+
+    /** Wire identity for a v2 row; null for a v1 row queued before the upgrade. */
+    fun ruleIdentityOrNull(): RuleIdentity? {
+        if (schemaVersion < AccountabilityEventWire.SCHEMA_VERSION) return null
+        val type = ruleTargetType?.let(RuleTargetType::fromWire) ?: return null
+        return RuleIdentity(
+            label = ruleLabel ?: return null,
+            targetType = type,
+            itemCount = ruleItemCount,
+            batchLabel = ruleBatchLabel,
+        )
     }
 
     companion object {
@@ -132,12 +170,17 @@ data class PartnerEventJournal(
             routePairId: String,
             occurredAtMinute: Long,
             createdAtMs: Long,
+            identity: RuleIdentity,
         ): PartnerEventJournal = PartnerEventJournal(
             eventId = eventId,
             category = AccountabilityEventCategory.RULE_CHANGED.wire,
             occurredAtMinute = occurredAtMinute,
             ruleId = ruleId.toString(),
             ruleChange = change.wire,
+            ruleLabel = identity.label,
+            ruleTargetType = identity.targetType.wire,
+            ruleItemCount = identity.itemCount,
+            ruleBatchLabel = identity.batchLabel,
             routePairId = routePairId,
             schemaVersion = AccountabilityEventWire.SCHEMA_VERSION,
             createdAtMs = createdAtMs,

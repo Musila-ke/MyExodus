@@ -70,8 +70,9 @@ class MilestoneSectionCardTest {
         render(habit = habitAt(days = 5), resolved = true, failed = false)
 
         compose.onNodeWithText(str(R.string.home_grid_title)).assertIsDisplayed()
-        // 5 completed days render as ordinal Day 6 (ADR #128) — never "Day 0 of 90".
-        compose.onNodeWithText(str(R.string.home_grid_day_of, 6, 90)).assertIsDisplayed()
+        // Completed days floored at 1 (ADR #176, superseding ADR #128's ordinal +1) —
+        // 5 completed days render "Day 5 of 90", never "Day 0" and never the ordinal.
+        compose.onNodeWithText(str(R.string.home_grid_day_of, 5, 90)).assertIsDisplayed()
         compose.onNodeWithText(str(R.string.home_grid_legend, "7, 30, 90")).assertIsDisplayed()
         compose.onNodeWithText(str(R.string.home_grid_empty_body)).assertDoesNotExist()
         compose.onNodeWithText(str(R.string.home_grid_error_body)).assertDoesNotExist()

@@ -7,13 +7,13 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.myexodus.accountability.EventCreator
 import com.example.myexodus.accountability.PartnerTestIdentity
 import com.example.myexodus.accountability.RoundTripTestEntryPoint
-import com.example.myexodus.accountability.crypto.AccountabilitySigner
 import com.example.myexodus.accountability.enrollment.EnrollmentTranscript
 import com.example.myexodus.accountability.enrollment.PairingFlow
 import com.example.myexodus.accountability.enrollment.PairingToken
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.sync.AppCheckTestSupport
 import com.example.myexodus.accountability.sync.MailboxOutboxDrainer
+import com.example.myexodus.accountability.sync.assumePartnerHarness
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import dagger.hilt.android.EntryPointAccessors
@@ -48,7 +48,7 @@ class PartnerDashboardInstrumentedTest {
     fun pairedDashboard_decodesReceivedActivityThroughTheProductionSeam(): Unit = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val ep = EntryPointAccessors.fromApplication(context, RoundTripTestEntryPoint::class.java)
-        assertWarmSigningWindow(ep.signer())
+        assumePartnerHarness(ep)
 
         val uidA = FirebaseAuth.getInstance().currentUser?.uid
             ?: error("no signed-in identity — launch the app once (anonymous auth) and re-run")
@@ -124,20 +124,6 @@ class PartnerDashboardInstrumentedTest {
             val outcomeB = withTimeout(60_000L) { partnerOutcome.await() }
             assertTrue("initiator pairing failed: $outcomeA", outcomeA is PairingFlow.Outcome.Paired)
             assertTrue("partner pairing failed: $outcomeB", outcomeB is PairingFlow.Outcome.Paired)
-        }
-    }
-
-    private fun assertWarmSigningWindow(signer: AccountabilitySigner) {
-        val signature = signer.beginSign()
-        signature.update("warm-window-probe".toByteArray())
-        try {
-            signer.finishSign(signature)
-        } catch (e: Exception) {
-            fail(
-                "signing window is cold — tap \"Warm signing window\" in PairingTestActivity " +
-                    "(adb shell am start -n com.example.myexodus/.accountability.PairingTestActivity) " +
-                    "and re-run. Cause: ${e.message}",
-            )
         }
     }
 

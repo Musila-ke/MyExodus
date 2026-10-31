@@ -45,10 +45,22 @@ class PairingReachabilityStore @Inject constructor(
         if (deniedAt(pairId) != null) prefs.edit { remove(key(pairId)) }
     }
 
+    /** Last server-answered read of [pairId]; null = this device has never reached it. The
+     *  dashboard's "last synced" falls back to this when no event has ever been received: a
+     *  healthy pairing with nothing shared yet is up to date, not "never synced" (owner report
+     *  2026-10-31 — Check now said "you're up to date" under a tile still reading "Never synced"). */
+    fun contactAt(pairId: String): Long? = prefs.getLong(contactKey(pairId), 0L).takeIf { it > 0L }
+
+    fun markContact(pairId: String, atMillis: Long) {
+        prefs.edit { putLong(contactKey(pairId), atMillis) }
+    }
+
     /** Drops flags for pairings this device no longer holds (an unpair that completed, a wipe). */
     fun prune(activePairIds: Set<String>) {
-        val stale = prefs.all.keys
-            .filter { it.startsWith(KEY_PREFIX) && it.removePrefix(KEY_PREFIX) !in activePairIds }
+        val stale = prefs.all.keys.filter { key ->
+            (key.startsWith(KEY_PREFIX) && key.removePrefix(KEY_PREFIX) !in activePairIds) ||
+                (key.startsWith(CONTACT_PREFIX) && key.removePrefix(CONTACT_PREFIX) !in activePairIds)
+        }
         if (stale.isEmpty()) return
         prefs.edit { stale.forEach { remove(it) } }
     }
@@ -78,9 +90,12 @@ class PairingReachabilityStore @Inject constructor(
 
     private fun key(pairId: String) = "$KEY_PREFIX$pairId"
 
+    private fun contactKey(pairId: String) = "$CONTACT_PREFIX$pairId"
+
     private companion object {
         const val PREFS_NAME = "pairing_reachability"
         const val KEY_PREFIX = "denied_at_"
+        const val CONTACT_PREFIX = "contact_at_"
         const val KEY_ROTATED_AT = "identity_rotated_at"
     }
 }

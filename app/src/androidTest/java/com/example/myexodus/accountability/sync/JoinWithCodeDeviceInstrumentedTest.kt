@@ -33,10 +33,12 @@ class JoinWithCodeDeviceInstrumentedTest {
     fun joinWithOwnerCode_pairsRealIdentityWithTheInviter(): Unit = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val ep = EntryPointAccessors.fromApplication(context, RoundTripTestEntryPoint::class.java)
-        assertWarmSigningWindow(ep.signer())
+        assumePartnerHarness(ep)
 
-        val code = InstrumentationRegistry.getArguments().getString("joinCode")
-            ?: error("pass -e joinCode <invitation code>")
+        val code = assumePresent(
+            InstrumentationRegistry.getArguments().getString("joinCode"),
+            "pass -e joinCode <invitation code>",
+        )
         val uidA = FirebaseAuth.getInstance().currentUser?.uid
             ?: error("no signed-in identity — launch the app once and re-run")
         harnessLog("join leg: uid=$uidA code=$code")

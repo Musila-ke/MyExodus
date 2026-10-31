@@ -44,20 +44,24 @@ class PartnerJourneySeedInstrumentedTest {
     fun seedMilestone_deliversToOwnerPair_overProductionRails(): Unit = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val ep = EntryPointAccessors.fromApplication(context, RoundTripTestEntryPoint::class.java)
-        assertWarmSigningWindow(ep.signer())
+        assumePartnerHarness(ep)
 
         val uidA = FirebaseAuth.getInstance().currentUser?.uid
             ?: error("no signed-in identity — launch the app once (anonymous auth) and re-run")
-        val uidB = InstrumentationRegistry.getArguments().getString("partnerUid")
-            ?: error("pass -e partnerUid <partner uid>")
+        val uidB = assumePresent(
+            InstrumentationRegistry.getArguments().getString("partnerUid"),
+            "pass -e partnerUid <partner uid>",
+        )
         val pairId = EnrollmentTranscript.durablePairIdOf(uidA, uidB)
 
         val store = EntryPointAccessors
             .fromApplication(context, EnhancedModeTestEntryPoint::class.java)
             .appRulesStoreFactory()
             .open() ?: error("rules store unavailable")
-        val enrollment = ep.enrollmentDao().getByPairId(pairId)
-            ?: error("no enrollment for pair=$pairId (uidA=$uidA uidB=$uidB) — wrong partnerUid?")
+        val enrollment = assumePresent(
+            ep.enrollmentDao().getByPairId(pairId),
+            "no enrollment for pair=$pairId (uidA=$uidA uidB=$uidB) — run the pairing harness first",
+        )
 
         // v16/ADR #135: the reconcile filter joins the row to its habit's consent slice —
         // a row without habit_progress_id matches no branch and would never deliver. Seed

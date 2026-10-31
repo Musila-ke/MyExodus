@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.GppBad
 import androidx.compose.material.icons.outlined.Handshake
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.SelfImprovement
 import androidx.compose.material.icons.outlined.Sync
@@ -77,6 +78,7 @@ import com.example.myexodus.accountability.monitoring.PartnerStatus
 import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.RuleChange
+import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.UnpairPhase
 import com.example.myexodus.accountability.state.UnpairState
@@ -123,6 +125,9 @@ private const val VIEW_ACTIVITY = "activity"
  *  consent surface belongs beside the partners it names. */
 private const val VIEW_SHARING = "sharing"
 private const val VIEW_PLANS = "plans"
+/** Owner mandate 2026-10-31: received rule/batch lifecycle rows as an organized page, not
+ *  just the feed preview. */
+private const val VIEW_RULES = "rules"
 private const val VIEW_PAIRING = "pairing"
 
 /** §19.4 item 4: the ceremony's two entry modes, as `view` values alongside the subpages. */
@@ -264,14 +269,33 @@ fun PartnerScreen(
     /** Plan Step 8: the server-derived connection reading (§8.10), coarse buckets only. Null =
      *  no honest answer right now — the card then claims nothing. */
     onLoadPartnerStatus: suspend (pairId: String) -> PartnerStatus? = { null },
+    /** ADR #193 deep link: the plan a notification named — the Plans subpage opens it. */
+    requestedPlanId: String? = null,
+    onPlanConsumed: () -> Unit = {},
+    /** Owner report 2026-10-31: a notification names ONE partner; its tap must land on that
+     *  partner's dashboard even when a different roster entry is currently selected. */
+    requestedPairId: String? = null,
+    onPairConsumed: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var state by remember { mutableStateOf<PartnerDashboardUi?>(null) }
     var view by rememberSaveable { mutableStateOf<String?>(null) }
+    // Hoisted from PartnerPlansScreen so a notification deep link can open the plan before the
+    // subpage composes; cleared whenever the subpage is left so a later visit starts at the list.
+    var openPlanId by rememberSaveable { mutableStateOf<String?>(null) }
     // System back leaves a subpage the way its BackRow does. The ceremony registers its own
     // handler later in composition — it must cancel the live token, so it wins while open.
-    BackHandler(enabled = view != null) { view = null }
+    BackHandler(enabled = view != null) {
+        view = null
+        openPlanId = null
+    }
+    LaunchedEffect(requestedPlanId) {
+        val planId = requestedPlanId ?: return@LaunchedEffect
+        view = VIEW_PLANS
+        openPlanId = planId
+        onPlanConsumed()
+    }
     var selectedPairId by rememberSaveable { mutableStateOf(selection?.selectedPairId) }
     var checking by remember { mutableStateOf(false) }
     var checkFailed by remember { mutableStateOf(false) }
@@ -420,6 +444,17 @@ fun PartnerScreen(
     // shared" card and the composer's ADR #135 gate keep the toggles' pre-visit answer.
     LaunchedEffect(view) { reload() }
 
+    // A notification names one partner; opening it must show THAT partner, not whichever
+    // roster entry was selected last (owner report 2026-10-31).
+    LaunchedEffect(requestedPairId) {
+        val pairId = requestedPairId ?: return@LaunchedEffect
+        selectedPairId = pairId
+        selection?.selectedPairId = pairId
+        view = null
+        reload()
+        onPairConsumed()
+    }
+
     // Owner UX ruling 2026-10-01: a background pass (FCM wake, periodic, check-now elsewhere)
     // that pulled partner events repaints this page in place. The dashboard is a one-shot
     // read, so without this tick an arrival waits for a resume — the exact "nothing moves
@@ -502,8 +537,13 @@ fun PartnerScreen(
     if (view == VIEW_PLANS && paired != null) {
         PartnerPlansScreen(
             planRepository = planRepository,
-            loadPartnerNames = { source.partnerDisplayNames() },
-            onBack = { view = null },
+            loadPartners = { source.pairRoster() },
+            openPlanId = openPlanId,
+            onOpenPlan = { openPlanId = it },
+            onBack = {
+                view = null
+                openPlanId = null
+            },
             modifier = modifier,
         )
         return
@@ -626,6 +666,7 @@ fun PartnerScreen(
                         when (view) {
                             VIEW_REQUESTS -> R.string.partner_tile_requests
                             VIEW_ACTIVITY -> R.string.partner_tile_activity
+                            VIEW_RULES -> R.string.partner_tile_rules
                             else -> R.string.partner_tile_pairing
                         },
                     ),
@@ -647,23 +688,18 @@ fun PartnerScreen(
                         onRespond = ::respondTo,
                     )
                     VIEW_ACTIVITY -> {
-                        // ADR #135: the message carries the sender's snapshot, so the journal
-                        // refuses it without a shared streak. Say that here — the old composer
-                        // offered a Send whose only possible outcome was "Try again".
-                        if (canEncourage == false) {
-                            EncourageNeedsSharingCard(
-                                partnerName = current.partnerLabel
-                                    ?: shortKeyId(current.partnerKeyId),
-                                onOpenSharing = { view = VIEW_SHARING },
-                            )
-                        } else {
-                            ComposeMessageCard(onCompose = { composing = true })
-                        }
+                        // Owner ruling 2026-10-31 ("each page has its own responsibility"): this
+                        // page shows the partner's activity. The composer stays an action; when
+                        // sharing gates it (ADR #135), the reason and the route live inside the
+                        // dialog at the moment the viewer tries to send — not as a passive block
+                        // of the viewer's own sharing configuration on the partner's page.
+                        ComposeMessageCard(onCompose = { composing = true })
                         // Owner ask 2026-10-01: the writer sees their own last message here —
                         // the mirror of the hub's "Their message to you".
                         current.sentMessageText?.let { SentMessageCard(it) }
-                        ActivityCard(current.alerts)
+                        ActivityCard(current.alerts, current.activity)
                     }
+                    VIEW_RULES -> RulesView(current)
                     else -> PairingView(
                         state = current,
                         checking = checking,
@@ -789,10 +825,17 @@ fun PartnerScreen(
                     NavTile(
                         icon = Icons.Outlined.Timeline,
                         label = stringResource(R.string.partner_tile_activity),
-                        status = stringResource(
-                            R.string.partner_tile_activity_week,
-                            current.alerts.weekCount,
-                        ),
+                        // Days free is the number the user expects this tile to answer
+                        // (owner report 2026-10-31: "activity is always 0" — the tile counted
+                        // only this week's events, so a shared streak read as zero).
+                        status = when (val activity = current.activity) {
+                            null -> stringResource(R.string.partner_tile_activity_none)
+                            else -> pluralStringResource(
+                                R.plurals.partner_tile_activity_days,
+                                activity.daysFree,
+                                activity.daysFree,
+                            )
+                        },
                         onClick = { view = VIEW_ACTIVITY },
                         modifier = Modifier.weight(1f),
                     )
@@ -841,6 +884,19 @@ fun PartnerScreen(
                         }
                     },
                     onClick = { view = VIEW_PLANS },
+                )
+                LinkRow(
+                    title = stringResource(R.string.partner_tile_rules),
+                    body = if (current.ruleHistory.isEmpty()) {
+                        stringResource(R.string.partner_tile_rules_none)
+                    } else {
+                        pluralStringResource(
+                            R.plurals.partner_tile_rules_changes,
+                            current.ruleHistory.size,
+                            current.ruleHistory.size,
+                        )
+                    },
+                    onClick = { view = VIEW_RULES },
                 )
             }
         }
@@ -961,6 +1017,12 @@ fun PartnerScreen(
             onDismiss = {
                 composing = false
                 messageOutcome = null
+            },
+            needsSharing = canEncourage == false,
+            onOpenSharing = {
+                composing = false
+                messageOutcome = null
+                view = VIEW_SHARING
             },
         )
     }
@@ -1234,20 +1296,25 @@ private fun PartnerSummaryCard(activity: PartnerActivityUi?, chainStatus: Partne
                     activity.daysFree,
                 ),
             )
+            // Equal thirds: intrinsic widths squeezed the third label below the width of its
+            // longest word, which broke "Coaching items" mid-word on the 720px device.
             Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
                 StatColumn(
                     stringResource(R.string.partner_summary_relapses),
                     activity.relapseCount.toString(),
+                    modifier = Modifier.weight(1f),
                 )
                 StatColumn(
                     stringResource(R.string.partner_summary_milestones_label),
                     activity.milestonesReached.joinToString(", ").ifEmpty {
                         stringResource(R.string.partner_summary_milestones_none)
                     },
+                    modifier = Modifier.weight(1f),
                 )
                 StatColumn(
                     stringResource(R.string.partner_summary_coaching_label),
                     activity.coachingProgress.toString(),
+                    modifier = Modifier.weight(1f),
                 )
             }
         }
@@ -1286,6 +1353,10 @@ private fun ComposeMessageDialog(
     toName: String,
     onSend: (String) -> Unit,
     onDismiss: () -> Unit,
+    /** ADR #135: the journal refuses a message unless this pair is consented to a streak, so
+     *  the explanation and its route appear here, at the moment the viewer tries to send. */
+    needsSharing: Boolean = false,
+    onOpenSharing: () -> Unit = {},
 ) {
     // Non-null only after the write attempt: FAILED renders inline red, QUEUED renders the
     // neutral "saved" note and disables Send (re-tapping would queue a duplicate).
@@ -1300,84 +1371,107 @@ private fun ComposeMessageDialog(
     val max = EventPayload.MAX_ACTIVITY_TEXT_LENGTH
     AlertDialog(
         onDismissRequest = { if (!sending) onDismiss() },
-        title = { Text(stringResource(R.string.partner_compose_title)) },
+        title = {
+            Text(
+                stringResource(
+                    if (needsSharing) {
+                        R.string.partner_compose_needs_sharing_title
+                    } else {
+                        R.string.partner_compose_title
+                    },
+                ),
+            )
+        },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (needsSharing) {
                 Text(
-                    stringResource(R.string.partner_compose_to, toName),
+                    stringResource(R.string.partner_compose_needs_sharing_body, toName),
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                Text(
-                    stringResource(R.string.partner_compose_body),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                suggestions.forEach { suggestion ->
-                    OutlinedButton(
-                        onClick = { text = suggestion; tooLong = false },
-                        enabled = !sending,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text(suggestion, style = MaterialTheme.typography.bodySmall) }
-                }
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = {
-                        text = it
-                        tooLong = it.trim().length > max
-                    },
-                    label = { Text(stringResource(R.string.partner_compose_hint)) },
-                    isError = tooLong,
-                    minLines = 2,
-                    maxLines = 4,
-                    enabled = !sending,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text(
-                    stringResource(R.string.partner_compose_characters, text.trim().length, max),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (tooLong) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-                if (tooLong) {
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        stringResource(R.string.partner_compose_too_long, max),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        stringResource(R.string.partner_compose_to, toName),
+                        style = MaterialTheme.typography.bodyMedium,
                     )
-                }
-                if (outcome == MessageSendOutcome.FAILED) {
                     Text(
-                        stringResource(R.string.partner_compose_failed),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                if (queued) {
-                    Text(
-                        stringResource(R.string.partner_compose_queued),
+                        stringResource(R.string.partner_compose_body),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    suggestions.forEach { suggestion ->
+                        OutlinedButton(
+                            onClick = { text = suggestion; tooLong = false },
+                            enabled = !sending,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(suggestion, style = MaterialTheme.typography.bodySmall) }
+                    }
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = {
+                            text = it
+                            tooLong = it.trim().length > max
+                        },
+                        label = { Text(stringResource(R.string.partner_compose_hint)) },
+                        isError = tooLong,
+                        minLines = 2,
+                        maxLines = 4,
+                        enabled = !sending,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        stringResource(R.string.partner_compose_characters, text.trim().length, max),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (tooLong) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                    if (tooLong) {
+                        Text(
+                            stringResource(R.string.partner_compose_too_long, max),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    if (outcome == MessageSendOutcome.FAILED) {
+                        Text(
+                            stringResource(R.string.partner_compose_failed),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    if (queued) {
+                        Text(
+                            stringResource(R.string.partner_compose_queued),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = { onSend(text) },
-                enabled = !sending && !queued && text.isNotBlank() && !tooLong,
-            ) {
-                Text(
-                    stringResource(
-                        when {
-                            sending -> R.string.partner_compose_sending
-                            queued -> R.string.partner_compose_saved
-                            else -> R.string.partner_compose_send
-                        },
-                    ),
-                )
+            if (needsSharing) {
+                TextButton(onClick = onOpenSharing) {
+                    Text(stringResource(R.string.partner_compose_open_sharing))
+                }
+            } else {
+                TextButton(
+                    onClick = { onSend(text) },
+                    enabled = !sending && !queued && text.isNotBlank() && !tooLong,
+                ) {
+                    Text(
+                        stringResource(
+                            when {
+                                sending -> R.string.partner_compose_sending
+                                queued -> R.string.partner_compose_saved
+                                else -> R.string.partner_compose_send
+                            },
+                        ),
+                    )
+                }
             }
         },
         dismissButton = {
@@ -1792,26 +1886,6 @@ private fun NothingSharedCard(partnerName: String, onOpenSharing: () -> Unit) {
     }
 }
 
-/** ADR #135: the composer's precondition, said where the composer would have been — the send
- *  path journals the sender's own snapshot, so without a shared streak there is nothing the
- *  partner may be shown and the write is refused by design. */
-@Composable
-private fun EncourageNeedsSharingCard(partnerName: String, onOpenSharing: () -> Unit) {
-    PartnerSurface {
-        Text(
-            stringResource(R.string.partner_compose_needs_sharing_title),
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Text(
-            stringResource(R.string.partner_compose_needs_sharing_body, partnerName),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        TextButton(onClick = onOpenSharing) {
-            Text(stringResource(R.string.partner_nothing_shared_action))
-        }
-    }
-}
-
 /**
  * Sync detail. The same card serves two jobs, so it takes its emphasis from the caller: the hub
  * shows it only when something needs attention, and there a filled button would make a routine
@@ -1947,20 +2021,41 @@ private fun SyncCard(
 }
 
 @Composable
-private fun ActivityCard(summary: AlertSummary) {
+private fun ActivityCard(summary: AlertSummary, activity: PartnerActivityUi?) {
     PartnerSurface {
         Text(
             stringResource(R.string.partner_activity_title, summary.recent.size),
             style = MaterialTheme.typography.titleMedium,
         )
         HorizontalDivider()
+        // The shared aggregate belongs on this page too (owner report 2026-10-31): counts of
+        // this week's events alone read as "0" while the partner's actual days-free sat one
+        // screen back.
+        activity?.let {
+            Text(
+                stringResource(
+                    R.string.partner_activity_shared_state,
+                    it.daysFree,
+                    it.relapseCount,
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
             StatColumn(stringResource(R.string.partner_activity_today), summary.todayCount.toString())
             StatColumn(stringResource(R.string.partner_activity_week), summary.weekCount.toString())
         }
         if (summary.recent.isEmpty()) {
             Text(
-                stringResource(R.string.partner_activity_empty),
+                // Two causes, two statements: nothing was ever shared, or sharing is on and
+                // the week was quiet. One shared empty sentence conflated them.
+                stringResource(
+                    if (activity == null) {
+                        R.string.partner_activity_none_shared
+                    } else {
+                        R.string.partner_activity_empty
+                    },
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1968,6 +2063,34 @@ private fun ActivityCard(summary: AlertSummary) {
             HorizontalDivider()
             summary.recent.forEach { alert -> AlertRow(alert) }
         }
+    }
+}
+
+/**
+ * Every rule/batch lifecycle row this device received (owner mandate 2026-10-31): the feed
+ * previews the latest five, this page is the organized list behind it. Each row names the
+ * rule or batch, the verb, and the batch context, using the wire-v2 identity.
+ */
+@Composable
+private fun RulesView(state: PartnerDashboardUi.Paired) {
+    if (state.ruleHistory.isEmpty()) {
+        InfoCard(
+            title = stringResource(R.string.partner_rules_empty_title),
+            body = stringResource(R.string.partner_rules_empty_body),
+        )
+        return
+    }
+    PartnerSurface {
+        Text(
+            pluralStringResource(
+                R.plurals.partner_rules_count,
+                state.ruleHistory.size,
+                state.ruleHistory.size,
+            ),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        HorizontalDivider()
+        state.ruleHistory.forEach { alert -> AlertRow(alert) }
     }
 }
 
@@ -2047,6 +2170,7 @@ private fun ruleChangeLabel(change: RuleChange): Int = when (change) {
     RuleChange.UPDATED -> R.string.partner_rule_updated
     RuleChange.DISABLED -> R.string.partner_rule_disabled
     RuleChange.DELETED -> R.string.partner_rule_deleted
+    RuleChange.EXPIRED -> R.string.partner_rule_expired
 }
 
 /**
@@ -2068,18 +2192,30 @@ private fun AlertRow(alert: PartnerAlert) {
             ?: stringResource(R.string.partner_alert_streak_unnamed)
         is PartnerAlert.Milestone -> alert.habitLabel
             ?: stringResource(R.string.partner_alert_streak_unnamed)
-        is PartnerAlert.RuleChanged -> stringResource(R.string.partner_alert_rule)
+        is PartnerAlert.RuleChanged -> alert.identity?.label
+            ?: stringResource(R.string.partner_alert_rule)
     }
     val kind = when (alert) {
         is PartnerAlert.AppActivity ->
-            stringResource(if (alert.isOverride) R.string.partner_alert_override else R.string.partner_alert_blocked)
+            stringResource(if (alert.isOverride) R.string.partner_alert_override else R.string.partner_alert_blocked) +
+                (alert.batchLabel?.let { " · " + stringResource(R.string.partner_rule_in_batch, it) }.orEmpty())
         is PartnerAlert.Recovery -> stringResource(outcomeLabel(alert.outcome.uppercase()))
         is PartnerAlert.Relapse -> stringResource(R.string.partner_alert_relapse) +
             (alert.endedDays?.let { " · " + stringResource(R.string.partner_relapse_ended_days, it) }.orEmpty())
         is PartnerAlert.Milestone -> alert.milestoneDay
             ?.let { pluralStringResource(R.plurals.partner_milestone_reached_days, it, it) }
             ?: stringResource(R.string.partner_alert_milestone_plain)
-        is PartnerAlert.RuleChanged -> stringResource(ruleChangeLabel(alert.change))
+        is PartnerAlert.RuleChanged -> {
+            val verb = stringResource(ruleChangeLabel(alert.change))
+            val id = alert.identity
+            val count = (id?.itemCount ?: 0L).toInt()
+            when {
+                id?.targetType == RuleTargetType.BATCH ->
+                    verb + " · " + pluralStringResource(R.plurals.partner_rule_item_count, count, count)
+                id?.batchLabel != null -> verb + " · " + stringResource(R.string.partner_rule_in_batch, id.batchLabel)
+                else -> verb
+            }
+        }
     }
     Row(
         Modifier.fillMaxWidth(),
@@ -2109,22 +2245,29 @@ private fun AlertRow(alert: PartnerAlert) {
             )
             is PartnerAlert.RuleChanged -> AppMark(
                 packageName = null,
-                fallback = Icons.Outlined.Tune,
+                fallback = if (alert.identity?.targetType == RuleTargetType.BATCH) {
+                    Icons.Outlined.Layers
+                } else {
+                    Icons.Outlined.Tune
+                },
                 size = 28.dp,
             )
         }
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            kind + " · " + relativeTimeText(System.currentTimeMillis(), alert.atEpochMillis),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        // Label gets the full width: sharing the line with the state·time tail truncated
+        // "Restriction rule" to "Res…" on the 720px test device (owner report 2026-10-31).
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                kind + " · " + relativeTimeText(System.currentTimeMillis(), alert.atEpochMillis),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -2482,8 +2625,9 @@ private fun InfoCard(
 internal fun shortKeyId(keyId: String): String =
     if (keyId.length > 12) keyId.take(12) + "…" else keyId
 
-/** "Sep 19, 2026" — the pairing date, shared by the hub's identity row and the Pairing page. */
-private fun pairedOnText(epochMillis: Long): String =
+/** "Sep 19, 2026" — the pairing date, shared by the hub's identity row, the Pairing page and
+ *  the plans editor's recipient choice (two pairs can carry the same person's name). */
+internal fun pairedOnText(epochMillis: Long): String =
     Instant.ofEpochMilli(epochMillis)
         .atZone(ZoneId.systemDefault())
         .format(DateTimeFormatter.ofPattern("MMM d, yyyy"))

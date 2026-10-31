@@ -113,6 +113,8 @@ class PartnerDashboardSourceTest {
         rejectionsThrow: Boolean = false,
         /** OPD #30(b): the recorded first-denial timestamp for this pairing; null = reachable. */
         pairingDeniedAt: (String) -> Long? = { null },
+        /** Owner report 2026-10-31: last server-answered pairing read, used when no event ever arrived. */
+        pairingContactAt: (String) -> Long? = { null },
         /** Step 7: the partner's latest decrypted monitoring snapshot, if any arrived. */
         monitoring: (String) -> PartnerMonitoringSnapshot? = { null },
         /** §8.4 RULE_CONTROL: the receiver's stored rule-lifecycle rows for this pair. */
@@ -148,6 +150,7 @@ class PartnerDashboardSourceTest {
             },
             hasPriorPairingKeys = { priorPairingKeys },
             pairingDeniedAt = pairingDeniedAt,
+            pairingContactAt = pairingContactAt,
             rejectionsSince = { pairId, _ ->
                 rejectionPairIds += pairId
                 if (rejectionsThrow) throw IllegalStateException("outbox read failed") else {
@@ -286,6 +289,43 @@ class PartnerDashboardSourceTest {
         val paired = source().source.load(now) as PartnerDashboardUi.Paired
         assertEquals(SyncFreshness.NEVER, paired.freshness)
         assertEquals(null, paired.lastSyncedAtEpochMillis)
+    }
+
+    @Test
+    fun aSuccessfulContactWithNoEvent_replacesNever_withTheContactTime() = runTest {
+        // Owner report 2026-10-31: Check now answered "you're up to date" while the tile still
+        // read "Never synced" — the mailbox watermark only moves when the partner shares
+        // something. A server-answered pairing read must clear the verdict by itself.
+        val paired = source(pairingContactAt = { now - 60_000L })
+            .source.load(now) as PartnerDashboardUi.Paired
+
+        assertEquals(SyncFreshness.FRESH, paired.freshness)
+        assertEquals(now - 60_000L, paired.lastSyncedAtEpochMillis)
+    }
+
+    @Test
+    fun theNewerOfContactAndWatermark_wins() = runTest {
+        val contactNewer = source(
+            enrollments = listOf(enrollment(watermark = now - 3_600_000L)),
+            pairingContactAt = { now - 60_000L },
+        ).source.load(now) as PartnerDashboardUi.Paired
+        assertEquals(now - 60_000L, contactNewer.lastSyncedAtEpochMillis)
+
+        val watermarkNewer = source(
+            enrollments = listOf(enrollment(watermark = now - 3_600_000L)),
+            pairingContactAt = { now - 7_200_000L },
+        ).source.load(now) as PartnerDashboardUi.Paired
+        assertEquals(now - 3_600_000L, watermarkNewer.lastSyncedAtEpochMillis)
+    }
+
+    @Test
+    fun aThrowingContactRead_fallsBackToTheWatermark() = runTest {
+        val paired = source(
+            enrollments = listOf(enrollment(watermark = now - 60_000L)),
+            pairingContactAt = { throw IllegalStateException("prefs locked") },
+        ).source.load(now) as PartnerDashboardUi.Paired
+
+        assertEquals(now - 60_000L, paired.lastSyncedAtEpochMillis)
     }
 
     @Test
@@ -588,17 +628,26 @@ class PartnerDashboardSourceTest {
 
         assertEquals(
             "the default choice is exactly the pre-picker §19.5 target",
-            listOf(ReachOutTarget("pair-new", "Sam"), ReachOutTarget("pair-old", "Alex")),
+            listOf(
+                ReachOutTarget("pair-new", "Sam", 200L),
+                ReachOutTarget("pair-old", "Alex", 100L),
+            ),
             recording.source.reachOutTargets(),
         )
         assertEquals(
             "a live pick moves to the front; the rest stay newest-first",
-            listOf(ReachOutTarget("pair-old", "Alex"), ReachOutTarget("pair-new", "Sam")),
+            listOf(
+                ReachOutTarget("pair-old", "Alex", 100L),
+                ReachOutTarget("pair-new", "Sam", 200L),
+            ),
             recording.source.reachOutTargets("pair-old"),
         )
         assertEquals(
             "a stale pick degrades to the newest target, never to nothing",
-            listOf(ReachOutTarget("pair-new", "Sam"), ReachOutTarget("pair-old", "Alex")),
+            listOf(
+                ReachOutTarget("pair-new", "Sam", 200L),
+                ReachOutTarget("pair-old", "Alex", 100L),
+            ),
             recording.source.reachOutTargets("pair-gone"),
         )
         assertEquals(emptyList<ReachOutTarget>(), source(enrollments = emptyList()).source.reachOutTargets())

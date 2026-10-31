@@ -572,12 +572,18 @@ internal object LocalDatabaseMigration {
         ok
     }
 
-    /** Forgets the completion marker so a test can exercise the crash-resume redo path. */
+    /**
+     * Forgets the completion marker so a test can exercise the crash-resume redo path, and the
+     * scope pointers with it: a live install on the same device may have left a switched-account
+     * pointer in these prefs (retainedScope/recoveryOffer read it), which is not this test's state.
+     */
     internal fun resetJournalForTest(context: Context) {
         synchronized(lock) {
             prefs(context).edit(commit = true) {
                 remove(KEY_SCOPE_HASH)
                 remove(KEY_ACTIVATED_AT)
+                remove(KEY_ACTIVE_HASH)
+                remove(KEY_LAST_UID_HASH)
                 putBoolean(KEY_CLEANED, false)
             }
             activeScope = null

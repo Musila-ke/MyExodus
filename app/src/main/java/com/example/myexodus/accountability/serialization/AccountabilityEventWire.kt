@@ -9,10 +9,12 @@ import java.util.UUID
  * that may travel for the new event-delivery feature; it is a closed allowlist, not a
  * superset of detector objects.
  *
- * There is deliberately no free-text field except [AccountabilityEvent.eventId], which is
- * format-checked as a canonical UUID. That is the minimizer: a raw URL, hostname, package
- * name, app label, notification line, location, or arbitrary JSON value has no field to
- * occupy, and [decodeOrNull] rejects unknown keys rather than ignoring them.
+ * The only free-text field is the bounded [RuleIdentity] label added in v2 (owner mandate
+ * 2026-10-31: a partner must be told *which* rule or batch changed); it is required to be its
+ * own sanitized single-line form, ≤[MAX_RULE_LABEL_CHARS], and rides only on RULE_CONTROL.
+ * Everything else stays closed: a raw URL path, notification line, location, or arbitrary
+ * JSON value has no field to occupy, and [decodeOrNull] rejects unknown keys rather than
+ * ignoring them. Every other identity is still the format-checked UUID [AccountabilityEvent.eventId].
  *
  * Recipient relationship and delivery state are local/relay metadata (§8.1 last paragraph),
  * never part of this body. [EventDeliveryState] names the sender-side states Step 4 persists;
@@ -76,7 +78,9 @@ enum class OutboxAgeBucket(val wire: String) {
     }
 }
 
-/** Closed rule-lifecycle vocabulary; the rule id rides as a UUID, never as free text. */
+/** Closed rule-lifecycle vocabulary; the rule id rides as a UUID, never as free text.
+ *  [EXPIRED] is a natural end of the rule's set duration, distinct from the owner switching
+ *  it off: the partner is told the block has ended, not that it was turned off. */
 enum class RuleChange(val wire: String) {
     CREATED("CREATED"),
     ASSIGNED("ASSIGNED"),
@@ -84,10 +88,86 @@ enum class RuleChange(val wire: String) {
     UPDATED("UPDATED"),
     DISABLED("DISABLED"),
     DELETED("DELETED"),
+    EXPIRED("EXPIRED"),
     ;
 
     companion object {
         fun fromWire(value: String): RuleChange? = entries.firstOrNull { it.wire == value }
+    }
+}
+
+/** Closed rule-target vocabulary for the bounded identity below. */
+enum class RuleTargetType(val wire: String) {
+    APP("APP"),
+    WEBSITE("WEBSITE"),
+    BATCH("BATCH"),
+    ;
+
+    companion object {
+        fun fromWire(value: String): RuleTargetType? = entries.firstOrNull { it.wire == value }
+    }
+}
+
+/** Hard caps for the bounded identity (owner mandate 2026-10-31). */
+const val MAX_RULE_LABEL_CHARS = 64
+const val MAX_BATCH_ITEMS = 2_000
+
+/**
+ * Bounded, sanitized identity for a rule-lifecycle event. Owner mandate 2026-10-31: a partner
+ * is never told only "a restriction rule changed" — the copy must name the app, website, or
+ * batch, and a batch carries its item count. [label] is the name the owner already sees
+ * (app label, website host, or batch name); [batchLabel] names the batch a member rule
+ * belongs to; [itemCount] is set on BATCH rows only.
+ *
+ * This is the one deliberate free-text opening in the closed body: the constructor requires
+ * the value to be its own sanitized single-line form (no control characters, collapsed
+ * whitespace, ≤[MAX_RULE_LABEL_CHARS]), so a raw URL path, notification line, or injected
+ * newline still has nowhere to hide.
+ */
+data class RuleIdentity(
+    val label: String,
+    val targetType: RuleTargetType,
+    val itemCount: Long? = null,
+    val batchLabel: String? = null,
+) {
+    init {
+        require(label.isNotBlank() && label == AccountabilityEventWire.sanitizeRuleLabel(label)) {
+            "rule label is not a sanitized single line"
+        }
+        if (targetType == RuleTargetType.BATCH) {
+            require(itemCount != null && itemCount in 1..MAX_BATCH_ITEMS.toLong()) {
+                "batch rows need a bounded item count"
+            }
+            require(batchLabel == null) { "a batch row carries no parent batch label" }
+        } else {
+            require(itemCount == null) { "item count belongs to batch rows only" }
+            batchLabel?.let {
+                require(it.isNotBlank() && it == AccountabilityEventWire.sanitizeRuleLabel(it)) {
+                    "batch label is not a sanitized single line"
+                }
+            }
+        }
+    }
+
+    companion object {
+        /** Identity for a single rule-shaped target: the display label this device shows
+         *  (sanitized, falling back to the raw target), its contract target type, and the
+         *  batch name when the rule belongs to one. Batch rows build their own identity. */
+        fun of(
+            targetType: String,
+            target: String,
+            label: String,
+            batchName: String? = null,
+        ): RuleIdentity {
+            val resolved = AccountabilityEventWire.sanitizeRuleLabel(label)
+                .ifBlank { AccountabilityEventWire.sanitizeRuleLabel(target) }
+            return RuleIdentity(
+                label = resolved.ifBlank { "Restriction rule" },
+                targetType = if (targetType == "APP") RuleTargetType.APP else RuleTargetType.WEBSITE,
+                batchLabel = batchName?.let(AccountabilityEventWire::sanitizeRuleLabel)
+                    ?.takeIf { it.isNotBlank() },
+            )
+        }
     }
 }
 
@@ -116,6 +196,8 @@ data class AccountabilityEvent(
     val missingSequenceEnd: Long? = null,
     val ruleId: UUID? = null,
     val ruleChange: RuleChange? = null,
+    /** Bounded name of what changed; null only on a schema-v1 body (pre-2026-10-31 sender). */
+    val ruleIdentity: RuleIdentity? = null,
 ) {
     val kind: AccountabilityEventKind = category.kind
 
@@ -128,7 +210,7 @@ data class AccountabilityEvent(
                 monitoringState == null && outboxAgeBucket == null &&
                     latestRelationshipSequence == null &&
                     missingSequenceStart == null && missingSequenceEnd == null &&
-                    ruleId == null && ruleChange == null,
+                    ruleId == null && ruleChange == null && ruleIdentity == null,
             ) { "accountability events carry no monitoring, gap, or rule fields" }
 
             AccountabilityEventKind.MONITORING_STATUS -> {
@@ -141,7 +223,7 @@ data class AccountabilityEvent(
                 require(missingSequenceStart == null && missingSequenceEnd == null) {
                     "monitoring snapshots carry no gap range"
                 }
-                require(ruleId == null && ruleChange == null) {
+                require(ruleId == null && ruleChange == null && ruleIdentity == null) {
                     "monitoring snapshots carry no rule fields"
                 }
             }
@@ -153,7 +235,7 @@ data class AccountabilityEvent(
                 require(
                     monitoringState == null && outboxAgeBucket == null &&
                         latestRelationshipSequence == null &&
-                        ruleId == null && ruleChange == null,
+                        ruleId == null && ruleChange == null && ruleIdentity == null,
                 ) { "gap markers carry no monitoring or rule fields" }
             }
 
@@ -172,7 +254,9 @@ data class AccountabilityEvent(
 
 object AccountabilityEventWire {
 
-    const val SCHEMA_VERSION = 1
+    /** v2 adds the bounded [RuleIdentity] to RULE_CONTROL (owner mandate 2026-10-31); v1
+     *  bodies still decode so a queued pre-upgrade journal row is never stranded. */
+    const val SCHEMA_VERSION = 2
 
     /** Hard body bound. Relay ciphertext ceiling is 4096 bytes; this leaves ample envelope room. */
     const val MAX_BODY_BYTES = 512
@@ -192,12 +276,29 @@ object AccountabilityEventWire {
     private const val K_MISSING_END = "ge"
     private const val K_RULE_ID = "rid"
     private const val K_RULE_CHANGE = "chg"
+    private const val K_RULE_LABEL = "lbl"
+    private const val K_RULE_TARGET = "tgt"
+    private const val K_RULE_ITEMS = "cnt"
+    private const val K_RULE_BATCH = "bat"
 
     private val ALL_KEYS = setOf(
         K_VERSION, K_EVENT_ID, K_SEQUENCE, K_KIND, K_CATEGORY, K_TIME,
         K_MONITORING_STATE, K_OUTBOX_AGE, K_LATEST_SEQUENCE, K_MISSING_START, K_MISSING_END,
-        K_RULE_ID, K_RULE_CHANGE,
+        K_RULE_ID, K_RULE_CHANGE, K_RULE_LABEL, K_RULE_TARGET, K_RULE_ITEMS, K_RULE_BATCH,
     )
+
+    private val WHITESPACE = Regex("\\s+")
+
+    /** The single-line, ≤[MAX_RULE_LABEL_CHARS] form a rule identity may carry: control and
+     *  line-separator characters become spaces, runs collapse, the result is trimmed. */
+    fun sanitizeRuleLabel(raw: String): String {
+        val single = buildString(raw.length) {
+            raw.forEach { ch ->
+                append(if (ch.isISOControl() || ch.code == 0x2028 || ch.code == 0x2029) ' ' else ch)
+            }
+        }
+        return single.replace(WHITESPACE, " ").trim().take(MAX_RULE_LABEL_CHARS).trim()
+    }
 
     fun newEventId(): String = UUID.randomUUID().toString()
 
@@ -250,6 +351,7 @@ object AccountabilityEventWire {
         ruleId: UUID,
         change: RuleChange,
         occurredAtMillis: Long,
+        identity: RuleIdentity,
     ): AccountabilityEvent = AccountabilityEvent(
         eventId = eventId,
         relationshipSequence = sequence,
@@ -257,6 +359,7 @@ object AccountabilityEventWire {
         occurredAtMinute = minuteOf(occurredAtMillis),
         ruleId = ruleId,
         ruleChange = change,
+        ruleIdentity = identity,
     )
 
     fun gap(
@@ -290,6 +393,15 @@ object AccountabilityEventWire {
         event.missingSequenceEnd?.let { entries += K_MISSING_END to CanonicalCbor.int(it) }
         event.ruleId?.let { entries += K_RULE_ID to CanonicalCbor.text(it.toString()) }
         event.ruleChange?.let { entries += K_RULE_CHANGE to CanonicalCbor.text(it.wire) }
+        event.ruleIdentity?.let { identity ->
+            entries += K_RULE_LABEL to CanonicalCbor.text(identity.label)
+            entries += K_RULE_TARGET to CanonicalCbor.text(identity.targetType.wire)
+            identity.itemCount?.let { entries += K_RULE_ITEMS to CanonicalCbor.int(it) }
+            identity.batchLabel?.let { entries += K_RULE_BATCH to CanonicalCbor.text(it) }
+        }
+        require(event.kind != AccountabilityEventKind.RULE_CONTROL || event.ruleIdentity != null) {
+            "rule control bodies carry an identity"
+        }
         return CanonicalCbor.encodeMap(entries)
     }
 
@@ -312,7 +424,8 @@ object AccountabilityEventWire {
         if (keys.size != map.keys.size || !ALL_KEYS.containsAll(keys)) return null
 
         val version = map.integerOrNull(K_VERSION) ?: return null
-        if (version != SCHEMA_VERSION.toLong()) return null
+        // v1 bodies still decode: a journal row queued before the v2 upgrade must not strand.
+        if (version != 1L && version != SCHEMA_VERSION.toLong()) return null
         val eventId = map.textOrNull(K_EVENT_ID) ?: return null
         val sequence = map.integerOrNull(K_SEQUENCE) ?: return null
         val kind = map.textOrNull(K_KIND)
@@ -356,6 +469,26 @@ object AccountabilityEventWire {
         } else {
             null
         }
+        val identityKeys = setOf(K_RULE_LABEL, K_RULE_TARGET, K_RULE_ITEMS, K_RULE_BATCH)
+        val ruleIdentity = if (keys.any(identityKeys::contains)) {
+            if (version != SCHEMA_VERSION.toLong()) return null
+            val label = map.textOrNull(K_RULE_LABEL) ?: return null
+            val target = map.textOrNull(K_RULE_TARGET)
+                ?.let(RuleTargetType::fromWire) ?: return null
+            val count = if (keys.contains(K_RULE_ITEMS)) {
+                map.integerOrNull(K_RULE_ITEMS) ?: return null
+            } else {
+                null
+            }
+            val batch = if (keys.contains(K_RULE_BATCH)) {
+                map.textOrNull(K_RULE_BATCH) ?: return null
+            } else {
+                null
+            }
+            runCatching { RuleIdentity(label, target, count, batch) }.getOrNull() ?: return null
+        } else {
+            null
+        }
 
         val expected = when (kind) {
             AccountabilityEventKind.ACCOUNTABILITY_EVENT -> {
@@ -377,10 +510,26 @@ object AccountabilityEventWire {
             }
 
             AccountabilityEventKind.RULE_CONTROL -> {
-                setOf(
-                    K_VERSION, K_EVENT_ID, K_SEQUENCE, K_KIND, K_CATEGORY, K_TIME,
-                    K_RULE_ID, K_RULE_CHANGE,
-                )
+                if (version == SCHEMA_VERSION.toLong()) {
+                    val identity = ruleIdentity ?: return null
+                    buildSet {
+                        addAll(
+                            listOf(
+                                K_VERSION, K_EVENT_ID, K_SEQUENCE, K_KIND, K_CATEGORY, K_TIME,
+                                K_RULE_ID, K_RULE_CHANGE, K_RULE_LABEL, K_RULE_TARGET,
+                            ),
+                        )
+                        when {
+                            identity.targetType == RuleTargetType.BATCH -> add(K_RULE_ITEMS)
+                            identity.batchLabel != null -> add(K_RULE_BATCH)
+                        }
+                    }
+                } else {
+                    setOf(
+                        K_VERSION, K_EVENT_ID, K_SEQUENCE, K_KIND, K_CATEGORY, K_TIME,
+                        K_RULE_ID, K_RULE_CHANGE,
+                    )
+                }
             }
         }
         if (keys != expected) return null
@@ -398,6 +547,7 @@ object AccountabilityEventWire {
                 missingSequenceEnd = missingEnd,
                 ruleId = ruleId,
                 ruleChange = ruleChange,
+                ruleIdentity = ruleIdentity,
             ).takeIf { it.kind == kind }
         } catch (e: IllegalArgumentException) {
             null

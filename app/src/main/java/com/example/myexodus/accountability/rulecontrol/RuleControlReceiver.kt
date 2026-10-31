@@ -26,12 +26,17 @@ class RuleControlReceiver(
             val nowMs = now()
             val dao = store.partnerRuleChangeDao()
             dao.deleteExpired(nowMs)
+            val identity = event.ruleIdentity
             dao.insert(
                 PartnerRuleChange(
                     pairId = pairId,
                     eventId = event.eventId,
                     ruleId = ruleId.toString(),
                     ruleChange = change.wire,
+                    ruleLabel = identity?.label,
+                    ruleTargetType = identity?.targetType?.wire,
+                    ruleItemCount = identity?.itemCount,
+                    ruleBatchLabel = identity?.batchLabel,
                     occurredAtMinute = event.occurredAtMinute,
                     receivedAtMs = nowMs,
                     expiresAtMs = nowMs + PartnerEventJournal.RETENTION_MILLIS,

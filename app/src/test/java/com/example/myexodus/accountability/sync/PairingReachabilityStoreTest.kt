@@ -60,11 +60,28 @@ class PairingReachabilityStoreTest {
         val store = store()
         store.markDenied("pair-gone", 1_000L)
         store.markDenied("pair-live", 1_000L)
+        store.markContact("pair-gone", 2_000L)
+        store.markContact("pair-live", 2_000L)
 
         store.prune(setOf("pair-live"))
 
         assertNull(store.deniedAt("pair-gone"))
+        assertNull(store.contactAt("pair-gone"))
         assertEquals(1_000L, store.deniedAt("pair-live"))
+        assertEquals(2_000L, store.contactAt("pair-live"))
+    }
+
+    @Test
+    fun contactAt_isTheLatestServerAnswer_andSurvivesTheProcess() {
+        assertNull(store().contactAt("pair-1"))
+
+        store().markContact("pair-1", 1_000L)
+        store().markContact("pair-1", 2_000L)
+
+        assertEquals(2_000L, store().contactAt("pair-1"))
+        // Clearing a denial is not a contact write, and vice versa.
+        store().markReachable("pair-1")
+        assertEquals(2_000L, store().contactAt("pair-1"))
     }
 
     @Test
