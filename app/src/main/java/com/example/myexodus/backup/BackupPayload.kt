@@ -57,7 +57,9 @@ object BackupPayload {
     const val VERSION = 1
     const val MAX_UNCOMPRESSED_BYTES = BackupEnvelope.MAX_UNCOMPRESSED_BYTES
     const val MAX_COMPRESSED_BYTES = BackupEnvelope.MAX_COMPRESSED_BYTES
-    const val MAX_EXPANSION = 5L
+    // ADR #247: measured text-only history compresses 25-33:1, so the plan's 5:1 bound refused
+    // every real snapshot; 100:1 keeps the bomb guard with 3x headroom over the worst fixture.
+    const val MAX_EXPANSION = 100L
 
     // shortcut: one record is capped at 16 MiB; a legitimate single row above that needs a v2
     // payload format rather than a silently larger buffer.
@@ -126,8 +128,8 @@ object BackupPayload {
 
     /**
      * Decompresses exactly [compressedLength] authenticated bytes and emits every record to
-     * [sink] in order. The 100 MiB absolute cap and the 5:1 expansion cap are applied while
-     * inflating; the deflate stream must end exactly at the declared length.
+     * [sink] in order. The 100 MiB absolute cap and the [MAX_EXPANSION] ratio cap are applied
+     * while inflating; the deflate stream must end exactly at the declared length.
      */
     fun read(input: InputStream, compressedLength: Long, sink: SnapshotSink): Sizes {
         if (compressedLength <= 0) throw BackupPayloadException.Corrupt("empty payload")

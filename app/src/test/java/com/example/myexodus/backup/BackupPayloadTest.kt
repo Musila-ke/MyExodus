@@ -16,6 +16,7 @@ import java.util.zip.DeflaterOutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -23,8 +24,8 @@ import org.robolectric.annotation.Config
 
 /**
  * Account plan §6.4 items 6-7 / §6.6 item 6: the payload keeps the whole logical allowlist
- * byte-exact, stays bounded under the 100 MiB / 20 MiB / 5:1 limits, and rejects anything that
- * is not a complete, well-formed snapshot.
+ * byte-exact, stays bounded under the 100 MiB / 20 MiB / 100:1 limits (ADR #247), and rejects
+ * anything that is not a complete, well-formed snapshot.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
@@ -252,7 +253,7 @@ class BackupPayloadTest {
     }
 
     @Test
-    fun aSnapshotThatCannotRestoreUnderTheFiveToOneLimitIsNeverProduced() {
+    fun aSnapshotThatWouldBlowUpOnRestoreIsNeverProduced() {
         val repetitive = fullSnapshot.copy(
             sessions = listOf(
                 fullSnapshot.sessions.first().copy(entry = "a".repeat(200_000)),
@@ -351,5 +352,53 @@ class BackupPayloadTest {
 
         assertEquals(bytes.size.toLong(), sizes.compressedBytes)
         assertEquals(inflated.size.toLong(), sizes.uncompressedBytes)
+    }
+
+    // Account plan §16 item 10: measured high-history fixture, not an estimate.
+    @Test
+    fun aHighHistoryTextOnlySnapshotStaysFarBelowTheCompressedCap() {
+        val attempts = (0 until 150_000).map {
+            AttemptLog(
+                occurredAtEpochMillis = 1_700_000_000_000L + it * 60_000L,
+                ruleId = "rule-${it % 50}",
+                blockedTarget = "com.example.target${it % 200}",
+                outcome = if (it % 3 == 0) "ALLOWED" else "BLOCKED",
+            )
+        }
+        val sessions = (0 until 2_000).map {
+            RecoverySession(
+                id = "j$it",
+                technique = "box_breathing",
+                intensityStart = 6,
+                intensityEnd = 2,
+                state = RecoverySession.STATE_COMPLETED,
+                startedAtEpochMs = 1_700_000_000_000L + it * 1_000L,
+                endedAtEpochMs = 1_700_000_060_000L + it * 1_000L,
+                durationSec = 60,
+                zoneId = "Africa/Nairobi",
+                entry = "A representative journal entry for session $it, long enough to model real text.",
+                falseAlarm = false,
+            )
+        }
+        val snapshot = GuestSnapshot(
+            habits = fullSnapshot.habits,
+            streaks = fullSnapshot.streaks,
+            milestones = (0 until 60).map {
+                MilestoneEvent("s1", (it + 1) * 7, achievedAt = 10L, notificationSentAt = 11L, acknowledgedAt = null)
+            },
+            attempts = attempts,
+            sessions = sessions,
+            coaching = emptyList(),
+            riskWindows = fullSnapshot.riskWindows,
+            policy = fullSnapshot.policy,
+        )
+
+        val bytes = write(snapshot)
+        val (collector, sizes) = read(bytes)
+
+        assertEquals(150_000, collector.attempts.size)
+        assertEquals(2_000, collector.sessions.size)
+        assertTrue("compressed=${sizes.compressedBytes}", sizes.compressedBytes < BackupPayload.MAX_COMPRESSED_BYTES)
+        assertTrue("uncompressed=${sizes.uncompressedBytes}", sizes.uncompressedBytes < BackupPayload.MAX_UNCOMPRESSED_BYTES)
     }
 }

@@ -393,7 +393,7 @@ with a reason. "Where" names the primary surfaces, not every call site.
   a DEK wrapper can never be replayed as a payload block. Serialization is newline-delimited
   JSON records over one explicit entity allowlist shared with the guest quarantine (attempt and
   session `eventSequence` never carried), compressed through deflate while enforcing the
-  100 MiB uncompressed / 20 MiB compressed / 5:1 expansion caps — an unrestorable object is
+  100 MiB uncompressed / 20 MiB compressed / 100:1 expansion caps (ADR #247) — an unrestorable object is
   never produced; restore enforces the same bounds while inflating. The whole-object SHA-256 is
   computed over the exact bytes for the manifest only. Decryption writes solely to an
   app-private staging sink and reports success only after `doFinal()` verifies the tag; every
