@@ -8,6 +8,7 @@ import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.core.app.NotificationCompat
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -73,6 +74,10 @@ class NudgeNotificationInstrumentedTest {
 
     private val setupState: SetupStateStore get() = SetupStateStore(context)
 
+    private companion object {
+        const val SETTLE_ID = 9001
+    }
+
     private var setupSeenBefore = false
 
     @Before
@@ -84,22 +89,60 @@ class NudgeNotificationInstrumentedTest {
         setupState.setupSeen = true
         shell("pm grant ${context.packageName} android.permission.POST_NOTIFICATIONS")
         setAppNotificationsEnabled(true)
-        PartnerNotifications.cancelPartnerNudge(context)
+        assertTrue("the notification tray did not settle before the test", settleNudgeTray())
         assertTrue("POST_NOTIFICATIONS must be grantable on the rig", NotificationAccess.canPost(context))
     }
 
     @After
     fun clearTray() {
-        PartnerNotifications.cancelPartnerNudge(context)
-        // The cancel is asynchronous on the framework side. Left unwaited, it can be processed
-        // after the NEXT test posts to the same tag/id and silently evict that entry — the
-        // 2026-10-31 full-suite run failed the tap leg exactly this way (cancel submitted at
-        // 03.314, next post at 03.389, NotificationService processed the cancel at 03.743).
-        val deadline = SystemClock.elapsedRealtime() + 5_000
-        while (SystemClock.elapsedRealtime() < deadline && nudgeEntries().isNotEmpty()) {
-            SystemClock.sleep(50)
-        }
+        settleNudgeTray()
         setupState.setupSeen = setupSeenBefore
+    }
+
+    /**
+     * Drains the nudge tray and waits until the cancel is *processed*, not merely enqueued.
+     *
+     * A cancel is only observable while an entry exists. When the tap leg already consumed its
+     * entry, the old drain loop exited instantly and the still-queued cancel later evicted the
+     * NEXT test's post — the 2026-10-31 full-suite failure at line 167 (cancel submitted at
+     * 03.314, next post at 03.389, NotificationService processed the cancel at 03.743). The
+     * barrier is a canary posted through the same manager after the cancel: the
+     * NotificationService handler runs a process's calls in order, so the canary appearing
+     * proves every earlier cancel for this app has been processed.
+     *
+     * Every attempt uses a fresh tag (and its own title): a late cancel of a previous canary
+     * targets THAT key only. The shared fixed key was itself evicting the next settle's canary
+     * (NotificationService logged "Cannot find enqueued record" for the key right after it had
+     * been seen — the 2026-10-31 class-run settle failures). The canary never counts as a
+     * nudge ([nudgeEntries]) and lives on the silent debug-only sync channel.
+     */
+    private fun settleNudgeTray(): Boolean {
+        PartnerNotifications.cancelPartnerNudge(context)
+        PartnerNotifications.ensureSyncStatusChannel(context)
+        repeat(3) {
+            val key = "test:tray-settle-${UUID.randomUUID()}"
+            manager.notify(
+                key,
+                SETTLE_ID,
+                NotificationCompat.Builder(context, PartnerNotifications.CHANNEL_SYNC_STATUS)
+                    .setSmallIcon(R.mipmap.ic_launcher)
+                    .setContentTitle(key)
+                    .build(),
+            )
+            val deadline = SystemClock.elapsedRealtime() + 15_000
+            var seen = false
+            while (!seen && SystemClock.elapsedRealtime() < deadline) {
+                seen = manager.activeNotifications.any {
+                    it.tag == key && it.id == SETTLE_ID &&
+                        it.notification.extras.getCharSequence(Notification.EXTRA_TITLE)
+                            ?.toString() == key
+                }
+                if (!seen) SystemClock.sleep(50)
+            }
+            manager.cancel(key, SETTLE_ID)
+            if (seen) return true
+        }
+        return false
     }
 
     // --- §12.3 bullet 1 ---------------------------------------------------------------------
@@ -107,6 +150,7 @@ class NudgeNotificationInstrumentedTest {
     @Test
     fun channel_existsBeforeAnyNotificationPost() {
         manager.deleteNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_NUDGES)
+        awaitChannelDeleted(PartnerNotifications.CHANNEL_PARTNER_NUDGES)
         assertNull(manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_NUDGES))
 
         // The app-startup path (MyExodusApp.onCreate) — not the lazy create inside a post.
@@ -135,7 +179,7 @@ class NudgeNotificationInstrumentedTest {
 
         messagingService().onMessageReceived(nudgeMessage(UUID.randomUUID().toString()))
 
-        val entry = nudgeEntries().single()
+        val entry = awaitNudgeEntries(1).single()
         assertEquals(PartnerNotifications.NOTIF_PARTNER_NUDGE, entry.id)
         assertEquals(PartnerNudgePush.TAG, entry.tag)
         assertEquals(PartnerNotifications.CHANNEL_PARTNER_NUDGES, entry.notification.channelId)
@@ -160,11 +204,12 @@ class NudgeNotificationInstrumentedTest {
     fun backgroundPush_postsExactlyOneSystemNotification() {
         // Background wake before app startup created the channel: the post path must create it.
         manager.deleteNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_NUDGES)
+        awaitChannelDeleted(PartnerNotifications.CHANNEL_PARTNER_NUDGES)
         assertNull(manager.getNotificationChannel(PartnerNotifications.CHANNEL_PARTNER_NUDGES))
 
         messagingService().onMessageReceived(nudgeMessage(UUID.randomUUID().toString()))
 
-        val entry = nudgeEntries().single()
+        val entry = awaitNudgeEntries(1).single()
         assertEquals(PartnerNotifications.NOTIF_PARTNER_NUDGE, entry.id)
         assertEquals(PartnerNudgePush.TAG, entry.tag)
         assertNotNull(
@@ -191,12 +236,12 @@ class NudgeNotificationInstrumentedTest {
     @Test
     fun fixedTag_replacesTheExistingPartnerNotification() {
         messagingService().onMessageReceived(nudgeMessage(UUID.randomUUID().toString()))
-        assertEquals(1, nudgeEntries().size)
+        assertEquals(1, awaitNudgeEntries(1).size)
 
         messagingService().onMessageReceived(nudgeMessage(UUID.randomUUID().toString()))
 
         // FR-19: one replaceable tray entry — a second nudge must not stack a second entry.
-        val entry = nudgeEntries().single()
+        val entry = awaitNudgeEntries(1).single()
         assertEquals(PartnerNotifications.NOTIF_PARTNER_NUDGE, entry.id)
         assertEquals(PartnerNudgePush.TAG, entry.tag)
     }
@@ -205,28 +250,56 @@ class NudgeNotificationInstrumentedTest {
 
     @Test
     fun notificationTap_navigatesHome_andConsumesIntentExtras() {
+        android.util.Log.i("NudgeTapTest", "tap: begin")
         finishAnyMainActivity()
+        android.util.Log.i("NudgeTapTest", "tap: previous activity finished")
 
         messagingService().onMessageReceived(nudgeMessage(UUID.randomUUID().toString()))
-        assertTrue("the nudge must reach the tray before the tap drive", nudgeEntries().isNotEmpty())
+        assertTrue("the nudge must reach the tray before the tap drive", awaitNudgeEntries(1).isNotEmpty())
+        android.util.Log.i("NudgeTapTest", "tap: posted + tray visible")
         // A synthetic contentIntent.send() is blocked by AOSP background-activity-launch
         // hardening (Lean_API34, 2026-10-31: "Background activity launch blocked …
         // originatingPendingIntent … NOTIFICATION_SERVICE"); only a real user tap carries the
         // NotificationManagerService allowlist. Drive the actual tap through SystemUI.
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        unlockedRig(device)
         device.pressHome()
-        device.openNotification()
-        val entry = device.wait(
-            Until.findObject(By.textContains(context.getString(R.string.partner_nudge_title))),
-            10_000,
-        ) ?: run {
+        android.util.Log.i("NudgeTapTest", "tap: home pressed")
+        // 45 s, not 10 s: under full-suite load SystemUI logged the shade surface 18 s after
+        // openNotification() returned (AVD, 2026-10-31 18:24:41 → 18:24:59), outliving a 10 s wait.
+        // Exact text, not textContains: the long-press settings panel shows the channel name
+        // "Accountability Check-ins", which contains the notification title and would otherwise
+        // be clicked instead (AVD, 2026-10-31 19:53:41 — attempt 2 found the panel's channel row).
+        // A busy SystemUI can also stretch the injected tap past the long-press threshold, which
+        // is what opens that panel (19:53:09: gesture took 9.9 s, no ActivityTaskManager START);
+        // each retry closes it with BACK and reopens a fresh shade.
+        val title = context.getString(R.string.partner_nudge_title)
+        var activity: MainActivity? = null
+        for (attempt in 1..3) {
+            // Re-assert an unlocked rig: a deferral observed here was the keyguard coming back
+            // between attempts, not a missed tap.
+            unlockedRig(device)
             device.pressBack()
-            fail("the posted nudge never appeared in the notification shade")
+            device.openNotification()
+            android.util.Log.i("NudgeTapTest", "tap: shade open requested ($attempt)")
+            val entry = device.wait(Until.findObject(By.text(title)), 45_000)
+            if (entry == null) {
+                android.util.Log.i("NudgeTapTest", "tap: nudge not in shade ($attempt)")
+                continue
+            }
+            // Let the row settle so the injection lands on it, not mid-layout.
+            SystemClock.sleep(500)
+            android.util.Log.i("NudgeTapTest", "tap: found in shade, clicking ($attempt)")
+            entry.click()
+            android.util.Log.i("NudgeTapTest", "tap: click returned ($attempt)")
+            activity = resumedMainActivityWithin(30_000, device)
+            if (activity != null) break
+            android.util.Log.i("NudgeTapTest", "tap: no activity after the click ($attempt)")
+        }
+        if (activity == null) {
+            fail("MainActivity never reached RESUMED after the notification tap (3 attempts)")
             error("unreachable")
         }
-        entry.click()
-
-        val activity = waitForMainActivity()
         assertNull(
             "the launcher entry must consume its type extra",
             activity.intent.getStringExtra(PartnerNudgePush.TYPE_KEY),
@@ -272,6 +345,31 @@ class NudgeNotificationInstrumentedTest {
         it.tag == PartnerNudgePush.TAG || it.id == PartnerNotifications.NOTIF_PARTNER_NUDGE
     }
 
+    /**
+     * Posting is asynchronous on the framework side (the enqueue returns before the
+     * NotificationService handler runs): an immediate read after [PartnerMessagingService.onMessageReceived]
+     * races it, and a test burst — canaries included — can lose that race. Poll for the
+     * expected count instead; the assertion after this call keeps the contract.
+     */
+    private fun awaitNudgeEntries(count: Int) = run {
+        val deadline = SystemClock.elapsedRealtime() + 30_000
+        var entries = nudgeEntries()
+        while (entries.size != count && SystemClock.elapsedRealtime() < deadline) {
+            SystemClock.sleep(50)
+            entries = nudgeEntries()
+        }
+        entries
+    }
+
+    private fun awaitChannelDeleted(channelId: String) {
+        val deadline = SystemClock.elapsedRealtime() + 10_000
+        while (manager.getNotificationChannel(channelId) != null &&
+            SystemClock.elapsedRealtime() < deadline
+        ) {
+            SystemClock.sleep(50)
+        }
+    }
+
     private fun finishAnyMainActivity() {
         InstrumentationRegistry.getInstrumentation().runOnMainSync {
             ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED)
@@ -294,14 +392,35 @@ class NudgeNotificationInstrumentedTest {
         return found
     }
 
-    private fun waitForMainActivity(): MainActivity {
-        val deadline = SystemClock.elapsedRealtime() + 20_000
+    private fun resumedMainActivityWithin(timeoutMs: Long, device: UiDevice): MainActivity? {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
         while (SystemClock.elapsedRealtime() < deadline) {
             resumedMainActivity()?.let { return it }
+            // A launch deferred on `afterKeyguardGone` executes the moment the keyguard goes;
+            // keep clearing it so the same attempt can observe its own launch.
+            if (device.hasObject(By.res("com.android.systemui", "keyguard_security_container"))) {
+                shell("wm dismiss-keyguard")
+            }
             SystemClock.sleep(200)
         }
-        fail("MainActivity never reached RESUMED after the notification tap")
-        error("unreachable")
+        return null
+    }
+
+    /**
+     * Wake the rig and clear the keyguard. A notification launch on a locked rig defers with
+     * "dismissKeyguardThenExecute, afterKeyguardGone: true" and the activity never starts
+     * (AVD, 2026-10-31), so the tap drive re-asserts this before every attempt. `wm
+     * dismiss-keyguard` alone does not clear the swipe keyguard; swipe up if it is still up.
+     */
+    private fun unlockedRig(device: UiDevice) {
+        device.wakeUp()
+        shell("wm dismiss-keyguard")
+        val keyguard = By.res("com.android.systemui", "keyguard_security_container")
+        if (device.hasObject(keyguard)) {
+            android.util.Log.i("NudgeTapTest", "tap: keyguard up, swiping to unlock")
+            device.swipe(540, 1900, 540, 500, 20)
+            device.wait(Until.gone(keyguard), 5_000)
+        }
     }
 
     // --- shell ------------------------------------------------------------------------------

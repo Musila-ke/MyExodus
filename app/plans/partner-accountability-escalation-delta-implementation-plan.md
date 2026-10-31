@@ -753,3 +753,16 @@ X6532 (15:15–15:30) crashed the app whenever the batch picker opened:
 #74/#76 did **not** run: the second device was returned to its owner, then the first left with
 the owner. They remain blocked-on-hardware, the fixed build has not yet been installed, and the
 fixed picker flow must be re-run on the X6532 before any device leg here is called passed.
+
+**AVD follow-up 2026-10-31 (fixed build, MyExodus_API37).** With both handsets away, the fixed
+APK ran on the sanctioned API-37 AVD: the batch app-picker opened 4× cold-process + 1× warm with
+zero crashes and zero FATAL entries (the phone crash does not reproduce post-fix); the full batch
+lifecycle ran end-to-end — named "QA temp batch", 2 apps (Chrome, Calendar), create → Rules page
+lists the batch with its 2 member rows and "Blocked now", delete → dialog names the batch and its
+item count, confirm → empty baseline restored (no residue). The local test alert on the real
+`partner_accountability_events_v1` channel produced an on-screen heads-up and deep-linked to the
+Partner tab. A full-page text-truncation sweep (Home, Rules, Recovery and subpages, Streaks and
+subpages, Partner and both ceremony entries, Settings and subpages, batch editor, picker) found no
+clipped or ellipsized app text. What the AVD still cannot exercise: any partner-visible leg
+(attestation wall — an emulator can never pair), so #74/#76's receive halves stay blocked on the
+handsets.
