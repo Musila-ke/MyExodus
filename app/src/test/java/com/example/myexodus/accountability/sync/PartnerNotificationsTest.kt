@@ -776,7 +776,9 @@ class PartnerNotificationsTest {
             RuleIdentity(label = "Social media", targetType = RuleTargetType.BATCH, itemCount = 4),
         )
         assertEquals(
-            context.getString(R.string.partner_rule_event_added_batched, "Social media", 4),
+            context.resources.getQuantityString(
+                R.plurals.partner_rule_event_added_batched, 4, "Social media", 4,
+            ),
             manager.activeNotifications.last().notification.extras.getString(Notification.EXTRA_TEXT),
         )
 

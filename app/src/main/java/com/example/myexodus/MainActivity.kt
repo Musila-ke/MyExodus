@@ -733,6 +733,14 @@ class MainActivity : FragmentActivity() {
                                 healBlockedPartnerSigning(forcePrompt = true)
                             }.getOrDefault(false)
                         },
+                        // Same heal, offered where the unsent rule change was made: a row
+                        // stops at a cold signing window, and the banner only clears when the
+                        // journal row is actually delivered.
+                        onRetryRuleDelivery = {
+                            if (isOnline()) {
+                                runCatching { healBlockedPartnerSigning(forcePrompt = true) }
+                            }
+                        },
                         onRespondToApproval = { requestEventId, approve ->
                             respondToApproval(requestEventId, approve)
                         },

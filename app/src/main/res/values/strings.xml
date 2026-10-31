@@ -227,12 +227,30 @@
     <string name="partner_rule_event_deleted_in_batch">%1$s was deleted from the %2$s batch.</string>
     <string name="partner_rule_event_unassigned_in_batch">You were removed from %1$s in the %2$s batch.</string>
     <string name="partner_rule_event_expired_in_batch">%1$s ended in the %2$s batch — its set duration ran out.</string>
-    <string name="partner_rule_event_added_batched">You were added as accountability partner on the %1$s batch (%2$d items).</string>
-    <string name="partner_rule_event_updated_batched">The %1$s batch was changed (%2$d items).</string>
-    <string name="partner_rule_event_disabled_batched">The %1$s batch was turned off (%2$d items).</string>
-    <string name="partner_rule_event_deleted_batched">The %1$s batch was deleted (%2$d items).</string>
-    <string name="partner_rule_event_unassigned_batched">You were removed from the %1$s batch (%2$d items).</string>
-    <string name="partner_rule_event_expired_batched">The %1$s batch ended — its set duration ran out (%2$d items).</string>
+    <plurals name="partner_rule_event_added_batched">
+        <item quantity="one">You were added as accountability partner on the %1$s batch (%2$d item).</item>
+        <item quantity="other">You were added as accountability partner on the %1$s batch (%2$d items).</item>
+    </plurals>
+    <plurals name="partner_rule_event_updated_batched">
+        <item quantity="one">The %1$s batch was changed (%2$d item).</item>
+        <item quantity="other">The %1$s batch was changed (%2$d items).</item>
+    </plurals>
+    <plurals name="partner_rule_event_disabled_batched">
+        <item quantity="one">The %1$s batch was turned off (%2$d item).</item>
+        <item quantity="other">The %1$s batch was turned off (%2$d items).</item>
+    </plurals>
+    <plurals name="partner_rule_event_deleted_batched">
+        <item quantity="one">The %1$s batch was deleted (%2$d item).</item>
+        <item quantity="other">The %1$s batch was deleted (%2$d items).</item>
+    </plurals>
+    <plurals name="partner_rule_event_unassigned_batched">
+        <item quantity="one">You were removed from the %1$s batch (%2$d item).</item>
+        <item quantity="other">You were removed from the %1$s batch (%2$d items).</item>
+    </plurals>
+    <plurals name="partner_rule_event_expired_batched">
+        <item quantity="one">The %1$s batch ended — its set duration ran out (%2$d item).</item>
+        <item quantity="other">The %1$s batch ended — its set duration ran out (%2$d items).</item>
+    </plurals>
     <!-- Owner mandate 2026-10-04: a relapse/milestone alert states which streak and when,
          using the wire-v2 fields (ADR #134). Unlocked copy only — the plain forms above stay
          the lockscreen public version (FR-13). Pre-v2 bodies lack the fields and degrade to
@@ -343,6 +361,16 @@
         <item quantity="other">%1$d rules will be deleted permanently. This can’t be undone.</item>
     </plurals>
     <string name="rules_cleanup_confirm">Remove</string>
+
+    <!-- Delivery guarantee (owner report 2026-10-31): a cold signing window stops the rule
+         queue until the owner's credential warms it — this surface keeps that visible. -->
+    <plurals name="rules_pending_delivery_title">
+        <item quantity="one">%1$d update waiting to be sent</item>
+        <item quantity="other">%1$d updates waiting to be sent</item>
+    </plurals>
+    <string name="rules_pending_delivery_body">Confirm with your device key to send them to your partner.</string>
+    <string name="rules_pending_delivery_action">Send now</string>
+    <string name="rules_pending_delivery_sending">Sending…</string>
 
     <!-- Batch creation (owner mandate 2026-10-31): a named group of apps/websites created
          together under one partner, so the partner reads "Social media", not N opaque rules. -->
@@ -714,7 +742,6 @@
     <!-- Tiles are ~88dp of text at 360dp: "Nothing waiting" ellipsized on the device. -->
     <string name="partner_tile_requests_none">None waiting</string>
     <string name="partner_tile_requests_waiting" tools:ignore="PluralsCandidate">%1$d waiting</string>
-    <string name="partner_tile_activity_week" tools:ignore="PluralsCandidate">%1$d this week</string>
     <!-- Owner report 2026-10-31: a one-day shared streak read "1 days free". -->
     <plurals name="partner_tile_activity_days">
         <item quantity="one">%1$d day free</item>

@@ -68,10 +68,10 @@ fun PartnerPlansScreen(
     planRepository: PartnerPlanRepository,
     loadPartners: suspend () -> List<ReachOutTarget>,
     onBack: () -> Unit,
+    modifier: Modifier = Modifier,
     /** Hoisted so a notification tap can open a named plan before this surface composes. */
     openPlanId: String? = null,
     onOpenPlan: (String?) -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
     var plans by remember { mutableStateOf<List<PartnerPlan>>(emptyList()) }

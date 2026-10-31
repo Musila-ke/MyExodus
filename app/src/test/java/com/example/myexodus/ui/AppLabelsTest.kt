@@ -1,10 +1,14 @@
 package com.example.myexodus.ui
 
 import android.content.Context
+import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.runtime.snapshots.SnapshotApplyResult
 import androidx.test.core.app.ApplicationProvider
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -84,6 +88,44 @@ class AppLabelsTest {
         val key = "com.nonexistent.notinstalled.pkg"
         runBlocking { preloadAppLabels(context, listOf(key)) { appLabel(context, it) } }
         assertEquals(key, peekAppLabel(key))
+    }
+
+    @Test
+    fun publishesNeverThrowWhileTheMainThreadKeepsApplyingSnapshots() {
+        // Task #75 device crash: SnapshotApplyConflictException killed the app three times in
+        // the app picker because a background apply lost the race with composition. The fix
+        // retries; this keeps a churning applier thread running so conflicts actually happen.
+        val churning = AtomicBoolean(true)
+        val failures = CopyOnWriteArrayList<Throwable>()
+        val churner = Thread {
+            while (churning.get()) {
+                val snapshot = Snapshot.takeMutableSnapshot()
+                try {
+                    snapshot.enter { }
+                } finally {
+                    val result = snapshot.apply()
+                    if (result is SnapshotApplyResult.Failure) result.snapshot.dispose()
+                }
+            }
+        }
+        churner.start()
+        val keys = List(8) { "churn.test.$it" }
+        val workers = keys.map { key ->
+            Thread {
+                try {
+                    repeat(200) { publishLabel(key, "Label $key") }
+                } catch (t: Throwable) {
+                    failures.add(t)
+                }
+            }
+        }
+        workers.forEach { it.start() }
+        workers.forEach { it.join(30_000) }
+        churning.set(false)
+        churner.join(30_000)
+        assertTrue("no publish threw: $failures", failures.isEmpty())
+        keys.forEach { assertEquals("Label $it", peekAppLabel(it)) }
+
     }
 
     @Test

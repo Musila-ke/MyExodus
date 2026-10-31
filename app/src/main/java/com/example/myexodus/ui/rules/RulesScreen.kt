@@ -124,6 +124,10 @@ fun RulesScreen(
     psl: PublicSuffixList,
     /** Plan §2.1 req 1: the live pairs a rule can be assigned to (the editor's assignee list). */
     partnerSource: PartnerDashboardSource,
+    /** Owner report 2026-10-31 (delivery guarantee): deliver the queued rule updates now —
+     *  the foreground's authenticated signing prompt. The banner is driven by the journal
+     *  count, so a cancelled prompt leaves it in place rather than claiming a send. */
+    onRetryRuleDelivery: suspend () -> Unit,
     modifier: Modifier = Modifier,
     openRuleId: String? = null,
     onOpenRuleConsumed: () -> Unit = {},
@@ -163,6 +167,20 @@ fun RulesScreen(
             runCatching { partnerSource.pairRoster() }.getOrDefault(emptyList())
         }
     }
+
+    // Delivery guarantee (owner report 2026-10-31): rule rows still queued for a pair this
+    // device is live with. A row is deleted only once its signed envelope exists, so Room
+    // drives the count to zero the moment the send lands — never on a UI guess.
+    val livePairIds = remember(partners) { partners.map { it.pairId }.sorted() }
+    val pendingDeliveryCount by remember(livePairIds) {
+        if (livePairIds.isEmpty()) {
+            flowOf(0)
+        } else {
+            store.partnerEventJournalDao().observePendingRuleChanges(livePairIds)
+                .catch { emit(0) }
+        }
+    }.collectAsStateWithLifecycle(initialValue = 0)
+    var retryingDelivery by remember { mutableStateOf(false) }
 
     // Finding #19: a Home block row hands over its rule id — open that editor directly.
     LaunchedEffect(openRuleId) {
@@ -433,6 +451,17 @@ fun RulesScreen(
                     pendingPause = pendingPause,
                     nowMillis = nowMillis,
                     partners = partners,
+                    pendingDeliveryCount = pendingDeliveryCount,
+                    deliveryRetryInFlight = retryingDelivery,
+                    onRetryDelivery = {
+                        if (!retryingDelivery) {
+                            retryingDelivery = true
+                            scope.launch {
+                                runCatching { onRetryRuleDelivery() }
+                                retryingDelivery = false
+                            }
+                        }
+                    },
                     domainUsageEngine = domainUsageEngine,
                     engineBannerMessage = engineBannerMessage.takeIf { hasLimitedSite },
                     engineOffMessage = engineOffMessage,
@@ -730,6 +759,10 @@ private fun RulesList(
     pendingPause: Map<String, Boolean>,
     nowMillis: Long,
     partners: List<ReachOutTarget>,
+    /** Owner report 2026-10-31: rule rows still awaiting a signed send to a live pair. */
+    pendingDeliveryCount: Int,
+    deliveryRetryInFlight: Boolean,
+    onRetryDelivery: () -> Unit,
     domainUsageEngine: DomainUsageEngine,
     engineBannerMessage: String?,
     /** #26: non-null when live website rules exist but the tunnel can't serve them (consent
@@ -792,6 +825,17 @@ private fun RulesList(
                     stringResource(R.string.rules_subtitle),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (pendingDeliveryCount > 0) {
+            // Owner report 2026-10-31: an unsent rule update must never be silently lost —
+            // a cold signing window stops the queue, and only the owner's credential warms it.
+            item(key = "pending-delivery") {
+                PendingDeliveryBanner(
+                    count = pendingDeliveryCount,
+                    sending = deliveryRetryInFlight,
+                    onRetry = onRetryDelivery,
                 )
             }
         }
@@ -1541,6 +1585,48 @@ private fun StatePill(label: String, active: Boolean) {
             maxLines = 1,
             softWrap = false,
         )
+    }
+}
+
+/** Owner report 2026-10-31: the persistent "waiting to be sent" surface. It is not an error —
+ *  a blocked queue is the designed cold-window state — so it uses the secondary container and
+ *  leaves only when the journal count drops to zero. */
+@Composable
+private fun PendingDeliveryBanner(
+    count: Int,
+    sending: Boolean,
+    onRetry: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(start = 16.dp, top = 12.dp, end = 12.dp, bottom = 4.dp)) {
+            Text(
+                pluralStringResource(R.plurals.rules_pending_delivery_title, count, count),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                stringResource(R.string.rules_pending_delivery_body),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onRetry, enabled = !sending) {
+                    Text(
+                        stringResource(
+                            if (sending) {
+                                R.string.rules_pending_delivery_sending
+                            } else {
+                                R.string.rules_pending_delivery_action
+                            },
+                        ),
+                    )
+                }
+            }
+        }
     }
 }
 

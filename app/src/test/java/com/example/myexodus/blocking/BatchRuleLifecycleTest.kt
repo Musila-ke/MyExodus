@@ -15,6 +15,7 @@ import com.example.myexodus.data.db.RulesStoreKeyManager
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.UserProfile
 import java.util.UUID
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -292,6 +293,43 @@ class BatchRuleLifecycleTest {
         assertNotEquals(partialBatch, partialRows.single().ruleId)
         val surviving = store.restrictionRuleDao().getByBatch(partialBatch).filter { it.isEnabled }
         assertEquals("the live member keeps blocking", 1, surviving.size)
+    }
+
+    @Test
+    fun pendingRuleRows_feedTheDeliveryBanner_andClearWhenDelivered() = runBlocking {
+        seedProfile()
+        var clock = BASE_MS
+        val repository = RulesRepository(factory, RulesSnapshotPublisher(context, factory), now = { clock })
+        val store = factory.open()!!
+        val dao = store.partnerEventJournalDao()
+
+        assertEquals("a quiet queue shows no banner", 0, dao.observePendingRuleChanges(listOf(PAIR_A)).first())
+
+        val batchId = UUID.randomUUID().toString()
+        repository.insertBatch(
+            listOf(
+                appRule("com.example.one", batchId, "Social media", PAIR_A),
+                appRule("com.example.two", batchId, "Social media", PAIR_A),
+            ),
+        )
+        assertEquals(
+            "the batch's one row is one pending update",
+            1,
+            dao.observePendingRuleChanges(listOf(PAIR_A)).first(),
+        )
+        assertEquals(
+            "a pair this device is not live with is never counted",
+            0,
+            dao.observePendingRuleChanges(listOf(PAIR_B)).first(),
+        )
+
+        val row = dao.dueRuleChangesForPair(PAIR_A, 0L, clock, LIMIT).single()
+        dao.deleteById(row.eventId)
+        assertEquals(
+            "delivery clears the banner without a UI guess",
+            0,
+            dao.observePendingRuleChanges(listOf(PAIR_A)).first(),
+        )
     }
 
     private suspend fun seedProfile() {

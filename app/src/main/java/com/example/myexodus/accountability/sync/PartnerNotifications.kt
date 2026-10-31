@@ -300,16 +300,17 @@ object PartnerNotifications {
         }
         val label = identity.label
         if (identity.targetType == RuleTargetType.BATCH) {
-            val counted = identity.itemCount ?: 0L
-            return context.getString(
+            val counted = (identity.itemCount ?: 0L).toInt()
+            return context.resources.getQuantityString(
                 when (change) {
-                    RuleChange.CREATED, RuleChange.ASSIGNED -> R.string.partner_rule_event_added_batched
-                    RuleChange.UPDATED -> R.string.partner_rule_event_updated_batched
-                    RuleChange.DISABLED -> R.string.partner_rule_event_disabled_batched
-                    RuleChange.DELETED -> R.string.partner_rule_event_deleted_batched
-                    RuleChange.UNASSIGNED -> R.string.partner_rule_event_unassigned_batched
-                    RuleChange.EXPIRED -> R.string.partner_rule_event_expired_batched
+                    RuleChange.CREATED, RuleChange.ASSIGNED -> R.plurals.partner_rule_event_added_batched
+                    RuleChange.UPDATED -> R.plurals.partner_rule_event_updated_batched
+                    RuleChange.DISABLED -> R.plurals.partner_rule_event_disabled_batched
+                    RuleChange.DELETED -> R.plurals.partner_rule_event_deleted_batched
+                    RuleChange.UNASSIGNED -> R.plurals.partner_rule_event_unassigned_batched
+                    RuleChange.EXPIRED -> R.plurals.partner_rule_event_expired_batched
                 },
+                counted,
                 label,
                 counted,
             )

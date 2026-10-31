@@ -5,6 +5,7 @@ import androidx.room3.Insert
 import androidx.room3.OnConflictStrategy
 import androidx.room3.Query
 import com.example.myexodus.data.db.entity.PartnerEventJournal
+import kotlinx.coroutines.flow.Flow
 
 /**
  * Step 4 journal access (plan §8.9). [insert] is called inside the detector's own domain
@@ -46,6 +47,17 @@ interface PartnerEventJournalDao {
         nowMs: Long,
         limit: Int,
     ): List<PartnerEventJournal>
+
+    /**
+     * Owner report 2026-10-31 (delivery guarantee): the Rules page's "waiting to be sent"
+     * banner. [route_pair_id] is non-null exactly for rule rows, so this counts only
+     * rule-lifecycle events still awaiting chain creation for the pairs this device is live
+     * with. A delivered row is deleted (see [deleteById]) and Room re-emits — the banner
+     * leaves the moment the send actually lands, never on a UI guess. Undelivered rows past
+     * their retention are swept by the pass's own retention sweep.
+     */
+    @Query("SELECT COUNT(*) FROM partner_event_journal WHERE route_pair_id IN (:pairIds)")
+    fun observePendingRuleChanges(pairIds: List<String>): Flow<Int>
 
     /**
      * A delivered rule row is deleted: the chain event and its outbox row own delivery from

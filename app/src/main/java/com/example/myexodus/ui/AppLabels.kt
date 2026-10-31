@@ -10,6 +10,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.runtime.snapshots.SnapshotApplyResult
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -51,7 +52,28 @@ private val labelLoads = ConcurrentHashMap.newKeySet<String>()
 internal val appLabelLoader: CoroutineScope =
     CoroutineScope(Dispatchers.IO.limitedParallelism(4))
 
-internal fun peekAppLabel(target: String): String? = labelCache[target]
+// Test-only read seam. A plain JVM thread has no GlobalSnapshotManager to advance the global
+// snapshot after a background apply, so flush apply notifications first (AppLabelsTest churn test).
+internal fun peekAppLabel(target: String): String? {
+    Snapshot.sendApplyNotifications()
+    return labelCache[target]
+}
+
+// A background snapshot apply that loses a race with the main thread's composition apply is
+// expected, not exceptional — Compose's contract is to retry. Throw-on-conflict here killed
+// the app three times in the app picker (task #75 device run, SnapshotApplyConflictException).
+internal fun publishLabel(target: String, label: String) {
+    while (true) {
+        val snapshot = Snapshot.takeMutableSnapshot()
+        try {
+            snapshot.enter { labelCache[target] = label }
+        } finally {
+            val result = snapshot.apply()
+            if (result.succeeded) return
+            (result as SnapshotApplyResult.Failure).snapshot.dispose()
+        }
+    }
+}
 
 /**
  * Publishes a label a caller already resolved synchronously (both block-fire paths name the
@@ -62,7 +84,7 @@ internal fun peekAppLabel(target: String): String? = labelCache[target]
  */
 internal fun seedAppLabel(target: String, label: String) {
     labelLoads.add(target)
-    Snapshot.withMutableSnapshot { labelCache[target] = label }
+    publishLabel(target, label)
 }
 
 /** Label for a target: cached if known, else null and a background load is queued. */
@@ -75,8 +97,7 @@ internal fun cachedAppLabel(
     labelCache[target]?.let { return it }
     if (labelLoads.add(target)) {
         load.launch {
-            val label = resolve(target)
-            Snapshot.withMutableSnapshot { labelCache[target] = label }
+            publishLabel(target, resolve(target))
         }
     }
     return null
@@ -97,8 +118,7 @@ suspend fun preloadAppLabels(
     // Recomposition between loads is the point (labels land progressively), so no batching.
     withContext(Dispatchers.IO.limitedParallelism(4)) {
         pending.forEach { target ->
-            val label = resolve(target)
-            Snapshot.withMutableSnapshot { labelCache[target] = label }
+            publishLabel(target, resolve(target))
         }
     }
 }

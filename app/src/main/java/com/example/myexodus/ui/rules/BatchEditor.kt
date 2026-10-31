@@ -141,6 +141,20 @@ fun BatchEditorScreen(
     val invalidWebsiteMessage = stringResource(R.string.batch_website_invalid)
     val duplicateTemplate = stringResource(R.string.batch_duplicate)
     val itemErrorTemplate = stringResource(R.string.batch_item_error)
+    // Hosted here, not read from context inside save(), so a configuration change can't leave
+    // stale strings behind (lint LocalContextGetResourceValueCall).
+    val limitUnavailableMessage = stringResource(R.string.editor_website_limits_unavailable)
+    val modeMissingMessage = stringResource(R.string.editor_mode_missing)
+    val sameTimeMessage = stringResource(R.string.editor_same_time_error)
+    val limitInvalidMessage = stringResource(R.string.editor_daily_limit_invalid)
+    val limitTooLargeMessage = stringResource(R.string.editor_daily_limit_too_large)
+    val siteHasPathTemplate = stringResource(R.string.editor_site_limit_has_path)
+    val siteInvalidMessage = stringResource(R.string.editor_site_limit_invalid)
+    val siteIpMessage = stringResource(R.string.editor_site_limit_ip)
+    val siteTooBroadMessage = stringResource(R.string.editor_site_limit_too_broad)
+    val siteNeverBlockMessage = stringResource(R.string.editor_site_limit_never_block)
+    val siteResolverMessage = stringResource(R.string.editor_site_limit_resolver)
+    val siteDuplicateMessage = stringResource(R.string.editor_site_limit_duplicate)
     val limitAvailable = websites.isEmpty() || websiteLimitMechanismAvailable(false, websiteLimitsMode)
     val appLabels = apps.associateWith { rememberAppLabel(it) }
 
@@ -167,15 +181,15 @@ fun BatchEditorScreen(
         }
         val limitOn = !alwaysOn && limitEnabled
         if (limitOn && !limitAvailable) {
-            error = context.getString(R.string.editor_website_limits_unavailable)
+            error = limitUnavailableMessage
             return
         }
         val limitTotalMinutes = parseLimitTotalMinutes(limitHours, limitMinutes)
         when (val modeError = validateBlockMode(alwaysOn, windowEnabled, limitEnabled, startMinutes, endMinutes, limitTotalMinutes)) {
-            ModeError.NoneSelected -> { error = context.getString(R.string.editor_mode_missing); return }
-            ModeError.SameTime -> { error = context.getString(R.string.editor_same_time_error); return }
-            ModeError.LimitInvalid -> { error = context.getString(R.string.editor_daily_limit_invalid); return }
-            ModeError.LimitTooLarge -> { error = context.getString(R.string.editor_daily_limit_too_large); return }
+            ModeError.NoneSelected -> { error = modeMissingMessage; return }
+            ModeError.SameTime -> { error = sameTimeMessage; return }
+            ModeError.LimitInvalid -> { error = limitInvalidMessage; return }
+            ModeError.LimitTooLarge -> { error = limitTooLargeMessage; return }
             null -> Unit
         }
 
@@ -195,19 +209,19 @@ fun BatchEditorScreen(
                 when (val check = siteLimitTarget(host, psl, patterns)) {
                     is SiteLimitCheck.Ok -> storedWebsites = storedWebsites - host + check.host
                     is SiteLimitCheck.HasPath ->
-                        { error = itemErrorTemplate.format(host, context.getString(R.string.editor_site_limit_has_path, check.suggestedHost)); return }
+                        { error = itemErrorTemplate.format(host, siteHasPathTemplate.format(check.suggestedHost)); return }
                     SiteLimitCheck.Invalid ->
-                        { error = itemErrorTemplate.format(host, context.getString(R.string.editor_site_limit_invalid)); return }
+                        { error = itemErrorTemplate.format(host, siteInvalidMessage); return }
                     SiteLimitCheck.IpLiteral ->
-                        { error = itemErrorTemplate.format(host, context.getString(R.string.editor_site_limit_ip)); return }
+                        { error = itemErrorTemplate.format(host, siteIpMessage); return }
                     SiteLimitCheck.TooBroad ->
-                        { error = itemErrorTemplate.format(host, context.getString(R.string.editor_site_limit_too_broad)); return }
+                        { error = itemErrorTemplate.format(host, siteTooBroadMessage); return }
                     SiteLimitCheck.NeverBlock ->
-                        { error = itemErrorTemplate.format(host, context.getString(R.string.editor_site_limit_never_block)); return }
+                        { error = itemErrorTemplate.format(host, siteNeverBlockMessage); return }
                     SiteLimitCheck.EncryptedDnsResolver ->
-                        { error = itemErrorTemplate.format(host, context.getString(R.string.editor_site_limit_resolver)); return }
+                        { error = itemErrorTemplate.format(host, siteResolverMessage); return }
                     SiteLimitCheck.DuplicatePattern ->
-                        { error = itemErrorTemplate.format(host, context.getString(R.string.editor_site_limit_duplicate)); return }
+                        { error = itemErrorTemplate.format(host, siteDuplicateMessage); return }
                 }
             }
         }

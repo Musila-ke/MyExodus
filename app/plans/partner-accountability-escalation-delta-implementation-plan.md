@@ -720,3 +720,36 @@ pairing-window bound and queue starvation. The physical X6532 leg ran the v21 AP
 database (four rules intact, six enrollments in the picker, assignment persisted across cold
 start); a sealed rule envelope on device still awaits a sync pass with resolved Firebase
 identity, and the partner-receipt half needs a second attesting device.
+
+**Shipped in the 2026-10-31 batch/identity/delivery session (evidence in ADRs #249/#250):**
+schema v23 (`batch_id` + `batch_name` denormalized on `restriction_rules`; additive `MIGRATION_22_23`
+and rollback rebuild), `RulesRepository.insertBatch`/`setBatchEnabled`/`removeBatchPartner`/
+`deleteBatch` with one batch-level journal row per assigned pair per verb and per-pair member
+counts, whole-vs-partial expiry journaling, wire v2 `RuleIdentity` (sanitized ≤64-char label,
+`APP`/`WEBSITE`/`BATCH`, `itemCount` for batches, `batchLabel` on members) with v1 rows still
+accepted, the recipient feed/notification/Rules page naming the target and batch, batch-named
+blocked-attempt text, and the delivery-guarantee surface (journal-count "waiting to be sent"
+banner on the Rules page, `forcePrompt` signing-heal retry, DEBUG-only receive breadcrumb at
+`files/rule-delivery.log`). Proof: `BatchRuleLifecycleTest` 7/7, `RuleDeliveryTraceTest` 3/3 and
+the wire/receiver/notification suites in the full JVM gate; the two-physical-device receive leg
+(X6532 ↔ X6532C) is scheduled under #74/#76 and its evidence is added to the progress note when
+run - it closes the "second attesting device" gap D.4 previously noted only on that evidence.
+Req 4/5 (storm coalescing), req 14/15 (backup delivery), req 17
+(target removal) and req 18 (daily streak summary) remain the open scope.
+
+**Delivery guarantee (owner report 2026-10-31, ADR #250).** The Rules page now reads the journal
+itself: `observePendingRuleChanges(livePairIds)` counts rule rows still awaiting chain creation,
+so a cold signing window is visible and "Send now" runs the authenticated heal with
+`forcePrompt = true`; the banner clears only when the delivered row is actually deleted
+(ADR #227). The DEBUG receive trace (`received`/`stored`/`notify` stages) exists solely to prove
+the partner half on a device and is a no-op in release.
+
+**On-phone outcome 2026-10-31 (honest status, not a pass).** The first batch flow run on the
+X6532 (15:15–15:30) crashed the app whenever the batch picker opened:
+`SnapshotApplyConflictException` from the background app-label publish (three fatal exceptions
+15:18–15:24, then Android killed the process for repeated crashes). Fixed under ADR #251 —
+`publishLabel` retries a losing snapshot apply per Compose's documented contract — and proven by
+`AppLabelsTest` 7/7 including a new churn regression. The two-physical-device receive legs under
+#74/#76 did **not** run: the second device was returned to its owner, then the first left with
+the owner. They remain blocked-on-hardware, the fixed build has not yet been installed, and the
+fixed picker flow must be re-run on the X6532 before any device leg here is called passed.

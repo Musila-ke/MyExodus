@@ -59,6 +59,8 @@ import com.example.myexodus.accountability.monitoring.StandbyBucket
 import com.example.myexodus.accountability.monitoring.parseHeartbeatReply
 import com.example.myexodus.accountability.monitoring.parsePartnerStatus
 import com.example.myexodus.accountability.rulecontrol.RuleControlReceiver
+import com.example.myexodus.accountability.rulecontrol.RuleDeliveryTrace
+import com.example.myexodus.accountability.serialization.AccountabilityEventKind
 import com.example.myexodus.blocking.EnforcementForegroundService
 import com.example.myexodus.accountability.plan.PartnerPlanReceiver
 import com.example.myexodus.accountability.plan.PartnerPlanRepository
@@ -97,6 +99,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import java.io.File
 import java.util.Base64
 import javax.inject.Singleton
 import kotlinx.coroutines.channels.awaitClose
@@ -966,6 +969,11 @@ object AccountabilityModule {
         storeFactory: AppRulesStoreFactory,
     ): RuleControlReceiver = RuleControlReceiver(storeFactory)
 
+    /** Owner report 2026-10-31: DEBUG-only receive-path breadcrumb (no-op in release). */
+    @Provides @Singleton
+    fun provideRuleDeliveryTrace(@ApplicationContext context: Context): RuleDeliveryTrace =
+        RuleDeliveryTrace(File(context.filesDir, "rule-delivery.log"))
+
     /**
      * §7 item 10 receive pipeline: dedup (AD-10b), verify-then-decrypt, chain commit with the
      * processed marker in one transaction, AD-18b ack, generic notification (AD-11/NFR2).
@@ -1004,6 +1012,7 @@ object AccountabilityModule {
         planReceiver: PartnerPlanReceiver,
         monitoringReceiver: MonitoringSnapshotReceiver,
         ruleControlReceiver: RuleControlReceiver,
+        deliveryTrace: RuleDeliveryTrace,
         enrollmentDao: EnrollmentDao,
     ): MailboxMessageHandler {
         val processedDao = db.processedEventDao()
@@ -1088,17 +1097,43 @@ object AccountabilityModule {
             onAccountabilityEvent = { pairId, senderKeyId, event, _ ->
                 monitoringReceiver.onEvent(pairId, senderKeyId, event)
                 val change = event.ruleChange
+                val traced = event.kind == AccountabilityEventKind.RULE_CONTROL
+                if (traced) {
+                    deliveryTrace.record(
+                        pairId,
+                        event.eventId,
+                        "stage=received change=${change?.wire ?: "-"} " +
+                            "label=${event.ruleIdentity?.label ?: "-"}",
+                    )
+                }
                 val stored = runCatching { ruleControlReceiver.onEvent(pairId, event) }
                     .onFailure { Log.w(TAG, "rule change store failed pairId=$pairId", it) }
                     .getOrDefault(false)
+                if (traced) deliveryTrace.record(pairId, event.eventId, "stage=stored stored=$stored")
                 if (stored && change != null) {
-                    enrollmentDao.getByPairId(pairId)?.let { enrollment ->
+                    val enrollment = enrollmentDao.getByPairId(pairId)
+                    if (enrollment == null) {
+                        if (traced) {
+                            deliveryTrace.record(
+                                pairId, event.eventId, "stage=notify notify=skipped no-enrollment",
+                            )
+                        }
+                    } else {
                         runCatching {
                             PartnerNotifications.notifyRuleChanged(
                                 context, pairId, displayNameOf(enrollment), change, event.ruleIdentity,
                             )
+                        }.onSuccess {
+                            if (traced) deliveryTrace.record(pairId, event.eventId, "stage=notify notify=posted")
                         }.onFailure {
                             Log.w(TAG, "rule change notification failed pairId=$pairId", it)
+                            if (traced) {
+                                deliveryTrace.record(
+                                    pairId,
+                                    event.eventId,
+                                    "stage=notify notify=failed ${it.javaClass.simpleName}",
+                                )
+                            }
                         }
                     }
                 }

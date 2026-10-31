@@ -2,7 +2,7 @@
 
 *SOS plan §14.5 deliverable. Grounded in the deployed functions source (`functions/partner-sos.js`, `partner-sos-push.js`, `partner-sos-push-logic.js`, `partner-sos-scheduler.js`) and the live project `myexodus-53804`, verified 2026-10-31. Behaviour claims below are source reads, not assumptions; live-state claims were read back from the APIs on the date stated.*
 
-**Current state (2026-10-31):** backend deployed and **inert** — `config/features.partnerSosEnabled` is **false** (read back from Firestore). Production enablement (plan Step 15) is owner-gated. No SOS-specific Cloud Monitoring alert policies exist yet (§8 records this honestly); the feature is the only one in this project whose alerts were deferred to its rollout step.
+**Current state (2026-10-31):** backend deployed and **LIVE** — `config/features.partnerSosEnabled` is **true** (read back from Firestore after the owner ruling below). Owner ruling 2026-10-31: SOS stays enabled for real users 24/7; the field was turned on and left on. No SOS-specific Cloud Monitoring alert policies exist yet (§8 records this honestly); the feature is the only one in this project whose alerts were deferred to its rollout step.
 
 The whole feature has **one operational control**: the server-side kill switch. The client Remote Config flag was removed 2026-10-15 (ADR #158), and Remote Config itself is retiring (ADR #171) — do not look for a second switch.
 
@@ -81,7 +81,7 @@ curl -s \
   | jq -r '.fields | to_entries[] | "\(.key)=\(.value)"'
 ```
 
-To turn ON (test window or rollout), same PATCH with `true`, then verify. **Flip it back to `false` immediately after any test window** — this is the standing constraint every prior SOS device run honored.
+To turn ON, same PATCH with `true`, then verify. ON is the production state (owner ruling 2026-10-31); the old "flip back to `false` after a test window" constraint is retired. Flip OFF only for rollback/emergency (§2).
 
 The token recipe mints from firebase-tools' stored refresh token; never print or persist the token. No `gcloud` exists on this machine.
 
