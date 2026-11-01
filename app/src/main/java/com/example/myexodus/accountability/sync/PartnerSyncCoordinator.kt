@@ -612,7 +612,8 @@ class PartnerSyncCoordinator(
      *  - projections/links/consent rows for pair ids no longer enrolled are deleted,
      *    self-healing after an unpair that never touched this store (no BilateralDeletion
      *    coupling). Consent rows are candidates too (v16): a pair can hold them without
-     *    ever having produced a projection or link.
+     *    ever having produced a projection or link. Plans are candidates as well (ADR #193
+     *    §9): a plan can be the only row a retired pair leaves behind.
      */
     private suspend fun sweepActivity(enrolledPairIds: Set<String>) {
         val store = storeFactory.open() ?: return
@@ -629,7 +630,10 @@ class PartnerSyncCoordinator(
         repeat(SWEEP_BATCH_LIMIT) {
             if (store.partnerEventJournalDao().deleteExpired(nowMs) < RECONCILE_BATCH) return@repeat
         }
-        val orphans = (dao.projectedPairIds() + dao.linkedPairIds() + sharingDao.consentPairIds())
+        val orphans = (
+            dao.projectedPairIds() + dao.linkedPairIds() + sharingDao.consentPairIds() +
+                store.partnerPlanDao().pairedPairIds()
+            )
             .distinct()
             .filterNot { it in enrolledPairIds }
         if (orphans.isNotEmpty()) {

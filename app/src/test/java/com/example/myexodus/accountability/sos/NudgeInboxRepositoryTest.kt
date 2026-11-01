@@ -13,7 +13,8 @@ import org.junit.Test
 
 /**
  * SOS plan §12.2 (Step 9): the recipient inbox — the §6.9 query's client semantics. Expired
- * docs are ignored (TTL lags; rules-test R-F2q pins that lists return them), only the newest
+ * docs are ignored (TTL lags; rules-test R-F2q pins that lists return them), suppressed and
+ * acknowledged docs are terminal and never render or enter the ack batch, only the newest
  * live doc is decrypted, an unreadable newest suppresses the card with one safe report and no
  * fallback, and the ack batch covers every fetched pending id with notifications cancelled
  * strictly after it commits.
@@ -179,6 +180,33 @@ class NudgeInboxRepositoryTest {
 
         val v1 = Harness().apply { emissions = flowOf(listOf(doc("d-new", createdAtMs = 990_000L))) }
         assertNull("a v1 envelope carries no message", v1.repository.inbox().toList().single()?.message)
+    }
+
+    @Test
+    fun terminalDocs_neverRender_andNeverEnterTheAckBatch() = runTest {
+        val h = Harness().apply {
+            val acked = doc("d-acked", createdAtMs = 995_000L).copy(acked = true)
+            val suppressed = doc("d-suppressed", createdAtMs = 997_000L).copy(suppressed = true)
+            val live = doc("d-live", createdAtMs = 990_000L)
+            emissions = flowOf(listOf(acked, suppressed, live))
+        }
+        val card = h.repository.inbox().toList().single()
+        assertEquals("an acked/suppressed newest must not drive the card", 990_000L, card?.createdAtMs)
+        assertEquals(
+            "the ack batch may only carry docs the ack rule still admits (ackedAt == null)",
+            listOf("d-live"),
+            card?.pendingNudgeIds,
+        )
+    }
+
+    @Test
+    fun onlyTerminalDocs_isNullCard() = runTest {
+        val h = Harness().apply {
+            emissions = flowOf(
+                listOf(doc("d-acked").copy(acked = true), doc("d-suppressed").copy(suppressed = true)),
+            )
+        }
+        assertNull(h.repository.inbox().toList().single())
     }
 
     @Test

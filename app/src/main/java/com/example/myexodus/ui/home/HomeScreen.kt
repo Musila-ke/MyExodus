@@ -22,7 +22,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -55,6 +57,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -300,7 +303,10 @@ fun HomeScreen(
     // glance at the phone does not disclose the blocked apps and sites.
     var blocksHidden by remember { mutableStateOf(homeSettings.blocksHidden) }
 
+    val listState = rememberLazyListState()
+    RevealPrependedCard(cardPresent = nudgeCard != null, listState = listState)
     LazyColumn(
+        state = listState,
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = sidePadding, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -1356,6 +1362,21 @@ private fun AttentionRow(item: AttentionItem) {
                 }
             }
         }
+    }
+}
+
+/**
+ * A pending reach-out is prepended at index 0. The keyed list keeps the row the user was
+ * looking at pinned, so a card that arrives while Home is open would sit above the viewport
+ * and never be seen (device-found on the two-AVD rig, 2026-11-01). Reveal it once the
+ * prepend has re-anchored; the card's active ask leads Home until acknowledged.
+ */
+@Composable
+internal fun RevealPrependedCard(cardPresent: Boolean, listState: LazyListState) {
+    LaunchedEffect(cardPresent) {
+        if (!cardPresent) return@LaunchedEffect
+        withFrameNanos { }
+        if (listState.firstVisibleItemIndex > 0) listState.animateScrollToItem(0)
     }
 }
 

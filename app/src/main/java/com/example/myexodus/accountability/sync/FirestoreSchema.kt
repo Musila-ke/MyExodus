@@ -192,14 +192,22 @@ object FirestoreSchema {
      * eligibility is pinned by rules-test R-F2q: recipient equality is what proves the rule;
      * expiry is client-side because a LIST cannot evaluate `request.time`). The composite
      * index in firestore.indexes.json matches these three equalities + the descending order.
+     * On the local rig the two null equalities are dropped ([EmulatorCompat]) and the
+     * repository filters those documents client-side instead.
      */
-    fun nudgeInboxQuery(firestore: FirebaseFirestore, pairId: String, uid: String): Query =
-        firestore.collection(PAIRINGS_COLLECTION).document(pairId).collection(NUDGES_COLLECTION)
+    fun nudgeInboxQuery(firestore: FirebaseFirestore, pairId: String, uid: String): Query {
+        val recipientOnly = firestore.collection(PAIRINGS_COLLECTION).document(pairId)
+            .collection(NUDGES_COLLECTION)
             .whereEqualTo("recipientUid", uid)
-            .whereEqualTo("suppressedAt", null)
-            .whereEqualTo("ackedAt", null)
+        val pendingOnly = if (EmulatorCompat.matchesExplicitNulls) {
+            recipientOnly.whereEqualTo("suppressedAt", null).whereEqualTo("ackedAt", null)
+        } else {
+            recipientOnly
+        }
+        return pendingOnly
             .orderBy("createdAt", Query.Direction.DESCENDING)
             .limit(10)
+    }
 
     /**
      * `pairings/{pairId}/nudgeSettings/{uid}` — owner-owned block preference (plan §8.2);

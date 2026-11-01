@@ -7,9 +7,13 @@ import android.util.Log
 
 /**
  * adb control for [DebugBackend] (exported for `am broadcast` — the shell cannot reach a
- * non-exported receiver, same rule as DeviceVerificationReceiver):
- *   `am broadcast -a com.example.myexodus.debug.SET_BACKEND --es host 10.0.2.2`
- *   `am broadcast -a com.example.myexodus.debug.CLEAR_BACKEND`
+ * non-exported receiver, same rule as DeviceVerificationReceiver). No intent-filter is
+ * declared, so the broadcast must also name the component (`-n`, the sibling receivers'
+ * recipe); an action-only `am broadcast` resolves to nothing and writes no pref.
+ *   `am broadcast -n com.example.myexodus/.accountability.DebugBackendReceiver \
+ *        -a com.example.myexodus.debug.SET_BACKEND --es host 10.0.2.2`
+ *   `am broadcast -n com.example.myexodus/.accountability.DebugBackendReceiver \
+ *        -a com.example.myexodus.debug.CLEAR_BACKEND`
  * The wiring applies at process start (provider init), so restart the app process after.
  */
 class DebugBackendReceiver : BroadcastReceiver() {

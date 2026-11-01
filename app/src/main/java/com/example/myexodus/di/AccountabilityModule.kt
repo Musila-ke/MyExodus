@@ -116,6 +116,7 @@ import kotlinx.coroutines.flow.callbackFlow
 object AccountabilityModule {
 
     private const val TAG = "MyExodusAccountabilityModule"
+    private const val TAG_NUDGE = "MyExodusNudgeInbox"
 
     @Provides @Singleton
     fun provideAccountabilityDatabase(@ApplicationContext context: Context): AccountabilityDatabase =
@@ -301,8 +302,14 @@ object AccountabilityModule {
         },
         listenNudges = { pairId, uid ->
             callbackFlow {
+                Log.d(TAG_NUDGE, "attach")
                 val registration = FirestoreSchema.nudgeInboxQuery(firestore, pairId, uid)
                     .addSnapshotListener { snapshot, error ->
+                        Log.d(
+                            TAG_NUDGE,
+                            "snapshot docs=${snapshot?.documents?.size} " +
+                                "cache=${snapshot?.metadata?.isFromCache} error=${error?.javaClass?.simpleName}",
+                        )
                         if (error != null) {
                             close(error)
                             return@addSnapshotListener
@@ -326,7 +333,10 @@ object AccountabilityModule {
             batch.commit().awaitReportingDenial(crashReporting, "nudge_ack")
         },
         cancelNotifications = { PartnerNotifications.cancelPartnerNudge(context) },
-        reportUnreadable = { cause -> crashReporting.nonFatal("partner_nudge_card", cause) },
+        reportUnreadable = { cause ->
+            Log.d(TAG_NUDGE, "unreadable doc: $cause")
+            crashReporting.nonFatal("partner_nudge_card", cause)
+        },
         cipher = eventCipher,
     )
 
@@ -1176,6 +1186,8 @@ private fun nudgeDocOf(snapshot: DocumentSnapshot): NudgeInboxRepository.NudgeDo
         envelope = snapshot.get("envelope") as? String,
         createdAtMs = (snapshot.get("createdAtMs") as? Number)?.toLong(),
         expiresAtMillis = nudgeExpiryMillisOf(snapshot.get("expiresAt")),
+        suppressed = snapshot.get("suppressedAt") != null,
+        acked = snapshot.get("ackedAt") != null,
     )
 
 /** A wrong-typed `expiresAt` must degrade to null, never throw: [nudgeDocOf] runs inside a

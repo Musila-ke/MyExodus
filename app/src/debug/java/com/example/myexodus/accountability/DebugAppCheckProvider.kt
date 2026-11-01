@@ -6,7 +6,9 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import com.example.myexodus.account.LegacyCachePurge
 import com.example.myexodus.accountability.sync.AppCheckInstaller
+import com.example.myexodus.accountability.sync.EmulatorCompat
 import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 
 /**
@@ -27,7 +29,15 @@ class DebugAppCheckProvider : ContentProvider() {
         // Runs in every process before Application.onCreate — the seam for the local-suite
         // backend redirect, which must precede all Firebase client use. Host-gated (no-op
         // unless `set-backend` stored one), so the X6532 is untouched by default.
-        DebugBackend.apply(context ?: return true)
+        val ctx = context ?: return true
+        DebugBackend.apply(ctx)
+        // The Firestore emulator cannot match explicit nulls, so the rig's inbox query drops
+        // those filters and the repository re-checks them client-side (see EmulatorCompat).
+        EmulatorCompat.matchesExplicitNulls = !DebugBackend.isLocalRig(ctx)
+        // The one-time legacy-cache purge terminates the Firestore client mid-bootstrap and
+        // the SDK then rebuilds it with production settings; re-wire the emulator on the
+        // replacement (host-gated inside, null-safe in every other build).
+        LegacyCachePurge.backendReapply = { DebugBackend.reapplyFirestore(it) }
         if (isEmulator()) {
             AppCheckInstaller.factoryOverride = DebugAppCheckProviderFactory.getInstance()
             Log.i(TAG, "App Check: debug provider substituted (emulator; Play Integrity unavailable)")

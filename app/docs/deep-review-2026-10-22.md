@@ -11,6 +11,23 @@ pass; carried verdicts are labelled as carried.
 
 **If the session was cut (power loss), read this first, then the task list, then continue.**
 
+- **State at last update (2026-11-01): the two-AVD LOCAL-RIG is permanently fixed and a
+  full pairing ceremony completed on it.** Cold-start root cause: the one-time
+  `LegacyCachePurge` terminates the Firestore client and the rebuilt client was production-
+  wired, discarding the emulator redirect; fixed with the `LegacyCachePurge.backendReapply`
+  seam (set by `DebugAppCheckProvider`, invoked in the purge worker's `finally`; see the rig
+  section below for evidence). Also corrected: `SET_BACKEND` needs `-n <component>` (no
+  intent-filter), and host-memory pressure kills the Functions emulator — check
+  `/tmp/local-rig-emulators.log` first. Current devices (2026-11-01): A `emulator-5554`, uid
+  `FTJvVlaxSYiDLmBvCB2LYbRBBjMU` (EmuA); B `emulator-5556`, uid
+  `HPTfYybBCZKuiyGf301bsMChUeJG` (EmuB); PIN 1234 both. Pair `FTJv…_HPTf…` active, epoch 6;
+  both Plans pages empty, B availability sharing OFF. The earlier devices (uids `25tso4Wz…` /
+  `5JLIedQHw…`) were re-provisioned; their pair doc is historical. All behavioural legs are
+  closed; #59 and #61 were re-proven twice on this pair, and the #193 §9 plan prune is fixed
+  and device-verified (section below). LOCAL-RIG evidence never upgrades to LIVE/PHYSICAL;
+  FCM wake is a latency optimization because mailbox ingest posts the same notification (see
+  `MailboxMessageHandler` note below).
+
 - **State at last update (2026-10-23 late): #55 CLOSED — all eight consented partner-activity
   categories proven on the two-device rig over the real rails.** Streak update, relapse,
   milestone day 7 (the owner-sanctioned `PartnerJourneySeedInstrumentedTest` supplies the row —
@@ -986,8 +1003,11 @@ with the partner channel. Nothing partner-to-partner.
 "AVD cannot pair" verdict holds only against the LIVE backend. The debug build ships a
 deliberate local-suite rig: (a) client — `LocalRigAttestationVerifier` accepts a peer's
 software-attested emulator chain only while `DebugBackend.isLocalRig(context)` (a pref set by
-`am broadcast -a com.example.myexodus.debug.SET_BACKEND --es host <ip>`, applied at process
-start; ports auth 9099 / firestore 8080 / functions 5001); (b) server — `ATTESTATION_STUB=1`
+`am broadcast -n com.example.myexodus/.accountability.DebugBackendReceiver -a com.example.myexodus.debug.SET_BACKEND --es host <ip>`, applied at process
+start; ports auth 9099 / firestore 8080 / functions 5001). **The receiver declares no
+intent-filter, so an action-only `am broadcast -a …` resolves to nothing and writes no pref
+(silent no-op — corrected 2026-10-31); the `-n` component is mandatory, same as the sibling
+verification receivers.** (b) server — `ATTESTATION_STUB=1`
 plus the emulator runtime flips `registerPairing`'s verifier to `{ok:true}` (`functions/index.js:243`).
 Mailbox delivery is client-side: `MailboxMessageHandler`'s notify lambda posts through
 `PartnerNotifications` when a sync pass ingests the mailbox (FCM only wakes the pass), so no
@@ -1006,6 +1026,121 @@ signals 1–10/13 and a third-instance multi-partner routing leg, forcing the 15
 with `cmd jobscheduler run -f com.example.myexodus <jobId>`; 7) unpair, then `CLEAR_BACKEND` +
 `pm clear` before #49's fresh-user onboarding. Record as LOCAL-RIG evidence, never as
 live-backend or physical-phone proof.
+
+### Rig permanently repaired — 2026-10-31 (cold-start wiring, proven end-to-end)
+
+**Root cause (device evidence):** every fresh install's first launch runs the one-time
+`LegacyCachePurge`, which calls `FirebaseFirestore.getInstance().terminate()`. `terminate()`
+deregisters the client; the next `getInstance()` builds a fresh instance with **production**
+settings, discarding the emulator wiring `DebugBackend.apply()` installed at process start.
+Symptom: the app reached the Partner screens but every pairing-token read/write went to the
+live project (App Check 403 / `DEADLINE_EXCEEDED`), so the ceremony never progressed on a rig
+that had just been wired correctly — and a process restart re-applied the wiring, which is why
+the rig sometimes "worked after relaunch" and sometimes did not.
+
+**Fix (production source untouched in effect):**
+- `LegacyCachePurge.backendReapply: ((Context) -> Unit)?` — a `@Volatile` debug substitution
+  point (same pattern as `AppCheckInstaller.factoryOverride`); always null in release.
+- `DebugAppCheckProvider.onCreate()` (debug source set, runs before `Application.onCreate`)
+  sets it to `DebugBackend.reapplyFirestore`.
+- The purge worker's `finally` invokes it after `terminate()` settles, success or failure, so
+  the replacement client exists before the main thread returns to bootstrap.
+- `DebugBackend.reapplyFirestore` re-wires **Firestore only** — Auth/Functions instances are
+  never deregistered and their `useEmulator` may be once-only.
+- Regression test: `LegacyCachePurgeTest` (2 Robolectric tests — hook runs on a failed purge,
+  hook does not run when nothing was purged).
+
+**Proof (LOCAL-RIG, `Lean_API34_B` A + `Lean_API34` B, 2026-10-31):** B was `pm clear`ed and
+`debug_backend.xml` restored, then launched cold — logcat showed
+`debug backend -> 10.0.2.2 (auth 9099, firestore 8080, functions 5001)` →
+`legacy Firestore disk cache purged` → `debug backend firestore re-wired -> 10.0.2.2:8080`;
+the same first launch then completed join + SAS + confirm with no restart. A's invite
+`2Z50-D2HD-JVTA-1` → token `b8acab08…` (responded 20:05:03Z) → A accepted B's chain
+(`local rig: accepting peer chain … 3 cert(s)`) → SAS `50258` matched on both →
+`pairings/25tso4WzSRVPf5Yt2hNSv4oEZkWr_5JLIedQHwmXQPFj23xVgF8fYASA2` `status=active`,
+uidA/uidB correct (created 20:05:04Z, activated 20:05:47Z; epoch 2 on A's reused install,
+B fresh). Both Partner pages named the other device ("Paired with emub" / "Paired with EmuA").
+
+**Two rig traps found the same day:**
+1. The action-only `SET_BACKEND` broadcast silently no-ops (receiver has no intent-filter) —
+   always pass `-n`. `DebugBackendReceiver`'s KDoc now documents this.
+2. Host memory exhaustion (~18 MB free on this 8 GB Mac) killed the Functions emulator
+   runtime (`Failed to load function`) and every callable then failed; the client surfaced it
+   as `DEADLINE_EXCEEDED` and the offer screen as the misleading "The invitation ran out".
+   Freeing memory (`./gradlew --stop`) and confirming `✔ functions: Loaded functions
+   definitions from source` restored the rig. Check the log before blaming the app.
+   **Open UX finding:** poll timeouts and transport failures reuse the expiry copy; worth a
+   distinct "couldn't reach the other phone" message.
+
+### #59/#61 closed + ADR #193 §9 plan-prune fix — 2026-11-01 (LOCAL-RIG)
+
+Rig at the start of this pass: A `emulator-5554` uid `FTJvVlaxSYiDLmBvCB2LYbRBBjMU` (EmuA),
+B `emulator-5556` uid `HPTfYybBCZKuiyGf301bsMChUeJG` (EmuB), pair `FTJv…_HPTf…` active. Both
+devices on the current debug APK (`install -r`).
+
+**#61 adversarial pairing — all five legs PASSED on the rig** (the existing pair was untouched
+throughout; only leg 3 mutates server token state, and it deletes the mutated doc):
+1. Invalid-format code → local-parse rejection copy (`partner_ceremony_code_invalid`); no
+   server call.
+2. Well-formed but nonexistent token → read returns NotFound; UI shows "That code was already
+   used" (`partner_ceremony_used_*`), the honest copy for a doc that no longer exists.
+3. Expired token: `expiresAt` rewritten to the past via Firestore REST
+   (`PATCH …?updateMask.fieldPaths=expiresAt`) → "The invitation ran out"
+   (`partner_ceremony_expired_*`); the mutated doc was then deleted (DELETE 200).
+4. SAS refusal: joiner stops → both land on the mismatch copy
+   (`partner_ceremony_mismatch_*`), the token is cancelled, the existing pair keeps syncing.
+5. Re-join with a consumed code: B entered the used invite `M9JE-QV7A-A1VC-7` → "Pairing
+   didn't finish — That code was already used / Each invitation works once, and this one was
+   already claimed. Ask for a new invitation, then try again." (Try again / Close). No
+   identity minted, no state change.
+
+**#59 bilateral unpair → re-pair — PASSED twice** (once before the fix below, once after, on
+the same pair id — ids are deterministic from the two uids). Unpair is screen-lock gated (PIN
+1234); the initiator waits on "Waiting to confirm your partner's device has also erased its
+data" until the responder syncs, then flips to "Your partner's device has also erased its
+data." The responder shows "Your partner ended the partnership. Your data for it on this
+device has been erased." Re-pair: invite `KMHD-TG2Z-XBNB-8` → join → SAS `27257` on both →
+joiner Confirm (PIN) → initiator "They match" (PIN) → both "You're paired". Server doc
+`pairings/FTJv…_HPTf…` `status=active`, `pairingEpoch=6`.
+
+**Found-and-fixed: ADR #193 §9 plan pruning.** `sweepActivity` built its orphan set only from
+activity projections/links/consent rows, so a plan whose pair was retired — and which left no
+other row — could never be seen and survived every unpair. Device evidence: A kept "Deep Link
+leg 71 B2" across an unpair→re-pair while B's author copy was gone (B re-provisioned). Fix
+(small, in the ADR's own design — prune on the next sweep, never inside `shredPair`):
+- `PartnerPlanDao.pairedPairIds()` — distinct non-null `pair_id` values in `partner_plan`.
+- `sweepActivity`'s candidate union includes it before `filterNot { enrolled }`.
+- Regression test `PartnerSyncCoordinatorTest.sweep_prunesPlansOfAGonePair_keepingLiveAndPrivatePlans`
+  (gone pair's plan deleted; the live pair's and a private plan survive). Class 55/55.
+Honest evidence split: the JVM test isolates the plan-only candidate source; on the rig the
+purge is user-visible (A's Plans went from the residue row to "No plans yet." after an
+unpaired-time pass logged `pruning activity state for 1 unpaired pair(s)`), but that pair also
+had monitoring rows, so the device run proves the end-to-end purge, not the candidate source
+in isolation. After re-pair both Plans pages are empty; emulator `pairing_tokens` holds 0 docs.
+
+**Rig compatibility finding (nudge inbox):** the bundled Firestore emulator cannot match
+explicit nulls — `whereEqualTo(field, null)` returns 0 for a document whose field is
+explicitly null (verified against firebase-tools 15.9.0), while production matches by
+documented semantics. On the rig the inbox therefore received suppressed/acked documents: a
+stale reach-out could re-render and the ack batch could include terminal rows the ack rule no
+longer admits. Fix: rig builds set `EmulatorCompat.matchesExplicitNulls = false`, the query
+omits the two null equalities, and `NudgeInboxRepository` filters `suppressed`/`acked`
+client-side (production query and semantics unchanged). Pinned by the terminal-docs tests in
+`NudgeInboxRepositoryTest`.
+
+**Rig driving traps reconfirmed:** dump bounds sit ~72 px above screenshot pixels
+(status-bar offset) — tap dump bounds (`/tmp/tap_text.sh`), never screenshot pixels;
+`screencap` is the only authoritative visual (a dump transiently unbinds the a11y service);
+the Partner tab does not reset the subpage `view` (tap the sub-page back arrow); "End
+partnership" occurs twice (card heading + button) and the confirm dialog reuses the label —
+tap the dialog action by its dump bounds; the BiometricPrompt is FLAG_SECURE (black
+screencap) — drive it through the dump: EditText `[152,589][568,738]`, type 1234, Enter.
+
+**Final gates (2026-11-01, this tree):** full JVM **265 classes / 2,413 tests / 0 failures /
+0 errors / 0 skipped** (BUILD SUCCESSFUL); `:app:lintDebug` run ALONE → **"No issues found."**;
+the new instrumented `RevealPrependedCardTest` ran **OK (1 test)** on `emulator-5554` via
+`am instrument` (no uninstall — the epoch-6 pair and app data survived; A's blocker a11y
+binding was re-cycled and the Home chip returned to "Protecting").
 
 **Owner-named scenarios, mapped honestly:** "revoke a permission — is the partner notified?" →
 no (not built). "Add a partner to a specific block/rule — are they notified?" → no per-rule

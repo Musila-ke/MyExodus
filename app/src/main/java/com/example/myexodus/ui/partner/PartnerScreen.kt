@@ -130,6 +130,11 @@ private const val VIEW_PLANS = "plans"
 private const val VIEW_RULES = "rules"
 private const val VIEW_PAIRING = "pairing"
 
+/** A partner-selection deep link returns to the hub — unless the same tap also named a plan;
+ *  the plan notification sends both extras, and the plan surface owns that landing. */
+internal fun pairDeepLinkView(requestedPlanId: String?): String? =
+    if (requestedPlanId != null) VIEW_PLANS else null
+
 /** §19.4 item 4: the ceremony's two entry modes, as `view` values alongside the subpages. */
 private const val VIEW_CEREMONY_INVITE = "ceremony-invite"
 private const val VIEW_CEREMONY_JOIN = "ceremony-join"
@@ -450,7 +455,9 @@ fun PartnerScreen(
         val pairId = requestedPairId ?: return@LaunchedEffect
         selectedPairId = pairId
         selection?.selectedPairId = pairId
-        view = null
+        // The plan notification carries BOTH extras; its plan surface owns the landing, so
+        // this effect must not reset the view the plan effect claims (whichever runs first).
+        view = pairDeepLinkView(requestedPlanId)
         reload()
         onPairConsumed()
     }

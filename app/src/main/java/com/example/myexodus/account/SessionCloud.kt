@@ -67,6 +67,16 @@ object LegacyCachePurge {
     private const val WORKER_DEADLINE_MS = 6_500L
 
     /**
+     * Debug-rig substitution point (debug source set only, set by the debug manifest's
+     * provider). `terminate()` removes the client from the SDK registry, so the next
+     * `getInstance()` builds a fresh one with production settings — any emulator wiring
+     * applied at process start is gone. A rig build re-applies its wiring here. Always null
+     * in release: no release class writes it.
+     */
+    @Volatile
+    var backendReapply: ((Context) -> Unit)? = null
+
+    /**
      * True when this install is already purged or the purge just succeeded now. Blocking on
      * purpose (the caller is the Application's bootstrap); the blocking body runs on a
      * short-lived worker because `Tasks.await` is main-thread-forbidden. A worker still
@@ -77,13 +87,13 @@ object LegacyCachePurge {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         if (prefs.getBoolean(KEY_LEGACY_CACHE_PURGED, false)) return true
         val result = AtomicBoolean(false)
-        val worker = Thread({ result.set(purge(prefs)) }, "myexodus-cache-purge")
+        val worker = Thread({ result.set(purge(context, prefs)) }, "myexodus-cache-purge")
         worker.start()
         worker.join(timeoutMillis)
         return result.get()
     }
 
-    private fun purge(prefs: android.content.SharedPreferences): Boolean = try {
+    private fun purge(context: Context, prefs: android.content.SharedPreferences): Boolean = try {
         val instance = FirebaseFirestore.getInstance()
         Tasks.await(instance.terminate(), TIMEOUT_SECONDS, TimeUnit.SECONDS)
         Tasks.await(instance.clearPersistence(), TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -93,5 +103,12 @@ object LegacyCachePurge {
     } catch (e: Exception) {
         Log.w(TAG, "legacy Firestore cache purge failed — cloud access blocked this launch", e)
         false
+    } finally {
+        // In the worker, after terminate() has settled: the replacement instance must exist
+        // before the main thread returns to bootstrap and the first consumer touches it.
+        backendReapply?.let { reapply ->
+            runCatching { reapply(context) }
+                .onFailure { Log.w(TAG, "backend re-wiring after purge failed", it) }
+        }
     }
 }

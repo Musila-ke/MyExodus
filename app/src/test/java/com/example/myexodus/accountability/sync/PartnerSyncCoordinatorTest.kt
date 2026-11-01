@@ -43,6 +43,7 @@ import com.example.myexodus.data.db.entity.PairProfileSharing
 import com.example.myexodus.data.db.entity.PairStreakSharing
 import com.example.myexodus.data.db.entity.PartnerActivityOutbox
 import com.example.myexodus.data.db.entity.PartnerEventJournal
+import com.example.myexodus.data.db.entity.PartnerPlan
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.data.db.entity.UserProfile
 import java.security.KeyPair
@@ -733,6 +734,33 @@ class PartnerSyncCoordinatorTest {
         assertEquals("the orphan is linked, not re-signed", 1, report.eventsLinked)
         assertEquals("the chain still holds exactly one copy", 1, store.chainFor(pairId).size)
         assertEquals(1L, factory.open()!!.partnerActivityDao().linkSequence("ev-heal", pairId))
+    }
+
+    /**
+     * ADR #193 §9: a plan whose pair is gone has no counterpart left to receive it, and a plan
+     * can be the ONLY row a retired pair left behind — the older candidate set (activity
+     * projections/links/consent) could never see that pair, so the plan outlived the unpair
+     * forever (device-proven 2026-10-31). Plans now feed the candidate set themselves.
+     */
+    @Test
+    fun sweep_prunesPlansOfAGonePair_keepingLiveAndPrivatePlans() = runTest {
+        enroll()
+        val planDao = factory.open()!!.partnerPlanDao()
+        planDao.insertPlan(
+            PartnerPlan("plan-gone", "pair-gone", authored = true, title = "gone", revision = 1, updatedAtMs = 1L),
+        )
+        planDao.insertPlan(
+            PartnerPlan("plan-live", pairId, authored = true, title = "live", revision = 1, updatedAtMs = 1L),
+        )
+        planDao.insertPlan(
+            PartnerPlan("plan-private", null, authored = true, title = "mine", revision = 1, updatedAtMs = 1L),
+        )
+
+        coordinator.syncOnce()
+
+        assertNull("the gone pair's plan is pruned", planDao.get("plan-gone"))
+        assertNotNull("the enrolled pair's plan survives", planDao.get("plan-live"))
+        assertNotNull("a private plan carries no pair and is never a candidate", planDao.get("plan-private"))
     }
 
     /** The gone pair's rows are pruned even when the unpair was the *last* one — the sweep

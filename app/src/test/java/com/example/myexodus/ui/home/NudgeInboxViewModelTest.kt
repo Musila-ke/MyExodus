@@ -1,5 +1,6 @@
 package com.example.myexodus.ui.home
 
+import android.app.Application
 import com.example.myexodus.accountability.crypto.EventCipher
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.sos.NudgeEnvelope
@@ -11,12 +12,19 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * SOS plan §8.16 (Step 9): the recipient card's lifecycle — the listener attaches while Home
- * is visible, start is idempotent, stop detaches (later emissions must not repaint), and
- * acknowledge replays the card's own ids.
+ * is visible, start is idempotent, stop detaches (later emissions must not repaint), a first
+ * attach that raced session bootstrap re-attaches without a Home exit, and acknowledge replays
+ * the card's own ids.
  */
+// Robolectric: the retry path logs via android.util.Log (stub-throws in plain JVM tests).
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], application = Application::class)
 class NudgeInboxViewModelTest {
 
     @get:Rule
@@ -26,12 +34,14 @@ class NudgeInboxViewModelTest {
         val cek = ByteArray(32) { (it + 1).toByte() }
         val emissions = MutableSharedFlow<List<NudgeInboxRepository.NudgeDoc>>()
         var listenCalls = 0
+        var uidCalls = 0
+        var uidReadyAfter = 1
         val ackCalls = mutableListOf<Pair<String, List<String>>>()
 
         val repository = NudgeInboxRepository(
             enrollments = { listOf(enrollment("pair-1", 100)) },
             selectedPairId = { null },
-            ensureUid = { "uid-1" },
+            ensureUid = { uidCalls++; if (uidCalls < uidReadyAfter) null else "uid-1" },
             deriveCek = { cek },
             listenNudges = { _, _ ->
                 listenCalls++
@@ -104,6 +114,20 @@ class NudgeInboxViewModelTest {
         vm.acknowledge()
         advanceUntilIdle()
         assertEquals(listOf("pair-1" to listOf("d1", "d2")), h.ackCalls)
+    }
+
+    @Test
+    fun firstAttachRacedSessionBootstrap_reattachesWithoutLeavingHome() = runTest {
+        val h = Harness().apply { uidReadyAfter = 2 }
+        val vm = NudgeInboxViewModel(h.repository)
+
+        vm.start()
+        advanceUntilIdle()
+        assertEquals("the retry must attach the listener", 1, h.listenCalls)
+
+        h.emissions.emit(listOf(h.doc("d1", createdAtMs = 500L)))
+        advanceUntilIdle()
+        assertEquals(500L, vm.card.value?.createdAtMs)
     }
 
     @Test

@@ -44,5 +44,22 @@ object DebugBackend {
         }.onFailure { Log.w(TAG, "debug backend wiring failed", it) }
     }
 
+    /**
+     * Firestore-only re-wire for [com.example.myexodus.account.LegacyCachePurge]: terminate()
+     * destroys the emulator-wired client and getInstance() builds a production one. Auth and
+     * Functions instances are never deregistered, so re-calling their useEmulator (which may
+     * reject a second call) is deliberately avoided.
+     */
+    fun reapplyFirestore(context: Context) {
+        val host = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_HOST, null)
+            ?.takeIf { it.isNotEmpty() }
+            ?: return
+        runCatching {
+            FirebaseFirestore.getInstance().useEmulator(host, FIRESTORE_PORT)
+            Log.i(TAG, "debug backend firestore re-wired -> $host:$FIRESTORE_PORT")
+        }.onFailure { Log.w(TAG, "debug backend firestore re-wire failed", it) }
+    }
+
     private const val TAG = "MyExodusDebugBackend"
 }

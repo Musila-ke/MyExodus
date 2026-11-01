@@ -32,13 +32,18 @@ class NudgeInboxRepository(
     private val now: () -> Long = System::currentTimeMillis,
 ) {
 
-    /** One document as the listener delivers it; nulls are possible and never trusted. */
+    /** One document as the listener delivers it; nulls are possible and never trusted.
+     *  [suppressed]/[acked] re-check the §6.9 query's null filters: production's query already
+     *  excludes them, but the local rig's emulator drops those filters ([
+     *  com.example.myexodus.accountability.sync.EmulatorCompat]) and delivers them here. */
     data class NudgeDoc(
         val nudgeId: String,
         val senderUid: String?,
         val envelope: String?,
         val createdAtMs: Long?,
         val expiresAtMillis: Long?,
+        val suppressed: Boolean = false,
+        val acked: Boolean = false,
     )
 
     /** The card's whole state: the newest readable nudge's age, its optional message (null for
@@ -82,7 +87,10 @@ class NudgeInboxRepository(
     }
 
     private fun cardOf(pairId: String, cek: ByteArray, docs: List<NudgeDoc>): NudgeCard? {
-        val newest = docs
+        // Suppressed and acknowledged documents are terminal: they must never render and must
+        // never enter the ack batch (the ack rule admits only `ackedAt == null`).
+        val pending = docs.filter { !it.suppressed && !it.acked }
+        val newest = pending
             .filter { doc -> doc.expiresAtMillis?.let { it > now() } != false }
             .maxByOrNull { it.createdAtMs ?: Long.MIN_VALUE }
             ?: return null
@@ -100,6 +108,6 @@ class NudgeInboxRepository(
                 reportUnreadable("decrypt")
                 return null
             }
-        return NudgeCard(pairId, createdAtMs, docs.map { it.nudgeId }, NudgeEnvelope.messageOf(plaintext))
+        return NudgeCard(pairId, createdAtMs, pending.map { it.nudgeId }, NudgeEnvelope.messageOf(plaintext))
     }
 }

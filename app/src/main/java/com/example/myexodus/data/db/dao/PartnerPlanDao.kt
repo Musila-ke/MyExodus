@@ -105,6 +105,11 @@ interface PartnerPlanDao {
     @Query("UPDATE partner_plan SET pending_progress = 0 WHERE plan_id = :planId AND revision = :revision")
     suspend fun clearProgressPending(planId: String, revision: Int): Int
 
+    /** Orphan candidates (ADR #193 §9): pairs that still own plans. A plan can be the only
+     *  row a retired pair left behind, so the sweep cannot rely on activity rows alone. */
+    @Query("SELECT DISTINCT pair_id FROM partner_plan WHERE pair_id IS NOT NULL")
+    suspend fun pairedPairIds(): List<String>
+
     /** Unpair prune (§8.17): a plan shared on a retired pair has no correspondent left. */
     @Query("DELETE FROM partner_plan WHERE pair_id IN (:pairIds)")
     suspend fun deleteForPairs(pairIds: List<String>)
