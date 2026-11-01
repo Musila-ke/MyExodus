@@ -38,8 +38,8 @@ import org.junit.runner.RunWith
  * SOS plan §12.3, recipient-inbox bullets — the data half (physical-device leg, X6532 rig):
  *
  *  - Card appears from Firestore without relying on FCM payload content.
- *  - `I'm here` acknowledges all fetched pending nudges.
- *  - `X` acknowledges all fetched pending nudges.
+ *  - `X` acknowledges all fetched pending nudges (owner ruling 2026-11-01: the card is a
+ *    one-way signal — no reply action exists).
  *  - Notification cancellation occurs after successful acknowledgment.
  *
  * The virtual partner (the §12 harness identity) seals a nudge and sends it through the real
@@ -144,7 +144,7 @@ class NudgeInboxDeviceInstrumentedTest {
         }
         assertEquals(1, nudgeEntries().size)
 
-        // One acknowledgment ("I'm here" and X are the same call): backend write → card
+        // One acknowledgment (the X is the card's only action): backend write → card
         // clears through the listener → tray entry retired (§6.9 steps 1-4).
         assertTrue("the ack batch must commit", repository.acknowledge(card))
 

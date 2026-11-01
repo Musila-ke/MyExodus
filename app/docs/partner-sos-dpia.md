@@ -6,7 +6,7 @@
 
 ## 1. What the feature does
 
-A paired user can send their accountability partner a one-tap "Reach out" nudge. The recipient's phone shows a local notification and an in-app card with three responses ("I'm here" / "X" / one-tap acknowledge); the sender is told only that the nudge reached the partner's device — never whether it was read or answered (FR-10). Either side can block incoming nudges at any time. The feature is server-mediated only because push delivery requires a server (see ADR #133).
+A paired user can send their accountability partner a one-tap "Reach out" nudge. The recipient's phone shows a local notification and an in-app card that names who needs the check-in; the card is a one-way signal — it offers no reply, and X dismisses it (owner ruling 2026-11-01, ADR #253). The sender is told only that the nudge reached the partner's device — never whether it was read or answered (FR-10). Either side can block incoming nudges at any time. The feature is server-mediated only because push delivery requires a server (see ADR #133).
 
 ## 2. Data flows
 

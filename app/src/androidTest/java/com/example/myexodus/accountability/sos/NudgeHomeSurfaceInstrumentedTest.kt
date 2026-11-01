@@ -37,9 +37,10 @@ import org.junit.runner.RunWith
  *    a pure function of its fetched data — no push input — rendered here with the listener's
  *    record shape; the data half — listener → card against the live backend — is the harness
  *    leg in [NudgeInboxDeviceInstrumentedTest]).
- *  - `I'm here` / `X` acknowledge (UI half: both actions invoke the repository's one ack path;
- *    the batch-over-all-fetched semantics is pinned by NudgeInboxRepositoryTest and the data
- *    half by the harness leg).
+ *  - X dismisses and acknowledges (UI half: it invokes the repository's one ack path; owner
+ *    ruling 2026-11-01 — the card is a one-way signal that names the sender and offers no
+ *    reply action. The batch-over-all-fetched semantics is pinned by
+ *    NudgeInboxRepositoryTest and the data half by the harness leg).
  *  - Notification-disabled banner appears (the banner's input is the boolean MainActivity
  *    computes from `NotificationAccess.canPost`; the input→banner render path is pinned here,
  *    and the canPost ↔ OS-state mapping is pinned by NotificationAccessTest (JVM)).
@@ -73,7 +74,7 @@ class NudgeHomeSurfaceInstrumentedTest {
     // --- §12.3 bullets 6-8 (UI half) --------------------------------------------------------
 
     @Test
-    fun card_rendersFromItsFetchedData_andBothActionsAcknowledge() {
+    fun card_rendersNamedFromItsFetchedData_andX_Acknowledges() {
         var acks = 0
         render(
             partnerNotificationsEnabled = true,
@@ -85,16 +86,12 @@ class NudgeHomeSurfaceInstrumentedTest {
             onAcknowledge = { acks++ },
         )
 
-        compose.onNodeWithText(str(R.string.sos_card_title)).assertIsDisplayed()
-        compose.onNodeWithText(str(R.string.sos_card_im_here)).assertIsDisplayed()
-
-        compose.onNodeWithText(str(R.string.sos_card_im_here)).performClick()
-        compose.waitForIdle()
-        assertEquals("'I'm here' must hit the one acknowledgment path", 1, acks)
+        // Owner ruling 2026-11-01: the signal names who needs the check-in and offers no reply.
+        compose.onNodeWithText(str(R.string.sos_card_title_named, "Sam")).assertIsDisplayed()
 
         compose.onNodeWithContentDescription(str(R.string.sos_card_dismiss)).performClick()
         compose.waitForIdle()
-        assertEquals("the X must acknowledge through the same path", 2, acks)
+        assertEquals("the X must acknowledge through the one path", 1, acks)
     }
 
     @Test
@@ -111,7 +108,7 @@ class NudgeHomeSurfaceInstrumentedTest {
                 message = "Please call me",
             ),
         )
-        compose.onNodeWithText(str(R.string.sos_card_title)).assertIsDisplayed()
+        compose.onNodeWithText(str(R.string.sos_card_title_named, "Sam")).assertIsDisplayed()
         compose.onNodeWithText("Please call me").assertIsDisplayed()
     }
 

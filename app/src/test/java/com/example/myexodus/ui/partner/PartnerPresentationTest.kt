@@ -97,11 +97,24 @@ class PartnerPresentationTest {
         val newestFirst = (0 until 7).map {
             PartnerAlert.AppActivity("com.x$it", false, startOfToday - it * 3_600_000L)
         }
-        val summary = summarizeAlerts(newestFirst, startOfToday)
+        val summary = summarizeAlerts(newestFirst, startOfToday, ZoneOffset.UTC)
         assertEquals(7, summary.weekCount)
         assertEquals(1, summary.todayCount)
         assertEquals(5, summary.recent.size)
         assertEquals("com.x0", (summary.recent.first() as PartnerAlert.AppActivity).target)
+        assertEquals(listOf(0, 0, 0, 0, 0, 0, 7), summary.dailyCounts)
+    }
+
+    @Test
+    fun summarize_bucketsByCalendarDay_oldestFirstEndingToday() {
+        val startOfToday = now - 3 * 3_600_000L
+        val alerts = listOf(
+            PartnerAlert.AppActivity("today", false, startOfToday),
+            PartnerAlert.AppActivity("yesterday", false, startOfToday - 24 * 3_600_000L),
+            PartnerAlert.AppActivity("outOfWindow", false, startOfToday - 9 * 24 * 3_600_000L),
+        )
+        val summary = summarizeAlerts(alerts, startOfToday, ZoneOffset.UTC)
+        assertEquals(listOf(0, 0, 0, 0, 0, 1, 1), summary.dailyCounts)
     }
 
     @Test

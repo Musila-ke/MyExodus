@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -26,11 +25,11 @@ import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.DirectionsWalk
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.SelfImprovement
 import androidx.compose.material.icons.outlined.SupportAgent
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -441,30 +440,21 @@ private fun HomeView(
                 remainingSeconds = remainingSeconds,
                 frozenAtSeconds = frozenAtSeconds,
             )
+        }
+
+        // The one urgent action, above the reference material (owner directive 2026-10-21).
+        // Owner directive 2026-11-01: as an icon-led action card, not a full-width bar — it
+        // leads the idle page in the primary container and steps back to a neutral row while
+        // the live timer keeps the page's visual weight.
+        LogUrgeCard(hero = liveSession == null, onClick = { logging = true })
+
+        if (liveSession != null) {
             OverrideCard(overrideAvailable = overrideAvailable, onOverride = onOverride)
             Text(
                 stringResource(R.string.recovery_leave_note),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-
-        // The one urgent action, above the reference material (owner directive 2026-10-21):
-        // full-width and impossible to miss, but not a second shout — the timer/status stays
-        // the visual anchor when a session is live.
-        Button(
-            onClick = { logging = true },
-            modifier = Modifier.fillMaxWidth().height(56.dp),
-        ) {
-            // Owner ruling 2026-10-17: the same glyph the widget's log-an-urge control draws,
-            // so one icon means one action on both surfaces.
-            Icon(
-                painter = painterResource(R.drawable.ic_log_urge),
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(stringResource(R.string.recovery_log_action))
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -785,6 +775,67 @@ private fun ActiveTimerCard(
 }
 
 @Composable
+private fun LogUrgeCard(hero: Boolean, onClick: () -> Unit) {
+    val container =
+        if (hero) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.surfaceContainerLow
+    val ink =
+        if (hero) MaterialTheme.colorScheme.onPrimaryContainer
+        else MaterialTheme.colorScheme.onSurface
+    Surface(
+        color = container,
+        contentColor = ink,
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            // Owner ruling 2026-10-17: the same glyph the widget's log-an-urge control draws,
+            // so one icon means one action on both surfaces.
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .background(
+                        if (hero) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.primaryContainer,
+                        CircleShape,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_log_urge),
+                    contentDescription = null,
+                    tint =
+                        if (hero) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    stringResource(R.string.recovery_log_action),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    stringResource(R.string.recovery_log_caption),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ink.copy(alpha = 0.78f),
+                )
+            }
+            Icon(
+                imageVector = Icons.Outlined.ChevronRight,
+                contentDescription = null,
+                tint = ink.copy(alpha = 0.6f),
+            )
+        }
+    }
+}
+
+@Composable
 private fun OverrideCard(overrideAvailable: Boolean, onOverride: () -> Unit) {
     // Finding #17: the override retires the rule for good (Rule-3 expiry) — an irreversible
     // consequence that was not disclosed before it happened.
@@ -792,26 +843,59 @@ private fun OverrideCard(overrideAvailable: Boolean, onOverride: () -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = overrideAvailable) { confirming = true },
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = { confirming = true },
-                enabled = overrideAvailable,
-                modifier = Modifier.fillMaxWidth(),
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(
+                        if (overrideAvailable) MaterialTheme.colorScheme.errorContainer
+                        else MaterialTheme.colorScheme.surfaceContainerHighest,
+                        CircleShape,
+                    ),
+                contentAlignment = Alignment.Center,
             ) {
+                Icon(
+                    imageVector = Icons.Outlined.LockOpen,
+                    contentDescription = null,
+                    tint =
+                        if (overrideAvailable) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     stringResource(
                         if (overrideAvailable) R.string.recovery_override
                         else R.string.recovery_override_unavailable,
                     ),
+                    style = MaterialTheme.typography.titleSmall,
+                    color =
+                        if (overrideAvailable) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                )
+                Text(
+                    stringResource(R.string.recovery_overrides_logged),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Text(
-                stringResource(R.string.recovery_overrides_logged),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (overrideAvailable) {
+                Icon(
+                    imageVector = Icons.Outlined.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
     if (confirming) {

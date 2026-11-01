@@ -29,11 +29,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Handshake
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Shield
@@ -95,6 +97,7 @@ import com.example.myexodus.ui.formatHeaderDate
 import com.example.myexodus.ui.preloadAppLabels
 import com.example.myexodus.ui.relativeTimeText
 import com.example.myexodus.ui.rememberAppLabel
+import com.example.myexodus.ui.rememberInstalledAppPackages
 import com.example.myexodus.ui.rememberWindowWidth
 import com.example.myexodus.ui.ruleRowState
 import com.example.myexodus.ui.rules.RULES_CARD_MAX_HEIGHT
@@ -107,6 +110,7 @@ import com.example.myexodus.ui.streaks.daysFree
 import com.example.myexodus.ui.streaks.daysUntil
 import com.example.myexodus.ui.streaks.nextMilestone
 import com.example.myexodus.ui.streaks.splashMilestones
+import com.example.myexodus.ui.visibleRules
 import com.example.myexodus.vpn.VpnLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -157,7 +161,8 @@ fun HomeScreen(
     partnerNotificationsRequestable: Boolean = false,
     onFixPartnerNotifications: () -> Unit = onOpenSettings,
     /** SOS §8.16 (Step 9): the recipient card — newest pending reach-out, or null. Both of
-     *  its actions ("I'm here" and X) acknowledge through the one callback (§6.9). */
+     *  X acknowledges through the one callback (§6.9); the card offers no reply (owner
+     *  ruling 2026-11-01 — it only names who needs the check-in). */
     nudgeCard: NudgeInboxRepository.NudgeCard? = null,
     onNudgeAcknowledge: () -> Unit = {},
 ) {
@@ -170,6 +175,10 @@ fun HomeScreen(
     val rules by remember(profileId) {
         profileId?.let { store.restrictionRuleDao().observeByProfile(it) } ?: emptyFlow()
     }.collectAsStateWithLifecycle(initialValue = null)
+    // Owner ruling 2026-11-01: an uninstalled app's block is hidden from the list and the
+    // counts, but stored and still active — it returns with the app.
+    val installedPackages = rememberInstalledAppPackages()
+    val shownRules = rules?.let { visibleRules(it, installedPackages) }
     // ADR #153: the user-perceivable "fully loaded" moment — streak + block list resolved, not
     // just the first frame (TTID). reportFullyDrawn → AMS logs "Fully drawn ... +Nms", the
     // TTFD number the startup-perf recipe reads.
@@ -185,8 +194,8 @@ fun HomeScreen(
     // ceiling ANR'd on per-row PackageManager calls during composition. Rows render the raw
     // identifier until their label arrives in the shared cache.
     val labelContext = LocalContext.current
-    LaunchedEffect(rules) {
-        val targets = rules.orEmpty().map { it.blockedPackage }
+    LaunchedEffect(shownRules) {
+        val targets = shownRules.orEmpty().map { it.blockedPackage }
         if (targets.isNotEmpty()) preloadAppLabels(labelContext, targets)
     }
     // Req 15 / #12: every partner's newest pinned message, newest first, as a Flow — a message
@@ -308,7 +317,14 @@ fun HomeScreen(
     LazyColumn(
         state = listState,
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = sidePadding, vertical = 16.dp),
+        // Bottom clears the shell's always-present Reach out FAB (56dp + its 16dp inset and
+        // margin): the last card must never end up underneath it (device-caught 2026-11-01).
+        contentPadding = PaddingValues(
+            start = sidePadding,
+            top = 16.dp,
+            end = sidePadding,
+            bottom = 96.dp,
+        ),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         // SOS §8.16 (Step 9): the partner's open reach-out is the one Home item with an
@@ -318,6 +334,7 @@ fun HomeScreen(
             item(key = "nudge") {
                 NudgeCardView(
                     card = current,
+                    partnerName = partnerNames[current.pairId],
                     nowMillis = nowMillis,
                     onAcknowledge = onNudgeAcknowledge,
                 )
@@ -444,7 +461,6 @@ fun HomeScreen(
                     // before the values are read. Zero blocks renders the empty card alone —
                     // a 0/0 tile row above "No blocks yet" would be noise, and history is
                     // still on Insights.
-                    val shownRules = rules
                     if (!shownRules.isNullOrEmpty()) {
                         Text(
                             stringResource(R.string.home_blocks_scope),
@@ -457,7 +473,7 @@ fun HomeScreen(
                         )
                     }
                     BlocksCard(
-                        rules = rules,
+                        rules = shownRules,
                         countsByTarget = countsByTarget,
                         nowEpochMillis = nowMillis,
                         // Same-instant coherence with the banner: when nothing can detect apps,
@@ -987,25 +1003,70 @@ private fun PinnedMessageCard(
     Surface(
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-        shape = MaterialTheme.shapes.medium,
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
-            Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // Same grammar as the reach-out card it sits under: a glyph naming the event, the
+            // sender and the message's own send time stacked, and the partner's words in their
+            // own bubble so they read as authored, not as app copy.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(MaterialTheme.colorScheme.secondary, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Outlined.Chat,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSecondary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        if (senderName != null) {
+                            stringResource(R.string.home_pinned_from, senderName)
+                        } else {
+                            stringResource(R.string.home_pinned_title)
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    sentAtMillis?.let { sent ->
+                        Text(
+                            stringResource(R.string.home_pinned_sent, relativeTimeText(nowMillis, sent)),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            }
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Text(
-                    if (senderName != null) {
-                        stringResource(R.string.home_pinned_from, senderName)
-                    } else {
-                        stringResource(R.string.home_pinned_title)
-                    },
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.weight(1f),
+                    text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(12.dp),
                 )
-                if (position != null) {
-                    val (index, count) = position
+            }
+            if (position != null) {
+                val (index, count) = position
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     IconButton(onClick = onPrev, enabled = index > 1) {
                         Icon(
                             Icons.AutoMirrored.Filled.KeyboardArrowLeft,
@@ -1023,13 +1084,6 @@ private fun PinnedMessageCard(
                         )
                     }
                 }
-            }
-            Text(text, style = MaterialTheme.typography.bodyLarge)
-            sentAtMillis?.let { sent ->
-                Text(
-                    stringResource(R.string.home_pinned_sent, relativeTimeText(nowMillis, sent)),
-                    style = MaterialTheme.typography.bodySmall,
-                )
             }
         }
     }
@@ -1382,33 +1436,66 @@ internal fun RevealPrependedCard(cardPresent: Boolean, listState: LazyListState)
 
 /**
  * SOS §8.16 (V1 Req 35, Step 9): the recipient's card for the newest unacknowledged
- * reach-out. Both actions acknowledge — §6.9's batch covers every fetched pending nudge and
- * the tray entry is cancelled after it commits (repository); the card then clears through
- * the listener. The sender's message renders when one was written (v2 envelope); a v1 nudge
- * has none and the card simply shows the title — it never implies a message was written.
+ * reach-out. Owner ruling 2026-11-01: the reach-out is a one-way signal, not an exchange —
+ * it names who needs the check-in so the partner can reach them by call or message, and
+ * offers no answer. X dismisses it (§6.9's batch covers every fetched pending nudge; the
+ * tray entry is cancelled after it commits) and the card clears through the listener. The
+ * sender's message renders when one was written (v2 envelope); a v1 nudge has none and the
+ * card shows only the title — it never implies a message was written.
  */
 @Composable
 private fun NudgeCardView(
     card: NudgeInboxRepository.NudgeCard,
+    partnerName: String?,
     nowMillis: Long,
     onAcknowledge: () -> Unit,
 ) {
     Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
-            Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    stringResource(R.string.sos_card_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f),
-                )
+            // Owner directive 2026-11-01: the reach-out leads Home, so it wears the strongest
+            // surface on the page — a glyph that names the event, the sender's words in their
+            // own bubble, and a title naming who needs the check-in. No reply action: the
+            // partner answers by calling or messaging, not in the app.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Outlined.Handshake,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        partnerName?.let { stringResource(R.string.sos_card_title_named, it) }
+                            ?: stringResource(R.string.sos_card_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        stringResource(
+                            R.string.sos_card_sent,
+                            relativeTimeText(nowMillis, card.createdAtMs),
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
                 IconButton(onClick = onAcknowledge) {
                     Icon(
                         Icons.Default.Close,
@@ -1417,14 +1504,18 @@ private fun NudgeCardView(
                 }
             }
             card.message?.let {
-                Text(it, style = MaterialTheme.typography.bodyLarge)
-            }
-            Text(
-                stringResource(R.string.sos_card_sent, relativeTimeText(nowMillis, card.createdAtMs)),
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Button(onClick = onAcknowledge) {
-                Text(stringResource(R.string.sos_card_im_here))
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.padding(12.dp),
+                    )
+                }
             }
         }
     }

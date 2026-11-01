@@ -355,6 +355,11 @@
     <string name="rules_deactivated_header">Deactivated</string>
     <string name="rules_deactivated_caption">Switched off, or ended when their duration lapsed. Turn one back on, or clear them all.</string>
     <string name="rules_cleanup">Remove all</string>
+    <!-- Owner ruling 2026-11-01: uninstalling a blocked app hides its block but keeps it. -->
+    <plurals name="rules_hidden_uninstalled">
+        <item quantity="one">%1$d block is saved but hidden — its app isn’t installed. It returns when you reinstall the app.</item>
+        <item quantity="other">%1$d blocks are saved but hidden — their apps aren’t installed. They return when you reinstall the apps.</item>
+    </plurals>
     <string name="rules_cleanup_title">Remove all deactivated rules?</string>
     <plurals name="rules_cleanup_body">
         <item quantity="one">%1$d rule will be deleted permanently. This can’t be undone.</item>
@@ -428,11 +433,12 @@
     <string name="editor_mode_title">How should this be blocked?</string>
     <string name="editor_mode_missing">Choose at least one way to block.</string>
     <string name="editor_always_on">Block all day</string>
-    <string name="editor_always_on_hint">Every hour of the day, on the days you pick. Overrides the settings below.</string>
+    <string name="editor_always_on_hint">Every time it opens. Overrides the other options.</string>
     <string name="editor_window_title">On a schedule</string>
-    <string name="editor_window_hint">Blocked between these times, on the days you pick.</string>
+    <string name="editor_window_hint">Blocked between the times you set.</string>
     <string name="editor_daily_limit_title">Limit daily use</string>
-    <string name="editor_daily_limit_hint">Blocked after this much use in a day, on the days you pick. Resets at midnight.</string>
+    <string name="editor_daily_limit_hint">Blocked after this much use each day.</string>
+    <string name="editor_scope_title">When it applies</string>
     <string name="editor_website_limits_unavailable">Website daily limits aren\'t available in this build — website metering is turned off. Blocking and time windows still work.</string>
     <string name="editor_limit_hours">Hours</string>
     <string name="editor_limit_minutes">Minutes</string>
@@ -465,7 +471,6 @@
     <string name="editor_partner_hint">They see changes to this rule and any attempts it blocks.</string>
     <string name="editor_partner_none">No partner</string>
     <string name="editor_partner_none_hint">This rule stays on this device — no one else is told about it.</string>
-    <string name="editor_partner_choice_hint">Watches this rule and receives its alerts.</string>
     <string name="editor_partner_departed_title">Former partner</string>
     <string name="editor_partner_departed_hint">No longer paired. Choose No partner to clear, or pick someone on your roster.</string>
     <string name="editor_partner_empty">No partners yet. Pairing happens on the Partner tab.</string>
@@ -728,12 +733,22 @@
     <!-- Hub tiles (ADR #78): the paired state keeps its verdict and anything time-boxed on the
          hub, and moves identity, sync detail, recent activity and unpair behind these three. -->
     <string name="partner_tile_requests">Requests</string>
-    <string name="partner_tile_activity">Activity</string>
+    <!-- Owner directive 2026-11-01: the tile names the question it answers, not the data
+         type behind it — the page leads with the partner's shared aggregate. -->
+    <string name="partner_tile_activity">How they’re doing</string>
     <!-- Owner ruling 2026-10-31 ("each page has its own responsibility"): this page is the
          viewer's side of the partnership — what THEY share with the partner — and the label
          says whose side it is. -->
-    <string name="partner_tile_sharing">You share</string>
+    <string name="partner_tile_sharing">What you share</string>
+    <!-- Owner directive 2026-11-01: the partner's device signals (monitoring report and the
+         connection check-in) share one destination instead of two equal-weight hub cards. -->
+    <string name="partner_tile_checkins">Check-ins</string>
+    <string name="partner_checkins_empty_title">Nothing reported yet</string>
+    <string name="partner_checkins_empty_body">Their phone hasn’t shared a monitoring report or a check-in yet. This page fills in once it does.</string>
     <string name="partner_tile_pairing">Pairing</string>
+    <!-- Owner directive 2026-11-01: the hub's identity card also opens "People you support",
+         so its first line reads as a statement of who the tab is about. -->
+    <string name="partner_viewing">Viewing %1$s</string>
     <string name="partner_tile_sharing_none">Nothing shared</string>
     <!-- Owner ask 2026-10-21: the hub groups everything time-boxed under one heading instead of
          letting each card shout at the same weight. -->
@@ -847,7 +862,14 @@
     <!-- Owner report 2026-10-31: an all-zero page read as broken. Name the two causes apart —
          nothing has ever been shared, or sharing is on and this week was simply quiet. -->
     <string name="partner_activity_none_shared">Nothing has been shared with you yet. This page fills in when your partner turns on sharing.</string>
-    <string name="partner_activity_shared_state">Days free: %1$d · Relapses logged: %2$d</string>
+    <!-- Owner directive 2026-11-01: the activity page shows the week as a picture. Each bar is
+         a local day, today on the right; the plural merges a column into one spoken sentence. -->
+    <string name="partner_activity_chart_title">Last 7 days</string>
+    <string name="partner_activity_chart_caption">Their shared activity, one bar per day. Today is on the right.</string>
+    <plurals name="partner_activity_chart_bar">
+        <item quantity="one">%1$s, %2$d event</item>
+        <item quantity="other">%1$s, %2$d events</item>
+    </plurals>
     <!-- §7 Step 11 delta: the partner's shared aggregate. Days free is the dominant number;
          activity time and sync time are ALWAYS separate lines (§8.11) — a quiet partner is not
          a broken sync. -->
@@ -944,7 +966,6 @@
     <string name="partner_compose_to">To: %1$s</string>
     <string name="partner_context_label">Viewing</string>
     <string name="partner_context_switch">Switch</string>
-    <string name="partner_switch_title">Switch partner</string>
     <string name="partner_switch_close">Close</string>
     <string name="partner_alert_blocked">Blocked</string>
     <string name="partner_alert_override">Override used</string>
@@ -1067,12 +1088,13 @@
     <string name="sos_check_in_sent">Check-in sent.</string>
     <!-- FR-25: help/onboarding text only — the tap path itself never displays this. -->
     <string name="sos_not_emergency">Reach out is a check-in, not an emergency service. If you need urgent help, call your local emergency number.</string>
-    <!-- The recipient card (plan §8.16 Step 9): title, the sender's message when one was
-         written (v2 envelope; a v1 nudge has none), relative send time, the "I'm here"
-         reply and the X (both acknowledge). -->
-    <string name="sos_card_title">Your partner reached out</string>
+    <!-- The recipient card (plan §8.16 Step 9): a one-way signal naming who needs the
+         check-in (owner ruling 2026-11-01 — no reply action), the sender's message when one
+         was written (v2 envelope; a v1 nudge has none), relative send time and the X
+         (dismisses + acknowledges). -->
+    <string name="sos_card_title">Your partner could use a check-in</string>
+    <string name="sos_card_title_named">%1$s could use a check-in</string>
     <string name="sos_card_sent">Sent %1$s</string>
-    <string name="sos_card_im_here">I’m here</string>
     <string name="sos_card_dismiss">Dismiss the reach-out</string>
 
     <!-- Step 13 disable-approval (§8 Step 12, AD-07/AD-16): the responder decides with a
@@ -1409,12 +1431,19 @@
     <string name="account_password_label">Password</string>
     <string name="account_create">Create account</string>
     <string name="account_sign_in">Sign in</string>
-    <string name="account_have_account">I already have an account</string>
-    <string name="account_new_here">Create a new account instead</string>
     <string name="account_forgot">Forgot password?</string>
     <string name="account_google">Continue with Google</string>
     <string name="account_email_invalid">Enter a valid email address.</string>
     <string name="account_password_short">Use at least 6 characters.</string>
+    <string name="account_auth_sign_in_title">Welcome back</string>
+    <string name="account_auth_sign_in_body">Sign in to bring your progress and partner connection to this device.</string>
+    <string name="account_auth_create_title">Create an account</string>
+    <string name="account_auth_create_body">Keep your progress safe if this phone is lost or replaced.</string>
+    <string name="account_password_confirm_label">Confirm password</string>
+    <string name="account_password_mismatch">The passwords don’t match. Re-enter the confirmation.</string>
+    <string name="account_password_blank">A password can’t be only spaces.</string>
+    <string name="account_password_show">Show password</string>
+    <string name="account_password_hide">Hide password</string>
     <string name="account_verification_sent">Verification email sent. Check your inbox.</string>
     <string name="account_reset_sent">If an account exists for that email, a reset link is on its way.</string>
     <string name="account_signed_out">Signed out. Your on-device data is still here.</string>

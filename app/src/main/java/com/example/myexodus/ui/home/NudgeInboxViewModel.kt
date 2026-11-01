@@ -63,8 +63,9 @@ class NudgeInboxViewModel @Inject constructor(
         const val REATTACH_DELAY_MS = 3_000L
     }
 
-    /** Both card actions (§6.9): "I'm here" and X acknowledge everything fetched. The card
-     *  clears through the listener when the batch lands — never optimistically. */
+    /** §6.9: the card's X acknowledges everything fetched (owner ruling 2026-11-01 — the
+     *  reach-out is a one-way signal, so there is no reply action). The card clears through
+     *  the listener when the batch lands — never optimistically. */
     fun acknowledge() {
         val current = _card.value ?: return
         viewModelScope.launch { repository.acknowledge(current) }

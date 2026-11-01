@@ -5,8 +5,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -14,6 +17,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.HourglassBottom
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -423,6 +429,7 @@ fun BatchEditorScreen(
             ModeRow(
                 title = stringResource(R.string.editor_always_on),
                 hint = stringResource(R.string.editor_always_on_hint),
+                icon = Icons.Outlined.Block,
                 checked = alwaysOn,
                 enabled = true,
                 onCheckedChange = { alwaysOn = it },
@@ -430,6 +437,7 @@ fun BatchEditorScreen(
             ModeRow(
                 title = stringResource(R.string.editor_window_title),
                 hint = stringResource(R.string.editor_window_hint),
+                icon = Icons.Outlined.Schedule,
                 checked = windowEnabled,
                 enabled = !alwaysOn,
                 onCheckedChange = { windowEnabled = it },
@@ -468,6 +476,7 @@ fun BatchEditorScreen(
             ModeRow(
                 title = stringResource(R.string.editor_daily_limit_title),
                 hint = stringResource(R.string.editor_daily_limit_hint),
+                icon = Icons.Outlined.HourglassBottom,
                 checked = limitEnabled,
                 enabled = !alwaysOn && limitAvailable,
                 onCheckedChange = { limitEnabled = it },
@@ -510,6 +519,13 @@ fun BatchEditorScreen(
                     )
                 }
             }
+        }
+
+        SectionCard {
+            Text(
+                stringResource(R.string.editor_scope_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
             DayChips(
                 days = days,
                 onChange = { days = it },
@@ -533,6 +549,17 @@ fun BatchEditorScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            val selectedPartner = partners.firstOrNull { it.pairId == assignedPairId }
+            Text(
+                selectedPartner?.let { stringResource(R.string.rules_watched_by, it.name) }
+                    ?: stringResource(R.string.rules_not_shared),
+                style = MaterialTheme.typography.titleSmall,
+                color = if (selectedPartner != null) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
             if (partners.isEmpty()) {
                 Text(
                     stringResource(R.string.editor_partner_empty),
@@ -540,19 +567,22 @@ fun BatchEditorScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                PartnerChoiceRow(
-                    title = stringResource(R.string.editor_partner_none),
-                    hint = stringResource(R.string.editor_partner_none_hint),
-                    selected = assignedPairId == null,
-                    onSelect = { assignedPairId = null },
-                )
-                partners.forEach { partner ->
-                    PartnerChoiceRow(
-                        title = partner.name,
-                        hint = stringResource(R.string.editor_partner_choice_hint),
-                        selected = assignedPairId == partner.pairId,
-                        onSelect = { assignedPairId = partner.pairId },
-                    )
+                LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
+                    item {
+                        PartnerChoiceRow(
+                            title = stringResource(R.string.editor_partner_none),
+                            hint = stringResource(R.string.editor_partner_none_hint),
+                            selected = assignedPairId == null,
+                            onSelect = { assignedPairId = null },
+                        )
+                    }
+                    items(partners) { partner ->
+                        PartnerChoiceRow(
+                            title = partner.name,
+                            selected = assignedPairId == partner.pairId,
+                            onSelect = { assignedPairId = partner.pairId },
+                        )
+                    }
                 }
             }
         }

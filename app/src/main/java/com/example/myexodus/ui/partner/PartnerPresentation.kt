@@ -10,6 +10,7 @@ import com.example.myexodus.recovery.RecoveryMirror
 import com.example.myexodus.ui.PillTone
 import java.time.Instant
 import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 
 /**
  * Pure presentation logic for the partner dashboard (plan §7 item 12 / FR3). No Android or
@@ -190,18 +191,42 @@ data class PartnerActivityUi(
 )
 
 /** Dashboard summary over the decoded received events. */
-data class AlertSummary(val todayCount: Int, val weekCount: Int, val recent: List<PartnerAlert>)
+data class AlertSummary(
+    val todayCount: Int,
+    val weekCount: Int,
+    val recent: List<PartnerAlert>,
+    /** One bucket per local day, oldest first, ending today — the activity page's chart. */
+    val dailyCounts: List<Int> = emptyList(),
+)
 
-/** [parsed] arrives in mailbox order; wire-v2 rows carry the sender's own occurrence time,
- *  which may differ from arrival (a backdated relapse). Everything time-based here — the
- *  today count and which rows survive [RECENT_LIMIT] — reads that timestamp, so the feed
- *  reports when things *happened*, never merely when the mail landed. */
-fun summarizeAlerts(parsed: List<PartnerAlert>, startOfTodayMillis: Long): AlertSummary =
-    AlertSummary(
+/**
+ * [parsed] arrives in mailbox order; wire-v2 rows carry the sender's own occurrence time,
+ * which may differ from arrival (a backdated relapse). Everything time-based here — the
+ * today count, the chart buckets and which rows survive [RECENT_LIMIT] — reads that
+ * timestamp, so the feed reports when things *happened*, never merely when the mail landed.
+ *
+ * Day buckets come from [zone]'s calendar days, not fixed 24-hour slices, so a DST shift
+ * cannot move an event into a neighbouring bar.
+ */
+fun summarizeAlerts(
+    parsed: List<PartnerAlert>,
+    startOfTodayMillis: Long,
+    zone: ZoneId,
+): AlertSummary {
+    val today = Instant.ofEpochMilli(startOfTodayMillis).atZone(zone).toLocalDate()
+    val counts = IntArray(WEEK_DAYS)
+    parsed.forEach { alert ->
+        val day = Instant.ofEpochMilli(alert.atEpochMillis).atZone(zone).toLocalDate()
+        val index = WEEK_DAYS - 1 - ChronoUnit.DAYS.between(day, today).toInt()
+        if (index in 0 until WEEK_DAYS) counts[index]++
+    }
+    return AlertSummary(
         todayCount = parsed.count { it.atEpochMillis >= startOfTodayMillis },
         weekCount = parsed.size,
         recent = parsed.sortedByDescending { it.atEpochMillis }.take(RECENT_LIMIT),
+        dailyCounts = counts.toList(),
     )
+}
 
 /** Start of the local day containing [nowMillis] — the "today" boundary of the summary. */
 fun startOfLocalDay(nowMillis: Long, zone: ZoneId): Long =
@@ -238,3 +263,4 @@ fun requestStatusTone(status: String): PillTone = when (status) {
 }
 
 private const val RECENT_LIMIT = 5
+private const val WEEK_DAYS = 7

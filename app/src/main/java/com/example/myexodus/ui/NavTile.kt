@@ -65,7 +65,9 @@ fun NavTile(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
-                    maxLines = 1,
+                    // Live statuses are sentences next to a half-width tile; one line cut them
+                    // mid-phrase (device-caught 2026-11-01 on "None shared with you yet").
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }

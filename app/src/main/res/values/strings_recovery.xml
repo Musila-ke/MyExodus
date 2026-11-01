@@ -59,6 +59,7 @@
 
     <!-- Urge log (W2) -->
     <string name="recovery_log_action">Log an urge</string>
+    <string name="recovery_log_caption">Note it without lifting the block.</string>
     <string name="recovery_log_title">Log this urge</string>
     <string name="recovery_log_intensity">How strong is it right now?</string>
     <!-- The chip label stays a bare numeral; this names the control for screen readers, where

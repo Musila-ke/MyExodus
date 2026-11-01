@@ -1,22 +1,43 @@
 package com.example.myexodus.ui.settings
 
 import android.util.Patterns
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.outlined.AccountCircle
+import androidx.compose.material.icons.outlined.DeleteForever
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Login
+import androidx.compose.material.icons.outlined.MailOutline
+import androidx.compose.material.icons.outlined.MarkEmailRead
+import androidx.compose.material.icons.outlined.PersonAdd
+import androidx.compose.material.icons.outlined.PersonOutline
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -26,6 +47,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -33,12 +55,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.R
@@ -576,40 +601,35 @@ private fun GuestAccount(
 ) {
     var email by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
+    var confirmPassword by rememberSaveable { mutableStateOf("") }
     var signInMode by rememberSaveable { mutableStateOf(false) }
     var emailInvalid by remember { mutableStateOf(false) }
-    var passwordInvalid by remember { mutableStateOf(false) }
+    var passwordErrorRes by remember { mutableIntStateOf(0) }
+    var confirmMismatch by remember { mutableStateOf(false) }
+    var passwordVisible by rememberSaveable { mutableStateOf(false) }
+    var confirmVisible by rememberSaveable { mutableStateOf(false) }
 
-    fun validInput(): Boolean {
-        emailInvalid = !Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches()
-        passwordInvalid = password.length < MIN_PASSWORD_LENGTH
-        return !emailInvalid && !passwordInvalid
-    }
-
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                stringResource(R.string.account_guest_intro_title),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                stringResource(R.string.account_guest_intro_body),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+    fun submit() {
+        // Owner directive 2026-11-01: fields are typed-once-wrong-twice risks — trim the email,
+        // reject a spaces-only password, and require the confirmation to match on create.
+        val cleanEmail = email.trim()
+        emailInvalid = !Patterns.EMAIL_ADDRESS.matcher(cleanEmail).matches()
+        passwordErrorRes = when {
+            password.isEmpty() || password.length < MIN_PASSWORD_LENGTH ->
+                R.string.account_password_short
+            password.isBlank() -> R.string.account_password_blank
+            else -> 0
         }
+        confirmMismatch = !signInMode && confirmPassword != password
+        if (emailInvalid || passwordErrorRes != 0 || confirmMismatch) return
+        if (signInMode) onSignIn(cleanEmail, password) else viewModel.createAccount(cleanEmail, password)
     }
 
-    if (googleAvailable) {
-        OutlinedButton(
-            onClick = onGoogle,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(stringResource(R.string.account_google)) }
-    }
+    AccountCard(
+        icon = Icons.Outlined.PersonOutline,
+        title = stringResource(R.string.account_guest_intro_title),
+        body = stringResource(R.string.account_guest_intro_body),
+    )
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -617,10 +637,71 @@ private fun GuestAccount(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector =
+                            if (signInMode) Icons.Outlined.Login else Icons.Outlined.PersonAdd,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        stringResource(
+                            if (signInMode) R.string.account_auth_sign_in_title
+                            else R.string.account_auth_create_title,
+                        ),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        stringResource(
+                            if (signInMode) R.string.account_auth_sign_in_body
+                            else R.string.account_auth_create_body,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            // The house mode-switch grammar (FilterChip pairs, as in ScheduleFields), so the
+            // two ways into an account are visible choices instead of a link below the fold.
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = signInMode,
+                    onClick = {
+                        signInMode = true
+                        emailInvalid = false
+                        passwordErrorRes = 0
+                        confirmMismatch = false
+                    },
+                    label = { Text(stringResource(R.string.account_sign_in)) },
+                )
+                FilterChip(
+                    selected = !signInMode,
+                    onClick = {
+                        signInMode = false
+                        emailInvalid = false
+                        passwordErrorRes = 0
+                        confirmMismatch = false
+                    },
+                    label = { Text(stringResource(R.string.account_create)) },
+                )
+            }
             OutlinedTextField(
                 value = email,
                 onValueChange = { email = it; emailInvalid = false },
                 label = { Text(stringResource(R.string.account_email_label)) },
+                leadingIcon = { Icon(Icons.Outlined.MailOutline, contentDescription = null) },
                 singleLine = true,
                 isError = emailInvalid,
                 supportingText = if (emailInvalid) {
@@ -636,31 +717,76 @@ private fun GuestAccount(
             )
             OutlinedTextField(
                 value = password,
-                onValueChange = { password = it; passwordInvalid = false },
+                onValueChange = { password = it; passwordErrorRes = 0 },
                 label = { Text(stringResource(R.string.account_password_label)) },
+                leadingIcon = { Icon(Icons.Outlined.Lock, contentDescription = null) },
+                trailingIcon = {
+                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                        Icon(
+                            imageVector =
+                                if (passwordVisible) Icons.Outlined.VisibilityOff
+                                else Icons.Outlined.Visibility,
+                            contentDescription = stringResource(
+                                if (passwordVisible) R.string.account_password_hide
+                                else R.string.account_password_show,
+                            ),
+                        )
+                    }
+                },
                 singleLine = true,
-                isError = passwordInvalid,
-                supportingText = if (passwordInvalid) {
-                    { Text(stringResource(R.string.account_password_short)) }
+                isError = passwordErrorRes != 0,
+                supportingText = if (passwordErrorRes != 0) {
+                    { Text(stringResource(passwordErrorRes)) }
                 } else {
                     null
                 },
-                visualTransformation = PasswordVisualTransformation(),
+                visualTransformation =
+                    if (passwordVisible) VisualTransformation.None
+                    else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Password,
-                    imeAction = ImeAction.Done,
+                    imeAction = if (signInMode) ImeAction.Done else ImeAction.Next,
                 ),
                 modifier = Modifier.fillMaxWidth(),
             )
-            Button(
-                onClick = {
-                    if (!validInput()) return@Button
-                    if (signInMode) {
-                        onSignIn(email, password)
+            if (!signInMode) {
+                OutlinedTextField(
+                    value = confirmPassword,
+                    onValueChange = { confirmPassword = it; confirmMismatch = false },
+                    label = { Text(stringResource(R.string.account_password_confirm_label)) },
+                    leadingIcon = { Icon(Icons.Outlined.Lock, contentDescription = null) },
+                    trailingIcon = {
+                        IconButton(onClick = { confirmVisible = !confirmVisible }) {
+                            Icon(
+                                imageVector =
+                                    if (confirmVisible) Icons.Outlined.VisibilityOff
+                                    else Icons.Outlined.Visibility,
+                                contentDescription = stringResource(
+                                    if (confirmVisible) R.string.account_password_hide
+                                    else R.string.account_password_show,
+                                ),
+                            )
+                        }
+                    },
+                    singleLine = true,
+                    isError = confirmMismatch,
+                    supportingText = if (confirmMismatch) {
+                        { Text(stringResource(R.string.account_password_mismatch)) }
                     } else {
-                        viewModel.createAccount(email, password)
-                    }
-                },
+                        null
+                    },
+                    visualTransformation =
+                        if (confirmVisible) VisualTransformation.None
+                        else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Done,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Button(
+                onClick = ::submit,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
@@ -669,30 +795,26 @@ private fun GuestAccount(
                     ),
                 )
             }
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                TextButton(onClick = { signInMode = !signInMode }) {
-                    Text(
-                        stringResource(
-                            if (signInMode) R.string.account_new_here
-                            else R.string.account_have_account,
-                        ),
-                    )
-                }
-                if (signInMode) {
-                    TextButton(
-                        onClick = {
-                            if (Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches()) {
-                                viewModel.sendPasswordReset(email)
-                            } else {
-                                emailInvalid = true
-                            }
-                        },
-                    ) { Text(stringResource(R.string.account_forgot)) }
-                }
+            if (signInMode) {
+                TextButton(
+                    onClick = {
+                        if (Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches()) {
+                            viewModel.sendPasswordReset(email.trim())
+                        } else {
+                            emailInvalid = true
+                        }
+                    },
+                    modifier = Modifier.align(Alignment.End),
+                ) { Text(stringResource(R.string.account_forgot)) }
+            }
+            // Owner directive 2026-11-01: an alternative sign-in route belongs inside the one
+            // auth surface, not floating between two cards as it used to.
+            if (googleAvailable) {
+                HorizontalDivider()
+                OutlinedButton(
+                    onClick = onGoogle,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(stringResource(R.string.account_google)) }
             }
             if (signInMode && hasGuestUid && !prepared) {
                 // Plan §8.4: the disclosure (import vs discard, pair effects) comes before the
@@ -707,50 +829,29 @@ private fun GuestAccount(
     }
 
     if (retainedLocal) {
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.fillMaxWidth(),
+        AccountCard(
+            icon = Icons.Outlined.Folder,
+            title = stringResource(R.string.account_local_title),
+            body = stringResource(R.string.account_local_retained_body),
         ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    stringResource(R.string.account_local_title),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    stringResource(R.string.account_local_retained_body),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                OutlinedButton(onClick = onRemoveLocal) {
-                    Text(stringResource(R.string.account_local_action))
-                }
+            OutlinedButton(onClick = onRemoveLocal) {
+                Text(stringResource(R.string.account_local_action))
             }
         }
     }
 
     if (hasGuestUid) {
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.fillMaxWidth(),
+        AccountCard(
+            icon = Icons.Outlined.DeleteForever,
+            title = stringResource(R.string.account_guest_delete_title),
+            body = stringResource(R.string.account_guest_delete_body),
+            destructive = true,
         ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onDeleteGuest) {
                 Text(
-                    stringResource(R.string.account_guest_delete_title),
-                    style = MaterialTheme.typography.titleMedium,
+                    stringResource(R.string.account_guest_delete_action),
+                    color = MaterialTheme.colorScheme.error,
                 )
-                Text(
-                    stringResource(R.string.account_guest_delete_body),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                OutlinedButton(onClick = onDeleteGuest) {
-                    Text(
-                        stringResource(R.string.account_guest_delete_action),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
             }
         }
     }
@@ -769,151 +870,120 @@ private fun PersistentAccount(
         shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.padding(16.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                contentAlignment = Alignment.Center,
             ) {
+                Icon(
+                    Icons.Outlined.AccountCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     state.email ?: stringResource(R.string.account_google_account),
                     style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f),
+                    // The email is the identity the page exists to show; one line cut it to
+                    // "kevinmainigi4…" next to the verified pill (device-caught 2026-11-01).
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
-                if (AuthProvider.PASSWORD in state.providers) {
-                    StatusPill(
-                        text = stringResource(
-                            if (state.emailVerified) R.string.account_verified
-                            else R.string.account_not_verified,
-                        ),
-                        tone = if (state.emailVerified) PillTone.POSITIVE else PillTone.NEGATIVE,
-                    )
-                }
+                Text(
+                    stringResource(
+                        if (AuthProvider.GOOGLE in state.providers &&
+                            AuthProvider.PASSWORD !in state.providers
+                        ) {
+                            R.string.account_provider_google
+                        } else {
+                            R.string.account_provider_password
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            Text(
-                stringResource(
-                    if (AuthProvider.GOOGLE in state.providers && AuthProvider.PASSWORD !in state.providers) {
-                        R.string.account_provider_google
-                    } else {
-                        R.string.account_provider_password
-                    },
-                ),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (AuthProvider.PASSWORD in state.providers) {
+                StatusPill(
+                    text = stringResource(
+                        if (state.emailVerified) R.string.account_verified
+                        else R.string.account_not_verified,
+                    ),
+                    tone = if (state.emailVerified) PillTone.POSITIVE else PillTone.NEGATIVE,
+                )
+            }
         }
     }
 
     if (AuthProvider.PASSWORD in state.providers && !state.emailVerified) {
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            shape = MaterialTheme.shapes.medium,
-            modifier = Modifier.fillMaxWidth(),
+        AccountCard(
+            icon = Icons.Outlined.MarkEmailRead,
+            title = stringResource(R.string.account_verify_title),
+            body = stringResource(R.string.account_verify_body, state.email.orEmpty()),
         ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    stringResource(R.string.account_verify_title),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    stringResource(R.string.account_verify_body, state.email.orEmpty()),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = viewModel::sendVerificationEmail) {
-                        Text(stringResource(R.string.account_verify_resend))
-                    }
-                    Button(onClick = viewModel::refreshVerification) {
-                        Text(stringResource(R.string.account_verify_confirm))
-                    }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = viewModel::sendVerificationEmail) {
+                    Text(stringResource(R.string.account_verify_resend))
+                }
+                Button(onClick = viewModel::refreshVerification) {
+                    Text(stringResource(R.string.account_verify_confirm))
                 }
             }
         }
     }
 
     // §6.4: encrypted backup belongs to the account that owns it, so its entry point lives here.
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth(),
+    AccountCard(
+        icon = Icons.Outlined.Key,
+        title = stringResource(R.string.backup_key_title),
+        body = stringResource(R.string.backup_key_account_body),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                stringResource(R.string.backup_key_title),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                stringResource(R.string.backup_key_account_body),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedButton(onClick = onOpenBackupKey) {
-                Text(stringResource(R.string.backup_key_account_open))
-            }
+        OutlinedButton(onClick = onOpenBackupKey) {
+            Text(stringResource(R.string.backup_key_account_open))
         }
     }
 
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth(),
+    AccountCard(
+        icon = Icons.AutoMirrored.Outlined.Logout,
+        title = stringResource(R.string.account_sign_out),
+        body = stringResource(R.string.account_sign_out_body),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                stringResource(R.string.account_sign_out_body),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedButton(onClick = viewModel::signOut) {
-                Text(stringResource(R.string.account_sign_out))
-            }
+        OutlinedButton(onClick = viewModel::signOut) {
+            Text(stringResource(R.string.account_sign_out))
         }
     }
 
     // §6.9.3: local removal never touches the account, its backups or its partner connections.
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth(),
+    AccountCard(
+        icon = Icons.Outlined.Folder,
+        title = stringResource(R.string.account_local_title),
+        body = stringResource(R.string.account_local_body),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                stringResource(R.string.account_local_title),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                stringResource(R.string.account_local_body),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedButton(onClick = onRemoveLocal) {
-                Text(stringResource(R.string.account_local_action))
-            }
+        OutlinedButton(onClick = onRemoveLocal) {
+            Text(stringResource(R.string.account_local_action))
         }
     }
 
     // §6.8.1: the irreversible action, last and set apart, with its consequences named first.
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth(),
+    AccountCard(
+        icon = Icons.Outlined.DeleteForever,
+        title = stringResource(R.string.account_delete_title),
+        body = stringResource(R.string.account_delete_body),
+        destructive = true,
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = onDeleteAccount) {
             Text(
-                stringResource(R.string.account_delete_title),
-                style = MaterialTheme.typography.titleMedium,
+                stringResource(R.string.account_delete_action),
+                color = MaterialTheme.colorScheme.error,
             )
-            Text(
-                stringResource(R.string.account_delete_body),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedButton(onClick = onDeleteAccount) {
-                Text(
-                    stringResource(R.string.account_delete_action),
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
         }
     }
 }
@@ -987,6 +1057,65 @@ internal fun WorkingCard(text: String) {
         ) {
             CircularProgressIndicator(Modifier.size(20.dp))
             Text(text, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+/**
+ * The pane's one card grammar: an icon disc naming the subject, the title and body, then the
+ * actions. Owner directive 2026-11-01 — the pane was a stack of identical plain-text cards,
+ * so nothing told one block from another before reading it.
+ */
+@Composable
+private fun AccountCard(
+    icon: ImageVector,
+    title: String,
+    body: String,
+    destructive: Boolean = false,
+    actions: @Composable ColumnScope.() -> Unit = {},
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(
+                            if (destructive) {
+                                MaterialTheme.colorScheme.errorContainer
+                            } else {
+                                MaterialTheme.colorScheme.primaryContainer
+                            },
+                            CircleShape,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = if (destructive) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                Text(title, style = MaterialTheme.typography.titleMedium)
+            }
+            Text(
+                body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            actions()
         }
     }
 }

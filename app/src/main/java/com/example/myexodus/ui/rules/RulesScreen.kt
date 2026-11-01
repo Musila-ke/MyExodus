@@ -9,8 +9,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,13 +24,12 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -85,9 +82,11 @@ import com.example.myexodus.ui.partner.PartnerDashboardSource
 import com.example.myexodus.ui.partner.ReachOutTarget
 import com.example.myexodus.ui.preloadAppLabels
 import com.example.myexodus.ui.rememberAppLabel
+import com.example.myexodus.ui.rememberInstalledAppPackages
 import com.example.myexodus.ui.rememberWindowWidth
 import com.example.myexodus.ui.ruleRowState
 import com.example.myexodus.ui.scheduleSummary
+import com.example.myexodus.ui.visibleRules
 import com.example.myexodus.vpn.DnsSinkholeVpnService
 import com.example.myexodus.vpn.VpnEngineState
 import com.example.myexodus.vpn.VpnLifecycle
@@ -148,6 +147,10 @@ fun RulesScreen(
         } ?: flowOf(RulesLoad.Loading)
     }.collectAsStateWithLifecycle(initialValue = RulesLoad.Loading)
     val rules = (loadState as? RulesLoad.Loaded)?.rules
+    // Owner ruling 2026-11-01: an uninstalled app's block is hidden but kept — it returns
+    // active on reinstall. Raw `rules` still feed the editor and the preset duplicate check.
+    val installedPackages = rememberInstalledAppPackages()
+    val shownRules = rules?.let { visibleRules(it, installedPackages) }
 
     var route by rememberSaveable { mutableStateOf(ROUTE_LIST) }
     var editRuleId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -447,7 +450,8 @@ fun RulesScreen(
             )
             is RulesLoad.Loaded -> {
                 RulesList(
-                    rules = loaded.rules,
+                    rules = shownRules.orEmpty(),
+                    hiddenAppCount = loaded.rules.size - shownRules.orEmpty().size,
                     pendingPause = pendingPause,
                     nowMillis = nowMillis,
                     partners = partners,
@@ -555,7 +559,9 @@ fun RulesScreen(
     // read at confirm time, so the dialog copy can never disagree with what's deleted.
     if (confirmCleanup) {
         // Batch members leave as one batch (their card's Delete batch), never one by one.
-        val doomed = rules.orEmpty().filter { !it.isEnabled && it.batchId == null }
+        // Hidden (uninstalled-app) rules are not on screen — a sweep of what the user can see
+        // must not delete a stored block they never saw.
+        val doomed = shownRules.orEmpty().filter { !it.isEnabled && it.batchId == null }
         AlertDialog(
             onDismissRequest = { confirmCleanup = false },
             title = { Text(stringResource(R.string.rules_cleanup_title)) },
@@ -752,10 +758,12 @@ private fun EditorUnavailable(onBack: () -> Unit, modifier: Modifier = Modifier)
  */
 internal val RULES_CARD_MAX_HEIGHT = 480.dp
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RulesList(
     rules: List<RestrictionRule>,
+    /** App rules kept out of the list because their app is not installed (owner ruling
+     *  2026-11-01) — the caption says they are stored, not gone. */
+    hiddenAppCount: Int,
     pendingPause: Map<String, Boolean>,
     nowMillis: Long,
     partners: List<ReachOutTarget>,
@@ -863,18 +871,26 @@ private fun RulesList(
             }
         }
         item(key = "add") {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                AddButton(
+            // Three equal tiles instead of wrapping buttons (owner report 2026-11-01): the row
+            // never breaks 2+1 and each action reads as one card, like a quick-action strip.
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                QuickAddTile(
+                    icon = Icons.Filled.Apps,
                     label = stringResource(R.string.rules_add_app),
                     onClick = onAddApp,
+                    modifier = Modifier.weight(1f),
                 )
-                AddButton(
+                QuickAddTile(
+                    icon = Icons.Filled.Language,
                     label = stringResource(R.string.rules_add_website),
                     onClick = onAddWebsite,
+                    modifier = Modifier.weight(1f),
                 )
-                AddButton(
+                QuickAddTile(
+                    icon = Icons.Outlined.GridView,
                     label = stringResource(R.string.rules_add_batch),
                     onClick = onAddBatch,
+                    modifier = Modifier.weight(1f),
                 )
             }
         }
@@ -922,6 +938,20 @@ private fun RulesList(
                     domainUsageEngine = domainUsageEngine,
                     onEdit = onEdit,
                     onTogglePause = onTogglePause,
+                )
+            }
+        }
+
+        if (hiddenAppCount > 0) {
+            // The blocks are stored, not gone (owner ruling 2026-11-01): say so quietly so a
+            // missing row reads as "app not installed" rather than "my block was lost".
+            item(key = "apps-hidden") {
+                Text(
+                    pluralStringResource(
+                        R.plurals.rules_hidden_uninstalled, hiddenAppCount, hiddenAppCount,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -1124,17 +1154,17 @@ private fun BatchMemberRow(rule: RestrictionRule, nowMillis: Long) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         AppMark(
             packageName = if (rule.targetType == "WEBSITE") null else rule.blockedPackage,
             fallback = if (rule.targetType == "WEBSITE") Icons.Default.Language else Icons.Default.Apps,
         )
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
                 label,
                 style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 color = if (rule.isEnabled) MaterialTheme.colorScheme.onSurface
                 else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1143,11 +1173,11 @@ private fun BatchMemberRow(rule: RestrictionRule, nowMillis: Long) {
                 scheduleSummary(rule, res),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            state.label?.let { StatePill(label = it, active = state.active && rule.isEnabled) }
         }
-        state.label?.let { StatePill(label = it, active = state.active && rule.isEnabled) }
     }
 }
 
@@ -1405,10 +1435,43 @@ private fun RulesLoadError(
 }
 
 @Composable
-private fun AddButton(label: String, onClick: () -> Unit) {
-    FilledTonalButton(onClick = onClick) {
-        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-        Text(label, modifier = Modifier.padding(start = 8.dp))
+private fun QuickAddTile(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        onClick = onClick,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = modifier,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Text(
+                label,
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -1479,13 +1542,29 @@ private fun RuleRow(
     val pauseLabel = stringResource(R.string.rules_pause, label)
     val resumeLabel = stringResource(R.string.rules_resume, label)
     val editLabel = stringResource(R.string.rules_edit)
+    // Owner report 2026-11-01: the row used to spend its width on a fixed pill and the switch,
+    // squeezing the title and the partner line into ellipses. The switch now owns the only
+    // fixed-width slot; status sits under the text where it can wrap.
+    val partnerLine: String? = when {
+        supervisor != null -> stringResource(R.string.rules_watched_by, supervisor.name)
+        unsupervised -> stringResource(R.string.rules_unsupervised)
+        // With a partner on the roster, "who sees this?" is answered on every row — the quiet
+        // state is what makes an assignment discoverable at all.
+        partners.isNotEmpty() -> stringResource(R.string.rules_not_shared)
+        else -> null
+    }
+    val partnerColor = when {
+        supervisor != null -> MaterialTheme.colorScheme.primary
+        unsupervised -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClickLabel = editLabel, onClick = onEdit)
-            .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            .padding(start = 16.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         // The blocked app's own icon where we can read it — a generic glyph says nothing about
         // which app a row is (same technique as the picker that chose it). An uninstalled
@@ -1494,11 +1573,11 @@ private fun RuleRow(
             packageName = if (rule.targetType == "WEBSITE") null else rule.blockedPackage,
             fallback = if (rule.targetType == "WEBSITE") Icons.Default.Language else Icons.Default.Apps,
         )
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
                 label,
                 style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 color = if (enabled) MaterialTheme.colorScheme.onSurface
                 else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1512,31 +1591,6 @@ private fun RuleRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            when {
-                supervisor != null -> Text(
-                    stringResource(R.string.rules_watched_by, supervisor.name),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                unsupervised -> Text(
-                    stringResource(R.string.rules_unsupervised),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                // With a partner on the roster, "who sees this?" is answered on every row —
-                // the quiet state is what makes an assignment discoverable at all.
-                partners.isNotEmpty() -> Text(
-                    stringResource(R.string.rules_not_shared),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
             // S9.3: the row's own progress against its limit. Null until the engine's startup
             // load attaches the ledger — hiding the line beats claiming a false zero.
             if (rule.targetType == "WEBSITE" && rule.dailyLimitMs > 0L && enabled) {
@@ -1552,8 +1606,24 @@ private fun RuleRow(
                     )
                 }
             }
+            if (state.label != null || partnerLine != null) {
+                // Stacked, not side by side: the state pill consumed the width the partner
+                // line needed and still cut it ("Not shared with a par…", device-caught
+                // 2026-11-01). The pill is short and fixed; the sentence gets its own line.
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    state.label?.let { StatePill(label = it, active = state.active && enabled) }
+                    partnerLine?.let { line ->
+                        Text(
+                            line,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = partnerColor,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
         }
-        state.label?.let { StatePill(label = it, active = state.active && enabled) }
         Switch(
             checked = enabled,
             onCheckedChange = onTogglePause,

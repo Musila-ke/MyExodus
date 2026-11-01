@@ -173,7 +173,7 @@ class PartnerDashboardSource(
                 repairState = chainHead?.repairState ?: ChainHead.REPAIR_NONE,
                 forked = chainHead?.forked ?: false,
             ),
-            alerts = summarizeAlerts(alerts, startOfLocalDay(nowMillis, zone)),
+            alerts = summarizeAlerts(alerts, startOfLocalDay(nowMillis, zone), zone),
             // The dedicated rules page (owner mandate 2026-10-31: "an organized page listing
             // rules/batches") shows the full 30-day retention, not the feed's week preview.
             ruleHistory = ruleRows.mapNotNull(::ruleChangeAlert)

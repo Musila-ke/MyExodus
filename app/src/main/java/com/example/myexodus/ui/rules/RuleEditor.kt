@@ -2,20 +2,29 @@ package com.example.myexodus.ui.rules
 
 import android.text.format.DateFormat
 import android.util.Log
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.HourglassBottom
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
@@ -47,6 +56,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -474,6 +484,7 @@ fun RuleEditorScreen(
             ModeRow(
                 title = stringResource(R.string.editor_always_on),
                 hint = stringResource(R.string.editor_always_on_hint),
+                icon = Icons.Outlined.Block,
                 checked = alwaysOn,
                 enabled = true,
                 onCheckedChange = { alwaysOn = it },
@@ -482,6 +493,7 @@ fun RuleEditorScreen(
             ModeRow(
                 title = stringResource(R.string.editor_window_title),
                 hint = stringResource(R.string.editor_window_hint),
+                icon = Icons.Outlined.Schedule,
                 checked = windowEnabled,
                 // Overridden while "all the time" is on: shown, not editable, values kept.
                 enabled = !alwaysOn,
@@ -528,6 +540,7 @@ fun RuleEditorScreen(
             ModeRow(
                 title = stringResource(R.string.editor_daily_limit_title),
                 hint = stringResource(R.string.editor_daily_limit_hint),
+                icon = Icons.Outlined.HourglassBottom,
                 checked = limitEnabled,
                 enabled = !alwaysOn && limitMechanismAvailable,
                 onCheckedChange = { limitEnabled = it },
@@ -587,8 +600,17 @@ fun RuleEditorScreen(
                 }
             }
 
+        }
+
+        // Owner report 2026-11-01: days and expiry bound every mechanism above, so they get
+        // their own card instead of extending one crowded "how to block" block.
+        SectionCard {
+            Text(
+                stringResource(R.string.editor_scope_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
             // Day scope is rule-level (user decision 2026-09-20): the days here bound every
-            // mechanism above — "Block all day" on weekends only is a weekend lockdown.
+            // mechanism — "Block all day" on weekends only is a weekend lockdown.
             DayChips(
                 days = days,
                 onChange = { days = it },
@@ -627,6 +649,23 @@ fun RuleEditorScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // Owner report 2026-11-01: the current choice is stated once, loudly — the roster
+            // below then only needs names, not the same sentence under every partner.
+            val selectedPartner = partners.firstOrNull { it.pairId == assignedPairId }
+            Text(
+                when {
+                    selectedPartner != null ->
+                        stringResource(R.string.rules_watched_by, selectedPartner.name)
+                    departedAssignment -> stringResource(R.string.editor_partner_departed_title)
+                    else -> stringResource(R.string.rules_not_shared)
+                },
+                style = MaterialTheme.typography.titleSmall,
+                color = if (selectedPartner != null) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
             if (partners.isEmpty() && assignedPairId == null) {
                 Text(
                     stringResource(R.string.editor_partner_empty),
@@ -634,29 +673,37 @@ fun RuleEditorScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                PartnerChoiceRow(
-                    title = stringResource(R.string.editor_partner_none),
-                    hint = stringResource(R.string.editor_partner_none_hint),
-                    selected = assignedPairId == null,
-                    onSelect = { assignedPairId = null },
-                )
-                partners.forEach { partner ->
-                    PartnerChoiceRow(
-                        title = partner.name,
-                        hint = stringResource(R.string.editor_partner_choice_hint),
-                        selected = assignedPairId == partner.pairId,
-                        onSelect = { assignedPairId = partner.pairId },
-                    )
-                }
-                if (departedAssignment) {
-                    // §2.1 req 23: the pair ended while this rule pointed at it. Tapping the
-                    // row is a no-op — the two exits are "No partner" above or a live partner.
-                    PartnerChoiceRow(
-                        title = stringResource(R.string.editor_partner_departed_title),
-                        hint = stringResource(R.string.editor_partner_departed_hint),
-                        selected = true,
-                        onSelect = {},
-                    )
+                // Fixed-height, scrollable roster (owner report 2026-11-01) — a long partner
+                // list must not stretch the form. No item keys: the roster has been observed
+                // with duplicate pair ids, and a duplicate key crashes LazyColumn.
+                LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
+                    item {
+                        PartnerChoiceRow(
+                            title = stringResource(R.string.editor_partner_none),
+                            hint = stringResource(R.string.editor_partner_none_hint),
+                            selected = assignedPairId == null,
+                            onSelect = { assignedPairId = null },
+                        )
+                    }
+                    items(partners) { partner ->
+                        PartnerChoiceRow(
+                            title = partner.name,
+                            selected = assignedPairId == partner.pairId,
+                            onSelect = { assignedPairId = partner.pairId },
+                        )
+                    }
+                    if (departedAssignment) {
+                        // §2.1 req 23: the pair ended while this rule pointed at it. Tapping
+                        // the row is a no-op — the two exits are "No partner" or a live partner.
+                        item {
+                            PartnerChoiceRow(
+                                title = stringResource(R.string.editor_partner_departed_title),
+                                hint = stringResource(R.string.editor_partner_departed_hint),
+                                selected = true,
+                                onSelect = {},
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -753,14 +800,16 @@ fun RuleEditorScreen(
     }
 }
 
-/** One assignee option: radio + name + what assigning means. The same selection grammar the
- *  partner roster uses (#96), so "which partner is chosen" looks identical everywhere. */
+/** One assignee option: radio + name, with an optional what-assigning-means line. The same
+ *  selection grammar the partner roster uses (#96), so "which partner is chosen" looks
+ *  identical everywhere. Owner report 2026-11-01: the per-partner hint was the same sentence
+ *  repeated for every name — callers now pass it once, on the option that needs it. */
 @Composable
 internal fun PartnerChoiceRow(
     title: String,
-    hint: String,
     selected: Boolean,
     onSelect: () -> Unit,
+    hint: String? = null,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -778,48 +827,86 @@ internal fun PartnerChoiceRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                hint,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            hint?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
 
-/** One blocking mechanism row: title + hint + switch. Disabled rows keep their checked
- *  state — the value survives while another mechanism overrides it. */
+/** One blocking mechanism as a selectable card (owner report 2026-11-01: three switch rows
+ *  read as one wall of text, so the mechanisms could not be told apart at a glance). The
+ *  card's container changes with its state; disabled rows keep their checked state — the
+ *  value survives while another mechanism overrides it. */
 @Composable
 internal fun ModeRow(
     title: String,
     hint: String,
+    icon: ImageVector,
     checked: Boolean,
     enabled: Boolean,
     onCheckedChange: (Boolean) -> Unit,
 ) {
-    Row(
+    val active = checked && enabled
+    Surface(
+        color = if (active) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHighest
+        },
+        contentColor = if (active) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        },
+        shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        // A gap, not just SpaceBetween: the hint wraps to the column's full width, so its last
-        // word otherwise ends flush against the switch.
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(
-                hint,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Row(
+            modifier = Modifier.padding(start = 12.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .background(
+                        if (active) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.surfaceContainerLow,
+                        CircleShape,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = if (active) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(19.dp),
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (active) MaterialTheme.colorScheme.onPrimaryContainer
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                enabled = enabled,
+                // The switch is a sibling of its title, not its child: without this its
+                // accessible name is a bare "On/Off" with no mechanism attached.
+                modifier = Modifier.semantics { contentDescription = title },
             )
         }
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            enabled = enabled,
-            // The switch is a sibling of its title, not its child: without this its accessible
-            // name is a bare "On/Off" with no mechanism attached (findings #25/#26's class).
-            modifier = Modifier.semantics { contentDescription = title },
-        )
     }
 }
 
