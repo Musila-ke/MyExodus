@@ -731,7 +731,14 @@ fun PartnerScreen(
                         // gets its detail instead of stretching the hub.
                         PartnerSummaryCard(current.activity, current.chainStatus)
                         ActivityChartCard(current.alerts)
-                        ComposeMessageCard(onCompose = { composing = true })
+                        ComposeMessageCard(
+                            onCompose = {
+                                // A dismissal while a send was in flight must not surface its
+                                // stale receipt on the next open.
+                                messageOutcome = null
+                                composing = true
+                            },
+                        )
                         // Owner ask 2026-10-01: the writer sees their own last message here —
                         // the mirror of the hub's "Their message to you".
                         current.sentMessageText?.let { SentMessageCard(it) }
@@ -862,7 +869,7 @@ fun PartnerScreen(
                             stringResource(R.string.partner_tile_rules_none)
                         } else {
                             pluralStringResource(
-                                R.plurals.partner_tile_rules_changes,
+                                R.plurals.partner_rules_count,
                                 current.ruleHistory.size,
                                 current.ruleHistory.size,
                             )
@@ -1538,7 +1545,9 @@ private fun ComposeMessageDialog(
     )
     val max = EventPayload.MAX_ACTIVITY_TEXT_LENGTH
     AlertDialog(
-        onDismissRequest = { if (!sending) onDismiss() },
+        // Never trap the sheet (finding 2026-11-02): the message is journaled before sending,
+        // so closing while it is in flight cannot lose it — the retry cadence owns it then.
+        onDismissRequest = onDismiss,
         title = {
             Text(
                 stringResource(
@@ -1643,10 +1652,12 @@ private fun ComposeMessageDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !sending) {
+            TextButton(onClick = onDismiss) {
                 Text(
                     stringResource(
-                        if (queued) R.string.partner_compose_close else R.string.partner_compose_cancel,
+                        // While sending this closes the sheet, it does not recall the
+                        // journaled message — so it is named Close, not Cancel.
+                        if (queued || sending) R.string.partner_compose_close else R.string.partner_compose_cancel,
                     ),
                 )
             }
@@ -2314,14 +2325,19 @@ private fun ActivityChartCard(summary: AlertSummary) {
 private fun ActivityCard(summary: AlertSummary, activity: PartnerActivityUi?) {
     PartnerSurface {
         Text(
-            stringResource(R.string.partner_activity_title, summary.recent.size),
+            stringResource(R.string.partner_activity_title),
             style = MaterialTheme.typography.titleMedium,
         )
         HorizontalDivider()
         Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-            StatColumn(stringResource(R.string.partner_activity_today), summary.todayCount.toString())
+            StatColumn(stringResource(R.string.partner_activity_today_stat), summary.todayCount.toString())
             StatColumn(stringResource(R.string.partner_activity_week), summary.weekCount.toString())
         }
+        Text(
+            stringResource(R.string.partner_activity_counted),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         if (summary.recent.isEmpty()) {
             Text(
                 // Two causes, two statements: nothing was ever shared, or sharing is on and

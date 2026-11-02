@@ -9,6 +9,19 @@
         <item name="android:windowBackground">@color/window_background</item>
     </style>
 
+    <!-- Owner report 2026-11-01: the block wall slid in from the right over 273 ms, leaving the
+         blocked app visible during the transition — it read as a mis-sized wall. The a11y
+         overlay host already appears instantly; this makes the Activity host match. -->
+    <style name="Theme.MyExodus.Blocker" parent="Theme.MyExodus">
+        <item name="android:windowAnimationStyle">@style/Animation.MyExodus.None</item>
+    </style>
+    <style name="Animation.MyExodus.None" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@null</item>
+        <item name="android:activityOpenExitAnimation">@null</item>
+        <item name="android:activityCloseEnterAnimation">@null</item>
+        <item name="android:activityCloseExitAnimation">@null</item>
+    </style>
+
     <!-- Widget v2 (owner spec 2026-10-15): the pills' hold-to-confirm surface is a sheet over
          the launcher — translucent window, no background of its own, and the system dims what
          is behind it so the card reads as modal. -->

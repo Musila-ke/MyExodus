@@ -18,7 +18,7 @@ import com.example.myexodus.data.db.entity.RestrictionRule
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -84,9 +84,9 @@ class RecoveryUnlockTest {
                 stored.activeDaysOfWeek, stored.timezone, stored.blockExpiresAt, System.currentTimeMillis(),
             ),
         )
-        assertNull(
+        assertTrue(
             "Session must be consumed — a spent row auto-unlocks the next blocker launch",
-            store.current(),
+            store.sessions().isEmpty(),
         )
     }
 

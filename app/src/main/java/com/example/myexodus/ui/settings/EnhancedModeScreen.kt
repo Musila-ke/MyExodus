@@ -35,6 +35,9 @@ internal fun EnhancedModeToggleRow(
     monitor: EnhancedModeHealthMonitor,
     strictMode: StrictModeManager,
     settings: EnhancedModeSettings,
+    /** Shared with the Strict row by the parent: a Strict toggle recomposes this row at once,
+     *  so the switch greys out immediately instead of up to a minute later on the tick. */
+    strictOn: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -64,7 +67,7 @@ internal fun EnhancedModeToggleRow(
         enabled = !advancedProtection && strictMode.canDisable(),
         // The Strict cooldown locks this switch too; without the line it greyed out with no
         // stated reason on the row (the Strict row above carries its own explanation).
-        warning = if (!advancedProtection && strictMode.cooldownActive) {
+        warning = if (!advancedProtection && strictOn && strictMode.cooldownActive) {
             tick
             stringResource(
                 R.string.enhanced_mode_strict_cooldown,
@@ -93,10 +96,11 @@ internal fun EnhancedModeToggleRow(
 internal fun StrictModeToggleRow(
     monitor: EnhancedModeHealthMonitor,
     strictMode: StrictModeManager,
+    strictOn: Boolean,
+    onStrictOnChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val advancedProtection by monitor.advancedProtection.collectAsStateWithLifecycle()
-    var strictOn by remember { mutableStateOf(strictMode.strictModeEnabled) }
     // Read below only to re-arm the countdown: the tick itself is what forces the recomposition,
     // and `cooldownRemainingMillis` recomputes from the clock on each pass.
     var tick by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -120,7 +124,7 @@ internal fun StrictModeToggleRow(
         enabled = !advancedProtection && strictMode.canDisable(),
         onCheckedChange = { on ->
             strictMode.strictModeEnabled = on
-            strictOn = on
+            onStrictOnChange(on)
         },
         warning = if (strictOn && strictMode.cooldownActive) {
             tick

@@ -96,6 +96,40 @@ class RulesStoreKeyManagerInstrumentedTest {
         assertFalse(isPlaintext(recoveryManager2.rulesDbFile, recoveryManager2))
     }
 
+    /**
+     * Regression 2026-11-01: Room captures the file name when the builder is created, so the
+     * driver must capture the matching key suffix at that same moment. Resolving the suffix per
+     * open let a pre-scope builder open the legacy file with the scoped DEK (hmac pgno=1).
+     */
+    @Test
+    fun driverCapturesKeySuffix_scopeFlipAfterCreationKeepsTheLegacyKey() {
+        LocalDatabaseMigration.resetForTest()
+        val driver = RulesStoreEncryption(rulesKeys, recovery()).newDriver()
+        val file = java.io.File(context.cacheDir, "scope-capture-probe.db")
+        try {
+            driver.open(file.absolutePath).use { conn ->
+                conn.prepare("CREATE TABLE probe (v TEXT NOT NULL)").use { it.step() }
+                conn.prepare("INSERT INTO probe (v) VALUES ('kept')").use { it.step() }
+            }
+
+            assertTrue(LocalDatabaseMigration.migrateForTest(context, "scope-capture-test-uid"))
+            assertTrue("the process is now scoped", LocalDatabaseMigration.keySuffix().isNotEmpty())
+
+            driver.open(file.absolutePath).use { conn ->
+                conn.prepare("SELECT v FROM probe").use { stmt ->
+                    assertTrue(stmt.step())
+                    assertEquals("kept", stmt.getText(0))
+                }
+            }
+        } finally {
+            file.delete()
+            java.io.File(file.path + "-wal").delete()
+            java.io.File(file.path + "-shm").delete()
+            LocalDatabaseMigration.resetJournalForTest(context)
+            LocalDatabaseMigration.resetForTest()
+        }
+    }
+
     private fun isPlaintext(file: java.io.File, recoveryManager: RecoveryManager): Boolean =
         PlaintextToEncryptedMigration(RulesStoreKeyManager(context), recoveryManager).isPlaintextDatabase(file)
 

@@ -59,7 +59,50 @@ class RecoveryStateStoreTest {
         assertEquals(ELAPSED + 60_000L, state.deadlineElapsedRealtimeThisBoot)
         assertEquals(ELAPSED, state.bootSessionId)
         assertEquals("com.instagram.android", state.ruleId)
-        assertEquals(state, factory.open()!!.recoveryStateDao().current())
+        assertEquals(state, factory.open()!!.recoveryStateDao().forRule("com.instagram.android"))
+    }
+
+    @Test
+    fun sessions_areIndependentPerRule() = runTest {
+        val instagram = store.startRecovery("com.instagram.android", clock)
+        clock.wall = WALL + 60_000L
+        clock.elapsed = ELAPSED + 60_000L
+        val tiktok = store.startRecovery("com.tiktok.android", clock)
+
+        // The second start must not have replaced or restarted the first rule's session.
+        assertEquals(
+            listOf(instagram, tiktok),
+            store.sessions().sortedBy { it.ruleId },
+        )
+        assertEquals(WALL + 60_000L, instagram.deadlineWallClockUtcMillis)
+        assertEquals(WALL + 120_000L, tiktok.deadlineWallClockUtcMillis)
+    }
+
+    @Test
+    fun override_isPerRule() = runTest {
+        store.startRecovery("com.instagram.android", clock)
+        store.startRecovery("com.tiktok.android", clock)
+
+        store.recordOverride("com.instagram.android", clock)
+
+        assertFalse(store.overrideEligible("com.instagram.android", clock))
+        assertTrue(
+            "Another rule's session must stay independently overridable",
+            store.overrideEligible("com.tiktok.android", clock),
+        )
+    }
+
+    @Test
+    fun clear_removesOnlyThatRulesSession() = runTest {
+        store.startRecovery("com.instagram.android", clock)
+        store.startRecovery("com.tiktok.android", clock)
+
+        store.clear("com.instagram.android")
+
+        assertEquals(
+            listOf("com.tiktok.android"),
+            store.sessions().map { it.ruleId },
+        )
     }
 
     @Test
@@ -71,9 +114,39 @@ class RecoveryStateStoreTest {
     }
 
     @Test
+    fun frictionSeconds_defaultsToSixty() = runTest {
+        assertEquals(60L, store.frictionSeconds())
+    }
+
+    @Test
+    fun setFrictionSeconds_drivesTheNextSession() = runTest {
+        store.setFrictionSeconds(8 * 3600L)
+        assertEquals(8 * 3600L, store.frictionSeconds())
+        val state = store.startRecovery("com.instagram.android", clock)
+        assertEquals(WALL + 8 * 3600_000L, state.deadlineWallClockUtcMillis)
+    }
+
+    @Test
+    fun setFrictionSeconds_clampsToTheOwnerRange() = runTest {
+        store.setFrictionSeconds(0L)
+        assertEquals(60L, store.frictionSeconds())
+        store.setFrictionSeconds(48 * 3600L)
+        assertEquals(24 * 3600L, store.frictionSeconds())
+    }
+
+    @Test
+    fun setFrictionSeconds_keepsTheOverrideCooldown() = runTest {
+        factory.open()!!.recoveryPolicyDao().update(120L, 900L)
+        store.setFrictionSeconds(300L)
+        val policy = factory.open()!!.recoveryPolicyDao().current()!!
+        assertEquals(300L, policy.defaultFrictionSeconds)
+        assertEquals(900L, policy.overrideCooldownSeconds)
+    }
+
+    @Test
     fun simulatedReboot_switchesToWallClockRemaining() = runTest {
         store.startRecovery("com.instagram.android", clock)
-        val persisted = factory.open()!!.recoveryStateDao().current()!!
+        val persisted = factory.open()!!.recoveryStateDao().forRule("com.instagram.android")!!
         assertNotNull(persisted)
 
         // Simulated reboot: elapsed-realtime reset to ~0, far below the stored boot id.
@@ -95,15 +168,18 @@ class RecoveryStateStoreTest {
     @Test
     fun recordOverride_thenCooldownGatesEligibility() = runTest {
         // No recovery session yet: override eligible (nothing to gate).
-        assertTrue(store.overrideEligible(clock))
+        assertTrue(store.overrideEligible("com.instagram.android", clock))
 
         store.startRecovery("com.instagram.android", clock)
-        store.recordOverride(clock)
+        store.recordOverride("com.instagram.android", clock)
 
         clock.wall = WALL + 599_000L
-        assertFalse("Override must not be eligible inside the 600s cooldown", store.overrideEligible(clock))
+        assertFalse(
+            "Override must not be eligible inside the 600s cooldown",
+            store.overrideEligible("com.instagram.android", clock),
+        )
         clock.wall = WALL + 600_000L
-        assertTrue("Override eligible again at cooldown expiry", store.overrideEligible(clock))
+        assertTrue("Override eligible again at cooldown expiry", store.overrideEligible("com.instagram.android", clock))
     }
 
     private class FakeClock(var wall: Long, var elapsed: Long) : RecoveryClock {

@@ -8,12 +8,15 @@ import com.example.myexodus.data.db.entity.RecoveryState
 
 @Dao
 interface RecoveryStateDao {
-    @Query("SELECT * FROM recovery_state WHERE id = 0")
-    suspend fun current(): RecoveryState?
+    @Query("SELECT * FROM recovery_state")
+    suspend fun all(): List<RecoveryState>
+
+    @Query("SELECT * FROM recovery_state WHERE rule_id = :ruleId")
+    suspend fun forRule(ruleId: String): RecoveryState?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(state: RecoveryState)
 
-    @Query("DELETE FROM recovery_state")
-    suspend fun clear()
+    @Query("DELETE FROM recovery_state WHERE rule_id = :ruleId")
+    suspend fun delete(ruleId: String)
 }

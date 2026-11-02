@@ -409,7 +409,17 @@ class MainActivity : FragmentActivity() {
     private fun startPartnerSigningHeal() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                PartnerSyncSignals.signingNeeded.collect { healBlockedPartnerSigning() }
+                launch {
+                    PartnerSyncSignals.signingNeeded.collect { healBlockedPartnerSigning() }
+                }
+                launch {
+                    // Owner ruling 2026-11-01: a rule save is explicit user intent — deliver it
+                    // now, prompting for the device key if the signer is cold, never waiting on
+                    // the banner's "Send now" tap.
+                    PartnerSyncSignals.ruleChangesJournaled.collect {
+                        healBlockedPartnerSigning(forcePrompt = true)
+                    }
+                }
             }
         }
     }

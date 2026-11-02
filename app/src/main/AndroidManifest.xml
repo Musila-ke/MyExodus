@@ -2,12 +2,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- CameraX QR capture (plan §6.3/§7.5); optional feature — the Firestore channel
-        covers sync when the camera is unavailable (ChromeOS lint contract). -->
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-feature
-        android:name="android.hardware.camera"
-        android:required="false" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Block close (user ruling 2026-09-27: "logically just block the app and close it"):
         eviction to Home alone left a blocked app running in the background, still audible
@@ -173,6 +167,7 @@
             android:excludeFromRecents="true"
             android:exported="false"
             android:screenOrientation="portrait"
+            android:theme="@style/Theme.MyExodus.Blocker"
             tools:ignore="LockedOrientationActivity,DiscouragedApi"
             android:taskAffinity="" />
 

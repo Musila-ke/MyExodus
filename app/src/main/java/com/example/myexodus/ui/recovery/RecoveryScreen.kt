@@ -39,7 +39,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -125,10 +124,10 @@ fun RecoveryScreen(
     // System back leaves a spoke the way its BackRow does — including a live technique
     // session, whose dispose path records the abandonment. At the hub the shell takes over.
     BackHandler(enabled = view != null) { view = null }
-    var liveSession by remember { mutableStateOf<Pair<RecoveryState, RestrictionRule>?>(null) }
-    var remainingSeconds by remember { mutableLongStateOf(0L) }
-    var frozenAtSeconds by remember { mutableStateOf<Long?>(null) }
-    var overrideAvailable by remember { mutableStateOf(true) }
+    // One row per rule (owner acceptance test 2026-11-02): every started session keeps its
+    // own countdown, override eligibility, and unlock — starting another rule's session never
+    // replaces it.
+    var liveSessions by remember { mutableStateOf<List<LiveSession>>(emptyList()) }
     var planItems by remember { mutableStateOf<List<CoachingStep>>(emptyList()) }
     var activeWindowId by remember { mutableStateOf<String?>(null) }
     var inRiskWindow by remember { mutableStateOf(false) }
@@ -150,13 +149,20 @@ fun RecoveryScreen(
     // seconds behind another opener's lock; on Main that is an ANR (device-caught 2026-09-19
     // on the resume path — this screen's callers are all Main-scoped).
     suspend fun reload() = withContext(Dispatchers.IO) {
-        val session = recoveryStore.current()
-        val rule = session?.let { s ->
-            repository.getActiveRules().firstOrNull { it.ruleId == s.ruleId }
-        }
-        val enforced = liveSessionRule(rule, System.currentTimeMillis())
-        liveSession = if (session != null && enforced != null) session to enforced else null
-        overrideAvailable = recoveryStore.overrideEligible()
+        val rules = repository.getActiveRules().associateBy { it.ruleId }
+        val now = System.currentTimeMillis()
+        liveSessions = recoveryStore.sessions()
+            .mapNotNull { session ->
+                val enforced = liveSessionRule(rules[session.ruleId], now) ?: return@mapNotNull null
+                LiveSession(
+                    state = session,
+                    rule = enforced,
+                    remainingSeconds = 0L,
+                    frozenAtSeconds = null,
+                    overrideAvailable = recoveryStore.overrideEligible(session.ruleId),
+                )
+            }
+            .sortedBy { it.state.deadlineWallClockUtcMillis }
     }
 
     suspend fun reloadPlan() = withContext(Dispatchers.IO) {
@@ -186,27 +192,39 @@ fun RecoveryScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(liveSession) {
-        val (session, _) = liveSession ?: return@LaunchedEffect
-        val tracker = RecoveryCountdownTracker()
+    // Ticks every live session independently; only the expired rule is unlocked. Keyed on the
+    // session identities so the per-second value updates never restart the effect, while a
+    // new or consumed session does.
+    val sessionKeys = liveSessions.map { it.state.ruleId to it.state.deadlineWallClockUtcMillis }
+    LaunchedEffect(sessionKeys) {
+        if (liveSessions.isEmpty()) return@LaunchedEffect
+        val trackers = liveSessions.associate { it.state.ruleId to RecoveryCountdownTracker() }
         while (isActive) {
-            val result = tracker.tick(
-                session,
-                RecoveryTimer.sameBootSession(session.bootSessionId, SystemClock.elapsedRealtime()),
-                System.currentTimeMillis(),
-                SystemClock.elapsedRealtime(),
-            )
-            when (result) {
-                is RecoveryCountdown.Counting -> {
-                    remainingSeconds = result.remainingSeconds
-                    frozenAtSeconds = null
-                    if (result.remainingSeconds == 0L) {
-                        unlockRule(repository, recoveryStore, session.ruleId)
-                        reload()
-                        return@LaunchedEffect
+            val nowWall = System.currentTimeMillis()
+            val nowElapsed = SystemClock.elapsedRealtime()
+            val expired = mutableListOf<String>()
+            // Re-read each tick: a concurrent reload (override, resume) may have removed a
+            // session, and a stale captured list would resurrect its row every second.
+            liveSessions = liveSessions.map { live ->
+                val result = trackers.getValue(live.state.ruleId).tick(
+                    live.state,
+                    RecoveryTimer.sameBootSession(live.state.bootSessionId, nowElapsed),
+                    nowWall,
+                    nowElapsed,
+                )
+                when (result) {
+                    is RecoveryCountdown.Counting -> {
+                        if (result.remainingSeconds == 0L) expired += live.state.ruleId
+                        live.copy(remainingSeconds = result.remainingSeconds, frozenAtSeconds = null)
                     }
+                    is RecoveryCountdown.Frozen ->
+                        live.copy(frozenAtSeconds = result.displayedRemainingSeconds)
                 }
-                is RecoveryCountdown.Frozen -> frozenAtSeconds = result.displayedRemainingSeconds
+            }
+            if (expired.isNotEmpty()) {
+                expired.forEach { unlockRule(repository, recoveryStore, it) }
+                reload()
+                return@LaunchedEffect
             }
             delay(1000)
         }
@@ -254,24 +272,22 @@ fun RecoveryScreen(
             )
         }
         else -> HomeView(
-            liveSession = liveSession,
-            remainingSeconds = remainingSeconds,
-            frozenAtSeconds = frozenAtSeconds,
-            overrideAvailable = overrideAvailable,
+            liveSessions = liveSessions,
             inRiskWindow = inRiskWindow,
-            onOverride = {
-                val rule = liveSession?.second
-                if (rule != null) {
+            onOverride = { ruleId ->
+                val live = liveSessions.firstOrNull { it.state.ruleId == ruleId }
+                if (live != null) {
                     scope.launch(Dispatchers.IO) {
                         // Same override path as BlockerActivity: always allowed, cooldown-bounded
                         // (recorded only when eligible) and logged to the attempt trail.
-                        if (recoveryStore.overrideEligible()) recoveryStore.recordOverride()
-                        attempts.recordOverride(rule.ruleId, rule.blockedPackage)
-                        unlockRule(repository, recoveryStore, rule.ruleId)
+                        if (recoveryStore.overrideEligible(ruleId)) recoveryStore.recordOverride(ruleId)
+                        attempts.recordOverride(ruleId, live.rule.blockedPackage)
+                        unlockRule(repository, recoveryStore, ruleId)
                         reload()
                     }
                 }
             },
+            onLeaveAlone = onRouteHome,
             onOpenTechnique = { view = it.id },
             onOpenTechniques = { view = VIEW_TECHNIQUES },
             onOpenPlan = { view = VIEW_PLAN },
@@ -396,14 +412,21 @@ private fun TechniqueSession(
  * three things an urge needs immediately stayed — the live state, the log action, and the
  * crisis path, which is never gated behind a tap.
  */
+/** One live session as the hub renders it: persisted state + the rule that still blocks. */
+private data class LiveSession(
+    val state: RecoveryState,
+    val rule: RestrictionRule,
+    val remainingSeconds: Long,
+    val frozenAtSeconds: Long?,
+    val overrideAvailable: Boolean,
+)
+
 @Composable
 private fun HomeView(
-    liveSession: Pair<RecoveryState, RestrictionRule>?,
-    remainingSeconds: Long,
-    frozenAtSeconds: Long?,
-    overrideAvailable: Boolean,
+    liveSessions: List<LiveSession>,
     inRiskWindow: Boolean,
-    onOverride: () -> Unit,
+    onOverride: (String) -> Unit,
+    onLeaveAlone: () -> Unit,
     onOpenTechnique: (RecoveryTechnique) -> Unit,
     onOpenTechniques: () -> Unit,
     onOpenPlan: () -> Unit,
@@ -431,25 +454,38 @@ private fun HomeView(
             )
         }
 
-        if (liveSession == null) {
+        if (liveSessions.isEmpty()) {
             IdleCard()
         } else {
-            val rule = liveSession.second
-            ActiveTimerCard(
-                blockedTarget = rule.blockedPackage,
-                remainingSeconds = remainingSeconds,
-                frozenAtSeconds = frozenAtSeconds,
-            )
+            // Each session is one visual group (timer → its own override): tighter inside the
+            // group than between groups, so a card's escape hatch can never read as belonging
+            // to the next app's timer.
+            liveSessions.forEach { live ->
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ActiveTimerCard(
+                        blockedTarget = live.rule.blockedPackage,
+                        remainingSeconds = live.remainingSeconds,
+                        frozenAtSeconds = live.frozenAtSeconds,
+                    )
+                    OverrideCard(
+                        overrideAvailable = live.overrideAvailable,
+                        onOverride = { onOverride(live.state.ruleId) },
+                    )
+                }
+            }
         }
 
         // The one urgent action, above the reference material (owner directive 2026-10-21).
         // Owner directive 2026-11-01: as an icon-led action card, not a full-width bar — it
         // leads the idle page in the primary container and steps back to a neutral row while
         // the live timer keeps the page's visual weight.
-        LogUrgeCard(hero = liveSession == null, onClick = { logging = true })
+        LogUrgeCard(hero = liveSessions.isEmpty(), onClick = { logging = true })
 
-        if (liveSession != null) {
-            OverrideCard(overrideAvailable = overrideAvailable, onOverride = onOverride)
+        if (liveSessions.isNotEmpty()) {
+            // Owner request 2026-11-01: the path for "I've come to my senses — I'll leave the
+            // block alone". Nothing is unlocked or deleted; the session rows stay and the
+            // countdowns keep their deadlines, exactly as leaving any other way would.
+            LeaveAloneCard(onClick = onLeaveAlone)
             Text(
                 stringResource(R.string.recovery_leave_note),
                 style = MaterialTheme.typography.bodySmall,
@@ -715,8 +751,9 @@ internal fun liveSessionRule(rule: RestrictionRule?, nowMillis: Long): Restricti
     }
 
 /** Escape semantics shared with BlockerActivity: expire the rule via Rule 3 (blockExpiresAt) —
- *  the engine's existing meaning, no new exemption path. Consumes the session (see
- *  [RecoveryStateStore.clear]) so a completed session cannot auto-unlock a later re-arm. */
+ *  the engine's existing meaning, no new exemption path. Consumes that rule's session (see
+ *  [RecoveryStateStore.clear]) so a completed session cannot auto-unlock a later re-arm;
+ *  other rules' sessions keep running. */
 internal suspend fun unlockRule(
     repository: RulesRepository,
     recoveryStore: RecoveryStateStore,
@@ -726,7 +763,7 @@ internal suspend fun unlockRule(
     if (rule != null) {
         repository.updateRule(rule.copy(blockExpiresAt = System.currentTimeMillis() - 1))
     }
-    recoveryStore.clear()
+    recoveryStore.clear(ruleId)
 }
 
 @Composable
@@ -924,6 +961,51 @@ private fun OverrideCard(overrideAvailable: Boolean, onOverride: () -> Unit) {
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun LeaveAloneCard(onClick: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(MaterialTheme.colorScheme.secondaryContainer, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.DirectionsWalk,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    stringResource(R.string.recovery_leave_alone),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    stringResource(R.string.recovery_leave_alone_caption),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                imageVector = Icons.Outlined.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

@@ -414,6 +414,16 @@ class BlockerAccessibilityService : AccessibilityService() {
         detectionNanos: Long,
         window: AccessibilityWindowInfo?,
     ) {
+        // Emergency exclusion re-applied at the decision, not only at event entry: a launch
+        // transition's WSC reaches the deferred re-check while the entry gate is skipped
+        // (the protected window is not active yet), and the deferred path used to decide and
+        // evict the package — device-caught 2026-11-01: a Phone block rule force-closed the
+        // default dialer despite the live dialer package being loaded and protected.
+        if (emergency.isProtected(packageName, window)) {
+            overlay.hide(stateMachine.currentGeneration, window.displayIdOrDefault())
+            closeUsageSession()
+            return
+        }
         val displayId = window.displayIdOrDefault()
         val decisionTimeNanos = SystemClock.elapsedRealtimeNanos()
         val decision = engine.decideApp(packageName, System.currentTimeMillis())
@@ -453,6 +463,13 @@ class BlockerAccessibilityService : AccessibilityService() {
                     // window submission, so it records nothing.
                     if (!overlay.isShown(displayId)) {
                         profiler.recordDecision(generation, detectionNanos, decisionTimeNanos)
+                    }
+                    // §6 attempt log (finding 2026-11-02): this wall used to be recorded
+                    // nowhere — only the FGS new-launch path and URL blocks logged — so a
+                    // service-held block, the normal case, read as "Times blocked 0". The
+                    // recorder's same-target window absorbs the FGS's parallel detection.
+                    publisher.snapshot.appRules[packageName]?.ruleId?.let { ruleId ->
+                        scope.launch { runCatching { attempts.recordBlocked(ruleId, packageName) } }
                     }
                     coverBlockedApp(generation, displayId, packageName)
                     // XOS measures the *animating* task for a moment after an app switch, so a
@@ -741,6 +758,11 @@ class BlockerAccessibilityService : AccessibilityService() {
                 if (usageSessions.activePackage == packageName) closeUsageSession()
                 val current = overlay.currentContent(displayId)
                 if (current !is OverlayContent.DailyLimitBlocked) {
+                    // Same §6 record as the app wall (finding 2026-11-02): the daily-limit
+                    // ticker showed this wall without ever writing an attempt.
+                    publisher.snapshot.appRules[packageName]?.ruleId?.let { ruleId ->
+                        scope.launch { runCatching { attempts.recordBlocked(ruleId, packageName) } }
+                    }
                     overlay.show(
                         stateMachine.currentGeneration,
                         displayId,
@@ -772,10 +794,40 @@ class BlockerAccessibilityService : AccessibilityService() {
      *  backgrounded — hence the retry after the (asynchronous) HOME transition. The wall itself
      *  is untouched: it keeps its own lifetime (the user's Close tap). */
     private fun closeBlockedApp(packageName: String) {
-        val evicted = performGlobalAction(GLOBAL_ACTION_HOME)
+        // HOME is global — whatever is front goes back. Late duplicate WSCs for the blocked
+        // app can reach this after BlockerActivity has taken the front (emulator-5554,
+        // 2026-11-02: five queued WSCs re-evicted in one burst; the global HOME pushed our own
+        // wall to the back — the "flash and vanish"). Two gates: never signal HOME while our
+        // own block screen is the active application window, and never while the FGS has just
+        // launched the durable wall for this same package. The root gate alone loses that
+        // race — rootInActiveWindow still reported the blocked app (then null) throughout the
+        // wall's launch transition, so every queued event still fired HOME.
+        val root = runCatching { rootInActiveWindow }.getOrNull()
+        val wallIsFront = ownBlockScreenIsFront(
+            rootPackage = runCatching { root?.packageName?.toString() }.getOrNull(),
+            rootWindowType = root?.let { windowFor(it.windowId)?.type } ?: -1,
+            ownPackage = this.packageName,
+        )
+        val wallLaunching = wallLaunchInFlight(
+            nowElapsedMs = SystemClock.elapsedRealtime(),
+            launchedPackage = EnforcementForegroundService.activeBlockTarget,
+            launchedAtElapsedMs = EnforcementForegroundService.activeBlockTargetSinceElapsedMs,
+            targetPackage = packageName,
+        )
+        val evicted = if (wallIsFront || wallLaunching) false else performGlobalAction(GLOBAL_ACTION_HOME)
         killBlockedProcess(packageName)
         mainHandler.postDelayed({ killBlockedProcess(packageName) }, BLOCK_CLOSE_RETRY_MS)
-        Log.i(TAG, "block close pkg=$packageName evicted=$evicted")
+        if (wallLaunching) {
+            // The suppressed HOME is the first kill's license to land; once the wall's own
+            // front transition backgrounds the app (~4 s emulator-measured), kill again so
+            // suppression doesn't reopen the "covering is not stopping" hole (2026-09-27).
+            mainHandler.postDelayed({ killBlockedProcess(packageName) }, WALL_LAUNCH_SUPPRESS_MS)
+        }
+        Log.i(
+            TAG,
+            "block close pkg=$packageName evicted=$evicted wallFront=$wallIsFront launching=$wallLaunching " +
+                "root=${runCatching { root?.packageName }.getOrNull()} type=${root?.let { windowFor(it.windowId)?.type }}",
+        )
     }
 
     private fun killBlockedProcess(packageName: String) {
@@ -1176,6 +1228,34 @@ class BlockerAccessibilityService : AccessibilityService() {
 
     companion object {
         const val TAG = "MyExodusBlocker"
+
+        /** True when the active root is this service's own *application* window — the durable
+         *  BlockerActivity. The focusable daily-limit overlay reports the same package but
+         *  TYPE_ACCESSIBILITY_OVERLAY: there the covered app is still the one that must be
+         *  evicted. */
+        internal fun ownBlockScreenIsFront(
+            rootPackage: String?,
+            rootWindowType: Int,
+            ownPackage: String,
+        ): Boolean = rootPackage == ownPackage && rootWindowType == AccessibilityWindowInfo.TYPE_APPLICATION
+
+        /** How long after the FGS launches the durable wall its own front transition may take:
+         *  during it, an eviction HOME would push the wall straight back. Covers the
+         *  emulator-measured ~4 s launch-to-display latency with margin. */
+        internal const val WALL_LAUNCH_SUPPRESS_MS = 5_000L
+
+        /** [closeBlockedApp]'s wall-launch gate (pure for direct testing): true while the FGS
+         *  has just launched the durable wall for [targetPackage] and it cannot be front yet.
+         *  Reads the FGS latch directly — both services live in this process. A null or
+         *  different-package latch, no stamp, or a launch older than the suppression window
+         *  leaves eviction untouched. */
+        internal fun wallLaunchInFlight(
+            nowElapsedMs: Long,
+            launchedPackage: String?,
+            launchedAtElapsedMs: Long,
+            targetPackage: String,
+        ): Boolean = launchedPackage == targetPackage &&
+            nowElapsedMs - launchedAtElapsedMs in 0..WALL_LAUNCH_SUPPRESS_MS
 
         /** How long to wait after a null-window WSC before re-checking the live window list. */
         private const val DEFERRED_WSC_MS = 400L

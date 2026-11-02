@@ -18,6 +18,7 @@ import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,6 +48,7 @@ import com.example.myexodus.R
 import com.example.myexodus.account.AuthState
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.RulesRepository
+import com.example.myexodus.blocking.recovery.RecoveryStateStore
 import com.example.myexodus.blocking.usage.AccountingOutage
 import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.domainusage.DomainUsageEngine
@@ -62,6 +64,7 @@ import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.ui.BrandMark
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.recovery.CoachingPlanScreen
+import com.example.myexodus.ui.recovery.FrictionTimerScreen
 import com.example.myexodus.ui.recovery.RecoveryPrefs
 import com.example.myexodus.ui.recovery.RiskWindowsScreen
 import com.example.myexodus.ui.rememberWindowWidth
@@ -84,6 +87,8 @@ fun SettingsScreen(
     widgetSettings: WidgetSettings,
     onWidgetSettingsChanged: () -> Unit,
     planRepository: RecoveryPlanRepository,
+    /** Owner request 2026-11-01: the friction timer pane reads/writes the policy row. */
+    recoveryStore: RecoveryStateStore,
     /** The coaching editor resolves the active profile through this (Req 20 / v3 W3). */
     rulesRepository: RulesRepository,
     recoveryPrefs: RecoveryPrefs,
@@ -174,6 +179,12 @@ fun SettingsScreen(
             onBack = { pane = null },
             modifier = modifier,
         )
+        PANE_FRICTION_TIMER -> FrictionTimerScreen(
+            recoveryStore = recoveryStore,
+            prefs = recoveryPrefs,
+            onBack = { pane = null },
+            modifier = modifier,
+        )
         PANE_ABOUT -> AboutScreen(onBack = { pane = null }, modifier = modifier)
         PANE_ACCOUNT -> AccountPane(
             viewModel = account,
@@ -207,6 +218,7 @@ fun SettingsScreen(
 private const val PANE_PROTECTION = "protection"
 private const val PANE_COACHING_PLAN = "coaching_plan"
 private const val PANE_RISK_WINDOWS = "risk_windows"
+private const val PANE_FRICTION_TIMER = "friction_timer"
 private const val PANE_ABOUT = "about"
 private const val PANE_ACCOUNT = "account"
 private const val PANE_BACKUP_KEY = "backup_key"
@@ -231,6 +243,9 @@ private fun SettingsIndex(
     val context = LocalContext.current
     var discreet by remember { mutableStateOf(widgetSettings.discreetMode) }
     var crashReportsOn by remember { mutableStateOf(crashReporting.enabled) }
+    // Owned here so switching Strict on recomposes the Enhanced row in the same frame (its
+    // switch must grey out at once, not up to 60 s later on its own tick).
+    var strictOn by remember { mutableStateOf(strictMode.strictModeEnabled) }
     // Null until the checks land: the row shows no status rather than claiming one it hasn't read.
     val attention = checks?.let { attentionCount(it, serviceEnabled) }
     // §8.3: the identity row states the current mode without implying an account is required.
@@ -304,10 +319,15 @@ private fun SettingsIndex(
                 )
 
                 RowDivider()
-                EnhancedModeToggleRow(monitor, strictMode, settings)
+                EnhancedModeToggleRow(monitor, strictMode, settings, strictOn)
 
                 RowDivider()
-                StrictModeToggleRow(monitor, strictMode)
+                StrictModeToggleRow(
+                    monitor,
+                    strictMode,
+                    strictOn,
+                    onStrictOnChange = { strictOn = it },
+                )
 
                 RowDivider()
                 ToggleRow(
@@ -337,6 +357,14 @@ private fun SettingsIndex(
                     title = stringResource(R.string.settings_recovery_windows_title),
                     subtitle = stringResource(R.string.settings_recovery_windows_body),
                     onClick = { onOpenPane(PANE_RISK_WINDOWS) },
+                )
+
+                RowDivider()
+                IndexRow(
+                    icon = Icons.Outlined.Timer,
+                    title = stringResource(R.string.recovery_timer_label),
+                    subtitle = stringResource(R.string.settings_friction_timer_body),
+                    onClick = { onOpenPane(PANE_FRICTION_TIMER) },
                 )
 
                 // SOS §8.19 (Step 11): the recipient's block switch — it configures exactly

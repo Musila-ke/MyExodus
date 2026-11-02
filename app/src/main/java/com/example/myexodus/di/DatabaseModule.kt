@@ -96,7 +96,10 @@ object DatabaseModule {
     ): RulesRepository = RulesRepository(
         storeFactory,
         publisher,
-        onJournaled = { enqueuePartnerSyncNow(context) },
+        onJournaled = {
+            com.example.myexodus.accountability.sync.PartnerSyncSignals.ruleChangesJournaled.tryEmit(Unit)
+            enqueuePartnerSyncNow(context)
+        },
         labelOf = { _, target -> com.example.myexodus.ui.appLabel(context, target) },
     )
 }

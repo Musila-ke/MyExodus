@@ -24,8 +24,26 @@ class AttemptRecorder @Inject constructor(
         record(AttemptLog.OUTCOME_OVERRIDE, ruleId, blockedTarget)
 
     private suspend fun record(outcome: String, ruleId: String, blockedTarget: String) {
-        val store = storeFactory.open() ?: return
+        val store = storeFactory.open() ?: run {
+            Log.w(TAG, "attempt log skipped: store unavailable")
+            return
+        }
         try {
+            // The a11y decision and the FGS poll observe the same blocked launch within a
+            // poll interval (1.5 s). Five seconds absorbs that skew without merging two
+            // deliberate re-opens; a clock-skewed future row does not count (DAO note).
+            // Overrides are never deduped: each is a separate user act.
+            val now = System.currentTimeMillis()
+            if (outcome == AttemptLog.OUTCOME_BLOCKED &&
+                store.attemptLogDao().countRecentBlocked(
+                    ruleId,
+                    blockedTarget,
+                    now - BLOCK_DEDUPE_WINDOW_MS,
+                    now,
+                ) > 0
+            ) {
+                return
+            }
             store.attemptLogDao().insert(
                 AttemptLog(
                     occurredAtEpochMillis = System.currentTimeMillis(),
@@ -42,5 +60,6 @@ class AttemptRecorder @Inject constructor(
 
     private companion object {
         const val TAG = "MyExodusAttempts"
+        const val BLOCK_DEDUPE_WINDOW_MS = 5_000L
     }
 }

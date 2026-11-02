@@ -86,6 +86,9 @@ class AppRulesStoreFactory(
     }
 
     private fun openInternal(): AppRulesStore? {
+        // Resolve the UID scope before any name is captured: components constructed during Hilt
+        // injection publish before MyExodusApp.onCreate reaches LocalDatabaseMigration.start.
+        LocalDatabaseMigration.start(appContext)
         recoverInterruptedSwap()
         recoveryManager.checkOrphanedCorruptFiles()
 
@@ -104,8 +107,14 @@ class AppRulesStoreFactory(
     }
 
     private fun openInMode(encrypted: Boolean, pendingUpgrade: Boolean): AppRulesStore? {
+        // One snapshot: the file name and the DEK suffix must never come from different scopes.
+        val scope = LocalDatabaseMigration.currentRulesScope()
         return try {
-            build(encrypted = encrypted).also { db ->
+            build(
+                encrypted = encrypted,
+                databaseName = scope.rulesName,
+                keySuffix = scope.keySuffix,
+            ).also { db ->
                 // Room 3 creates the schema lazily on first DAO access; the migration and the
                 // snapshot publisher INSERT against a store whose schema must exist NOW.
                 // runBlocking is fine here: every caller (MyExodusApp init, health worker,
@@ -126,10 +135,17 @@ class AppRulesStoreFactory(
                 }
             }
         } catch (e: SQLiteDatabaseCorruptException) {
-            if (usePreRestoreCopy()) return openInMode(encrypted, pendingUpgrade)
+            if (usePreRestoreCopy(scope.rulesName)) return openInMode(encrypted, pendingUpgrade)
             if (restorePlaintextIfPossible()) return openPlaintextAfterRestore()
             Log.w(TAG, "Rules DB open classified ConfirmedCorruption; recreating fresh", e)
             encryptedMode = encryption != null
+            if (scope.rulesName != LocalDatabaseMigration.rulesDbName(appContext)) {
+                // The failed file is not the active scope's file; renaming the active one here
+                // would set aside a healthy database that was never opened.
+                Log.e(TAG, "Refusing to rename the active database after ${scope.rulesName} failed", e)
+                healthStore.set(DatabaseHealth.DatabaseIssue)
+                return null
+            }
             recoveryManager.renameCorruptRules()
             try {
                 build(encrypted = encryptedMode).also { healthStore.set(DatabaseHealth.RecoverableDataFound) }
@@ -139,13 +155,13 @@ class AppRulesStoreFactory(
                 null
             }
         } catch (e: SQLiteException) {
-            if (usePreRestoreCopy()) return openInMode(encrypted, pendingUpgrade)
+            if (usePreRestoreCopy(scope.rulesName)) return openInMode(encrypted, pendingUpgrade)
             if (restorePlaintextIfPossible()) return openPlaintextAfterRestore()
             Log.e(TAG, "Rules DB open failed with SQLiteException", e)
             healthStore.set(healthFor(e))
             null
         } catch (e: Throwable) {
-            if (usePreRestoreCopy()) return openInMode(encrypted, pendingUpgrade)
+            if (usePreRestoreCopy(scope.rulesName)) return openInMode(encrypted, pendingUpgrade)
             if (restorePlaintextIfPossible()) return openPlaintextAfterRestore()
             Log.e(TAG, "Rules DB open failed", e)
             healthStore.set(healthFor(e))
@@ -186,6 +202,7 @@ class AppRulesStoreFactory(
     private fun build(
         encrypted: Boolean,
         databaseName: String = LocalDatabaseMigration.rulesDbName(appContext),
+        keySuffix: String = LocalDatabaseMigration.keySuffix(),
         journalMode: RoomDatabase.JournalMode = RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING,
     ): AppRulesStore {
         val builder = Room.databaseBuilder(appContext, AppRulesStore::class.java, databaseName)
@@ -198,7 +215,7 @@ class AppRulesStoreFactory(
             .setSingleConnectionPool()
             .addMigrations(*ALL_MIGRATIONS)
             .addCallback(createCallback)
-        if (encrypted) builder.setDriver(requireNotNull(encryption).newDriver())
+        if (encrypted) builder.setDriver(requireNotNull(encryption).newDriver(keySuffix))
         return builder.build()
     }
 
@@ -326,10 +343,13 @@ class AppRulesStoreFactory(
      * failed file goes through the existing corrupt-file path so it stays recoverable; the
      * caller retries the open against the restored previous copy.
      */
-    private fun usePreRestoreCopy(): Boolean {
+    private fun usePreRestoreCopy(attemptedName: String): Boolean {
         val previous = appContext.getDatabasePath(previousDbName())
         if (stagingActive || !previous.exists()) return false
         val active = appContext.getDatabasePath(LocalDatabaseMigration.rulesDbName(appContext))
+        // Only the file that is active now may be set aside: a stale-scope handle failing must
+        // not rename the current (possibly freshly restored) database.
+        if (attemptedName != active.name) return false
         recoveryManager.renameCorruptRules()
         deleteSidecars(active)
         if (!previous.renameTo(active)) return false
@@ -1370,6 +1390,63 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * v23 → v24 (owner acceptance test 2026-11-02): one recovery session per rule. The
+         * single-row table is rebuilt keyed by `rule_id` so a second app's friction session
+         * cannot replace the first. Existing data is one session and is carried over as-is.
+         */
+        val MIGRATION_23_24 = object : Migration(23, 24) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS recovery_state_new (" +
+                        "rule_id TEXT NOT NULL, " +
+                        "deadline_wall_clock_utc_millis INTEGER NOT NULL, " +
+                        "deadline_elapsed_realtime_this_boot INTEGER NOT NULL, " +
+                        "boot_session_id INTEGER NOT NULL, " +
+                        "last_override_start_wall_utc_millis INTEGER, " +
+                        "PRIMARY KEY(rule_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO recovery_state_new (rule_id, deadline_wall_clock_utc_millis, " +
+                        "deadline_elapsed_realtime_this_boot, boot_session_id, " +
+                        "last_override_start_wall_utc_millis) " +
+                        "SELECT rule_id, deadline_wall_clock_utc_millis, " +
+                        "deadline_elapsed_realtime_this_boot, boot_session_id, " +
+                        "last_override_start_wall_utc_millis FROM recovery_state",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE recovery_state").use { it.step() }
+                connection.prepare("ALTER TABLE recovery_state_new RENAME TO recovery_state").use { it.step() }
+            }
+        }
+
+        /** v24 rollback (older build reinstalled): the pre-multi-session shape can hold one
+         *  session, so the newest one survives and the rest are dropped. */
+        val MIGRATION_24_23 = object : Migration(24, 23) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS recovery_state_old (" +
+                        "id INTEGER NOT NULL, " +
+                        "rule_id TEXT NOT NULL, " +
+                        "deadline_wall_clock_utc_millis INTEGER NOT NULL, " +
+                        "deadline_elapsed_realtime_this_boot INTEGER NOT NULL, " +
+                        "boot_session_id INTEGER NOT NULL, " +
+                        "last_override_start_wall_utc_millis INTEGER, " +
+                        "PRIMARY KEY(id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO recovery_state_old (id, rule_id, deadline_wall_clock_utc_millis, " +
+                        "deadline_elapsed_realtime_this_boot, boot_session_id, " +
+                        "last_override_start_wall_utc_millis) " +
+                        "SELECT 0, rule_id, deadline_wall_clock_utc_millis, " +
+                        "deadline_elapsed_realtime_this_boot, boot_session_id, " +
+                        "last_override_start_wall_utc_millis FROM recovery_state " +
+                        "ORDER BY deadline_wall_clock_utc_millis DESC LIMIT 1",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE recovery_state").use { it.step() }
+                connection.prepare("ALTER TABLE recovery_state_old RENAME TO recovery_state").use { it.step() }
+            }
+        }
+
         /** v23 rollback (older build reinstalled): table rebuilds remove the identity and
          *  batch columns while every rule and journal row survives. */
         val MIGRATION_23_22 = object : Migration(23, 22) {
@@ -1681,6 +1758,7 @@ class AppRulesStoreFactory(
             MIGRATION_10_9, MIGRATION_12_11, MIGRATION_13_12, MIGRATION_14_13, MIGRATION_15_14,
             MIGRATION_16_15, MIGRATION_17_16, MIGRATION_18_17, MIGRATION_19_18, MIGRATION_20_19,
             MIGRATION_21_20, MIGRATION_21_22, MIGRATION_22_21, MIGRATION_22_23, MIGRATION_23_22,
+            MIGRATION_23_24, MIGRATION_24_23,
         )
     }
 }

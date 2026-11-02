@@ -51,6 +51,36 @@ class EnhancedModeDeviceTest : EnhancedModeDeviceSuite() {
     }
 
     @Test
+    fun lifeSafety_dialerWithItsOwnBlockRule_isNeitherWalledNorClosed() = runTest {
+        resetData()
+        seedProfile()
+
+        // 2026-11-01 device-caught: no leg ever made the dialer itself a restricted target,
+        // so the deferred-WSC path's missing emergency re-check went unseen — a Phone rule
+        // decided Block on the protected dialer and force-closed it within ~1 s of launch.
+        val dialers = roleHolders("android.app.role.DIALER")
+            .ifEmpty { EmergencyExclusionManager.FALLBACK_DIALER_PACKAGES.toList() }
+        assertFalse("device must have a default dialer", dialers.isEmpty())
+        dialers.forEach { pkg ->
+            seedRule(pkg, "APP")
+            if (!launchPackage(pkg)) return@forEach
+            val deadline = SystemClock.elapsedRealtime() + 4_000
+            while (SystemClock.elapsedRealtime() < deadline) {
+                assertFalse(
+                    "overlay must never cover the default dialer ($pkg) even when it has its own rule",
+                    overlay.isShown(Display.DEFAULT_DISPLAY),
+                )
+                SystemClock.sleep(100)
+            }
+            val focus = shell("dumpsys window | grep mCurrentFocus")
+            assertTrue(
+                "the default dialer must still be foreground after its launch ($pkg): $focus",
+                focus.contains(pkg),
+            )
+        }
+    }
+
+    @Test
     fun lifeSafety_callSurfacesAndTransitions_hideOverlay() = runTest {
         resetData()
         seedProfile()

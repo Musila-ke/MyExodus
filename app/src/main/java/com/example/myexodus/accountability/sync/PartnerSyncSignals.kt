@@ -51,4 +51,15 @@ object PartnerSyncSignals {
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
+
+    /** Owner ruling 2026-11-01: a rule or batch write must reach the partner on its own —
+     *  "1 update waiting to be sent / Send now" was a defect, not a feature. Emitted from the
+     *  rules write path (after the journal transaction commits), the Activity runs the heal
+     *  with the explicit-path semantics: a warm signer delivers silently, a cold one asks for
+     *  the device key now instead of waiting for a tap (or the ask-cooldown). Same
+     *  drop-when-nobody-collects contract as the rest of this object. */
+    val ruleChangesJournaled = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
 }

@@ -145,6 +145,56 @@ class AttemptLogTest {
         )
     }
 
+    /** Finding 2026-11-02: the a11y decision and the FGS poll both observe one blocked
+     *  launch. The recorder collapses the pair into one attempt; a different rule/target, or
+     *  the same pair past the dedupe window, still records; overrides are never deduped. */
+    @Test
+    fun recordBlocked_collapsesOneLaunchSeenByBothPaths() = runTest {
+        val dao = factory.open()!!.attemptLogDao()
+        recorder.recordBlocked("r-1", "com.a")
+        recorder.recordBlocked("r-1", "com.a")
+        assertEquals("the second path's view of the same wall is not a new attempt", 1, dao.count())
+
+        recorder.recordBlocked("r-2", "com.a")
+        recorder.recordBlocked("r-1", "com.b")
+        assertEquals("a different rule or target is a different attempt", 3, dao.count())
+
+        recorder.recordOverride("r-1", "com.a")
+        recorder.recordOverride("r-1", "com.a")
+        assertEquals("overrides are separate user acts and are never deduped", 5, dao.count())
+    }
+
+    /** Device 2026-11-02: the AVD clock had once been set a month ahead, leaving rows stamped
+     *  in the future. A one-sided dedupe window treated those rows as "just now" and silently
+     *  suppressed every later wall; a future stamp is clock skew, not this launch. */
+    @Test
+    fun recordBlocked_ignoresFutureDatedRows() = runTest {
+        val dao = factory.open()!!.attemptLogDao()
+        dao.insert(attempt(at = System.currentTimeMillis() + 30L * 24 * 60 * 60 * 1000, target = "com.a"))
+
+        recorder.recordBlocked("r-1", "com.a")
+
+        assertEquals("a future-stamped row is not evidence of this launch", 2, dao.count())
+    }
+
+    @Test
+    fun recordBlocked_recordsAgainOnceTheDedupeWindowHasPassed() = runTest {
+        val dao = factory.open()!!.attemptLogDao()
+        dao.insert(
+            AttemptLog(
+                occurredAtEpochMillis = System.currentTimeMillis() - 6_000L,
+                ruleId = "r-1",
+                blockedTarget = "com.a",
+                outcome = AttemptLog.OUTCOME_BLOCKED,
+                eventSequence = null,
+            ),
+        )
+
+        recorder.recordBlocked("r-1", "com.a")
+
+        assertEquals("a deliberate re-open minutes later is a new attempt", 2, dao.count())
+    }
+
     private fun attempt(at: Long, target: String) = AttemptLog(
         occurredAtEpochMillis = at,
         ruleId = "r-1",

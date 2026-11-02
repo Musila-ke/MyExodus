@@ -114,7 +114,7 @@ class AppRulesStoreMigrationTest {
 
         runBlocking {
             // Fresh recovery_state table: no rows yet, fully usable.
-            assertNull(store!!.recoveryStateDao().current())
+            assertTrue(store!!.recoveryStateDao().all().isEmpty())
             // Sibling tables intact and queryable after the migration.
             assertEquals(60L, store.recoveryPolicyDao().current()!!.defaultFrictionSeconds)
             // The v2-era rule survived with the v5 column defaulted to enabled.
@@ -937,6 +937,74 @@ class AppRulesStoreMigrationTest {
             assertTrue("pair tables dropped on rollback", columnNames(conn, "pair_profile_sharing").isEmpty())
         }
         context.deleteDatabase("consent-matrix-test.db")
+    }
+
+    /**
+     * Per-rule recovery sessions (owner acceptance test 2026-11-02): 23→24 rebuilds
+     * `recovery_state` keyed by `rule_id`, carrying the one existing session over intact;
+     * the rollback returns to the single-row shape and keeps the newest session.
+     */
+    @Test
+    fun migration23to24AndBack_rekeysSessionsByRule_andKeepsNewestOnRollback() {
+        val scratchPath = context.getDatabasePath("recovery-sessions-test.db").absolutePath
+        AndroidSQLiteDriver().open(scratchPath).use { conn ->
+            conn.prepare("CREATE TABLE sentinel_table (id INTEGER NOT NULL, PRIMARY KEY(id))").use { it.step() }
+            conn.prepare(
+                "CREATE TABLE recovery_state (" +
+                    "id INTEGER NOT NULL, rule_id TEXT NOT NULL, " +
+                    "deadline_wall_clock_utc_millis INTEGER NOT NULL, " +
+                    "deadline_elapsed_realtime_this_boot INTEGER NOT NULL, " +
+                    "boot_session_id INTEGER NOT NULL, " +
+                    "last_override_start_wall_utc_millis INTEGER, PRIMARY KEY(id))",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO recovery_state (id, rule_id, deadline_wall_clock_utc_millis, " +
+                    "deadline_elapsed_realtime_this_boot, boot_session_id, " +
+                    "last_override_start_wall_utc_millis) VALUES (0, 'r-1', 111, 222, 333, 444)",
+            ).use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_23_24.migrate(conn) }
+
+            conn.prepare(
+                "SELECT rule_id, deadline_wall_clock_utc_millis, " +
+                    "deadline_elapsed_realtime_this_boot, boot_session_id, " +
+                    "last_override_start_wall_utc_millis FROM recovery_state",
+            ).use { stmt ->
+                assertTrue("the one existing session survives", stmt.step())
+                assertEquals("r-1", stmt.getText(0))
+                assertEquals(111L, stmt.getLong(1))
+                assertEquals(222L, stmt.getLong(2))
+                assertEquals(333L, stmt.getLong(3))
+                assertEquals(444L, stmt.getLong(4))
+            }
+            conn.prepare(
+                "INSERT INTO recovery_state (rule_id, deadline_wall_clock_utc_millis, " +
+                    "deadline_elapsed_realtime_this_boot, boot_session_id) " +
+                    "VALUES ('r-2', 555, 666, 777)",
+            ).use { it.step() }
+            conn.prepare("SELECT count(*) FROM recovery_state").use { stmt ->
+                assertTrue(stmt.step())
+                assertEquals("a second rule's session coexists", 2L, stmt.getLong(0))
+            }
+            assertTrue(
+                "nothing else is touched on upgrade",
+                "id" in columnNames(conn, "sentinel_table"),
+            )
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_24_23.migrate(conn) }
+
+            conn.prepare("SELECT id, rule_id FROM recovery_state").use { stmt ->
+                assertTrue("the pre-multi-session shape keeps one row", stmt.step())
+                assertEquals(0L, stmt.getLong(0))
+                assertEquals("the newest session wins the rollback", "r-2", stmt.getText(1))
+                assertFalse("the older session is dropped", stmt.step())
+            }
+            assertTrue(
+                "nothing else is touched on rollback",
+                "id" in columnNames(conn, "sentinel_table"),
+            )
+        }
+        context.deleteDatabase("recovery-sessions-test.db")
     }
 
     private fun columnNames(conn: androidx.sqlite.SQLiteConnection, table: String): List<String> {

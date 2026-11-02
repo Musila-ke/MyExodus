@@ -979,6 +979,12 @@ class EnforcementForegroundService : Service() {
                 // once the user's own Home press backgrounds it and the wall lifts.
                 if (usageSessions.activePackage == packageName) closeUsageSession()
                 if (usageOverlay.currentContent(Display.DEFAULT_DISPLAY) !is OverlayContent.DailyLimitBlocked) {
+                    // §6 attempt log (finding 2026-11-02): Path B's wall was the one daily
+                    // wall that never recorded — Path A's ticker records the same way, and
+                    // the recorder dedupes one wall seen by both paths.
+                    publisher.snapshot.appRules[packageName]?.ruleId?.let { ruleId ->
+                        scope.launch { runCatching { attempts.recordBlocked(ruleId, packageName) } }
+                    }
                     usageOverlay.show(
                         usageStateMachine.currentGeneration,
                         Display.DEFAULT_DISPLAY,

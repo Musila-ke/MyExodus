@@ -44,11 +44,16 @@ TEST_APK="app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
 # earlier flip would faithfully restore the flip — so force accelerometer_rotation OFF on
 # exit; user_rotation still restores so the locked orientation does not jump.
 ROT_USER=$("$ADB" shell settings get system user_rotation | tr -d '\r')
+case "$ROT_USER" in ''|null) ROT_USER=0 ;; esac
 restore_rotation() {
-  "$ADB" shell settings put system accelerometer_rotation 0
-  "$ADB" shell settings put system user_rotation "$ROT_USER"
+  "$ADB" shell settings put system accelerometer_rotation 0 || :
+  "$ADB" shell settings put system user_rotation "$ROT_USER" || :
 }
+# INT/TERM get an explicit exit so the EXIT trap runs when a run is interrupted (Ctrl-C used
+# to skip it, which is how a flip survived a session despite this guard existing).
 trap restore_rotation EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if [[ "${1:-}" == "--build" ]]; then
   ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest -q

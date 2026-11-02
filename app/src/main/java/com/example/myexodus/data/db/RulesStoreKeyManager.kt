@@ -15,13 +15,17 @@ class RulesStoreKeyManager(
 
     // Resolved per call, not cached: the store can be keyed before or after the scope activates
     // (e.g. a pre-unlock process that migrates only on its USER_UNLOCKED pass).
-    private fun delegate(): KeystoreWrappedDekManager = KeystoreWrappedDekManager(
-        appContext,
-        LEGACY_KEK_ALIAS + LocalDatabaseMigration.keySuffix(),
-        LEGACY_PREFS + LocalDatabaseMigration.keySuffix(),
-    )
+    private fun delegate(keySuffix: String = LocalDatabaseMigration.keySuffix()): KeystoreWrappedDekManager =
+        KeystoreWrappedDekManager(
+            appContext,
+            LEGACY_KEK_ALIAS + keySuffix,
+            LEGACY_PREFS + keySuffix,
+        )
 
     override fun getOrCreateDek(): ByteArray = delegate().getOrCreateKey()
+
+    /** DEK for a file whose scope was captured earlier — name and key must come from one scope. */
+    fun getOrCreateDek(keySuffix: String): ByteArray = delegate(keySuffix).getOrCreateKey()
 
     override fun classifyFailure(e: Throwable): KeyFailure = delegate().classifyFailure(e)
 

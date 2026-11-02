@@ -105,6 +105,18 @@ internal object LocalDatabaseMigration {
 
     fun scopeOrNull(): Scope? = activeScope
 
+    /**
+     * One read of the active scope for callers that must pair a file name with the key suffix
+     * that opens it. Two [scopeOrNull] reads can straddle the null→scope activation and hand a
+     * legacy-named Room builder the UID-scoped DEK (hmac check failed for pgno=1, 2026-11-01).
+     */
+    internal data class StoreScope(val rulesName: String, val keySuffix: String)
+
+    internal fun currentRulesScope(): StoreScope {
+        val scope = scopeOrNull()
+        return StoreScope(scope?.rulesName ?: AppRulesStoreFactory.DB_NAME, scope?.keySuffix ?: "")
+    }
+
     fun rulesDbName(context: Context): String =
         scopeOrNull()?.rulesName ?: AppRulesStoreFactory.DB_NAME
 

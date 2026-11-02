@@ -80,6 +80,21 @@ interface AttemptLogDao {
     @Query("SELECT count(*) FROM attempt_log")
     suspend fun count(): Long
 
+    /** Double-record guard (2026-11-02): both enforcement paths can observe one blocked
+     *  launch — the accessibility service decides on the window-state event, the foreground
+     *  service's 1.5 s poll on the resumed task. One wall is one attempt.
+     *
+     *  Bounded on BOTH sides: a row stamped after [nowMs] is clock skew (the device clock was
+     *  set back after the write), not evidence of this launch — an open-ended lower bound let
+     *  one future row suppress every later attempt forever (device 2026-11-02). */
+    @Query(
+        "SELECT COUNT(*) FROM attempt_log WHERE outcome = 'BLOCKED' " +
+            "AND rule_id = :ruleId AND blocked_target = :target " +
+            "AND occurred_at_epoch_millis >= :sinceMs " +
+            "AND occurred_at_epoch_millis <= :nowMs",
+    )
+    suspend fun countRecentBlocked(ruleId: String, target: String, sinceMs: Long, nowMs: Long): Int
+
     /** Block-screen hits grouped by target ("BLOCKED" only — overrides are not attempts). */
     @Query(
         "SELECT blocked_target AS target, COUNT(*) AS count FROM attempt_log " +

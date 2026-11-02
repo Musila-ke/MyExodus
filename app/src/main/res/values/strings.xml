@@ -13,7 +13,9 @@
     <string name="block_screen_hint">Blocking resumes when you come back.</string>
     <string name="enhanced_mode_service_label">MyExodus blocker</string>
     <string name="enhanced_mode_accessibility_description">Used to detect when you open an app or website on your restriction list and show the blocking overlay. It reads only the app name of the window you switch to and, in supported browsers only, the address-bar text.</string>
-    <string name="enhanced_mode_health_disabled_title">Enhanced Mode is off</string>
+    <!-- The row switch reflects the saved setting, not the service's live state, so a dropped
+         service must not title itself "Enhanced Mode is off" while Settings shows it on. -->
+    <string name="enhanced_mode_health_disabled_title">Accessibility service is off</string>
     <string name="enhanced_mode_health_disabled_text">Blocks still work, but they start up to a few seconds later while detection falls back to polling. Re-enable the accessibility service for instant blocking.</string>
     <string name="enhanced_mode_health_channel_name">MyExodus blocker status</string>
 
@@ -373,7 +375,10 @@
         <item quantity="one">%1$d update waiting to be sent</item>
         <item quantity="other">%1$d updates waiting to be sent</item>
     </plurals>
-    <string name="rules_pending_delivery_body">Confirm with your device key to send them to your partner.</string>
+    <plurals name="rules_pending_delivery_body">
+        <item quantity="one">Confirm with your device key to send it to your partner.</item>
+        <item quantity="other">Confirm with your device key to send them to your partner.</item>
+    </plurals>
     <string name="rules_pending_delivery_action">Send now</string>
     <string name="rules_pending_delivery_sending">Sending…</string>
 
@@ -557,6 +562,8 @@
     <string name="recovery_override">Use it now (override)</string>
     <string name="recovery_override_unavailable">Override unavailable — try again later</string>
     <string name="recovery_overrides_logged">Overrides are logged on this device.</string>
+    <string name="recovery_leave_alone">Leave the block alone</string>
+    <string name="recovery_leave_alone_caption">Back to your home screen. The block stays — nothing is unlocked or deleted.</string>
     <string name="recovery_leave_note">Leaving MyExodus won’t stop the timer — the block lifts when it ends or when you override.</string>
     <string name="recovery_override_confirm_title">Override the block?</string>
     <string name="recovery_override_confirm_text">The block ends for good — it won’t restart on its own. To block it again later you’d create a new rule under Rules. This override is logged on this device.</string>
@@ -773,10 +780,6 @@
     <string name="partner_tile_plans_all_done">All done</string>
     <string name="partner_tile_rules">Rules &amp; blocks</string>
     <string name="partner_tile_rules_none">None shared with you yet</string>
-    <plurals name="partner_tile_rules_changes">
-        <item quantity="one">%1$d change</item>
-        <item quantity="other">%1$d changes</item>
-    </plurals>
     <string name="partner_rules_empty_title">No rule updates yet</string>
     <string name="partner_rules_empty_body">When a rule or batch you watch is created, changed, turned off, or ends, it shows up here.</string>
     <plurals name="partner_rules_count">
@@ -855,17 +858,22 @@
     <string name="partner_nothing_shared_title">Nothing shared yet</string>
     <string name="partner_nothing_shared_body">%1$s can’t see your streaks, check-ins or recovery updates until you choose what to share.</string>
     <string name="partner_nothing_shared_action">Choose what to share</string>
-    <string name="partner_activity_title">Recent activity (%1$d)</string>
+    <string name="partner_activity_title">Recent activity</string>
+    <!-- Owner report 2026-11-02: bare counts ("1 today, 5 this week", a bar reading "4") did
+         not say what was counted. Every count on this card is a shared event; the window is a
+         rolling seven days, so it is never labelled as a calendar "week". -->
+    <string name="partner_activity_counted">Counted: blocks and overrides, recovery steps, relapses, milestones and rule changes — the events your partner shared with you.</string>
     <string name="partner_activity_today">Today</string>
-    <string name="partner_activity_week">This week</string>
+    <string name="partner_activity_today_stat">Events today</string>
+    <string name="partner_activity_week">Events last 7 days</string>
     <string name="partner_activity_empty">No shared activity in the last 7 days.</string>
     <!-- Owner report 2026-10-31: an all-zero page read as broken. Name the two causes apart —
          nothing has ever been shared, or sharing is on and this week was simply quiet. -->
     <string name="partner_activity_none_shared">Nothing has been shared with you yet. This page fills in when your partner turns on sharing.</string>
     <!-- Owner directive 2026-11-01: the activity page shows the week as a picture. Each bar is
          a local day, today on the right; the plural merges a column into one spoken sentence. -->
-    <string name="partner_activity_chart_title">Last 7 days</string>
-    <string name="partner_activity_chart_caption">Their shared activity, one bar per day. Today is on the right.</string>
+    <string name="partner_activity_chart_title">Shared events per day</string>
+    <string name="partner_activity_chart_caption">The last 7 days — blocks and overrides, recovery steps, relapses, milestones and rule changes. Today is on the right.</string>
     <plurals name="partner_activity_chart_bar">
         <item quantity="one">%1$s, %2$d event</item>
         <item quantity="other">%1$s, %2$d events</item>
@@ -973,13 +981,13 @@
     <string name="partner_alert_milestone_plain">Reached a milestone</string>
     <string name="partner_alert_streak_unnamed">Their streak</string>
     <string name="partner_alert_rule">Restriction rule</string>
-    <string name="partner_rule_created">Created</string>
-    <string name="partner_rule_assigned">Assigned to you</string>
-    <string name="partner_rule_unassigned">No longer shared with you</string>
-    <string name="partner_rule_updated">Updated</string>
-    <string name="partner_rule_disabled">Turned off</string>
-    <string name="partner_rule_deleted">Deleted</string>
-    <string name="partner_rule_expired">Ended</string>
+    <string name="partner_rule_created">Rule created</string>
+    <string name="partner_rule_assigned">Rule assigned to you</string>
+    <string name="partner_rule_unassigned">Rule no longer shared with you</string>
+    <string name="partner_rule_updated">Rule updated</string>
+    <string name="partner_rule_disabled">Rule turned off</string>
+    <string name="partner_rule_deleted">Rule deleted</string>
+    <string name="partner_rule_expired">Rule ended</string>
     <string name="partner_rule_in_batch">%1$s batch</string>
     <plurals name="partner_rule_item_count">
         <item quantity="one">%1$d item</item>

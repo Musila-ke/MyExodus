@@ -1679,7 +1679,7 @@ private fun PendingDeliveryBanner(
                 style = MaterialTheme.typography.titleMedium,
             )
             Text(
-                stringResource(R.string.rules_pending_delivery_body),
+                pluralStringResource(R.plurals.rules_pending_delivery_body, count, count),
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 2.dp),
             )

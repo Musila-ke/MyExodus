@@ -514,6 +514,7 @@ fun AppShell(
                         widgetSettings = widgetSettings,
                         onWidgetSettingsChanged = onWidgetSettingsChanged,
                         planRepository = planRepository,
+                        recoveryStore = recoveryStore,
                         rulesRepository = rulesRepository,
                         recoveryPrefs = prefs,
                         domainUsageEngine = domainUsageEngine,

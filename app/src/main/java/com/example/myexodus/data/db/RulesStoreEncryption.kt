@@ -26,7 +26,8 @@ class RulesStoreEncryption(
     private val migration = PlaintextToEncryptedMigration(keyManager, recoveryManager)
     private var backupPresentAtStart = false
 
-    fun newDriver(): SQLiteDriver = KeyFetchingSQLCipherDriver { keyManager.getOrCreateDek() }
+    fun newDriver(keySuffix: String = LocalDatabaseMigration.keySuffix()): SQLiteDriver =
+        KeyFetchingSQLCipherDriver { keyManager.getOrCreateDek(keySuffix) }
 
     fun classifyFailure(e: Throwable): KeyFailure = keyManager.classifyFailure(e)
 

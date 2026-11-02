@@ -1,6 +1,8 @@
 package com.example.myexodus.accountability.sync
 
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -90,6 +92,34 @@ class MessageDeliveryTest {
             authorize = { true },
             runPass = { throw IllegalStateException("no network after all") },
             stillPending = { true },
+        )
+        assertEquals(MessageSendOutcome.QUEUED, outcome)
+    }
+
+    /** Finding 2026-11-02: a prompt left up (or a wedged pass) held `sending` forever while
+     *  the composer refused every dismiss. Each leg is bounded; a timed-out leg is QUEUED. */
+    @Test
+    fun anAuthorizationThatNeverReturnsIsSavedWithinTheTimeout() = runTest {
+        val outcome = messageSendOutcome(
+            emitted = true,
+            online = true,
+            authorize = { awaitCancellation() },
+            runPass = { error("must not run") },
+            stillPending = { false },
+            timeoutMs = 1_000L,
+        )
+        assertEquals(MessageSendOutcome.QUEUED, outcome)
+    }
+
+    @Test
+    fun aQueueThatNeverAnswersNeverClaimsSent() = runTest {
+        val outcome = messageSendOutcome(
+            emitted = true,
+            online = true,
+            authorize = { true },
+            runPass = {},
+            stillPending = { awaitCancellation() },
+            timeoutMs = 1_000L,
         )
         assertEquals(MessageSendOutcome.QUEUED, outcome)
     }

@@ -47,6 +47,17 @@
     <string name="settings_recovery_windows_title">Risk windows</string>
     <string name="settings_recovery_windows_body">The times you\'re most likely to struggle. Inside a window, the lowest-effort techniques show first.</string>
 
+    <!-- Friction timer (owner request 2026-11-01): the wait is the user\'s choice, 1 minute to
+         24 hours, instead of the fixed 60 s. Title reuses recovery_timer_label. -->
+    <string name="settings_friction_timer_body">How long a block holds before it lifts on its own. From 1 minute to 24 hours; an override can still end it early.</string>
+    <string name="friction_timer_intro">The wait before a block lifts on its own. It applies to new sessions — a countdown already running keeps its length.</string>
+    <string name="friction_timer_hours">Hours</string>
+    <string name="friction_timer_minutes">Minutes</string>
+    <string name="friction_timer_current">Now set to %1$s</string>
+    <string name="friction_timer_save">Save</string>
+    <string name="friction_timer_saved">Saved. New sessions will hold for %1$s.</string>
+    <string name="friction_timer_invalid">Choose a time between 1 minute and 24 hours.</string>
+
     <!-- Risk windows (W4 editor) -->
     <string name="recovery_windows_title">Risk windows</string>
     <string name="recovery_windows_intro">The times you\'re most likely to struggle. Inside a window, the lowest-effort techniques show first.</string>
@@ -176,6 +187,7 @@
     <string name="recovery_gate_title_history">Unlock to see your history</string>
     <string name="recovery_gate_title_plan">Unlock to edit your coaching plan</string>
     <string name="recovery_gate_title_windows">Unlock to edit your risk windows</string>
+    <string name="recovery_gate_title_friction">Unlock to change your friction timer</string>
     <string name="recovery_gate_locked">Your history is locked.</string>
     <string name="recovery_gate_unlock">Unlock</string>
     <string name="recovery_gate_no_lock_banner">No screen lock is set on this device, so this screen isn\'t protected. Set one in system settings for privacy.</string>
