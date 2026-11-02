@@ -1515,14 +1515,14 @@ posts a correct high-importance notification; whether it banners is XOS's dynami
 policy (device-owner-level setting), not app delivery. No code change. Honest limit: this
 was observed on one OEM skin; it is not evidence that every OEM banners.
 
-### Remaining device work
+### Remaining device work (resolved 2026-11-03 — see the second 2026-11-03 pass below)
 
-- Receiver display of ADR #257's label on X6532C — BLOCKED (needs new build there;
-  borrow permission).
+- Receiver display of ADR #257's label on X6532C — **PASSED 2026-11-03** on hardware (the
+  current APK was installed on X6532C with the owner's per-action permission).
 - On-device tap leg for ADR #258 (partner notification → the subpage it concerns:
-  activity / rules / requests) — BLOCKED on a fresh partner notification arriving while
-  the new build is foreground-testable on both phones; JVM-proven (33 targeted tests), no
-  device tap captured yet.
+  activity / rules / requests) — **PASSED 2026-11-03 for activity and rules**; the requests
+  view was not triggered on device (no approval request arrived in the window) and remains
+  JVM-covered.
 - Everything else exercised in this window is PASSED with the evidence above.
 
 ## 2026-11-03 — final gates, APK install, and phone release
@@ -1535,7 +1535,10 @@ was observed on one OEM skin; it is not evidence that every OEM banners.
   (`lastUpdateTime=2026-11-03 01:01:20`); cold start resumed
   (`topResumedActivity=com.example.myexodus/.MainActivity`), process alive, crash buffer empty,
   no `ANR in com.example.myexodus`. X6532C intentionally not installed (borrowed phone,
-  per-action permission required).
+  per-action permission required). **Superseded later the same day:** the owner granted
+  per-action permission, the same APK was installed on X6532C (`lastUpdateTime=2026-11-03
+  01:11:24`), and both installed base APKs hash-match the built APK (`sha256
+  6b70e44a37242190066e634f50ea3d076824dfa98a8849de0ba84a02beb8dc0c`, `versionName=1.1`).
 - **Test-infra note (no app change):** `AppLabelsTest.publishesNeverThrowWhileTheMainThreadKeepsApplyingSnapshots`
   no longer reads the state map back after its churn. Under 8×200 background publishes against
   a tight snapshot-applying thread, Compose 1.12 can transiently make the whole map unreadable
@@ -1548,3 +1551,126 @@ was observed on one OEM skin; it is not evidence that every OEM banners.
 - **Phone release:** top-level `/sdcard/*.png` captures and `window_dump.xml` deleted on both
   phones; `stay_on_while_plugged_in=0`; `rotation-guard.sh` run for both serials
   (`accelerometer_rotation=0`); wireless adb disconnected (`adb devices` empty).
+
+## 2026-11-03 — second pass: partner legs on hardware, wall frame capture, hand-back
+
+Both phones were reattached over wireless adb with the owner's per-action permission. The
+build under test is the same APK as the final-gates section above: `sha256
+6b70e44a37242190066e634f50ea3d076824dfa98a8849de0ba84a02beb8dc0c` on the build host and on
+both installed `base.apk` files (`versionName=1.1`; `lastUpdateTime` 2026-11-03 01:01:20 on
+X6532 / 01:11:24 on X6532C).
+
+### ADR #257 — receiver-side label on X6532C: PASSED
+
+`com.ichi2.anki` (AnkiDroid) is installed on X6532 (FtVxfq…) but **not** on X6532C
+(`pm list packages | grep ichi2` returns nothing there). X6532C's Partner → How they're doing
+→ Recent activity renders "AnkiDroid — Blocked · 10m ago" and "AnkiDroid — Blocked · 11m ago"
+for two fresh blocked attempts, while an older row from ~2 h earlier still reads
+`com.ichi2.anki — Blocked`. The sender-resolved `al` label on the attempt wire is the only
+possible source of the name on that phone; the older row is the before/after contrast.
+Evidence: `app/docs/evidence/2026-11-03-adr257-receiver-label-x6532c.png`.
+
+### ADR #258 — notification tap opens the subpage it concerns: PASSED (2 of 3 views on device)
+
+With MyExodus backgrounded on X6532C (HOME, process alive; no force-stop), both partner
+notifications were tapped from the shade after expanding the group:
+
+- **VIEW_RULES:** "Rule update from Musila — cold-window-test.exampl was turned off." →
+  landed on **Rules & blocks** with "4 rule updates", including "Rule turned off · 5m ago".
+  Evidence: `app/docs/evidence/2026-11-03-adr258-rules-tap-x6532c.png`.
+- **VIEW_ACTIVITY:** "New activity from Musila" → landed on **How they're doing** with the
+  chart reading Today=6. Evidence:
+  `app/docs/evidence/2026-11-03-adr258-activity-tap-x6532c.png`.
+
+The **requests** view was not triggered on device: no approval request arrived during the
+window, and producing one requires a signed partner action. All three view mappings are
+JVM-proven (`PartnerDeepLinkViewTest` 4/4, with the plan-extra-outranks-view-extra contract;
+`PartnerNotificationsTest` 29/29). This is 2-of-3 on hardware, stated as such.
+
+### Rule updates deliver automatically — device half: PASSED
+
+X6532C's own `files/rule-delivery.log` (pulled before the wipe) records the delivery of the
+disabled throwaway rule with no "Send now" tap on the sender:
+
+```
+2026-11-02T22:29:31.382Z event=049ebf1c… stage=received change=DISABLED label=cold-window-test.exampl
+2026-11-02T22:29:31.406Z event=049ebf1c… stage=stored stored=true
+2026-11-02T22:29:31.429Z event=049ebf1c… stage=notify notify=posted
+```
+
+The same log shows the earlier CREATED (20:24:45Z) and UPDATED (20:42:25Z) deliveries of that
+rule. On the sender, the "1 update waiting to be sent" banner was stale after the automatic
+delivery. The 2026-11-02 cold-window leg additionally proved the prompt path when the keystore
+window is cold (forced heal → BiometricPrompt → owner fingerprint → `drain: 3 event(s)
+delivered`, banner cleared).
+
+### Block wall transition — frame-level capture on X6532: PASSED
+
+The Animation.MyExodus.None fix (BlockerActivity inherits `windowAnimationStyle` from
+`Theme.MyExodus.Blocker`, themes.xml:13-21) was re-captured on hardware with the device's
+animation scales at 0.5 (all three). A blocked AnkiDroid launch was recorded at ~43.5 fps
+(222 frames) and every frame was inspected by per-frame edge-column colour analysis plus
+contact sheets:
+
+- launcher through frame 90 (t=2.008 s, both edge columns still launcher-coloured);
+- the wall window is **full-screen from its first painted frame** (frame 91, t=2.035 s);
+- no frame anywhere in the transition shows a wall/app boundary — the 273 ms right-to-left
+  slide is gone.
+
+The live BlockerActivity window reports `wanim=0x7f120005`, and `aapt2 dump resources` on the
+installed APK resolves `0x7f120005` to `style/Animation.MyExodus.None` with all four
+`activity*Animation` items = `@null`. Evidence:
+`app/docs/evidence/2026-11-03-wall-no-slide-launch-strip-x6532.png` (frames 82-101) and
+`app/docs/evidence/2026-11-03-wall-activity-host-x6532.png` (settled activity-host wall).
+
+Observation (not a fix-scope defect, one launch): on the first capture the accessibility
+overlay took over from the activity host and the target app's own UI (including AnkiDroid's
+backup dialog) was visible for roughly 0.9 s before the overlay card painted. The recording has
+a 260 ms encoder gap in exactly that interval, so the exact exposure is uncertain, and whether
+the already-attached overlay was intercepting touches during the gap was not measured. A second
+launch kept the activity host full-screen for the whole capture.
+
+### Pending-delivery banner grammar — device leg deliberately not run
+
+The singular body fix is present in the installed APK (`plurals/rules_pending_delivery_body`:
+one = "Confirm with your device key to send it to your partner.", other = "…send them…"). The
+device leg would require leaving a rule update queued on X6532 by cancelling the cold-window
+biometric prompt; with X6532C being wiped and returned in the same session that queued update
+could never be delivered, so the sender would be left with a stuck banner. Not run for that
+reason; the resource and the JVM binding are verified, the on-device singular body is not.
+
+### Coverage ledger — what remains BLOCKED and why
+
+- **Physical typed re-pair ceremony (unpair → invitation code → SAS → both authorize):**
+  BLOCKED. The shipped V1 ceremony is typed Crockford codes only (partner-pairing plan §1/§2,
+  ADR #97). Both the unpair (`MainActivity.endPartnership`, MainActivity.kt:920-925) and each
+  SAS-gated pairing signature (`PairingCeremonyScreen.kt` `signAndFinish` → `deps.sign`) route
+  through `signWithAuthPrompt`, which raises a BiometricPrompt unless the signing key's 900 s
+  keystore window is warm. The last owner authentication was 2026-11-02 23:41:56; the window
+  expired ~23:56, and the owner was unavailable at 01:40. **Unblock:** the owner present for
+  about five minutes to authenticate on both handsets; then run unpair → re-pair twice. The
+  emulator cannot substitute (live backend rejects emulator pairing).
+- **Composer send on the current build:** BLOCKED by the same signing gate (composer auth is
+  `signWithAuthPrompt`, MainActivity.kt:797). The 45 s per-leg timeout fix itself is JVM-proven
+  (`MessageDeliveryTest`); the normal send path on this build was not re-run because reaching
+  it requires the prompt.
+- **Requests-view notification tap:** see ADR #258 above (not triggered; JVM-covered).
+- **OEM heads-up banner policy:** XOS-specific verdict above; other skins remain unmeasured.
+
+**Task-list honesty correction.** In the previous session's task list, task #5
+("Unpair, re-pair, adversarial pairing") and task #12 ("Wall frame-level re-capture on X6532
+hardware") were marked `completed` while the entries themselves said BLOCKED. #12 is now
+genuinely PASSED (above). #5 remains BLOCKED — this file has said so throughout, and that
+record stands. The two-phone live partner matrix (task #4) was genuinely completed on
+2026-11-01 21:39 and is not part of the blocked set.
+
+### Hand-back and release (X6532C)
+
+- `pm clear com.example.myexodus` on X6532C → `Success`; the app's `files` directory is gone
+  and the package remains installed. Its `com.example.myexodus.test` androidTest package was
+  left installed (removing it was not covered by the granted per-action permission).
+- Harness artifacts deleted from `/sdcard` root on both phones (95 files on X6532, 120 on
+  X6532C: XML/UI dumps, log dumps, screen recordings). User folders were not touched.
+- `stay_on_while_plugged_in=0` on both; `scripts/rotation-guard.sh` run for both serials and
+  read back `accelerometer_rotation=0`, `user_rotation=0`; both phones on the launcher, screens
+  off (`KEYCODE_SLEEP`); wireless adb disconnected (`adb devices` empty).
