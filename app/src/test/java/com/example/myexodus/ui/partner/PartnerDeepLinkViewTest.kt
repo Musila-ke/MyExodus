@@ -21,4 +21,22 @@ class PartnerDeepLinkViewTest {
     fun pairDeepLink_keepsThePlansSurface_whenTheSameTapNamedAPlan() {
         assertEquals("plans", pairDeepLinkView(requestedPlanId = "plan-7"))
     }
+
+    /** Owner ask 2026-11-02: a tap must land on the subpage the notification concerns, not
+     *  one tap short on the hub. */
+    @Test
+    fun pairDeepLink_opensTheSubpage_theNotificationNamed() {
+        assertEquals(VIEW_ACTIVITY, pairDeepLinkView(requestedPlanId = null, requestedViewId = VIEW_ACTIVITY))
+        assertEquals(VIEW_RULES, pairDeepLinkView(requestedPlanId = null, requestedViewId = VIEW_RULES))
+        assertEquals(VIEW_REQUESTS, pairDeepLinkView(requestedPlanId = null, requestedViewId = VIEW_REQUESTS))
+    }
+
+    /** A plan outranks the subpage extra: both ride the plan notification's tap. */
+    @Test
+    fun pairDeepLink_planWinsOverTheSubpageExtra() {
+        assertEquals(
+            "plans",
+            pairDeepLinkView(requestedPlanId = "plan-7", requestedViewId = VIEW_ACTIVITY),
+        )
+    }
 }

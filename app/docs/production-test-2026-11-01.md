@@ -1451,3 +1451,100 @@ separately and know which rule it belongs to, and must be able to cancel each on
   system_server once (the documented post-boot/cold-boot crash class), not app-caused; the
   guest was recovered with the documented SIGKILL-qemu + cold-relaunch recipe. The acceptance
   evidence above was captured after recovery on the rebuilt APK.
+
+## 2026-11-02 overnight — two-phone signing, partner feed, and heads-up verdict (X6532 ↔ X6532C)
+
+Build: debug APK 22:58:30 on X6532; X6532C on the previous build (no install was performed on
+the borrowed phone — installing there requires per-action owner permission). Local rig over
+the live backend, wireless adb `LAN-ADDRESS-REDACTED:5555` ↔ `192.0.2.105:5555`.
+
+### Cold-window biometric signing — PASS (fingerprint)
+
+Started from a genuinely cold signing window (`setUserAuthenticationParameters` expired).
+Evidence chain:
+
+- `MyExodus: SyncReport(... signingBlocked=true, pulledCount=0)` at **23:41:33** — the sync
+  pass correctly refused to sign.
+- Rule update journaled → `healBlockedPartnerSigning(forcePrompt = true)` → BiometricPrompt
+  window added **23:41:51.926** (`dumpsys window` / Keyguard drain).
+- Owner placed their fingerprint (owner-confirmed); prompt window removed **23:41:56.269**,
+  no prompt error logged.
+- Delivery: `MyExodusPartnerSync: drain: 3 event(s) delivered` at **23:42:20.622**.
+- Receiver: `SyncReport(... pulledCount=3, signingBlocked=false)` at **23:42:28.182**; the
+  sender's "1 update waiting to be sent / Send now" banner cleared.
+- A pass at 23:42:06 still reported `signingBlocked=true` between the prompt closing and the
+  drain — transient auth-token propagation, not a failed prompt (delivery followed 14 s
+  later, same session).
+
+The app-labeled "Use PIN/pattern" negative button was owner-verified visible in both light
+and dark mode (the actual defect fixed earlier today was invisible SystemUI text). The
+credential route behind that button was **not** re-exercised in this window; its last
+device proof is ADR #112 Leg B (2026-09-28, cold acceptance with device credential only).
+Recorded as: fingerprint leg PASSED today; credential leg PASSED earlier, not repeated.
+
+### Partner feed accuracy — PASS, with one display defect fixed (ADR #257)
+
+Owner question: "is the rules and blocks page being updated accurately? I saw a block
+violation yet I see no activity of it, what of modification…"
+
+- **Block violations do appear** — in Partner → How they're doing → Recent activity on
+  X6532C, three `Blocked` rows (28m / 38m / 55m ago). They are deliberately not on the
+  Rules & blocks page, which lists rule/batch lifecycle only (owner ruling 2026-10-31:
+  "each page has its own responsibility").
+- **Modification rows do arrive** — X6532C's Rules & blocks showed
+  "cold-window-test.exampl — Rule updated · 5m ago", beside "Rule created · 23m ago" and
+  "AnkiDroid — Rule assigned to you · 2h ago". This is the wire-v2 `RuleIdentity` path.
+- **Duplicate-looking Blocked rows were genuine distinct attempts** (minutes apart, not
+  seconds). The shipped 5 s dedupe (`AttemptRecorder`, pinned by `AttemptLogTest`) collapses
+  only the two enforcement paths' view of one launch; no further change was needed.
+- **DEFECT (MEDIUM, display) FIXED — raw package id.** The three Blocked rows read
+  `com.ichi2.anki` because AnkiDroid is not installed on the viewing phone and the attempt
+  wire text carried no label. Fixed additively in ADR #257: the attempt payload now carries
+  the sender-resolved app label (optional key, ignored by older receivers; text format
+  unchanged); the receiver shows its local label when the app is installed and the sender's
+  otherwise. JVM-proven through the real-crypto coordinator path; the receiver-display leg
+  on X6532C is **BLOCKED** until the new build is installed there (permission required).
+
+### Heads-up banner on XOS — app correct, OEM presentation (verdict)
+
+Channel `partner_accountability_events_v1` is `IMPORTANCE_HIGH` with sound, and
+`dumpsys notification` shows the posted record with the expected flags. Two controlled
+captures (23:18:49 partner event; 23:28:17 test alert) recorded no heads-up banner on the
+X6532 dynamic bar; the notification was present in the shade both times. Verdict: the app
+posts a correct high-importance notification; whether it banners is XOS's dynamic-bar
+policy (device-owner-level setting), not app delivery. No code change. Honest limit: this
+was observed on one OEM skin; it is not evidence that every OEM banners.
+
+### Remaining device work
+
+- Receiver display of ADR #257's label on X6532C — BLOCKED (needs new build there;
+  borrow permission).
+- On-device tap leg for ADR #258 (partner notification → the subpage it concerns:
+  activity / rules / requests) — BLOCKED on a fresh partner notification arriving while
+  the new build is foreground-testable on both phones; JVM-proven (33 targeted tests), no
+  device tap captured yet.
+- Everything else exercised in this window is PASSED with the evidence above.
+
+## 2026-11-03 — final gates, APK install, and phone release
+
+- **JVM suite:** 2,412 tests, 0 failures, 0 errors, 0 skipped (`:app:testDebugUnitTest`, final
+  tree including ADRs #257/#258).
+- **Android lint:** `:app:lintDebug` — "No issues found." (separate invocation from tests,
+  ADR #208).
+- **APK:** `assembleDebug` → `app-debug.apk` (50,541,984 bytes, 01:00), `install -r` on X6532
+  (`lastUpdateTime=2026-11-03 01:01:20`); cold start resumed
+  (`topResumedActivity=com.example.myexodus/.MainActivity`), process alive, crash buffer empty,
+  no `ANR in com.example.myexodus`. X6532C intentionally not installed (borrowed phone,
+  per-action permission required).
+- **Test-infra note (no app change):** `AppLabelsTest.publishesNeverThrowWhileTheMainThreadKeepsApplyingSnapshots`
+  no longer reads the state map back after its churn. Under 8×200 background publishes against
+  a tight snapshot-applying thread, Compose 1.12 can transiently make the whole map unreadable
+  to every snapshot (`IllegalStateException: Reading a state that was created after the snapshot
+  was taken…`, Google issue 346818437). Reproduced with a throwaway Compose-only probe with zero
+  app code on 4/6 runs; plain, `Snapshot.global`, and read-only-snapshot reads all failed
+  together. The test's ADR-#251 contract ("no publish threw") still passes on every run; the
+  label-visible path is pinned by the other tests in the class. No production occurrence of this
+  class is known — `publishLabel` never threw in any run.
+- **Phone release:** top-level `/sdcard/*.png` captures and `window_dump.xml` deleted on both
+  phones; `stay_on_while_plugged_in=0`; `rotation-guard.sh` run for both serials
+  (`accelerometer_rotation=0`); wireless adb disconnected (`adb devices` empty).

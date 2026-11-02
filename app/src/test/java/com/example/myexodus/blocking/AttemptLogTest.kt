@@ -11,6 +11,10 @@ import com.example.myexodus.data.db.KeyFailure
 import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.data.db.RulesStoreKeyManager
 import com.example.myexodus.data.db.entity.AttemptLog
+import com.example.myexodus.accountability.sync.PartnerSyncSignals
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -175,6 +179,29 @@ class AttemptLogTest {
         recorder.recordBlocked("r-1", "com.a")
 
         assertEquals("a future-stamped row is not evidence of this launch", 2, dao.count())
+    }
+
+    /** Owner 2026-11-02: a block the partner could not see until the 15-min worker was the
+     *  "no notification on partner" report. A recorded attempt kicks the same immediate pass
+     *  every other shared write uses; a dedupe-skip is not a new attempt and must not kick. */
+    @Test
+    fun recordedAttempt_kicksAPartnerSyncPass() = runTest {
+        val kicks = mutableListOf<Unit>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            PartnerSyncSignals.activityEmitted.collect { kicks += it }
+        }
+
+        recorder.recordBlocked("r-1", "com.a")
+        runCurrent()
+        assertEquals(1, kicks.size)
+
+        recorder.recordBlocked("r-1", "com.a") // 5 s dedupe window
+        runCurrent()
+        assertEquals("a collapsed duplicate is not a new partner-visible attempt", 1, kicks.size)
+
+        recorder.recordOverride("r-1", "com.a")
+        runCurrent()
+        assertEquals(2, kicks.size)
     }
 
     @Test

@@ -82,6 +82,9 @@ sealed interface PartnerAlert {
         /** The named batch the rule belongs to; null for a standalone rule (v2 attempt text
          *  carries it after a `|`). */
         val batchLabel: String? = null,
+        /** The sender's own name for the app (optional wire key): lets a receiver without the
+         *  app installed show "AnkiDroid" rather than `com.ichi2.anki`. */
+        val appLabel: String? = null,
     ) : PartnerAlert
 
     data class Recovery(
@@ -161,7 +164,9 @@ fun alertOf(payload: EventPayload, atEpochMillis: Long): PartnerAlert? = when (p
     EventPayload.TYPE_MILESTONE_REACHED -> payload.stateAfter?.let {
         PartnerAlert.Milestone(it.habitLabel, it.milestoneDay, it.eventOccurredAtMs)
     }
-    else -> parseActivityText(payload.text, atEpochMillis)
+    else -> parseActivityText(payload.text, atEpochMillis)?.let {
+        if (it is PartnerAlert.AppActivity) it.copy(appLabel = payload.appLabel) else it
+    }
 }
 
 /**

@@ -50,6 +50,10 @@ data class EventPayload(
     /** Plan types only (ADR #193): the plan snapshot or the recipient's progress set.
      *  Absent on every other type, so their encodings stay byte-identical. */
     val plan: PlanBody? = null,
+    /** Attempt activity only: the sender-resolved app label, so a receiver without the app
+     *  installed names it instead of showing the raw package id. Additive optional key —
+     *  older receivers ignore it and fall back to their local resolve (owner report 2026-11-02). */
+    val appLabel: String? = null,
 ) {
     companion object {
         const val TYPE_ACTIVITY = "activity"
@@ -104,6 +108,10 @@ data class EventPayload(
          *  longer-than-this label is declined to null at decode; the event itself still
          *  applies — the name is the optional part, never the state. */
         const val MAX_HABIT_LABEL_LENGTH = 80
+
+        /** Wire bound for [appLabel] — same rule: an overlong label is declined, the attempt
+         *  itself still renders (falling back to the package id). */
+        const val MAX_APP_LABEL_LENGTH = 80
     }
 }
 
@@ -186,6 +194,7 @@ private const val K_EVENT_OCCURRED_AT = "eo"
 private const val K_HABIT_LABEL = "hl"
 private const val K_ENDED_DAYS = "ed"
 private const val K_MILESTONE_DAY = "md"
+private const val K_APP_LABEL = "al"
 
 /** Defensive decode bounds (§8.5/§10.6): a malicious peer must not be able to make the
  *  receiver allocate unbounded state through a well-signed envelope. */
@@ -204,6 +213,7 @@ fun encodePayload(p: EventPayload): ByteArray = CanonicalCbor.encodeMap(
         p.schemaVersion?.let { add(K_SCHEMA_VERSION to CanonicalCbor.int(it.toLong())) }
         p.stateAfter?.let { add(K_STATE_AFTER to encodeStateAfter(it)) }
         p.plan?.let { add(K_PLAN to encodePlan(it)) }
+        p.appLabel?.let { add(K_APP_LABEL to CanonicalCbor.text(it)) }
     },
 )
 
@@ -224,6 +234,8 @@ fun decodePayload(bytes: ByteArray): EventPayload {
         // Malformed from Unsupported without rejecting the chain event that carries it.
         stateAfter = obj.get(K_STATE_AFTER)?.takeIf { !it.isNull }?.let(::decodeStateAfterOrNull),
         plan = obj.get(K_PLAN)?.takeIf { !it.isNull }?.let(::decodePlanOrNull),
+        appLabel = textOrNull(obj.get(K_APP_LABEL))
+            ?.takeIf { it.isNotBlank() && it.length <= EventPayload.MAX_APP_LABEL_LENGTH },
     )
 }
 

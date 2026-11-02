@@ -16,6 +16,9 @@ import com.example.myexodus.accountability.serialization.PlanWire
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleIdentity
 import com.example.myexodus.accountability.serialization.RuleTargetType
+import com.example.myexodus.ui.partner.VIEW_ACTIVITY
+import com.example.myexodus.ui.partner.VIEW_REQUESTS
+import com.example.myexodus.ui.partner.VIEW_RULES
 import java.text.DateFormat
 import java.util.Date
 import org.junit.Assert.assertEquals
@@ -99,6 +102,16 @@ class PartnerNotificationsTest {
             manager.getNotificationChannel(PartnerNotifications.CHANNEL_APPROVAL_REQUESTS)!!.importance,
         )
         assertEquals(2, manager.activeNotifications.size)
+        // Owner ask 2026-11-02: an approval tap lands on the Requests queue that holds it.
+        val requestTap = shadowOf(
+            manager.activeNotifications.first {
+                it.id == PartnerNotifications.idFor(PartnerNotifications.NOTIF_APPROVAL_REQUEST, PAIR_ID)
+            }.notification.contentIntent,
+        ).savedIntent
+        assertEquals(
+            VIEW_REQUESTS,
+            requestTap.getStringExtra(MainActivity.EXTRA_OPEN_PARTNER_VIEW),
+        )
     }
 
     /**
@@ -666,6 +679,7 @@ class PartnerNotificationsTest {
         val tap = shadowOf(notification.contentIntent).savedIntent
         assertEquals(MainActivity.TAB_PARTNER, tap.getStringExtra(MainActivity.EXTRA_START_TAB))
         assertEquals(PAIR_ID, tap.getStringExtra(MainActivity.EXTRA_OPEN_PARTNER))
+        assertEquals(VIEW_ACTIVITY, tap.getStringExtra(MainActivity.EXTRA_OPEN_PARTNER_VIEW))
         assertNull(tap.getStringExtra(MainActivity.EXTRA_OPEN_PLAN))
         assertEquals(
             context.getString(
@@ -751,6 +765,8 @@ class PartnerNotificationsTest {
             assertNull(tap.getStringExtra(MainActivity.EXTRA_OPEN_PLAN))
             // Owner report 2026-10-31: the tap must select the pair the post concerns.
             assertEquals(PAIR_ID, tap.getStringExtra(MainActivity.EXTRA_OPEN_PARTNER))
+            // Owner ask 2026-11-02: and land on Rules & blocks, where the change is listed.
+            assertEquals(VIEW_RULES, tap.getStringExtra(MainActivity.EXTRA_OPEN_PARTNER_VIEW))
             // One replace-in-place entry per pair: the six posts never stack.
             assertEquals(1, manager.activeNotifications.size)
         }

@@ -1,5 +1,6 @@
 package com.example.myexodus.ui.partner
 
+import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainHead
@@ -62,6 +63,21 @@ class PartnerPresentationTest {
     fun activityText_parsesBothEventKinds() {
         assertEquals(PartnerAlert.AppActivity("com.x", true, 42L), parseActivityText("override:com.x", 42L))
         assertEquals(PartnerAlert.AppActivity("com.x", false, 42L), parseActivityText("blocked:com.x", 42L))
+    }
+
+    /** Owner report 2026-11-02: the feed must name the app even when the viewer does not have
+     *  it installed — the attempt payload's sender label rides through; old payloads stay null. */
+    @Test
+    fun alertOf_carriesTheSenderAppLabel_andOldPayloadsStayNull() {
+        val withLabel = alertOf(
+            EventPayload(text = "blocked:com.ichi2.anki", appLabel = "AnkiDroid"),
+            atEpochMillis = 42L,
+        ) as PartnerAlert.AppActivity
+        assertEquals("AnkiDroid", withLabel.appLabel)
+
+        val old = alertOf(EventPayload(text = "blocked:com.ichi2.anki"), atEpochMillis = 42L)
+            as PartnerAlert.AppActivity
+        assertNull(old.appLabel)
     }
 
     @Test

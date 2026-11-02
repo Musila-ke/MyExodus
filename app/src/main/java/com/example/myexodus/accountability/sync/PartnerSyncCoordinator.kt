@@ -371,7 +371,14 @@ class PartnerSyncCoordinator(
         if (profileConsent?.shareCheckins == true) {
             val since = maxOf(sinceMs, profileConsent.checkinsEnabledSinceMs)
             for (attempt in attempts.pendingEventCreation(pairId, since, RECONCILE_BATCH)) {
-                when (val emit = emitActivity(pairId, "attempt ${attempt.id}", eventText(attempt, store))) {
+                when (
+                    val emit = emitActivity(
+                        pairId,
+                        "attempt ${attempt.id}",
+                        eventText(attempt, store),
+                        appLabel = attemptAppLabel(attempt),
+                    )
+                ) {
                     is Emit.Created -> { attempts.linkEvent(attempt.id, pairId, emit.sequence); linked++ }
                     Emit.Duplicate, Emit.Skip -> Unit
                     Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
@@ -761,8 +768,22 @@ class PartnerSyncCoordinator(
     }
 
     /** Signs and creates one `TYPE_ACTIVITY` event (attempts/sessions — the shipped shape). */
-    private suspend fun emitActivity(pairId: String, label: String, text: String): Emit =
-        emitPayload(pairId, label, EventPayload(type = EventPayload.TYPE_ACTIVITY, text = text))
+    private suspend fun emitActivity(
+        pairId: String,
+        label: String,
+        text: String,
+        appLabel: String? = null,
+    ): Emit = emitPayload(
+        pairId,
+        label,
+        EventPayload(type = EventPayload.TYPE_ACTIVITY, text = text, appLabel = appLabel),
+    )
+
+    /** The name the owner sees for the blocked app, bounded like every wire label. Null when
+     *  it would add nothing (unresolvable, or the package id itself). */
+    private fun attemptAppLabel(attempt: AttemptLog): String? =
+        AccountabilityEventWire.sanitizeRuleLabel(resolveRuleLabel("APP", attempt.blockedTarget))
+            .takeIf { it.isNotBlank() && it != attempt.blockedTarget }
 
     /** Signs and creates one event carrying [payload]. [Stop] is the cold-auth-window signal
      *  the caller ends the pass on; the row stays unlinked for the next run either way. */

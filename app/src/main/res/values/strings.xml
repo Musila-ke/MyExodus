@@ -1147,6 +1147,10 @@
     <string name="partner_sign_lock_rejected_body">Your screen lock verified, but this device’s security key was created before screen-lock confirmation was available, and keys can’t be changed after creation. Add a fingerprint or face in Android Settings and try again.</string>
     <!-- The confirm-credential prompt's subtitle (ADR #112 fallback path). -->
     <string name="partner_signing_screen_lock_subtitle">Confirm with your screen lock</string>
+    <!-- Owner report 2026-11-02: the OEM sheet's own "Use Numeric Password" link can render
+         invisible in light mode (light mode, X6532C) because SystemUI paints it. The sheet's
+         app-labeled negative button carries the same route with visibly themed text. -->
+    <string name="partner_signing_use_pin">Use PIN/pattern</string>
     <string name="partner_biometric_open_settings">Open settings</string>
     <string name="partner_biometric_close">Close</string>
     <!-- §8.2/§9 identity migration (task #68): enrollment change or a permanently invalidated

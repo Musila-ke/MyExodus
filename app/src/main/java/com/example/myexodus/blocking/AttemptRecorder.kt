@@ -1,6 +1,7 @@
 package com.example.myexodus.blocking
 
 import android.util.Log
+import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.AttemptLog
 import javax.inject.Inject
@@ -52,6 +53,9 @@ class AttemptRecorder @Inject constructor(
                     outcome = outcome,
                 ),
             )
+            // Owner 2026-11-02: the partner must hear about a wall now, not at the next
+            // 15-min pass. Same kick (and same cold-signing heal) as every other shared write.
+            PartnerSyncSignals.activityEmitted.tryEmit(Unit)
             Log.i(TAG, "attempt logged: outcome=$outcome rule=$ruleId target=$blockedTarget")
         } catch (e: Exception) {
             Log.w(TAG, "attempt log write failed: $outcome $blockedTarget", e)

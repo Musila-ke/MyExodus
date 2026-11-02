@@ -158,6 +158,27 @@ class PartnerSyncCoordinatorTest {
         assertEquals(0, repairCalls)
     }
 
+    /** Owner report 2026-11-02: the attempt event carries the sender-resolved app label, so a
+     *  receiver without the app installed names it instead of showing the raw package id. */
+    @Test
+    fun blockedAttempt_carriesTheSenderResolvedAppLabel() = runTest {
+        coordinator = coordinator(
+            warmSigner(),
+            resolveRuleLabel = { _, target -> if (target == "com.instagram.android") "Instagram" else target },
+        )
+        enroll()
+        seedConsent(shareCheckins = true)
+        recorder.recordBlocked("r-1", "com.instagram.android")
+
+        coordinator.syncOnce()
+
+        val payload = decodePayload(
+            cipher.decrypt(cek, 1L, decodeSigned(store.chainFor(pairId).single().envelope).unsigned.ciphertext),
+        )
+        assertEquals("blocked:com.instagram.android", payload.text)
+        assertEquals("Instagram", payload.appLabel)
+    }
+
     @Test
     fun blockedAttempt_warmWindow_becomesLinkedDrainedEvent() = runTest {
         enroll()
@@ -1436,6 +1457,7 @@ class PartnerSyncCoordinatorTest {
         checkIn: suspend (Boolean) -> Unit = {},
         syncConsent: suspend (String, Boolean) -> Boolean = { _, _ -> true },
         fence: SessionFence = SessionFence.Unfenced,
+        resolveRuleLabel: (String, String) -> String = { _, target -> target },
     ) = PartnerSyncCoordinator(
         enrollmentDao = db.enrollmentDao(),
         storeFactory = factory,
@@ -1470,6 +1492,7 @@ class PartnerSyncCoordinatorTest {
             syncConsent(pId, enabled)
         },
         fence = fence,
+        resolveRuleLabel = resolveRuleLabel,
     )
 
     private fun enroll(

@@ -167,6 +167,10 @@ class MainActivity : FragmentActivity() {
      *  that partner's dashboard, never whichever roster entry happened to be selected. */
     private var requestedPartner by mutableStateOf<String?>(null)
 
+    /** Owner ask 2026-11-02: a partner notification also names the surface it concerns; the
+     *  tap opens that subpage (activity, rules, requests) instead of the hub. */
+    private var requestedPartnerView by mutableStateOf<String?>(null)
+
     /** Which surface sent the user to the Recovery tab (block screen vs. widget). Labels the
      *  session rows the visit creates (v3 W7 `RecoverySession.entry`). */
     private var requestedRecoveryEntry by mutableStateOf<String?>(null)
@@ -207,6 +211,7 @@ class MainActivity : FragmentActivity() {
         requestedRecoveryEntry = intent.getStringExtra(EXTRA_RECOVERY_ENTRY)
         requestedPlan = intent.getStringExtra(EXTRA_OPEN_PLAN)
         requestedPartner = intent.getStringExtra(EXTRA_OPEN_PARTNER)
+        requestedPartnerView = intent.getStringExtra(EXTRA_OPEN_PARTNER_VIEW)
         handlePartnerNudgeIntent(intent)
     }
 
@@ -498,6 +503,7 @@ class MainActivity : FragmentActivity() {
         requestedRecoveryEntry = intent.getStringExtra(EXTRA_RECOVERY_ENTRY)
         requestedPlan = intent.getStringExtra(EXTRA_OPEN_PLAN)
         requestedPartner = intent.getStringExtra(EXTRA_OPEN_PARTNER)
+        requestedPartnerView = intent.getStringExtra(EXTRA_OPEN_PARTNER_VIEW)
         handlePartnerNudgeIntent(intent)
         startPartnerLiveSync()
         startPartnerSigningHeal()
@@ -808,6 +814,8 @@ class MainActivity : FragmentActivity() {
                         onPlanConsumed = { requestedPlan = null },
                         requestedPartner = requestedPartner,
                         onPartnerConsumed = { requestedPartner = null },
+                        requestedPartnerView = requestedPartnerView,
+                        onPartnerViewConsumed = { requestedPartnerView = null },
                         planRepository = recoveryPlanRepository,
                         rulesRepository = rulesRepository,
                         habitRepository = habitRepository,
@@ -935,11 +943,10 @@ class MainActivity : FragmentActivity() {
      * (PIN/pattern/password) authorizes the key through the platform's confirm-credential
      * flow. The explicit-message dialog shows only when neither can produce a signature.
      *
-     * Owner ruling 2026-10-01 (#17) made the credential affordance in-sheet — one dialog,
-     * no chaining. (An app-rendered picker in front of the sheet was tried 2026-10-04 and
-     * owner-rejected the same day — the sheet's own affordance is the single prompt; the
-     * light-mode XOS text-invisibility finding is parked for research, not worked around
-     * in-app.)
+     * Owner ruling 2026-11-02 supersedes #17's in-sheet credential entry: the OEM sheet's
+     * own "Use Numeric Password" link is SystemUI-painted and can be invisible in light
+     * mode, so the sheet now carries an app-labeled negative button for the screen-lock
+     * route. An extra app dialog in front of the sheet was tried and rejected the same day.
      */
     private suspend fun signWithAuthPrompt(title: String): Signature? {
         val status = BiometricManager.from(this)
@@ -973,6 +980,11 @@ class MainActivity : FragmentActivity() {
                     null
                 }
 
+                // Owner report 2026-11-02: the app-labeled negative button replaces the
+                // OEM sheet's own credential link, which renders invisible in light mode
+                // on some skins (its color is SystemUI's, unreachable from here).
+                BiometricOutcome.CredentialRequested -> signWithDeviceCredential(title)
+
                 BiometricOutcome.Cancelled -> null
             }
         }
@@ -982,6 +994,7 @@ class MainActivity : FragmentActivity() {
         data class Signed(val signature: Signature) : BiometricOutcome
         data object Cancelled : BiometricOutcome
         data object LockedOut : BiometricOutcome
+        data object CredentialRequested : BiometricOutcome
         data object PermanentlyInvalidated : BiometricOutcome
     }
 
@@ -989,12 +1002,12 @@ class MainActivity : FragmentActivity() {
      * BiometricPrompt signing that never binds a CryptoObject (owner ruling 2026-10-04):
      * a crypto-bound prompt can only be answered by a biometric — the sheet cannot render the
      * "Use PIN/pattern" affordance, so anyone whose fingerprint won't read had no way through.
-     * The combined sheet (BIOMETRIC_STRONG or DEVICE_CREDENTIAL, #17) plus the key's 900s auth
-     * window (setUserAuthenticationParameters, §NFR4) make the no-crypto path correct — the
-     * prompt authorizes the key and initSign runs in the success callback (the harness-proven
-     * path, 2026-09-28; device-differential found 2026-10-04: a live keystore window made the
-     * old code take the crypto branch on one phone and the sheet lost its fallback — and its
-     * continuation, fingerprint-only and unresumable).
+     * The sheet plus the key's 900s auth window (setUserAuthenticationParameters, §NFR4) make
+     * the no-crypto path correct — the prompt authorizes the key and initSign runs in the
+     * success callback (the harness-proven path, 2026-09-28; device-differential found
+     * 2026-10-04: a live keystore window made the old code take the crypto branch on one
+     * phone and the sheet lost its fallback — and its continuation, fingerprint-only and
+     * unresumable).
      *
      * initSign is still attempted once before the prompt, ONLY to detect a permanently
      * invalidated key early (§9 — a dead key cannot be revived by any prompt).
@@ -1003,7 +1016,21 @@ class MainActivity : FragmentActivity() {
      * `Dispatchers.IO`, and BiometricPrompt's FragmentManager throws "Must be called from main
      * thread of fragment host" if constructed or authenticated off-main.
      */
-    private suspend fun biometricSign(title: String): BiometricOutcome {
+    /** Owner report 2026-11-02: the Keyguard confirm screen shows a fingerprint pane first and
+     *  hides the PIN switch behind SystemUI text that renders invisible in light mode (X6532C).
+     *  API 30+ can raise the credential-only system prompt instead, which opens directly on the
+     *  PIN/pattern/password entry — no switch, nothing for the OEM theme to paint wrong. */
+    private suspend fun deviceCredentialSign(title: String): BiometricOutcome =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            biometricSign(title, BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+        } else {
+            BiometricOutcome.Cancelled
+        }
+
+    private suspend fun biometricSign(
+        title: String,
+        authenticators: Int = BiometricManager.Authenticators.BIOMETRIC_STRONG,
+    ): BiometricOutcome {
         val signature = Signature.getInstance(AccountabilitySigner.SIGNATURE_ALGORITHM)
         val probe = runCatching { signature.initSign(accountabilityKeyStore.signingPrivateKey()) }
         probe.exceptionOrNull()?.let { failure ->
@@ -1012,6 +1039,7 @@ class MainActivity : FragmentActivity() {
                 return BiometricOutcome.PermanentlyInvalidated
             }
         }
+        val credentialOnly = authenticators == BiometricManager.Authenticators.DEVICE_CREDENTIAL
         return withContext(Dispatchers.Main.immediate) {
             suspendCancellableCoroutine { cont ->
                 val prompt = BiometricPrompt(
@@ -1043,9 +1071,13 @@ class MainActivity : FragmentActivity() {
                         override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                             Log.w(TAG, "approval biometric prompt: $errString")
                             val outcome = when (errorCode) {
-                                // The combined sheet keeps credential in-prompt (#17), so no
-                                // negative-button routing exists; a lockout raised by an OEM
-                                // sheet still falls back to the confirm flow.
+                                // Owner report 2026-11-02: the sheet's own credential link
+                                // is painted by SystemUI and can be invisible in light
+                                // mode (TranSystemUI, X6532C), so the visible app-labeled
+                                // negative button carries the screen-lock route instead.
+                                BiometricPrompt.ERROR_NEGATIVE_BUTTON,
+                                -> BiometricOutcome.CredentialRequested
+
                                 BiometricPrompt.ERROR_LOCKOUT,
                                 BiometricPrompt.ERROR_LOCKOUT_PERMANENT,
                                 -> BiometricOutcome.LockedOut
@@ -1059,20 +1091,24 @@ class MainActivity : FragmentActivity() {
                     },
                 )
                 cont.invokeOnCancellation { prompt.cancelAuthentication() }
+                // Owner ruling 2026-11-02 supersedes #17's in-sheet credential entry:
+                // DEVICE_CREDENTIAL rendered its "Use Numeric Password" link through
+                // SystemUI's own (untheable) style, which paints invisible on some light-mode
+                // skins. The biometric sheet therefore carries an app-labeled negative button
+                // (visible text path) for the screen-lock route, and the credential-only
+                // prompt opens straight on PIN entry. Neither prompt is crypto-bound (owner
+                // ruling 2026-10-04); the key's 900s window authorizes the initSign in the
+                // success callback instead. A negative button is forbidden with
+                // DEVICE_CREDENTIAL (PromptInfo.build() throws).
                 val promptInfo = BiometricPrompt.PromptInfo.Builder()
                     .setTitle(title)
                     .setSubtitle(getString(R.string.partner_approval_prompt_subtitle))
-                    // #17 owner ruling 2026-10-01: DEVICE_CREDENTIAL joins the sheet, so
-                    // "Use PIN/pattern" is an in-prompt affordance entering credential mode
-                    // inline — one dialog, no KeyguardManager hand-off. The prompt is never
-                    // crypto-bound (owner ruling 2026-10-04): a CryptoObject prompt admits only
-                    // biometrics, hiding the fallback; the key's 900s window authorizes the
-                    // initSign in the success callback instead. A negative button is forbidden
-                    // with DEVICE_CREDENTIAL (PromptInfo.build() throws).
-                    .setAllowedAuthenticators(
-                        BiometricManager.Authenticators.BIOMETRIC_STRONG or
-                            BiometricManager.Authenticators.DEVICE_CREDENTIAL,
-                    )
+                    .setAllowedAuthenticators(authenticators)
+                    .apply {
+                        if (!credentialOnly) {
+                            setNegativeButtonText(getString(R.string.partner_signing_use_pin))
+                        }
+                    }
                     .build()
                 prompt.authenticate(promptInfo)
             }
@@ -1088,6 +1124,27 @@ class MainActivity : FragmentActivity() {
      * silent cancel. A cancelled lock screen is a plain cancel, like a dismissed prompt.
      */
     private suspend fun signWithDeviceCredential(title: String): Signature? {
+        // API 30+: credential-only BiometricPrompt opens directly on PIN/pattern entry. The
+        // KeyguardManager screen below leads with a fingerprint pane whose "Use Numeric
+        // Password" switch is painted by SystemUI and reads invisible in light mode (X6532C).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return when (val outcome = deviceCredentialSign(title)) {
+                is BiometricOutcome.Signed -> outcome.signature
+                BiometricOutcome.PermanentlyInvalidated -> {
+                    onKeyPermanentlyInvalidated()
+                    null
+                }
+                BiometricOutcome.LockedOut -> {
+                    withContext(Dispatchers.Main.immediate) {
+                        biometricUnavailable = NoSignatureReason.SCREEN_LOCK_REJECTED
+                    }
+                    null
+                }
+                BiometricOutcome.CredentialRequested,
+                BiometricOutcome.Cancelled,
+                -> null
+            }
+        }
         val confirm = getSystemService(KeyguardManager::class.java)
             ?.createConfirmDeviceCredentialIntent(
                 title,
@@ -1254,6 +1311,10 @@ class MainActivity : FragmentActivity() {
 
         /** Owner report 2026-10-31: the exact partner a notification was about. */
         const val EXTRA_OPEN_PARTNER = "extra_open_partner"
+
+        /** Owner ask 2026-11-02: the Partner subpage a notification was about (a
+         *  `PartnerScreen` VIEW_* id) — the tap lands on it, not the hub. */
+        const val EXTRA_OPEN_PARTNER_VIEW = "extra_open_partner_view"
 
         /** Which surface opened the Recovery tab — a `RecoverySession.ENTRY_*` constant. */
         const val EXTRA_RECOVERY_ENTRY = "extra_recovery_entry"

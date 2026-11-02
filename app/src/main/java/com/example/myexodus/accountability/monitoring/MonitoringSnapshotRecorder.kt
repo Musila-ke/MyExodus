@@ -5,6 +5,7 @@ import com.example.myexodus.accountability.serialization.AccountabilityEventCate
 import com.example.myexodus.accountability.serialization.AccountabilityEventWire
 import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.serialization.OutboxAgeBucket
+import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.accountability.state.AccountabilityDatabase
 import com.example.myexodus.blocking.ProtectionAuthority
 import com.example.myexodus.data.db.AppRulesStoreFactory
@@ -89,6 +90,9 @@ class MonitoringSnapshotRecorder(
             }.onFailure { Log.w(TAG, "monitoring snapshot journal failed", it) }
                 .isSuccess
         }
+        // Owner 2026-11-02: a journaled snapshot is partner-visible — deliver it now, not on
+        // the next 15-min pass. Same kick as every other shared write.
+        if (journaled) PartnerSyncSignals.activityEmitted.tryEmit(Unit)
         // The debounce row advances even when no pair is consented: the state was still
         // observed, and an enable must not replay "changed" for a stale transition.
         runCatching {

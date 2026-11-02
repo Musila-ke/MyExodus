@@ -136,8 +136,8 @@ enum class UnpairOutcome { UNPAIRED, CANCELLED, FAILED }
  * wipe-detected, ended — already render a single card, and splitting those would create the
  * one-control page the owner's ruling forbids, so they get no subpages at all.
  */
-private const val VIEW_REQUESTS = "requests"
-private const val VIEW_ACTIVITY = "activity"
+internal const val VIEW_REQUESTS = "requests"
+internal const val VIEW_ACTIVITY = "activity"
 /** Owner directive 2026-11-01: the partner's device signals (monitoring + connection
  *  check-ins) get their own named destination instead of two equal-weight hub cards. */
 private const val VIEW_CHECKINS = "checkins"
@@ -147,13 +147,18 @@ private const val VIEW_SHARING = "sharing"
 private const val VIEW_PLANS = "plans"
 /** Owner mandate 2026-10-31: received rule/batch lifecycle rows as an organized page, not
  *  just the feed preview. */
-private const val VIEW_RULES = "rules"
+internal const val VIEW_RULES = "rules"
 private const val VIEW_PAIRING = "pairing"
 
-/** A partner-selection deep link returns to the hub — unless the same tap also named a plan;
- *  the plan notification sends both extras, and the plan surface owns that landing. */
-internal fun pairDeepLinkView(requestedPlanId: String?): String? =
-    if (requestedPlanId != null) VIEW_PLANS else null
+/** A partner-selection deep link returns to the hub — unless the same tap also named a plan
+ *  (the plan surface owns that landing) or a subpage (owner ask 2026-11-02: the tap must land
+ *  where the event is listed, not one tap short on the hub). */
+internal fun pairDeepLinkView(requestedPlanId: String?, requestedViewId: String? = null): String? =
+    when {
+        requestedPlanId != null -> VIEW_PLANS
+        requestedViewId != null -> requestedViewId
+        else -> null
+    }
 
 /** §19.4 item 4: the ceremony's two entry modes, as `view` values alongside the subpages. */
 private const val VIEW_CEREMONY_INVITE = "ceremony-invite"
@@ -301,6 +306,10 @@ fun PartnerScreen(
      *  partner's dashboard even when a different roster entry is currently selected. */
     requestedPairId: String? = null,
     onPairConsumed: () -> Unit = {},
+    /** Owner ask 2026-11-02: the subpage a notification concerns — activity, rules, requests.
+     *  A plan extra wins over this one; both ride the same tap. */
+    requestedViewId: String? = null,
+    onViewConsumed: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -477,9 +486,10 @@ fun PartnerScreen(
         selection?.selectedPairId = pairId
         // The plan notification carries BOTH extras; its plan surface owns the landing, so
         // this effect must not reset the view the plan effect claims (whichever runs first).
-        view = pairDeepLinkView(requestedPlanId)
+        view = pairDeepLinkView(requestedPlanId, requestedViewId)
         reload()
         onPairConsumed()
+        onViewConsumed()
     }
 
     // Owner UX ruling 2026-10-01: a background pass (FCM wake, periodic, check-now elsewhere)
@@ -2479,7 +2489,12 @@ private fun AlertRow(alert: PartnerAlert) {
     // Wire v2 (ADR #134): a relapse/milestone row leads with the streak's own name and
     // states the day-count; "Their streak" covers a v1 body with no name rather than a gap.
     val label = when (alert) {
-        is PartnerAlert.AppActivity -> rememberAppLabel(alert.target)
+        is PartnerAlert.AppActivity -> {
+            // Local name when this phone has the app; otherwise the name the sender sent —
+            // never a bare package id when the partner labelled it (owner report 2026-11-02).
+            val local = rememberAppLabel(alert.target)
+            if (local != alert.target) local else alert.appLabel ?: local
+        }
         is PartnerAlert.Recovery -> stringResource(techniqueTitle(alert.technique))
         is PartnerAlert.Relapse -> alert.habitLabel
             ?: stringResource(R.string.partner_alert_streak_unnamed)

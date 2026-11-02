@@ -226,6 +226,10 @@ fun AppShell(
      *  selects it before painting, so the tap never shows a different roster entry. */
     requestedPartner: String? = null,
     onPartnerConsumed: () -> Unit = {},
+    /** Owner ask 2026-11-02: the subpage a partner notification concerns (activity, rules,
+     *  requests) — the tap lands on it instead of the hub. */
+    requestedPartnerView: String? = null,
+    onPartnerViewConsumed: () -> Unit = {},
     planRepository: RecoveryPlanRepository,
     /** Settings → Coaching plan: the editor resolves the active profile through this. */
     rulesRepository: RulesRepository,
@@ -504,6 +508,8 @@ fun AppShell(
                         onPlanConsumed = onPlanConsumed,
                         requestedPairId = requestedPartner,
                         onPairConsumed = onPartnerConsumed,
+                        requestedViewId = requestedPartnerView,
+                        onViewConsumed = onPartnerViewConsumed,
                         modifier = contentModifier,
                     )
                     contentTab == 5 -> SettingsScreen(

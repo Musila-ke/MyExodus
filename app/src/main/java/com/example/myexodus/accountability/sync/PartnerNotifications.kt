@@ -20,6 +20,9 @@ import com.example.myexodus.accountability.serialization.RuleIdentity
 import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.notifications.NotificationTapTarget
+import com.example.myexodus.ui.partner.VIEW_ACTIVITY
+import com.example.myexodus.ui.partner.VIEW_REQUESTS
+import com.example.myexodus.ui.partner.VIEW_RULES
 import com.example.myexodus.ui.partner.shortKeyId
 import java.text.DateFormat
 import java.util.Date
@@ -250,6 +253,11 @@ object PartnerNotifications {
             // reachable — the tap must land on the plan it names.
             openPlanId = payload.plan?.planId
                 ?.takeIf { payload.type == PlanWire.TYPE_PLAN_PUBLISHED },
+            // Owner ask 2026-11-02: an event is listed on the partner's Activity page — the
+            // tap must land there, not stop at the hub. A published plan keeps its own
+            // landing (the plan surface wins in pairDeepLinkView).
+            openPartnerView = VIEW_ACTIVITY
+                .takeIf { payload.type != PlanWire.TYPE_PLAN_PUBLISHED },
             openPairId = pairId,
         )
     }
@@ -277,7 +285,8 @@ object PartnerNotifications {
             namedTitle = context.getString(R.string.partner_rule_event_title_named, partnerName),
             namedText = ruleEventBody(context, change, identity),
             tag = partnerTag("event", pairId),
-            openPartnerTab = true,
+            // Owner ask 2026-11-02: the change is listed on Rules & blocks — land there.
+            openPartnerView = VIEW_RULES,
             openPairId = pairId,
         )
     }
@@ -373,11 +382,11 @@ object PartnerNotifications {
     /** A verified disable-approval request arrived — the responder's actionable item.
      *  Plan Step 16 channel spec: `approval_requests` is HIGH importance. */
     fun notifyApprovalRequest(context: Context, pairId: String, partnerName: String) =
-        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_APPROVAL_REQUEST, pairId), R.string.approval_request_title, R.string.approval_request_text, namedTitle = context.getString(R.string.approval_request_title_named, partnerName), tag = partnerTag("request", pairId), openPairId = pairId)
+        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_APPROVAL_REQUEST, pairId), R.string.approval_request_title, R.string.approval_request_text, namedTitle = context.getString(R.string.approval_request_title_named, partnerName), tag = partnerTag("request", pairId), openPartnerView = VIEW_REQUESTS, openPairId = pairId)
 
     /** The partner answered our request — informational. */
     fun notifyApprovalDecision(context: Context, pairId: String, partnerName: String) =
-        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_APPROVAL_DECISION, pairId), R.string.approval_decision_title, R.string.approval_decision_text, namedTitle = context.getString(R.string.approval_decision_title_named, partnerName), tag = partnerTag("decision", pairId), openPairId = pairId)
+        post(context, CHANNEL_APPROVAL_REQUESTS, context.getString(R.string.partner_channel_requests_name), NotificationManager.IMPORTANCE_HIGH, idFor(NOTIF_APPROVAL_DECISION, pairId), R.string.approval_decision_title, R.string.approval_decision_text, namedTitle = context.getString(R.string.approval_decision_title_named, partnerName), tag = partnerTag("decision", pairId), openPartnerView = VIEW_REQUESTS, openPairId = pairId)
 
     /** #16: the partner ended the partnership and this device's shared data was shredded — the
      *  responder is told who, when, and that the erase happened (owner-observed defect: the
@@ -458,7 +467,7 @@ object PartnerNotifications {
         tag: String? = null,
         pushNudgeId: String? = null,
         openPlanId: String? = null,
-        openPartnerTab: Boolean = false,
+        openPartnerView: String? = null,
         openPairId: String? = null,
     ) {
         if (!NotificationAccess.canPost(context)) return
@@ -488,7 +497,7 @@ object PartnerNotifications {
             .setData(NotificationTapTarget.of(tag ?: "id-$notificationId"))
             .putExtra(
                 MainActivity.EXTRA_START_TAB,
-                if (openPlanId != null || openPartnerTab || openPairId != null) {
+                if (openPlanId != null || openPartnerView != null || openPairId != null) {
                     MainActivity.TAB_PARTNER
                 } else {
                     MainActivity.TAB_HOME
@@ -501,6 +510,10 @@ object PartnerNotifications {
         // another roster entry is selected — the extra switches PartnerScreen's selection.
         if (openPairId != null) {
             openAppIntent.putExtra(MainActivity.EXTRA_OPEN_PARTNER, openPairId)
+        }
+        // Owner ask 2026-11-02: the tap lands on the subpage the post concerns.
+        if (openPartnerView != null) {
+            openAppIntent.putExtra(MainActivity.EXTRA_OPEN_PARTNER_VIEW, openPartnerView)
         }
         if (pushNudgeId != null) {
             openAppIntent

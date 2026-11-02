@@ -58,9 +58,9 @@ import kotlinx.coroutines.launch
  * Since the task #4 consistency audit it also carries the overlay card's Close (owner rulings
  * 2026-09-27 / 2026-10-03: every block wall stays until the user dismisses it): the a11y
  * cover and this screen are now the identical composition, so the hand-off cannot restyle.
- * It finishes(), which is exactly what Home already does from this screen — the app was
- * evicted first in the a11y flow (lands on the launcher), and Path B re-blocks on the next
- * tick (the app is still behind; Home behaves identically there).
+ * Close routes through Home ([leaveToHome]): a bare finish() resumed the target still behind
+ * the wall, the FGS tick re-blocked it as a brand-new attempt (a duplicate partner event) and
+ * the wall collapsed mid-transition (owner-observed 2026-11-02).
  *
  * On stop (Home, keyguard, another window) the screen dismisses itself; it is not kept
  * alive in the background.
@@ -97,7 +97,7 @@ class BlockerActivity : ComponentActivity() {
                         // IO: the session write opens the store — a synchronous SQLCipher call
                         // that must never run on Main while a wall is up (ADR #63).
                         onOpenRecovery = { lifecycleScope.launch(Dispatchers.IO) { openRecovery() } },
-                        onClose = { finish() },
+                        onClose = { leaveToHome() },
                         modifier = Modifier.padding(innerPadding),
                     )
                 }
@@ -117,6 +117,18 @@ class BlockerActivity : ComponentActivity() {
     override fun onDestroy() {
         EnforcementForegroundService.activeBlockTarget = null
         super.onDestroy()
+    }
+
+    /** Close means "leave the wall", not "reveal the blocked app". Home must be resumed
+     *  BEFORE this activity goes away: finishing in place hands RESUMED back to the target,
+     *  which the FGS tick reads as a fresh blocked launch (new partner event) and which
+     *  plays the wall's close animation. onStop finishes us once the launcher is up. */
+    private fun leaveToHome() {
+        startActivity(
+            Intent(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_HOME)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
     }
 
     private fun stillBlocked(): Boolean {

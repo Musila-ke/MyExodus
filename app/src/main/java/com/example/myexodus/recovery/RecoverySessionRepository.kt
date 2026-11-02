@@ -1,5 +1,6 @@
 package com.example.myexodus.recovery
 
+import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.dao.SessionCount
 import com.example.myexodus.data.db.entity.RecoverySession
@@ -62,6 +63,9 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
                 durationSec = ((nowEpochMs - session.startedAtEpochMs) / 1000).coerceAtLeast(0).toInt(),
             ),
         )
+        // Owner 2026-11-02: a terminal session is mirrorable now — deliver it now, not on the
+        // next 15-min pass. Same kick as every other shared write.
+        PartnerSyncSignals.activityEmitted.tryEmit(Unit)
     }
 
     /**

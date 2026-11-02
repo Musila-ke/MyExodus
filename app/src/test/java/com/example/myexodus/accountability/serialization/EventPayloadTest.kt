@@ -32,6 +32,18 @@ class EventPayloadTest {
         assertEquals(EventPayload.TYPE_DELETION_REQUEST, decodePayload(encodePayload(p)).type)
     }
 
+    /** Owner report 2026-11-02: attempts carry the sender-resolved app label so a receiver
+     *  without the app names it. Additive optional key — unset payload bytes are unchanged. */
+    @Test
+    fun appLabel_roundTrips_andStaysAbsentWhenUnset() {
+        val p = EventPayload(text = "blocked:com.ichi2.anki", appLabel = "AnkiDroid")
+        assertEquals(p, decodePayload(encodePayload(p)))
+        assertEquals(
+            null,
+            decodePayload(encodePayload(EventPayload(text = "blocked:com.ichi2.anki"))).appLabel,
+        )
+    }
+
     /** Plan §8 Step 4 / AD-07: the DisableApprovalResponse reference fields. */
     @Test
     fun approvalReferenceFields_roundTrip() {
