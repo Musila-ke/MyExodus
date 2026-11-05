@@ -4951,7 +4951,7 @@ The implementation went the other way on the owner's explicit 2026-09-19 ruling:
 
 ## #258 — A Partner-Notification Tap Opens the Subpage It Concerns, for the Named Partner (owner ask 2026-11-02)
 
-**Status:** Accepted; implemented 2026-11-02. JVM-verified. The on-device tap leg remains unrun (2026-11-05): no production entry point calls `ApprovalFlow.requestApproval` — only `ApprovalFlowTest` and `PartnerApprovalInstrumentedTest` do — so a request notification cannot arise between two live phones yet. Activity and rule taps are device-covered via their sibling ADRs (#250/#259/#260).
+**Status:** Accepted; implemented 2026-11-02. JVM-verified. **Closed by owner 2026-11-05:** the rule-update tap was exercised on hardware by the owner (notification → Rules & blocks), and the Requests mapping is accepted on its JVM proof — no production entry point calls `ApprovalFlow.requestApproval` (only `ApprovalFlowTest` and `PartnerApprovalInstrumentedTest`), so no user-reachable request notification exists to tap. Re-open only if a requester UI ships.
 
 **Context.** Partner notifications already named their partner and opened the Partner tab (`EXTRA_OPEN_PARTNER`, ADR #193/#250 line of work), but every event type landed on the Partner hub — one tap short of the surface that actually lists it. The owner asked for the tap to open "the relevant page … the new activity bit", while still switching to the partner the notification names when several partners exist.
 
@@ -4966,7 +4966,7 @@ The implementation went the other way on the owner's explicit 2026-09-19 ruling:
 
 **Verified (JVM, 2026-11-02).** `PartnerDeepLinkViewTest.pairDeepLink_opensTheSubpage_theNotificationNamed` and `pairDeepLink_planWinsOverTheSubpageExtra`; `PartnerNotificationsTest` — milestone/activity tap carries `VIEW_ACTIVITY`, every rule-change verb carries `VIEW_RULES`, approval requests carry `VIEW_REQUESTS`, all alongside the existing pair extra.
 
-**Consequences / honest limits.** (1) On-device tap behavior is JVM-proven only: the Activity and Rules mappings ride taps already exercised on hardware, but the Requests mapping has no live trigger until a requester UI ships. (2) The subpage ids are UI-layer constants referenced by the notification layer (the same cross-layer precedent as `EXTRA_OPEN_PLAN` and the tab constants); no new module boundary. (3) A stale PendingIntent from a pre-#258 build still opens the hub — additive, never a regression.
+**Consequences / honest limits.** (1) The Activity and Rules mappings are device-proven; the Requests mapping is JVM-proven only and accepted as such (owner ruling 2026-11-05) until a requester UI ships. (2) The subpage ids are UI-layer constants referenced by the notification layer (the same cross-layer precedent as `EXTRA_OPEN_PLAN` and the tab constants); no new module boundary. (3) A stale PendingIntent from a pre-#258 build still opens the hub — additive, never a regression.
 
 ## #259 — Partner Delivery Is Promptless: the Pending-Update Banner and the Forced Signing Prompt Are Removed (owner ruling 2026-11-05)
 

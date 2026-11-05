@@ -1654,7 +1654,10 @@ reason; the resource and the JVM binding are verified, the on-device singular bo
   `signWithAuthPrompt`, MainActivity.kt:797). The 45 s per-leg timeout fix itself is JVM-proven
   (`MessageDeliveryTest`); the normal send path on this build was not re-run because reaching
   it requires the prompt.
-- **Requests-view notification tap:** see ADR #258 above (not triggered; JVM-covered).
+- **Requests-view notification tap:** closed by owner ruling 2026-11-05 — JVM-covered; no
+  production entry point calls `ApprovalFlow.requestApproval`, so no user-reachable request
+  notification exists to tap (ADR #258). The owner exercised a rule-update tap on hardware
+  himself (notification → Rules & blocks).
 - **OEM heads-up banner policy:** XOS-specific verdict above; other skins remain unmeasured.
 
 **Task-list honesty correction.** In the previous session's task list, task #5
