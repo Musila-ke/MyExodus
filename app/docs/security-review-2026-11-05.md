@@ -100,7 +100,8 @@ show 0 in the report even when their isolated tests pass.
 ## Live DAST — owner-authorized, 2026-11-05
 
 Scope: the deployed backend only (`us-central1-myexodus-53804.cloudfunctions.net` and the
-Firestore REST API), a handful of requests, no data written, no availability testing.
+Firestore REST API) — manual probes plus one rate-limited automated template scan, no data
+written, no availability testing.
 
 - **Callables without credentials:** `POST {"data":{}}` to `registerPairing`,
   `createPairInvitation`, `sendNudge` → `401 UNAUTHENTICATED`; body is the generic error
@@ -114,6 +115,15 @@ Firestore REST API), a handful of requests, no data written, no availability tes
   application are blocked" (the package + debug-SHA-1 restriction). A host attacker cannot mint
   tokens with the shipped key; only the app's own signed build can.
 - **Firestore REST without App Check/auth:** list `pairing_tokens` → `403 PERMISSION_DENIED`.
+- **Automated template scan (Nuclei 3.11.1):** 6,521 templates loaded after the severity and
+  DoS/intrusive/fuzz/brute-force exclusions; 60,208 requests at ~19 req/s against the base host
+  and three callable URLs. Result: **zero application findings.** The only matches were eight
+  duplicates of one low-severity `weak-cipher-suites` hit — the host accepts TLS 1.0/1.1 with
+  `TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA`. That is Google's shared
+  `*.cloudfunctions.net` front end, not project-controlled infrastructure, and the TLS policy
+  there cannot be configured by the owner; modern Android/iOS clients do not negotiate TLS
+  1.0/1.1, so no in-app exposure. The 895 transport errors are scanner noise on non-existent
+  paths against a shared host, not availability testing.
 - **Not reachable from the host by design:** a valid app-scoped token requires the app's App
   Check attestation, so the authenticated callable surface could not be exercised from this
   machine. That is the control working; those legs belong to the on-device break-in pass.
