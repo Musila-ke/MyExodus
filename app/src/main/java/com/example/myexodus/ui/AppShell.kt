@@ -203,9 +203,6 @@ fun AppShell(
     /** Plan Step 6: user-triggered proof that partner alerts display on this device. */
     onSendTestAlert: () -> Unit,
     onPartnerCheckNow: suspend () -> Boolean,
-    /** Owner report 2026-10-31: the Rules banner's "Send now" — the same authenticated
-     *  signing heal Check now runs, offered where the unsent rule change was made. */
-    onRetryRuleDelivery: suspend () -> Unit = {},
     onRespondToApproval: suspend (requestEventId: String, approve: Boolean) -> Boolean = { _, _ -> false },
     onUnpair: suspend (pairId: String) -> UnpairOutcome = { UnpairOutcome.FAILED },
     onDismissUnpair: suspend (pairId: String) -> Unit = {},
@@ -449,7 +446,6 @@ fun AppShell(
                         // assignee list is the live pair roster — the same read the SOS
                         // recipient dialog uses.
                         partnerSource = partnerSource,
-                        onRetryRuleDelivery = onRetryRuleDelivery,
                         openRuleId = openRuleId,
                         onOpenRuleConsumed = { openRuleId = null },
                         modifier = contentModifier,

@@ -394,63 +394,71 @@ class MainActivity : FragmentActivity() {
      *  arriving mid-prompt (or a Check-now+signal race) must not stack a second sheet. */
     private var signingHealInFlight = false
 
-    /** When the heal last asked for a credential. A cancelled prompt is a "not now", not an
-     *  error: the rows stay journaled, and begging on every 15-minute pass would train the
-     *  user to dismiss it. One ask per cooldown; explicit actions (Check now, Send) are never
-     *  throttled. */
-    private var lastSigningPromptAtMs = 0L
-
     /**
-     * ADR #216 — the foreground half of partner delivery. Streak, relapse, milestone, coaching,
-     * attempt, recovery and availability events are journaled locally and signed at sync time,
-     * and the §8.1 key refuses to sign while its 900 s window is cold. Nothing wakes that
-     * window on its own: background passes must never prompt, so before this heal the queues
-     * simply stopped (`Emit.Stop`) pass after pass — rig-proven 2026-10-23 with a pending
-     * streak row and a cold signer probe. The coordinator now reports the stop, and this
-     * collector answers it with exactly what only the user can supply: one authenticated
-     * prompt, then the pass that delivers the backlog. A warm window (the common case right
-     * after an unlock) skips the prompt entirely.
+     * ADR #216 + owner ruling 2026-11-05: partner delivery is automatic. The §8.1 key refuses
+     * to sign while its 900 s window is cold — a window every device authentication re-opens
+     * without any app prompt — so an automatic pass signs when warm and otherwise leaves the
+     * rows journaled. The periodic worker runs the same pass, so the next unlock delivers the
+     * backlog: nothing waits on a tap, and no sheet exists for the subject to dismiss and
+     * suppress the partner. Prompts remain only on explicit user-initiated actions (Check now,
+     * pairing, unpair, message send).
      */
     private fun startPartnerSigningHeal() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch {
-                    PartnerSyncSignals.signingNeeded.collect { healBlockedPartnerSigning() }
+                    PartnerSyncSignals.signingNeeded.collect { deliverQueuedPartnerEvents() }
                 }
                 launch {
-                    // Owner ruling 2026-11-01: a rule save is explicit user intent — deliver it
-                    // now, prompting for the device key if the signer is cold, never waiting on
-                    // the banner's "Send now" tap.
-                    PartnerSyncSignals.ruleChangesJournaled.collect {
-                        healBlockedPartnerSigning(forcePrompt = true)
-                    }
+                    // Owner ruling 2026-11-05: a rule save, edit, deactivate or delete is
+                    // delivered automatically — never gated on a confirmation the subject can
+                    // ignore. A cold window only defers the delivery, never drops it.
+                    PartnerSyncSignals.ruleChangesJournaled.collect { deliverQueuedPartnerEvents() }
                 }
             }
         }
     }
 
     /**
-     * Runs the pass, and when it stops cold, warms the window and runs it once more. Returns
-     * true only when nothing partner-visible is left blocked on the signing window — the
-     * "Check now" receipt must never claim a delivery the device has not made. [forcePrompt]
-     * is the explicit Check-now path: it runs the pass first (so the common warm-window case
-     * stays one pass with no sheet), and its prompt ignores the ask-cooldown.
+     * One automatic delivery pass. A cold signing window is not an error and never raises a
+     * sheet: the journal row is durable and the next pass after any device authentication
+     * (foreground start or the periodic worker) signs and sends it.
      */
-    private suspend fun healBlockedPartnerSigning(forcePrompt: Boolean = false): Boolean {
+    private suspend fun deliverQueuedPartnerEvents() {
+        if (signingHealInFlight) return
+        signingHealInFlight = true
+        try {
+            if (!isOnline()) return
+            if (!runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked) return
+            if (signingWindowWarm()) {
+                runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "automatic partner delivery failed", e)
+        } finally {
+            signingHealInFlight = false
+        }
+    }
+
+    /**
+     * The explicit "deliver my queued updates" path (Check now). Runs the pass first — the
+     * common warm-window case stays one pass with no sheet — and raises the device-key prompt
+     * only when the signer is cold. Automatic delivery never comes through here.
+     */
+    private suspend fun healBlockedPartnerSigning(): Boolean {
         if (signingHealInFlight) return false
         signingHealInFlight = true
         try {
             if (!isOnline()) return false
-            if (forcePrompt && !runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked) {
+            if (!runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked) {
                 return true
             }
             if (signingWindowWarm()) {
                 return !runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked
             }
-            val now = System.currentTimeMillis()
-            if (!forcePrompt && now - lastSigningPromptAtMs < PARTNER_SIGNING_PROMPT_COOLDOWN_MILLIS) return false
-            lastSigningPromptAtMs = now
-            // Cancelled prompt: rows stay journaled for the next pass — nothing to undo here.
+            // Cancelled prompt: rows stay journaled for the next automatic pass.
             signWithAuthPrompt(getString(R.string.partner_sync_auth_title)) ?: return false
             return !runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked
         } catch (e: CancellationException) {
@@ -746,16 +754,8 @@ class MainActivity : FragmentActivity() {
                         // returning a success receipt for a pass that sent nothing.
                         onPartnerCheckNow = {
                             isOnline() && runCatching {
-                                healBlockedPartnerSigning(forcePrompt = true)
+                                healBlockedPartnerSigning()
                             }.getOrDefault(false)
-                        },
-                        // Same heal, offered where the unsent rule change was made: a row
-                        // stops at a cold signing window, and the banner only clears when the
-                        // journal row is actually delivered.
-                        onRetryRuleDelivery = {
-                            if (isOnline()) {
-                                runCatching { healBlockedPartnerSigning(forcePrompt = true) }
-                            }
                         },
                         onRespondToApproval = { requestEventId, approve ->
                             respondToApproval(requestEventId, approve)
@@ -1298,10 +1298,6 @@ class MainActivity : FragmentActivity() {
         /** How often [startPartnerLiveSync] re-checks its gate while visible but not yet live
          *  (no pairing yet, or the kill switch is off). */
         private const val PARTNER_LIVE_RECHECK_MILLIS = 30_000L
-
-        /** ADR #216: minimum gap between auto-raised signing prompts after a cold-window stop.
-         *  The rows survive a "not now"; a re-ask on the next pass would just train dismissal. */
-        private const val PARTNER_SIGNING_PROMPT_COOLDOWN_MILLIS = 10 * 60_000L
 
         /** Milestone notification deep link: which habit's Home to show. */
         const val EXTRA_START_HABIT = "extra_start_habit"

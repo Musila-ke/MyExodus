@@ -4793,6 +4793,8 @@ The implementation went the other way on the owner's explicit 2026-09-19 ruling:
 
 **Status:** Accepted; implemented and JVM-verified 2026-10-31. Extends ADR #227 (delivered rows are deleted) and ADR #216 (signing heal).
 
+**Revision 2026-11-05:** Decisions 1–3 (the journal-count banner, its "Send now" action and the forced authenticated prompt) are removed by owner ruling — the subject must not be able to suppress a partner notification, and every unlock already warms the signing window. The DEBUG receive breadcrumb (Decision 4) remains. See ADR #259.
+
 **Context.** The owner reported the real failure mode behind "my partner never heard about the rule change": a rule mutation journals its row in the same transaction as the write, but delivery needs the sealed chain, and sealing stops at a cold signing window (screen locked / key not warmed). Nothing on the Rules page said a change was still queued, and the only retry was a global partner "Check now" elsewhere in the app. A cancelled signing prompt looked identical to a delivered change. There was also no way to prove on a device where a rule event stopped — received, stored, or notified — without reading code or attaching a debugger.
 
 **Decision.**
@@ -4909,6 +4911,8 @@ The implementation went the other way on the owner's explicit 2026-09-19 ruling:
 
 **Status:** Accepted; implemented 2026-11-02. Six defects from `production-test-2026-11-01.md`, each with its own verification chain. JVM suite **262 classes / 2,406 tests / 0 failures / 0 errors / 0 skipped** (2026-11-02). Device legs that need a paired second phone or attached hardware are recorded as BLOCKED, never passed.
 
+**Revision 2026-11-05:** Item 5's `forcePrompt = true` path is removed — automatic delivery never raises a device-key prompt or shows the pending-delivery banner (item 7's resources are deleted too). A cold signing window leaves the row journaled for the next warm pass. See ADR #259.
+
 **Context.** The pre-production sweep found contract-level defects, not cosmetic ones: Path A blocks were never written to the attempt log (the ADR's "every enforced block is recorded durably" invariant was broken on the primary enforcement path), a strict-mode write was observable to one row up to 60 s late (a one-tap bypass of the 24 h lock that also disabled protection), the composer could hang on "Sending…" for ~40 minutes with every dismiss disabled, rule updates waited on a manual "Send now" the owner called a defect, and BlockerActivity inherited the platform open animation so the wall slid in over 273 ms while the blocked app stayed visible.
 
 **Decision.**
@@ -4963,3 +4967,36 @@ The implementation went the other way on the owner's explicit 2026-09-19 ruling:
 **Verified (JVM, 2026-11-02).** `PartnerDeepLinkViewTest.pairDeepLink_opensTheSubpage_theNotificationNamed` and `pairDeepLink_planWinsOverTheSubpageExtra`; `PartnerNotificationsTest` — milestone/activity tap carries `VIEW_ACTIVITY`, every rule-change verb carries `VIEW_RULES`, approval requests carry `VIEW_REQUESTS`, all alongside the existing pair extra.
 
 **Consequences / honest limits.** (1) On-device tap behavior is JVM-proven only on the current build; X6532 runs it after the session's final install, X6532C does not receive a new build without per-action permission. (2) The subpage ids are UI-layer constants referenced by the notification layer (the same cross-layer precedent as `EXTRA_OPEN_PLAN` and the tab constants); no new module boundary. (3) A stale PendingIntent from a pre-#258 build still opens the hub — additive, never a regression.
+
+## #259 — Partner Delivery Is Promptless: the Pending-Update Banner and the Forced Signing Prompt Are Removed (owner ruling 2026-11-05)
+
+**Status:** Accepted; implemented 2026-11-05. Supersedes ADR #250 (banner, "Send now", prompt cooldown) and the prompt half of ADR #256 item 5. Warm-window delivery PASSED on hardware; the cold-window deferral leg is BLOCKED.
+
+**Context.** ADR #250/#256 made a rule change deliver on its own, but kept two subject-controlled cancellation points: the cold-window BiometricPrompt (dismiss it and the row stays queued) and the "1 update waiting to be sent / Send now" banner. Either one lets the subject suppress a notification the partner is owed. The owner ruled 2026-11-05 that no prompt, banner or confirm step may stand on the automatic path. What only the user can supply is device authentication — and every unlock already supplies it, re-opening the §8.1 900 s signing window.
+
+**Decision.**
+
+1. **One automatic delivery path.** `PartnerSyncSignals.ruleChangesJournaled` and `signingNeeded` both collect into `deliverQueuedPartnerEvents()` in `MainActivity`: one pass; if it reports `signingBlocked` and the window is warm, one retry pass; otherwise return. No prompt, no cooldown, no banner.
+2. **A cold window is a delay, not a loss.** Rows are journaled in the rule write's transaction and deleted only by a delivered pass; the periodic 15-minute worker and the next foreground signal re-run the same pass after any device authentication.
+3. **Explicit user-initiated integrity actions still prompt.** Check now, pairing/unpair, message send and backup keep `signWithAuthPrompt`. The automatic path never calls it.
+4. **The pending-delivery surface is deleted, not hidden.** `PendingDeliveryBanner`, `onRetryRuleDelivery` (MainActivity → AppShell → RulesScreen), the `rules_pending_delivery_*` resources and `PARTNER_SIGNING_PROMPT_COOLDOWN_MILLIS` are removed. The journal remains the queue of record.
+
+**Alternatives considered.** (a) *Keep the banner as status only* — rejected: it still advertises a tap the owner wants gone, and the queue is already durable without it. (b) *Warm the key silently in the background* — impossible: the platform requires user authentication; a cold pass can only defer. (c) *Let the partner pull the update on demand* — rejected: the row and the key are both on the subject device, so this adds a second trigger surface without changing the authentication requirement. (d) *Send rule events unsigned* — rejected by ADR #42/#196: the relay stays content-blind and signing is the E2EE boundary, not a UX toggle.
+
+**Verified (2026-11-05).** Warm-window automatic delivery on the 16:22 build (banner and prompt removed): after X6532's 16:32 install, a partner-shared rule created on X6532 reached X6532C automatically — X6532C receipt `13:37:56.011Z … change=CREATED label=AI Gallery` → `stored=true` → `notify=posted` — with no Send-now tap and no device-key sheet; the partner Rules page named "AI Gallery · Rule created". `PartnerNotificationsTest` green, Android lint clean (run alone per ADR #208), `assembleDebug` green, APK installed on X6532. **BLOCKED:** the cold-window deferral leg — let the 900 s window lapse, make a change (no sheet must appear), then unlock the phone and see the queued row deliver on the next pass. Not run: it needs owner-authentication timing. That behavior is verified by code path and build, not by a device result.
+
+**Consequences / honest limits.** (1) Delivery latency is bounded by the next device authentication or the 15-minute worker, not by a tap. (2) The owner loses the "what's queued" view; the partner's receipt remains the proof of delivery. (3) The subject can still suppress by uninstalling or force-stopping the app — a platform limit outside this ruling (the XOS OneKeyClean case is a real instance; see `xos-onekeyclean-force-stop-2026-11-05.md`). (4) A permanently cold device never delivers; the queue retains the rows rather than lying about delivery.
+
+## #260 — Attempt, Override and Recovery Alerts Carry the Rule Alerts' Named Shape (owner ruling 2026-11-05)
+
+**Status:** Accepted; implemented 2026-11-05. JVM-verified; the partner display leg on X6532C is BLOCKED (no per-action install permission for the copy build).
+
+**Context.** The owner reported two notification families that did not read alike: "Rule update from Musila — AI Gallery was deleted" for rule changes, but only "New activity from Musila" for a blocked attempt. The typed activity branch in `PartnerNotifications.notifyPartnerEvent` had no rich copy and fell through to the generic named text. The wire already carries everything needed: `blocked:<pkg>[|<batch>]`, `override:<pkg>[|<batch>]`, `recovery:<technique>:<outcome>`, plus the sender's `appLabel` (ADR #257).
+
+**Decision.** `activityCopy` parses the wire text with the same `parseActivityText` the feed uses and renders: the title names the partner and the act ("tried to open a blocked app" / "used an override" / "logged a recovery step"); the body names the app (local label, else the sender's `appLabel`, else the package id) and the batch when present; the recovery body names the localized technique and outcome. Undecodable text keeps the generic named copy. Lockscreen public copy stays generic (FR-13). No wire change; batch attempts already append `|batchName` (ADR #249).
+
+**Alternatives considered.** (a) *Put the app in the title ("Musila tried to open AI Gallery")* — rejected: both families would then have different title grammars, and long app/batch names would be truncated in the tray; the rule family's person+act title is the consistent shape. (b) *Resolve the app label at send time and put it on the wire* — rejected: ADR #196's bounded allowlist and ADR #257 already send the label as a bounded field, and the receiver may know a better local label. (c) *Leave activity generic and rely on the tap* — rejected by the owner: the notification itself must say what happened.
+
+**Verified (JVM, 2026-11-05).** `PartnerNotificationsTest` — `blockedAttempt_namesTheActTheAppAndTheBatch` (title, in-batch body and the lockscreen-public fallback), `blockedAttemptOutsideABatch_hasNoBatchTail`, `overrideAttempt_namesTheOverride`, `recoveryStep_namesTheTechniqueAndOutcome` — green. Android lint clean (alone per ADR #208); `assembleDebug` green; APK (50,544,300 bytes, built 17:24) installed on X6532 at 17:25:20. **BLOCKED:** partner-side display — X6532C runs the 16:22 build without this change and no new install was authorized there.
+
+**Consequences / honest limits.** (1) Both notification families now name the person and the act, and the body names the target. (2) An app not installed on the partner phone falls back to the sender's label, then the package id (ADR #257). (3) A batch name is user-authored text and is rendered verbatim in the body (already sanitized on the wire, ADR #249). (4) The lockscreen deliberately stays generic, so the specific target is visible only after unlock (FR-13).

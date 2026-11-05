@@ -43,21 +43,21 @@ object PartnerSyncSignals {
     )
 
     /** ADR #216: a pass stopped with partner-visible rows still queued because the §8.1
-     *  signing window was cold. Only the foreground can warm it (a user-authenticated
-     *  prompt), so [runPartnerSyncPass] ticks this and the Activity answers with prompt +
-     *  re-run. Background runs tick with nobody collecting — dropped by design; the next
-     *  foreground pass re-detects the same block and ticks again. */
+     *  signing window was cold. [runPartnerSyncPass] ticks this and the Activity retries the
+     *  pass automatically once the window is warm (owner ruling 2026-11-05: never a prompt).
+     *  Background runs tick with nobody collecting — dropped by design; the next foreground
+     *  pass re-detects the same block and ticks again. */
     val signingNeeded = MutableSharedFlow<Unit>(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
 
-    /** Owner ruling 2026-11-01: a rule or batch write must reach the partner on its own —
-     *  "1 update waiting to be sent / Send now" was a defect, not a feature. Emitted from the
-     *  rules write path (after the journal transaction commits), the Activity runs the heal
-     *  with the explicit-path semantics: a warm signer delivers silently, a cold one asks for
-     *  the device key now instead of waiting for a tap (or the ask-cooldown). Same
-     *  drop-when-nobody-collects contract as the rest of this object. */
+    /** Owner ruling 2026-11-01, tightened 2026-11-05: a rule or batch write must reach the
+     *  partner on its own — no pending banner, no "Send now", no device-key prompt. Emitted
+     *  from the rules write path (after the journal transaction commits); the Activity runs an
+     *  automatic pass, which delivers while the signer is warm and otherwise leaves the rows
+     *  journaled for the next warm pass. Same drop-when-nobody-collects contract as the rest
+     *  of this object. */
     val ruleChangesJournaled = MutableSharedFlow<Unit>(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,

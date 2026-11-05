@@ -202,6 +202,18 @@
     <string name="partner_event_title">New activity from your partner</string>
     <string name="partner_event_title_named">New activity from %1$s</string>
     <string name="partner_event_text">Open MyExodus to see what changed.</string>
+    <!-- Owner ruling 2026-11-05: attempt and recovery alerts carry the same named, specific
+         shape as rule alerts — title names the partner and the act, body names the app (and
+         its batch) or the recovery step. Unlocked copy only; lockscreen keeps the generic
+         partner_event_* forms above (FR-13). -->
+    <string name="partner_activity_blocked_title_named">%1$s tried to open a blocked app</string>
+    <string name="partner_activity_override_title_named">%1$s used an override</string>
+    <string name="partner_activity_recovery_title_named">%1$s logged a recovery step</string>
+    <string name="partner_activity_blocked_body">%1$s was blocked.</string>
+    <string name="partner_activity_blocked_in_batch">%1$s was blocked in the %2$s batch.</string>
+    <string name="partner_activity_override_body">%1$s was opened with an override.</string>
+    <string name="partner_activity_override_in_batch">%1$s was opened with an override in the %2$s batch.</string>
+    <string name="partner_activity_recovery_body">%1$s · %2$s</string>
     <string name="partner_message_title_named">%1$s sent you a message</string>
     <string name="partner_message_quoted">“%1$s”</string>
     <!-- §8.4 RULE_CONTROL (owner report 2026-10-31): a rule this device was assigned to
@@ -368,19 +380,6 @@
         <item quantity="other">%1$d rules will be deleted permanently. This can’t be undone.</item>
     </plurals>
     <string name="rules_cleanup_confirm">Remove</string>
-
-    <!-- Delivery guarantee (owner report 2026-10-31): a cold signing window stops the rule
-         queue until the owner's credential warms it — this surface keeps that visible. -->
-    <plurals name="rules_pending_delivery_title">
-        <item quantity="one">%1$d update waiting to be sent</item>
-        <item quantity="other">%1$d updates waiting to be sent</item>
-    </plurals>
-    <plurals name="rules_pending_delivery_body">
-        <item quantity="one">Confirm with your device key to send it to your partner.</item>
-        <item quantity="other">Confirm with your device key to send them to your partner.</item>
-    </plurals>
-    <string name="rules_pending_delivery_action">Send now</string>
-    <string name="rules_pending_delivery_sending">Sending…</string>
 
     <!-- Batch creation (owner mandate 2026-10-31): a named group of apps/websites created
          together under one partner, so the partner reads "Social media", not N opaque rules. -->

@@ -1674,3 +1674,103 @@ record stands. The two-phone live partner matrix (task #4) was genuinely complet
 - `stay_on_while_plugged_in=0` on both; `scripts/rotation-guard.sh` run for both serials and
   read back `accelerometer_rotation=0`, `user_rotation=0`; both phones on the launcher, screens
   off (`KEYCODE_SLEEP`); wireless adb disconnected (`adb devices` empty).
+
+## 2026-11-05 — re-pair, promptless auto-delivery, attempt consent, and named activity notifications
+
+Both phones were reattached over wireless adb with the owner present. Installed builds:
+X6532 `lastUpdateTime` 16:32:07 (APK built 16:22 — banner and forced prompt removed) then
+17:25:20 (APK built 17:24 — activity notification copy); X6532C `lastUpdateTime` 16:57:43
+(the same 16:22 APK). No newer build was installed on X6532C; per-action install permission
+was not given for the copy build.
+
+### Re-pair — PASSED
+
+Fresh live-backend pairing after an unpair: invitation code entered on the second phone, SAS
+compared and confirmed on both, both screen-lock authorizations given by the owner; both
+terminals showed "You're paired" and the new enrollment was stored at 15:31:56 local.
+
+### Attempt delivery is consent-gated per pair — finding
+
+The freshly re-paired pair had "Blocked apps, recovery & device — **Not shared**". The
+reconciler emits attempts only when `profileConsent.shareCheckins` is true and only for
+attempts recorded at/after `checkinsEnabledSinceMs`; rule lifecycle events travel by rule
+assignment and are not gated. That explains the owner's "no rule violation on the partner
+side" report: rule changes had been delivered, attempts had not.
+
+After turning the switch on (~16:47:35 local):
+
+- `16:47:43.739 MyExodusAttempts: attempt logged: outcome=BLOCKED … target=com.gallery20`;
+  sender `drain: 1 event(s) delivered` at 16:47:57; X6532C posted the activity notification at
+  16:48:04 (generic copy in that build: "New activity from Musila").
+- `16:54:47.138` a second blocked AI Gallery launch; sender drain 16:59:38.646; X6532C
+  `rule-delivery.log` `stage=received` 16:59:45.493.
+
+So the pipeline is sound; the switch was off. Whether attempts should be consent-gated at all,
+and whether a fresh pair should default the switch on or ask at pairing, is an open product
+decision (vault OPD #42) — not changed in code.
+
+### Promptless auto-delivery on the 16:22 build — PASSED (warm window)
+
+The 16:22 build deletes `PendingDeliveryBanner`, `onRetryRuleDelivery`, the prompt cooldown and
+the automatic path's `signWithAuthPrompt` call (ADR #259). A partner-shared rule created on
+X6532 after its 16:32 install reached X6532C automatically: X6532C receipt
+`13:37:56.011Z … change=CREATED label=AI Gallery` → `stored=true` → `notify=posted`, with no
+Send-now tap and no device-key sheet; the partner Rules page showed "AI Gallery · Rule
+created · 8m ago". The pending-delivery banner cannot appear — the composable and its resources
+no longer exist in the build — and the automatic path contains no prompt call.
+
+**Cold-window deferral — BLOCKED.** With no prompt available, a cold 900 s window must leave
+the row journaled and the next warm pass must deliver it. Proving that on hardware needs the
+window to lapse, a rule change, a check that no sheet appears, then an owner unlock and a
+delivery — an owner-authentication timing run. Not run today; the window stayed warm. The
+code path is verified by inspection/build, not by a device result.
+
+### Activity notifications now name the act, the app and the batch (owner ruling 2026-11-05)
+
+Owner report: rule alerts read "Rule update from Musila — AI Gallery was deleted", while a
+blocked attempt read only "New activity from Musila". `notifyPartnerEvent` now routes
+`TYPE_ACTIVITY` through `activityCopy` (ADR #260):
+
+| Wire | Title | Body |
+|---|---|---|
+| `blocked:com.gallery20` | "Musila tried to open a blocked app" | "AI Gallery was blocked." |
+| `blocked:<pkg>\|<batch>` | same | "Instagram was blocked in the Things I'm trying to quit batch." |
+| `override:<pkg>[|<batch>]` | "Musila used an override" | "…was opened with an override[ in the … batch]." |
+| `recovery:<technique>:<outcome>` | "Musila logged a recovery step" | "Urge surfing · Completed" |
+
+The app name is resolved locally, else from the sender's `appLabel` (ADR #257), else the package
+id. Lockscreen public copy stays the generic `partner_event_*` form (FR-13); undecodable text
+falls back to the generic named copy.
+
+Verification: `PartnerNotificationsTest` — `blockedAttempt_namesTheActTheAppAndTheBatch`,
+`blockedAttemptOutsideABatch_hasNoBatchTail`, `overrideAttempt_namesTheOverride`,
+`recoveryStep_namesTheTechniqueAndOutcome` (all green, including the lockscreen-public
+assertion); Android lint clean (run alone per ADR #208); `assembleDebug` green; APK (50,544,300
+bytes, built 17:24) installed on X6532 at 17:25:20. **Partner display — BLOCKED:** X6532C runs
+the 16:22 build, which predates this change, and no install of the new build was authorized.
+
+### Batch notification shape (answer to the owner's 2026-11-05 question)
+
+Batches are atomic objects (ADR #249): members are read-only rows inside the batch card; there
+is no per-item toggle, delete or modify in the UI, and the batch editor is create-only. Each
+batch operation journals exactly one batch-level row per assigned pair, so the partner gets one
+notification:
+
+- create/assign → "You were added as accountability partner on the Things I'm trying to quit batch (5 items)."
+- pause → "The Things I'm trying to quit batch was turned off (5 items)."
+- resume → "The Things I'm trying to quit batch was changed (5 items)."
+- remove partner → "You were removed from the Things I'm trying to quit batch (5 items)."
+- delete → "The Things I'm trying to quit batch was deleted (5 items)."
+- whole-batch expiry → "The Things I'm trying to quit batch ended — its set duration ran out (5 items)."
+
+The only member-level rule copy that exists is a partial natural lapse (one member's timed
+block runs out while the others continue): "Instagram ended in the Things I'm trying to quit
+batch — its set duration ran out." Blocked attempts name the batch when the wire carries it:
+"AI Gallery was blocked in the Things I'm trying to quit batch." Adding per-item controls would
+need a partial-batch state the model deliberately does not have; not built, not requested.
+
+### Hand-back and release
+
+- `stay_on_while_plugged_in=0` on both; `scripts/rotation-guard.sh` run for both serials and
+  read back `accelerometer_rotation=0`, `user_rotation=0`; both phones on the launcher, screens
+  off; wireless adb disconnected.

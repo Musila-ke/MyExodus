@@ -20,10 +20,15 @@ import com.example.myexodus.accountability.serialization.RuleIdentity
 import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.notifications.NotificationTapTarget
+import com.example.myexodus.ui.appLabel
+import com.example.myexodus.ui.partner.PartnerAlert
 import com.example.myexodus.ui.partner.VIEW_ACTIVITY
 import com.example.myexodus.ui.partner.VIEW_REQUESTS
 import com.example.myexodus.ui.partner.VIEW_RULES
+import com.example.myexodus.ui.partner.parseActivityText
 import com.example.myexodus.ui.partner.shortKeyId
+import com.example.myexodus.ui.recovery.outcomeLabel
+import com.example.myexodus.ui.recovery.techniqueTitle
 import java.text.DateFormat
 import java.util.Date
 
@@ -228,6 +233,9 @@ object PartnerNotifications {
                 context.getString(R.string.partner_plan_title_named, partnerName) to
                     payload.plan?.title?.takeIf { it.isNotBlank() }
                         ?.let { context.getString(R.string.partner_plan_body_named, it) }
+            // Owner ruling 2026-11-05: an attempt alert says what happened and to which app,
+            // the same named shape the rule alerts use — never "New activity, open the app".
+            EventPayload.TYPE_ACTIVITY -> activityCopy(context, partnerName, payload)
             else -> null to null
         }
         val richBody = rich.second
@@ -260,6 +268,49 @@ object PartnerNotifications {
                 .takeIf { payload.type != PlanWire.TYPE_PLAN_PUBLISHED },
             openPairId = pairId,
         )
+    }
+
+    /** The attempt/recovery half of [notifyPartnerEvent] (owner ruling 2026-11-05): the same
+     *  named, verb-first shape the rule alerts use — title = who + what kind of act, body =
+     *  which app (and batch) or which recovery step. Text this phone cannot decode keeps the
+     *  generic named copy rather than guessing at it. */
+    private fun activityCopy(
+        context: Context,
+        partnerName: String,
+        payload: EventPayload,
+    ): Pair<String?, String?> = when (val alert = parseActivityText(payload.text, 0L)) {
+        is PartnerAlert.AppActivity -> {
+            val local = appLabel(context, alert.target)
+            val label = local.takeIf { it != alert.target } ?: payload.appLabel ?: alert.target
+            val title = if (alert.isOverride) {
+                R.string.partner_activity_override_title_named
+            } else {
+                R.string.partner_activity_blocked_title_named
+            }
+            val body = if (alert.batchLabel == null) {
+                context.getString(
+                    if (alert.isOverride) R.string.partner_activity_override_body
+                    else R.string.partner_activity_blocked_body,
+                    label,
+                )
+            } else {
+                context.getString(
+                    if (alert.isOverride) R.string.partner_activity_override_in_batch
+                    else R.string.partner_activity_blocked_in_batch,
+                    label,
+                    alert.batchLabel,
+                )
+            }
+            context.getString(title, partnerName) to body
+        }
+        is PartnerAlert.Recovery ->
+            context.getString(R.string.partner_activity_recovery_title_named, partnerName) to
+                context.getString(
+                    R.string.partner_activity_recovery_body,
+                    context.getString(techniqueTitle(alert.technique)),
+                    context.getString(outcomeLabel(alert.outcome.uppercase())),
+                )
+        else -> null to null
     }
 
     /** §8.4 RULE_CONTROL (owner report 2026-10-31): a rule the partner assigned this device to

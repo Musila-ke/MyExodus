@@ -693,6 +693,97 @@ class PartnerNotificationsTest {
         )
     }
 
+    /** Owner ruling 2026-11-05: an attempt alert says which act and which app (and batch),
+     *  matching the named, specific rule alerts — not the generic "new activity" copy. The
+     *  lockscreen public version keeps the generic copy (FR-13). */
+    @Test
+    fun blockedAttempt_namesTheActTheAppAndTheBatch() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME,
+            payload(
+                EventPayload.TYPE_ACTIVITY,
+                text = "blocked:com.instagram.android|Social media",
+                appLabel = "Instagram",
+            ),
+        )
+
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_activity_blocked_title_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(R.string.partner_activity_blocked_in_batch, "Instagram", "Social media"),
+            notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+        assertEquals(
+            context.getString(R.string.partner_event_text),
+            notification.publicVersion!!.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
+    @Test
+    fun blockedAttemptOutsideABatch_hasNoBatchTail() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME,
+            payload(EventPayload.TYPE_ACTIVITY, text = "blocked:com.instagram.android", appLabel = "Instagram"),
+        )
+
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_activity_blocked_body, "Instagram"),
+            notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
+    @Test
+    fun overrideAttempt_namesTheOverride() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME,
+            payload(EventPayload.TYPE_ACTIVITY, text = "override:com.instagram.android", appLabel = "Instagram"),
+        )
+
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_activity_override_title_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(R.string.partner_activity_override_body, "Instagram"),
+            notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
+    @Test
+    fun recoveryStep_namesTheTechniqueAndOutcome() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME,
+            payload(EventPayload.TYPE_ACTIVITY, text = "recovery:urge_surfing:completed"),
+        )
+
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_activity_recovery_title_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(
+                R.string.partner_activity_recovery_body,
+                context.getString(com.example.myexodus.R.string.recovery_tech_urge_surfing_title),
+                context.getString(com.example.myexodus.R.string.recovery_history_completed),
+            ),
+            notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
     /** ADR #193 §6: a new or edited plan is the one plan event worth an alert. It names the
      *  plan's own title, and unlike an activity burst it alerts again on an edit
      *  (`onlyAlertOnce = false`) while the lockscreen keeps the generic public copy. */
@@ -813,7 +904,8 @@ class PartnerNotificationsTest {
         text: String = "streak:7",
         stateAfter: ActivityStateAfter? = null,
         plan: PlanBody? = null,
-    ) = EventPayload(type = type, text = text, stateAfter = stateAfter, plan = plan)
+        appLabel: String? = null,
+    ) = EventPayload(type = type, text = text, stateAfter = stateAfter, plan = plan, appLabel = appLabel)
 
     private companion object {
         const val PAIR_ID = "pair-alpha"
