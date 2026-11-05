@@ -1678,10 +1678,9 @@ record stands. The two-phone live partner matrix (task #4) was genuinely complet
 ## 2026-11-05 — re-pair, promptless auto-delivery, attempt consent, and named activity notifications
 
 Both phones were reattached over wireless adb with the owner present. Installed builds:
-X6532 `lastUpdateTime` 16:32:07 (APK built 16:22 — banner and forced prompt removed) then
-17:25:20 (APK built 17:24 — activity notification copy); X6532C `lastUpdateTime` 16:57:43
-(the same 16:22 APK). No newer build was installed on X6532C; per-action install permission
-was not given for the copy build.
+X6532 `lastUpdateTime` 16:32:07 (APK built 16:22 — banner and forced prompt removed),
+17:25:20, then 17:35:06; X6532C `lastUpdateTime` 16:57:43, then 17:35:35. Both phones ended
+the session on the same 17:24 APK (activity notification copy), installed with `-r` only.
 
 ### Re-pair — PASSED
 
@@ -1719,11 +1718,14 @@ Send-now tap and no device-key sheet; the partner Rules page showed "AI Gallery 
 created · 8m ago". The pending-delivery banner cannot appear — the composable and its resources
 no longer exist in the build — and the automatic path contains no prompt call.
 
-**Cold-window deferral — BLOCKED.** With no prompt available, a cold 900 s window must leave
-the row journaled and the next warm pass must deliver it. Proving that on hardware needs the
-window to lapse, a rule change, a check that no sheet appears, then an owner unlock and a
-delivery — an owner-authentication timing run. Not run today; the window stayed warm. The
-code path is verified by inspection/build, not by a device result.
+**Cold-window deferral — PASSED (both halves, 17:49-17:55).** The window genuinely lapsed
+while adb held the screen awake. The QA-check batch was created at 17:49:27; the 17:49:53
+pass reported `signingBlocked=true`, keystore2 logged `enforcements.rs:656: matching auth
+token is expired` → `KEY_USER_NOT_AUTHENTICATED`, **no sheet, banner or prompt appeared**, and
+the batch event stayed journaled (the partner had no notification and no feed row). After a
+normal owner fingerprint unlock (17:54), the next foreground passes delivered it with no
+interaction: subject `drainedCount=1`, partner notification posted — "You were added as
+accountability partner on the QA check batch (2 items)." Delay, never drop, never prompt.
 
 ### Activity notifications now name the act, the app and the batch (owner ruling 2026-11-05)
 
@@ -1746,8 +1748,10 @@ Verification: `PartnerNotificationsTest` — `blockedAttempt_namesTheActTheAppAn
 `blockedAttemptOutsideABatch_hasNoBatchTail`, `overrideAttempt_namesTheOverride`,
 `recoveryStep_namesTheTechniqueAndOutcome` (all green, including the lockscreen-public
 assertion); Android lint clean (run alone per ADR #208); `assembleDebug` green; APK (50,544,300
-bytes, built 17:24) installed on X6532 at 17:25:20. **Partner display — BLOCKED:** X6532C runs
-the 16:22 build, which predates this change, and no install of the new build was authorized.
+bytes, built 17:24) installed on X6532 at 17:25:20. **Partner display — PASSED:** the same
+17:24 APK was installed on X6532C at 17:35:35 (per-action permission given), and the blocked
+attempt at 17:41:33 (delivered 17:41:50) produced "Musila tried to open a blocked app" /
+"AI Gallery was blocked." on the partner phone.
 
 ### Batch notification shape (answer to the owner's 2026-11-05 question)
 
@@ -1769,8 +1773,41 @@ batch — its set duration ran out." Blocked attempts name the batch when the wi
 "AI Gallery was blocked in the Things I'm trying to quit batch." Adding per-item controls would
 need a partial-batch state the model deliberately does not have; not built, not requested.
 
+### Every rule verb reaches the partner — PASSED on X6532C (17:39-17:55)
+
+Both phones on the 17:24 APK. Each event was created on X6532 and read back from X6532C's
+notification record (`dumpsys notification --noredact`) and Rules & blocks feed:
+
+| Action on X6532 | Deliver | Partner notification (title / body) |
+|---|---|---|
+| Rule added (AI Gallery) | 17:39:15 | "Rule update from Musila" / "You were added as accountability partner on AI Gallery." |
+| Blocked attempt (AI Gallery) | 17:41:50 | "Musila tried to open a blocked app" / "AI Gallery was blocked." |
+| Rule turned off | 17:43:45 | "Rule update from Musila" / "AI Gallery was turned off." |
+| Rule changed (re-enabled) | 17:45:50 | "Rule update from Musila" / "AI Gallery was changed." |
+| Rule deleted | 17:47:28 | "Rule update from Musila" / "AI Gallery was deleted." |
+| Batch created (QA check, 2 apps, partner assigned) | cold 17:49:27 → delivered after the 17:54 unlock | "Rule update from Musila" / "You were added as accountability partner on the QA check batch (2 items)." |
+| Batch deleted | 17:55:33 | "Rule update from Musila" / "The QA check batch was deleted (2 items)." |
+
+The partner's Rules & blocks feed listed every verb under the named rule/batch — "Rule
+created · 2 items", "Rule updated", "Rule turned off", "Rule deleted" — matching the
+notifications. No Send-now control, banner or prompt exists in the build or appeared during
+the run; the only user interaction in the whole sequence was the one normal unlock needed to
+warm the signing key (see cold-window above).
+
+**Heads-up banners are OS-decided.** Both the create and the delete notifications were posted
+to the same per-pair tag, so each replaces the previous tray entry. The batch-create update
+landed while the phone was just waking / the app was in front and did not raise a banner;
+the delete landed while the phone was in active use and did. The app requests a high-importance
+alerting notification in every case (channel `IMPORTANCE_HIGH`, no silent/only-alert-once
+flag, record `mIsInterruptive=true`); whether an update becomes a heads-up is the system's
+call. Tray and the partner feed were correct for both. This is the known OEM heads-up policy
+item — to be re-checked on a second OEM skin.
+
 ### Hand-back and release
 
-- `stay_on_while_plugged_in=0` on both; `scripts/rotation-guard.sh` run for both serials and
-  read back `accelerometer_rotation=0`, `user_rotation=0`; both phones on the launcher, screens
-  off; wireless adb disconnected.
+- Test data removed: the QA-check batch deleted, the AI Gallery test rule deleted, and AnkiDroid
+  restored after it was disabled by a mis-aimed tap on the rules list (snapshot v29: 3 app,
+  3 URL rules — the pre-test set).
+- `/sdcard/ui.xml` removed on both phones; `stay_on_while_plugged_in=0` on both;
+  `scripts/rotation-guard.sh` run for both serials and read back `accelerometer_rotation=0`,
+  `user_rotation=0`; both phones on the launcher, screens off; wireless adb disconnected.
