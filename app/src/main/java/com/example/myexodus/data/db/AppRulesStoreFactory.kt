@@ -12,6 +12,7 @@ import androidx.sqlite.SQLiteDriver
 import androidx.sqlite.driver.AndroidSQLiteDriver
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.data.db.entity.UsageLedgerKind
+import com.example.myexodus.util.deleteOrWarn
 import com.example.myexodus.data.db.entity.UsageLedgerSource
 import java.io.File
 import java.time.LocalDate
@@ -373,12 +374,12 @@ class AppRulesStoreFactory(
 
     private fun deleteDb(file: File) {
         deleteSidecars(file)
-        file.delete()
+        file.deleteOrWarn(TAG)
     }
 
     private fun deleteSidecars(file: File) {
         for (suffix in SIDECARS) {
-            File(file.parentFile, file.name + suffix).delete()
+            File(file.parentFile, file.name + suffix).deleteOrWarn(TAG)
         }
     }
 

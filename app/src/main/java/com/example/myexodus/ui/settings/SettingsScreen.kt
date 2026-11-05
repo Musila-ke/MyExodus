@@ -237,7 +237,6 @@ private fun SettingsIndex(
     modifier: Modifier = Modifier,
 ) {
     val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
-    val context = LocalContext.current
     var discreet by remember { mutableStateOf(widgetSettings.discreetMode) }
     var crashReportsOn by remember { mutableStateOf(crashReporting.enabled) }
     // Owned here so switching Strict on recomposes the Enhanced row in the same frame (its

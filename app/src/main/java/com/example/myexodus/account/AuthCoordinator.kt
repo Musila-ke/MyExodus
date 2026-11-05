@@ -277,6 +277,7 @@ class AuthCoordinator @Inject constructor(
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
+            // Best effort by contract: an account exists even if the mail must be re-sent later.
         }
     }
 

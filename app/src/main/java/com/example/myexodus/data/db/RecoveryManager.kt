@@ -2,6 +2,7 @@ package com.example.myexodus.data.db
 
 import android.content.Context
 import android.util.Log
+import com.example.myexodus.util.deleteOrWarn
 import java.io.File
 import java.io.IOException
 
@@ -64,9 +65,9 @@ class RecoveryManager(
     fun renameCorruptRules() = renameCorrupt(rulesDbFile)
 
     fun discardCorruptFiles() {
-        File(rulesDbFile.path + ".corrupt").delete()
-        File(activityDbFile.path + ".corrupt").delete()
-        File(legacyDbFile.path + ".corrupt").delete()
+        File(rulesDbFile.path + ".corrupt").deleteOrWarn(TAG)
+        File(activityDbFile.path + ".corrupt").deleteOrWarn(TAG)
+        File(legacyDbFile.path + ".corrupt").deleteOrWarn(TAG)
         if (healthStore.health.value == DatabaseHealth.RecoverableDataFound) {
             healthStore.set(DatabaseHealth.Ready)
         }
@@ -79,8 +80,8 @@ class RecoveryManager(
             deleteWithSidecars(file)
         }
         cleanupConversionArtifacts()
-        snapshotCacheFile.delete()
-        deviceProtectedSnapshotCacheFile.delete()
+        snapshotCacheFile.deleteOrWarn(TAG)
+        deviceProtectedSnapshotCacheFile.deleteOrWarn(TAG)
         legacyKeyManager.resetKeyMaterial()
         activityLogKeyManager.resetKeyMaterial()
         rulesStoreKeyManager.resetKeyMaterial()
@@ -115,7 +116,7 @@ class RecoveryManager(
         var renamed = rulesDbTempFile.renameTo(rulesDbFile)
         if (!renamed) {
             // Unusual for a same-directory rename; the .bak makes the delete window safe.
-            rulesDbFile.delete()
+            rulesDbFile.deleteOrWarn(TAG)
             renamed = rulesDbTempFile.renameTo(rulesDbFile)
         }
         if (!renamed) {
@@ -145,13 +146,13 @@ class RecoveryManager(
     }
 
     fun deleteConversionTemp() {
-        rulesDbTempFile.delete()
+        rulesDbTempFile.deleteOrWarn(TAG)
         deleteSidecars(rulesDbTempFile)
     }
 
     private fun cleanupConversionArtifacts() {
         deleteConversionTemp()
-        rulesDbBackupFile.delete()
+        rulesDbBackupFile.deleteOrWarn(TAG)
         deleteSidecars(rulesDbBackupFile)
     }
 
@@ -165,14 +166,14 @@ class RecoveryManager(
 
     private fun deleteWithSidecars(file: File) {
         deleteSidecars(file)
-        File(file.path + ".corrupt").delete()
-        file.delete()
+        File(file.path + ".corrupt").deleteOrWarn(TAG)
+        file.deleteOrWarn(TAG)
     }
 
     private fun deleteSidecars(file: File) {
-        File(file.path + "-wal").delete()
-        File(file.path + "-shm").delete()
-        File(file.path + "-journal").delete()
+        File(file.path + "-wal").deleteOrWarn(TAG)
+        File(file.path + "-shm").deleteOrWarn(TAG)
+        File(file.path + "-journal").deleteOrWarn(TAG)
     }
 
     private fun hasCorrupt(file: File): Boolean = File(file.path + ".corrupt").exists()

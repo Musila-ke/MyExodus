@@ -1,6 +1,7 @@
 package com.example.myexodus.streaks
 
 import android.util.Log
+import com.example.myexodus.util.deleteOrWarn
 import java.io.File
 import java.time.Instant
 import java.time.format.DateTimeFormatter
@@ -52,9 +53,9 @@ class StreakAnomalyLog(
 
     private fun rotate() {
         val old = File(file.parentFile, file.name + ".1")
-        old.delete()
+        old.deleteOrWarn(TAG)
         // Rename can fail (locked/exotic FS); truncating loses history but never wedges.
-        if (!file.renameTo(old)) file.delete()
+        if (!file.renameTo(old)) file.deleteOrWarn(TAG)
     }
 
     private fun format(a: StreakAnomaly): String = buildString {

@@ -3,6 +3,7 @@ package com.example.myexodus.blocking
 import android.util.Log
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.isExpiredAt
+import com.example.myexodus.util.deleteOrWarn
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
@@ -81,7 +82,7 @@ data class RulesSnapshot(
                     json.remove("checksum")
                     if (expected != sha256(json.toString())) {
                         Log.e(TAG, "Snapshot cache checksum mismatch (${file.name}); discarding")
-                        file.delete()
+                        file.deleteOrWarn(TAG)
                         null
                     } else {
                         fromJson(json)
@@ -91,7 +92,7 @@ data class RulesSnapshot(
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Snapshot cache unreadable (${file.name}); discarding", e)
-                file.delete()
+                file.deleteOrWarn(TAG)
                 null
             }
         }

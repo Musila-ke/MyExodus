@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import com.example.myexodus.data.db.entity.DomainEvent
+import com.example.myexodus.util.deleteOrWarn
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import java.io.File
 import java.util.Arrays
@@ -143,8 +144,8 @@ class ActivityLogStore(
 
     private fun renameCorrupt(path: File) {
         Log.w(TAG, "Activity log confirmed corrupt; preserving as .corrupt")
-        File(path.path + "-wal").delete()
-        File(path.path + "-shm").delete()
+        File(path.path + "-wal").deleteOrWarn(TAG)
+        File(path.path + "-shm").deleteOrWarn(TAG)
         if (path.exists() && !path.renameTo(File(path.path + ".corrupt"))) {
             Log.e(TAG, "Failed to rename corrupt activity log to .corrupt")
         }

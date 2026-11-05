@@ -2,6 +2,7 @@ package com.example.myexodus.accountability.rulecontrol
 
 import android.util.Log
 import com.example.myexodus.BuildConfig
+import com.example.myexodus.util.deleteOrWarn
 import java.io.File
 import java.time.Instant
 import java.time.format.DateTimeFormatter
@@ -41,8 +42,8 @@ class RuleDeliveryTrace(
 
     private fun rotate() {
         val old = File(file.parentFile, file.name + ".1")
-        old.delete()
-        if (!file.renameTo(old)) file.delete()
+        old.deleteOrWarn(TAG)
+        if (!file.renameTo(old)) file.deleteOrWarn(TAG)
     }
 
     private companion object {

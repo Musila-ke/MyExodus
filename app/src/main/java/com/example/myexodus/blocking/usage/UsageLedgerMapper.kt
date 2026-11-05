@@ -101,8 +101,10 @@ object UsageLedgerMapper {
         }
         if (draft.elapsedEndMs < draft.elapsedStartMs) return "elapsed_end before elapsed_start"
         val span = draft.elapsedEndMs - draft.elapsedStartMs
-        if (draft.kind == UsageLedgerKind.ACCOUNTING || draft.kind == UsageLedgerKind.RECONCILIATION) {
-            if (draft.creditedMs > span) return "credited_ms exceeds elapsed span"
+        if ((draft.kind == UsageLedgerKind.ACCOUNTING || draft.kind == UsageLedgerKind.RECONCILIATION) &&
+            draft.creditedMs > span
+        ) {
+            return "credited_ms exceeds elapsed span"
         }
         if (draft.referencesEventId != null && draft.referencesEventId.isEmpty()) {
             return "empty references_event_id"

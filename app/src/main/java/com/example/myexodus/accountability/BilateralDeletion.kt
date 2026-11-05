@@ -340,12 +340,11 @@ class BilateralDeletion(
         // delivered one is never re-sent — the journal keeps the bytes only for the retry
         // window between shred and first successful write.
         if (!confirmed && !delivered && partnerUid != null &&
-            row.messageId.isNotEmpty() && row.requestEnvelope.isNotEmpty()
+            row.messageId.isNotEmpty() && row.requestEnvelope.isNotEmpty() &&
+            runCatching { deliverRequest(partnerUid, row) }.getOrDefault(false)
         ) {
-            if (runCatching { deliverRequest(partnerUid, row) }.getOrDefault(false)) {
-                journal.markDelivered(pairId)
-                delivered = true
-            }
+            journal.markDelivered(pairId)
+            delivered = true
         }
 
         // Step 10: the server-side revocation is retried until acknowledged. Delivered = the

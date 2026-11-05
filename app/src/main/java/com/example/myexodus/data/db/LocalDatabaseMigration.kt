@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.core.content.edit
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.driver.AndroidSQLiteDriver
+import com.example.myexodus.util.deleteOrWarn
 import com.google.firebase.auth.FirebaseAuth
 import java.io.File
 import java.io.FileInputStream
@@ -413,7 +414,7 @@ internal object LocalDatabaseMigration {
 
     private fun copyWithSidecars(spec: StoreSpec) {
         val tmp = File(spec.target.path + ".tmp")
-        tmp.delete()
+        tmp.deleteOrWarn(TAG)
         try {
             copyFile(spec.source, tmp)
             // A TRUNCATE checkpoint normally leaves no WAL; if the platform kept one, it carries
@@ -424,8 +425,8 @@ internal object LocalDatabaseMigration {
             }
             if (!tmp.renameTo(spec.target)) throw IOException("rename ${tmp.name} -> ${spec.target.name} failed")
         } catch (e: Throwable) {
-            tmp.delete()
-            listOf("-wal", "-journal").forEach { File(tmp.path + it).delete() }
+            tmp.deleteOrWarn(TAG)
+            listOf("-wal", "-journal").forEach { File(tmp.path + it).deleteOrWarn(TAG) }
             throw e
         }
     }

@@ -22,9 +22,12 @@ matching the nudges rule's existing split. Regression test
 get-expired fails, plain list fails, constrained list fails, anonymous list fails. Rules suite
 **15/15 green**.
 
-**Deployment status — NEEDS VALIDATION.** Editing the file does not deploy it: the currently
-deployed ruleset predates this split. The owner must run
-`firebase deploy --only firestore:rules` and re-read the deployed source before the fix is live.
+**Deployment status — LIVE (2026-11-05).** Deployed with
+`firebase deploy --only firestore:rules`. The deployed ruleset was re-read through the Firebase
+Rules API (`projects/myexodus-53804/rulesets/ab0f8b65-f6bc-4aff-97fd-bf4cb8ff6021`) and contains
+`allow get` plus `allow list: if false` in the `pairing_tokens` block.
+The functions lockfile fix (body-parser 2.4.0) was deployed the same day: all 36 functions
+updated and verified `ACTIVE` with fresh `updateTime`s through the Cloud Functions v2 API.
 
 ## Dependency results
 
@@ -52,10 +55,73 @@ extraction exclusions; encrypted backup and E2EE mailbox; deletion requires rece
 event nonce uniqueness; no WebView surface; debug exported components are debug-variant only and
 have no in-app senders.
 
+## SonarQube re-run — 2026-11-05
+
+SonarQube 26.8.0.126808 was reinstalled locally (fresh database) and the whole tree re-analysed
+with the Kotlin analyzer: 57,234 ncloc, coverage 16.7 % line (JaCoCo from
+`:app:createDebugUnitTestCoverageReport`), duplication 1.2 %. Results and triage:
+
+- **3 vulnerabilities — none real.** Every one is `text:S6389` (bidirectional control character)
+  in `PartnerLabelTest` / `EnrollmentPayloadTest`: the tests deliberately feed U+202E
+  (RIGHT-TO-LEFT OVERRIDE) through the encoder/sanitizer to prove the label is stripped. The
+  flagged lines are the spoofing regression tests, not shipped code.
+- **0 security hotspots.**
+- **31 bugs, minor.** 30 × `kotlin:S899` "do something with the Boolean returned by delete" —
+  best-effort temp-file cleanup where a failed delete is intentionally ignored; 1 ×
+  `kotlin:S1143` return in `finally` at `ui/AppLabels.kt:72` — a documented bounded retry loop
+  (`Snapshot.apply()` conflict/retry) whose non-throwing body makes it safe.
+- **287 code smells.** Cognitive complexity (`kotlin:S3776`, 108), duplicated string literals
+  (`S1192`, 72), long parameter lists (`S107`, 48), empty blocks (`S108`, 15), plus minor rules.
+  Same family triaged as non-blocking in the 2026-09-13 run.
+
+**Remediation pass (same day).** The mechanical and correctness-relevant findings were fixed
+rather than filed — owner ruling: do not ignore even minor issues. A second analysis on the same
+project key (2026-11-05 20:56 +0300, coverage regenerated from
+`:app:createDebugUnitTestCoverageReport`) confirms every targeted rule closed:
+
+| Rule | Before | After | Fix |
+|---|---|---|---|
+| S899 ignored `File.delete()` | 30 | 0 | shared `File.deleteOrWarn(tag)` (logs a failed delete) |
+| S1143 `return` in `finally` | 1 | 0 | bounded retry loop in `ui/AppLabels.kt`, no `finally` |
+| S108 empty catch | 15 | 0 | VPN teardown `Closeable.closeQuietly()` (+1 GMS-less comment), two account catches documented |
+| S1066 collapsible `if` | 4 | 0 | merged conditions |
+| S1871 identical branches | 4 | 2 | merged two; two left by design (`healthLabel` is declared on both data classes, not the sealed interface) |
+| S1481 unused local | 3 | 1 | removed two; `PartnerDashboardSource.decode` is used — analyzer false positive |
+| S6619 useless null check | 5 | 5 | all five verified false positives on nullable declarations |
+
+Post-fix totals: **0 bugs**, 262 code smells, 3 vulnerabilities (the deliberate bidi spoofing
+fixtures above), 0 hotspots, reliability rating A (1.0), coverage unchanged at 16.7 % line,
+ncloc 57,251. Compile, full JVM suite, and Android lint (`:app:lintDebug` alone per ADR #208)
+were green after the changes.
+
+Coverage is a floor, not the suite's reach: classes exercised only inside Robolectric's sandbox
+show 0 in the report even when their isolated tests pass.
+
+## Live DAST — owner-authorized, 2026-11-05
+
+Scope: the deployed backend only (`us-central1-myexodus-53804.cloudfunctions.net` and the
+Firestore REST API), a handful of requests, no data written, no availability testing.
+
+- **Callables without credentials:** `POST {"data":{}}` to `registerPairing`,
+  `createPairInvitation`, `sendNudge` → `401 UNAUTHENTICATED`; body is the generic error
+  envelope, no stack trace, no internal detail. A malformed body → `400 INVALID_ARGUMENT`.
+- **CORS:** the callable endpoint reflects an arbitrary `Origin` in
+  `Access-Control-Allow-Origin` and allows `POST`. Not a finding here: callables authenticate
+  with an explicit `Authorization: Bearer` token (no cookies or ambient credentials), so a
+  hostile origin gains no authenticated request, and App Check remains enforced server-side.
+- **Android API key:** an anonymous sign-in attempted with the key from `google-services.json`
+  is refused from the host — `403 PERMISSION_DENIED`, "Requests from this Android client
+  application are blocked" (the package + debug-SHA-1 restriction). A host attacker cannot mint
+  tokens with the shipped key; only the app's own signed build can.
+- **Firestore REST without App Check/auth:** list `pairing_tokens` → `403 PERMISSION_DENIED`.
+- **Not reachable from the host by design:** a valid app-scoped token requires the app's App
+  Check attestation, so the authenticated callable surface could not be exercised from this
+  machine. That is the control working; those legs belong to the on-device break-in pass.
+
 ## Accepted / remaining
 
 - Debug exported components remain reachable by `adb shell` on debug installs — accepted:
   debug-only, no secrets beyond the install's own state, and the owner installs debug builds.
-- The deployed Firestore rules lag the repository (see above) — the only open security item.
-- No dynamic/DAST pass against the live backend was run in this session; callable behavior was
-  assessed from source, the deployed-function inventory, and existing device evidence.
+- No App Check-bearing authenticated DAST from a host was possible (see above); authenticated
+  callable semantics were assessed from source and the emulator rules suite, and remain covered
+  by the on-device adversarial pass.

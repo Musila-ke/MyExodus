@@ -1,5 +1,7 @@
 package com.example.myexodus.backup
 
+import android.util.Log
+import com.example.myexodus.util.deleteOrWarn
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
@@ -74,10 +76,12 @@ class BackupStaging(private val root: File) {
     /** §6.9.3: local removal discards every staged artifact, the active operation included. */
     fun wipe() {
         root.listFiles()?.forEach { it.deleteRecursively() }
-        root.delete()
+        root.deleteOrWarn(TAG)
     }
 
     companion object {
+        private const val TAG = "BackupStaging"
+
         /** Reserved for §6.6 restore staging; never deleted by the backup sweep. */
         const val RESTORE_PREFIX = "restore-"
         private const val OBJECT_PREFIX = "object-"

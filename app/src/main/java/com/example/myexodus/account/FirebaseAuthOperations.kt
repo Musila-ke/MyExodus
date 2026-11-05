@@ -71,10 +71,8 @@ class FirebaseAuthOperations(
 
     /** Never an existence oracle: "no such user" is reported to the caller as success. */
     override suspend fun sendPasswordReset(email: String): Unit = mapped {
-        try {
-            auth.sendPasswordResetEmail(email).await()
-        } catch (_: FirebaseAuthInvalidUserException) {
-        }
+        runCatching { auth.sendPasswordResetEmail(email).await() }
+            .onFailure { if (it !is FirebaseAuthInvalidUserException) throw it }
         Unit
     }
 

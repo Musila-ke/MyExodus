@@ -67,11 +67,13 @@ internal fun publishLabel(target: String, label: String) {
         val snapshot = Snapshot.takeMutableSnapshot()
         try {
             snapshot.enter { labelCache[target] = label }
-        } finally {
-            val result = snapshot.apply()
-            if (result.succeeded) return
-            (result as SnapshotApplyResult.Failure).snapshot.dispose()
+        } catch (failure: Throwable) {
+            snapshot.dispose()
+            throw failure
         }
+        val result = snapshot.apply()
+        if (result.succeeded) return
+        (result as SnapshotApplyResult.Failure).snapshot.dispose()
     }
 }
 

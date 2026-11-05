@@ -5,6 +5,7 @@ import android.content.Context
 import android.util.Log
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.SQLiteStatement
+import com.example.myexodus.util.deleteOrWarn
 import java.io.File
 import java.time.LocalDate
 import java.time.ZoneId
@@ -273,9 +274,9 @@ class DatabaseMigration(
         }
 
     private fun deleteLegacy(legacyFile: File) {
-        File(legacyFile.path + "-wal").delete()
-        File(legacyFile.path + "-shm").delete()
-        legacyFile.delete()
+        File(legacyFile.path + "-wal").deleteOrWarn(TAG)
+        File(legacyFile.path + "-shm").deleteOrWarn(TAG)
+        legacyFile.deleteOrWarn(TAG)
     }
 
     private data class TableSpec(val old: String, val new: String, val columns: List<Column>)

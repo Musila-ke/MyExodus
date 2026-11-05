@@ -65,8 +65,8 @@ suspend fun runPartnerSyncPass(
     wakeMessageId: String? = null,
     forceHeartbeat: Boolean = false,
 ): PartnerSyncCoordinator.SyncReport {
-    if (rollout.pushRegistrationEnabled()) {
-        if (!registrar.register()) Log.w("MyExodusPartnerSync", "push installation not (re)registered this run")
+    if (rollout.pushRegistrationEnabled() && !registrar.register()) {
+        Log.w("MyExodusPartnerSync", "push installation not (re)registered this run")
     }
     val report = coordinator.syncOnce(wakeMessageId, forceHeartbeat)
     // Unpair progress (peer shred pulled, journal row advanced, ack confirmed) repaints too:

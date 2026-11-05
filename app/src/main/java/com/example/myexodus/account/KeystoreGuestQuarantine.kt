@@ -3,6 +3,7 @@ package com.example.myexodus.account
 import android.content.Context
 import android.util.Log
 import com.example.myexodus.data.db.KeystoreWrappedDekManager
+import com.example.myexodus.util.deleteOrWarn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.security.MessageDigest
@@ -82,7 +83,7 @@ class KeystoreGuestQuarantine @Inject constructor(
 
     override suspend fun deleteFor(guestUid: String, transitionId: String) =
         withContext(Dispatchers.IO) {
-            fileFor(guestUid, transitionId).delete()
+            fileFor(guestUid, transitionId).deleteOrWarn(TAG)
             Unit
         }
 
@@ -95,8 +96,10 @@ class KeystoreGuestQuarantine @Inject constructor(
         var removed = 0
         dir.listFiles().orEmpty().forEach { file ->
             val record = read(file)
-            if (record != null && nowMs - record.stagedAtMs > QUARANTINE_RETENTION_MS) {
-                if (file.delete()) removed++
+            if (record != null && nowMs - record.stagedAtMs > QUARANTINE_RETENTION_MS &&
+                file.delete()
+            ) {
+                removed++
             }
         }
         removed

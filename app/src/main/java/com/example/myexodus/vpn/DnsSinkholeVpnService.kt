@@ -32,6 +32,7 @@ import com.example.myexodus.domainusage.PassThroughTap
 import com.example.myexodus.domainusage.UdpAdmission
 import com.example.myexodus.notifications.NotificationTapTarget
 import dagger.hilt.android.AndroidEntryPoint
+import java.io.Closeable
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
@@ -217,6 +218,7 @@ class DnsSinkholeVpnService : VpnService() {
                 try {
                     addDisallowedApplication(GMS_PACKAGE)
                 } catch (_: PackageManager.NameNotFoundException) {
+                    // GMS-less device: nothing to exclude from the TUN.
                 }
                 addAddress(TUN_V4, 32)
                 addAddress(TUN_V6, 128)
@@ -235,7 +237,7 @@ class DnsSinkholeVpnService : VpnService() {
                 s4 = DatagramSocket().also { protect(it) }
                 s6 = DatagramSocket().also { protect(it) }
             } catch (e: IOException) {
-                try { fd.close() } catch (e2: IOException) {}
+                fd.closeQuietly()
                 fail("${EngineHealth.FAILED_DNS_BIND} ${e.javaClass.simpleName}")
                 return
             }
@@ -254,9 +256,9 @@ class DnsSinkholeVpnService : VpnService() {
                     running = false
                     tunFd = null; tunOut = null; dnsSocket4 = null; dnsSocket6 = null
                 }
-                try { fd.close() } catch (e: IOException) {}
-                try { s4.close() } catch (e: IOException) {}
-                try { s6.close() } catch (e: IOException) {}
+                fd.closeQuietly()
+                s4.closeQuietly()
+                s6.closeQuietly()
                 return
             }
             thread(name = "vpn-tun") { pump(fd) }
@@ -664,7 +666,7 @@ class DnsSinkholeVpnService : VpnService() {
         if (flow.closed.get()) {
             // Reset while we were connecting (an exhausted-rule admission): the RST is already on
             // its way to the device, so answer nothing and leave no socket behind.
-            try { socket.close() } catch (e: IOException) {}
+            socket.closeQuietly()
             return
         }
         flow.socket = socket
@@ -803,8 +805,17 @@ class DnsSinkholeVpnService : VpnService() {
     private fun teardown(flow: TcpFlow) {
         if (flow.closed.getAndSet(true)) return
         flow.tap.onClosed() // exactly once: releases a held inspection buffer, leaves FlowRegistry
-        try { flow.socket?.close() } catch (e: IOException) {}
+        flow.socket.closeQuietly()
         flows.remove(flow.key, flow) // identity-checked: a reset must not evict a same-key retry
+    }
+
+    /** Teardown close: an already-dead socket or fd is expected, not a failure. */
+    private fun Closeable?.closeQuietly() {
+        try {
+            this?.close()
+        } catch (e: IOException) {
+            if (BuildConfig.DEBUG) Log.w(TAG, "close failed: ${e.message}")
+        }
     }
 
     private fun tcpKey(ip: VpnPacket.IpHeader, tcp: VpnPacket.TcpHeader): String =
@@ -821,7 +832,7 @@ class DnsSinkholeVpnService : VpnService() {
             udpFlows.entries.removeIf { (key, flow) ->
                 if (now - flow.lastActivity > FLOW_IDLE_SWEEP_MS) {
                     flow.tap.onClosed()
-                    try { flow.socket?.close() } catch (e: IOException) {}
+                    flow.socket.closeQuietly()
                     if (BuildConfig.DEBUG) Log.d(TAG, "swept udp flow $key")
                     true
                 } else false
@@ -870,17 +881,17 @@ class DnsSinkholeVpnService : VpnService() {
         // "Website limits paused" notification. Reached from onDestroy, onRevoke, STOP, fail and
         // the pump's EOF path; the Engine's lifecycle guard makes every repeat a no-op.
         engine.stop()
-        try { tunFd?.close() } catch (e: IOException) {}
-        try { dnsSocket4?.close() } catch (e: IOException) {}
-        try { dnsSocket6?.close() } catch (e: IOException) {}
+        tunFd.closeQuietly()
+        dnsSocket4.closeQuietly()
+        dnsSocket6.closeQuietly()
         for (flow in flows.values) {
             flow.tap.onClosed() // returns any held inspection buffer to the pool
-            try { flow.socket?.close() } catch (e: IOException) {}
+            flow.socket.closeQuietly()
         }
         flows.clear()
         for (flow in udpFlows.values) {
             flow.tap.onClosed()
-            try { flow.socket?.close() } catch (e: IOException) {}
+            flow.socket.closeQuietly()
         }
         udpFlows.clear()
         pendingDns.clear()

@@ -35,7 +35,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -84,7 +83,6 @@ private fun CoachingPlanBody(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
     var profileId by remember { mutableStateOf<String?>(null) }
     var items by remember { mutableStateOf<List<CoachingStep>>(emptyList()) }
     var windows by remember { mutableStateOf<List<RiskWindow>>(emptyList()) }

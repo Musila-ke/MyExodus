@@ -346,12 +346,6 @@ class ChainStateStore(
         if (head.forked) return AppendResult.Rejected
 
         return when {
-            unsigned.sequence == head.lastSequence -> if (sameAsStored(pairId, sender, unsigned.sequence, hash)) {
-                AppendResult.Duplicate
-            } else {
-                flagFork(head)
-            }
-
             unsigned.sequence == head.lastSequence + 1 -> {
                 val stored = db.chainEventDao().getBySequence(pairId, sender, unsigned.sequence)
                 when {
