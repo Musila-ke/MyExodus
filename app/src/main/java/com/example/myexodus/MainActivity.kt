@@ -748,7 +748,6 @@ class MainActivity : FragmentActivity() {
                                 }
                             }
                         },
-                        onSendTestAlert = { PartnerNotifications.notifyTestAlert(this@MainActivity) },
                         // ADR #216: Check now is the explicit "deliver my queued updates"
                         // request, so a cold signing window raises the prompt here instead of
                         // returning a success receipt for a pass that sent nothing.

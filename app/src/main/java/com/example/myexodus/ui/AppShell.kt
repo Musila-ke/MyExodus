@@ -200,8 +200,6 @@ fun AppShell(
     /** Plan Step 6: permission + channel + push-provider health, in one actionable reading. */
     partnerAlertHealth: PartnerAlertHealth.State,
     onFixNotifications: () -> Unit,
-    /** Plan Step 6: user-triggered proof that partner alerts display on this device. */
-    onSendTestAlert: () -> Unit,
     onPartnerCheckNow: suspend () -> Boolean,
     onRespondToApproval: suspend (requestEventId: String, approve: Boolean) -> Boolean = { _, _ -> false },
     onUnpair: suspend (pairId: String) -> UnpairOutcome = { UnpairOutcome.FAILED },
@@ -491,7 +489,6 @@ fun AppShell(
                         notificationsEnabled = partnerNotificationsEnabled,
                         notificationsRequestable = partnerNotificationsRequestable,
                         alertHealth = partnerAlertHealth,
-                        onSendTestAlert = onSendTestAlert,
                         onFixNotifications = onFixNotifications,
                         onCheckNow = onPartnerCheckNow,
                         onRespondToApproval = onRespondToApproval,
@@ -519,7 +516,6 @@ fun AppShell(
                         recoveryStore = recoveryStore,
                         rulesRepository = rulesRepository,
                         recoveryPrefs = prefs,
-                        domainUsageEngine = domainUsageEngine,
                         accountingOutageSource = accountingOutage,
                         account = account,
                         backupKey = backupKey,

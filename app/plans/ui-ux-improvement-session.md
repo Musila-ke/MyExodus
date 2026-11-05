@@ -650,8 +650,9 @@ mechanical, same standing as #29).** Task #6, in two halves plus a guard:
    `DatabaseHealthScreen`, `HomeScreen`, `ProtectionNotifications`, `DnsSinkholeVpnService`,
    `StreakNotifications`, `PartnerNotifications`. 42 strings extracted; channel **ids** stay
    literals (protocol, not copy — the first guard run's `"vpn_spike"` hit was the false positive
-   that forced the pattern onto the constructor's second arg). `DomainUsageDebugSection.kt` is
-   exempt by filename: debug-gated, never ships.
+   that forced the pattern onto the constructor's second arg). `DomainUsageDebugSection.kt` was
+   exempt by filename while it existed: debug-gated, never shipped; both the file and the
+   exemption were removed 2026-11-05.
 2. **Display copy and wire value separate.** Tab labels were literals *and* the deep-link protocol
    at once; `ui.NavKeys` now owns the six values, `MainActivity.TAB_*` delegates, `NavTab` carries
    `labelRes`, and the rendered labels are unchanged ("Home"/"Rules"/… — same title strings).

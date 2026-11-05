@@ -761,7 +761,7 @@ lifecycle ran end-to-end — named "QA temp batch", 2 apps (Chrome, Calendar), c
 lists the batch with its 2 member rows and "Blocked now", delete → dialog names the batch and its
 item count, confirm → empty baseline restored (no residue). The local test alert on the real
 `partner_accountability_events_v1` channel produced an on-screen heads-up and deep-linked to the
-Partner tab. A full-page text-truncation sweep (Home, Rules, Recovery and subpages, Streaks and
+Partner tab (the test alert was removed later, 2026-11-05). A full-page text-truncation sweep (Home, Rules, Recovery and subpages, Streaks and
 subpages, Partner and both ceremony entries, Settings and subpages, batch editor, picker) found no
 clipped or ellipsized app text. What the AVD still cannot exercise: any partner-visible leg
 (attestation wall — an emulator can never pair), so #74/#76's receive halves stay blocked on the

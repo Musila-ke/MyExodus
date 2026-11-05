@@ -65,8 +65,9 @@ import kotlinx.coroutines.launch
  * emulator, which otherwise gates the FGS tick body — poll, oracle, and session feed), and
  * `-a mirror-read` (task #52: the v12 per-pair mirror-link rails — schema version, both link
  * tables' counts and per-pair rows, and the legacy `event_sequence` marker census), and
- * `-a push-read` (§18's FCM matrix leg: the FCM registration token + the AD-18a installation id,
- * so a host-side `messages:send` can target this install; the delivery proof is the app's own
+ * `-a push-read` (§18's FCM matrix leg: registration presence, the FID and the AD-18a legacy
+ * android id — a host-side `messages:send` reads the credential from the Firestore
+ * `push_installations` document; the delivery proof is the app's own
  * `MyExodusPush: wake for <messageId>` line in whatever state the device is in), and
  * `-a rules-expire --es pkg <pkg> [--es backMs <n>] [--es read 1]` (#18's device leg: backdate
  * one rule's `block_expires_at` past now so the app's own sweep — not this seam — flips its
@@ -128,20 +129,22 @@ class DeviceVerificationReceiver : BroadcastReceiver() {
         context.applicationContext, EnhancedModeTestEntryPoint::class.java,
     )
 
-    /** §18 FCM matrix leg: the token a host-side `messages:send` needs to target this install,
-     *  plus the FID the dispatcher multicasts to (SOS §8.12) and the legacy ANDROID_ID so the
-     *  migration leg can confirm its document was deleted. `Tasks.await` blocks, but the
-     *  receiver already runs on Dispatchers.IO. */
+    /** §18 FCM matrix leg: registration presence (the value itself is read from the
+     *  `push_installations` document, never logged), plus the FID the dispatcher multicasts to
+     *  (SOS §8.12) and the legacy ANDROID_ID so the migration leg can confirm its document was
+     *  deleted. `Tasks.await` blocks, but the receiver already runs on Dispatchers.IO. */
     private fun pushRead(context: Context) {
-        val token = runCatching { Tasks.await(FirebaseMessaging.getInstance().token) }
-            .onFailure { Log.w(TAG, "push fcm token unavailable: ${it.message}") }
+        val registration = runCatching { Tasks.await(FirebaseMessaging.getInstance().token) }
+            .onFailure { Log.w(TAG, "push registration read failed: ${it.message}") }
             .getOrNull()
         val fid = runCatching { Tasks.await(FirebaseInstallations.getInstance().id) }
             .onFailure { Log.w(TAG, "push fid unavailable: ${it.message}") }
             .getOrNull()
+        // The registration value itself is a delivery credential: never logged. A host send
+        // reads it from /users/{uid}/push_installations/{androidId}.
         Log.i(
             TAG,
-            "push fcm token=${token ?: "<unavailable>"} " +
+            "push registration=${if (registration != null) "present" else "<unavailable>"} " +
                 "installationId=${fid ?: "<unavailable>"} " +
                 "legacyAndroidId=${PushInstallationRegistrar.androidIdOf(context)}",
         )

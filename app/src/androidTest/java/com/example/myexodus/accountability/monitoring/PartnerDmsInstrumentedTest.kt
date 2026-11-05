@@ -44,9 +44,9 @@ import org.junit.runner.RunWith
  * emulator suite and the 100k soak.
  *
  * Preconditions mirror PartnerApprovalInstrumentedTest: signed-in anonymous identity, warm
- * signing window (tap "Warm signing window" in PairingTestActivity), fresh virtual partner.
+ * signing window (warm it with a production signing prompt), fresh virtual partner.
  *   adb install -r app-debug.apk + app-debug-androidTest.apk
- *   adb shell am start -n com.example.myexodus/.accountability.PairingTestActivity
+ *   (warm the window in the app UI, then:)
  *   adb shell am instrument -w -r -e class \
  *     com.example.myexodus.accountability.monitoring.PartnerDmsInstrumentedTest \
  *     com.example.myexodus.test/androidx.test.runner.AndroidJUnitRunner

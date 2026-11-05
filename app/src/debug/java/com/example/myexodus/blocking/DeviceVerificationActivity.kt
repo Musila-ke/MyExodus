@@ -693,8 +693,11 @@ class DeviceVerificationActivity : Activity() {
         // worked — establish the facts before changing production code.
         runCatching {
             val ks = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            val aliasExists = ks.containsAlias(
+                com.example.myexodus.accountability.crypto.AccountabilityKeyStore.SIGNING_ALIAS,
+            )
             Log.i(TAG, "providers=${java.security.Security.getProviders().joinToString { it.name }}")
-            Log.i(TAG, "signingAliasExists=${ks.containsAlias(com.example.myexodus.accountability.crypto.AccountabilityKeyStore.SIGNING_ALIAS)}")
+            Log.i(TAG, "signingAliasExists=$aliasExists")
         }
         val explicit = runCatching { java.security.Signature.getInstance("SHA256withECDSA", "AndroidKeyStore") }
         Log.i(TAG, "explicitGetInstance success=${explicit.isSuccess} err=${explicit.exceptionOrNull()?.message}")

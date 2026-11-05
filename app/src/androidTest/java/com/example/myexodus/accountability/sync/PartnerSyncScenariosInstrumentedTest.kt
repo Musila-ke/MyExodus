@@ -39,7 +39,7 @@ import org.junit.runner.RunWith
  * handler return values.
  *
  * Preconditions mirror [PartnerRoundTripInstrumentedTest]: signed-in identity, warm signing
- * window (PairingTestActivity → "Warm signing window"), app + androidTest APKs installed.
+ * window (warm it with a production signing prompt), app + androidTest APKs installed.
  */
 @RunWith(AndroidJUnit4::class)
 class PartnerSyncScenariosInstrumentedTest {

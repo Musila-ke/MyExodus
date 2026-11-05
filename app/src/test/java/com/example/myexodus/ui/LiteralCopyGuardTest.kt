@@ -38,13 +38,8 @@ class LiteralCopyGuardTest {
             // constructor's second argument is the name, whatever the surrounding call shape.
             "channel name" to Regex("""\bNotificationChannel\(\s*[^,]+,\s*"[A-Za-z]"""),
         )
-        // The protection subpage's domain-usage block is debug-gated (BuildConfig.DEBUG), so it
-        // never ships and its label stays a literal.
-        val exempt = setOf("DomainUsageDebugSection.kt")
-
         val offenders = mutableListOf<String>()
         mainSources()
-            .filterNot { it.name in exempt }
             .forEach { file ->
                 patterns.forEach { (kind, pattern) ->
                     if (pattern.containsMatchIn(file.readText())) offenders += "${file.name} ($kind)"

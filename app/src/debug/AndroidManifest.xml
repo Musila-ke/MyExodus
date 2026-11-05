@@ -10,9 +10,6 @@
         <activity
             android:name=".vpn.VpnSpikeActivity"
             android:exported="true" />
-        <activity
-            android:name=".accountability.PairingTestActivity"
-            android:exported="true" />
         <!-- First-run wizard re-entry: the production gate shows it once per install, so the
              physical test phone (never uninstalled, data never cleared) would never see it
              again. Renders the same SetupScreen against the real monitor. -->

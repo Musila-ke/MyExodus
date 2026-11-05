@@ -21,10 +21,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import com.example.myexodus.BuildConfig
 import com.example.myexodus.R
 import com.example.myexodus.blocking.usage.BatteryPromptRoute
-import com.example.myexodus.domainusage.DomainUsageEngine
 import com.example.myexodus.settings.IntegrityStatus
 import com.example.myexodus.settings.ProtectionChecks
 import com.example.myexodus.settings.accessibilitySettingsIntent
@@ -48,7 +46,6 @@ internal fun ProtectionScreen(
     checks: ProtectionChecks,
     serviceEnabled: Boolean,
     onRecheck: () -> Unit,
-    domainUsageEngine: DomainUsageEngine,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     /** §8.7/D1: non-null while the outage prompt may be offered — the battery row then
@@ -184,8 +181,6 @@ internal fun ProtectionScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-
-            if (BuildConfig.DEBUG) DomainUsageDebugSection(domainUsageEngine)
         }
     }
 }

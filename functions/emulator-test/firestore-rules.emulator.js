@@ -26,6 +26,8 @@ const {
   setDoc,
   collection,
   getDocs,
+  query,
+  where,
   serverTimestamp,
 } = require('firebase/firestore');
 
@@ -153,6 +155,32 @@ test('the pairing document itself is not client-writable', async () => {
   await assertFails(
     updateDoc(doc(alice, 'pairings/pair-alice-bob'), { status: 'terminated' }),
   );
+});
+
+test('pairing invitations cannot be enumerated — the id is the capability', async () => {
+  // 2026-11-05 security audit: `allow read` let any signed-in user run an expiresAt-
+  // constrained list query and receive EVERY live invitation document id — which is also
+  // the respondToPairInvitation capability. Listing is now denied; a get by id (the QR /
+  // typed-code holder) still works.
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'pairing_tokens/live-token'), {
+      creatorUid: 'alice',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    await setDoc(doc(db, 'pairing_tokens/expired-token'), {
+      creatorUid: 'alice',
+      expiresAt: new Date(Date.now() - 60_000),
+    });
+  });
+  await assertSucceeds(getDoc(doc(stranger, 'pairing_tokens/live-token')));
+  await assertFails(getDoc(doc(stranger, 'pairing_tokens/expired-token')));
+  await assertFails(getDocs(collection(stranger, 'pairing_tokens')));
+  await assertFails(getDocs(query(
+    collection(stranger, 'pairing_tokens'),
+    where('expiresAt', '>', new Date()),
+  )));
+  await assertFails(getDocs(collection(anonymous, 'pairing_tokens')));
 });
 
 test('backup control documents are owner-readable only while the account is active', async () => {

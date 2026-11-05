@@ -37,8 +37,7 @@ import org.junit.runner.RunWith
  * verify-then-decrypt on stored envelope bytes → `blocked:`/`override:` parsing.
  *
  * Same preconditions as [com.example.myexodus.accountability.sync.PartnerRoundTripInstrumentedTest]:
- * signed-in app user + warm biometric signing window (tap "Warm signing window" in
- * PairingTestActivity first). Leaves A paired with the fresh partner so the Partner tab shows
+ * signed-in app user + warm biometric signing window (warm it with a production signing prompt first). Leaves A paired with the fresh partner so the Partner tab shows
  * a live Paired state for the screenshot leg.
  */
 @RunWith(AndroidJUnit4::class)

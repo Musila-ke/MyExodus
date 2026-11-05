@@ -54,11 +54,6 @@ object PartnerNotifications {
     internal const val CHANNEL_PARTNER_ALERTS_LEGACY = "partner_alerts"
     const val NOTIF_PARTNER_EVENT = 2001
 
-    /** Plan Step 6: the user-triggered test alert. Tagged at post time, so its id can never
-     *  replace a real per-pair alert. */
-    const val NOTIF_PARTNER_TEST = 2006
-    internal const val TEST_NOTIFICATION_TAG = "partner_alerts_test"
-
     /** §8 Step 12 disable-approval pair — own channel so a user can silence decisions
      *  separately from activity alerts (plan §8 Step 16's channel list). */
     const val CHANNEL_APPROVAL_REQUESTS = "approval_requests"
@@ -162,22 +157,6 @@ object PartnerNotifications {
     fun deleteLegacyCheckinChannel(context: Context) {
         context.getSystemService(NotificationManager::class.java)
             .deleteNotificationChannel(CHANNEL_CHECKIN_REMINDERS_LEGACY)
-    }
-
-    /** The explicitly user-triggered test notification: proof of display, which no provider
-     *  acceptance receipt can give (plan Step 6). Goes through the same post gate and channel
-     *  as a real partner alert, so a pass here means the next real alert will show. */
-    fun notifyTestAlert(context: Context) {
-        post(
-            context,
-            CHANNEL_ACCOUNTABILITY_EVENTS,
-            context.getString(R.string.partner_channel_activity_name),
-            NotificationManager.IMPORTANCE_HIGH,
-            NOTIF_PARTNER_TEST,
-            R.string.partner_test_alert_title,
-            R.string.partner_test_alert_text,
-            tag = TEST_NOTIFICATION_TAG,
-        )
     }
 
     /** SOS §8.14 (V1 Req 35, plan Step 7): the check-ins channel, created at application

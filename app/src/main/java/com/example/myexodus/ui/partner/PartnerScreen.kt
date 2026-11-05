@@ -270,8 +270,6 @@ fun PartnerScreen(
     /** Plan Step 6: what actually blocks a partner alert on this device — permission, the
      *  partner-activity channel's own switch, or a missing push provider. */
     alertHealth: PartnerAlertHealth.State = PartnerAlertHealth.State.OK,
-    /** Plan Step 6: the explicitly user-triggered test alert (proof of display). */
-    onSendTestAlert: () -> Unit = {},
     onRespondToApproval: suspend (requestEventId: String, approve: Boolean) -> Boolean = { _, _ -> false },
     /** Step 14: biometric-gated unpair initiation. CANCELLED (refused prompt) leaves the pair
      *  intact — the local shred is unconditional once the request is acted on, so a refused
@@ -526,7 +524,6 @@ fun PartnerScreen(
             notificationsRequestable = notificationsRequestable,
             onFixNotifications = onFixNotifications,
             alertHealth = alertHealth,
-            onSendTestAlert = onSendTestAlert,
             onExit = {
                 view = null
                 scope.launch(Dispatchers.IO) { reload() }
@@ -647,16 +644,12 @@ fun PartnerScreen(
                     onAction = onFixNotifications,
                 )
 
-                // A local test still proves the display path, so the test action stays.
-                PartnerAlertHealth.State.PROVIDER_UNSUPPORTED -> {
-                    AlertHealthBanner(
-                        title = stringResource(R.string.partner_alerts_provider_title),
-                        body = stringResource(R.string.partner_alerts_provider_body),
-                        action = null,
-                        onAction = {},
-                    )
-                    TestAlertRow(onSendTestAlert)
-                }
+                PartnerAlertHealth.State.PROVIDER_UNSUPPORTED -> AlertHealthBanner(
+                    title = stringResource(R.string.partner_alerts_provider_title),
+                    body = stringResource(R.string.partner_alerts_provider_body),
+                    action = null,
+                    onAction = {},
+                )
             }
         }
 
@@ -764,7 +757,6 @@ fun PartnerScreen(
                         onCheckNow = runCheckNow,
                         unpairing = unpairing,
                         unpairFailed = unpairFailed,
-                        onSendTestAlert = onSendTestAlert,
                         onStartUnpair = { confirmingUnpair = true },
                         // §19.5: pairing again is how the roster grows; hidden on the harness
                         // path where no production ceremony exists.
@@ -2628,7 +2620,6 @@ private fun PairingView(
     onCheckNow: () -> Unit,
     unpairing: Boolean,
     unpairFailed: Boolean,
-    onSendTestAlert: () -> Unit,
     onStartUnpair: () -> Unit,
     onAddUser: ((CeremonyMode) -> Unit)?,
 ) {
@@ -2653,10 +2644,6 @@ private fun PairingView(
         // the automatic pass's job (foreground, worker, push).
         showCheck = checkFailed || syncNeedsAttention(state),
     )
-    // Owner question 2026-11-01: the test alert stays a feature (Plan Step 6 proof of display)
-    // but no longer sits on the hub — it is a diagnostic, and this is the page for the
-    // connection's mechanics.
-    TestAlertRow(onSendTestAlert)
     if (onAddUser != null) AddUserCard(onAddUser)
     UnpairCard(working = unpairing, failed = unpairFailed, onStart = onStartUnpair)
 }
@@ -2924,11 +2911,3 @@ private fun AlertHealthBanner(
     }
 }
 
-@Composable
-private fun TestAlertRow(onSendTestAlert: () -> Unit) {
-    LinkRow(
-        title = stringResource(R.string.partner_alerts_test_action),
-        body = stringResource(R.string.partner_alerts_test_body),
-        onClick = onSendTestAlert,
-    )
-}

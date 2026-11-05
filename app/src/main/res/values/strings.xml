@@ -1007,10 +1007,6 @@
     <string name="partner_alerts_channel_off_action">Open channel settings</string>
     <string name="partner_alerts_provider_title">Push alerts aren’t supported here</string>
     <string name="partner_alerts_provider_body">This device can’t receive partner pushes. New partner activity still arrives when you open MyExodus or check for updates.</string>
-    <string name="partner_alerts_test_action">Send a test alert</string>
-    <string name="partner_alerts_test_body">Check that partner alerts actually reach you on this device.</string>
-    <string name="partner_test_alert_title">Partner alerts are working</string>
-    <string name="partner_test_alert_text">This is a test alert. Real partner activity will arrive the same way.</string>
     <string name="partner_channel_activity_name">MyExodus partner activity</string>
     <string name="partner_channel_requests_name">MyExodus partner requests</string>
     <string name="partner_channel_sync_status_name">MyExodus sync status</string>

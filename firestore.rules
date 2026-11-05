@@ -201,9 +201,15 @@ service cloud.firestore {
     // transport only — authority is the signed proof registered through the function.
     match /pairing_tokens/{tokenId} {
       allow create, update: if false;
-      allow read: if request.auth != null
+      allow get: if request.auth != null
         && !exists(/databases/$(database)/documents/deletionJobs/$(request.auth.uid))
         && (resource == null || resource.data.expiresAt > request.time);
+      // The document id IS the possession capability, and a list query constrained by
+      // expiresAt returns EVERY live id (emulator-verified 2026-11-05 security audit) —
+      // which would hand any signed-in user every open invitation and the respond
+      // capability that goes with the id. Clients only ever read one document by id (the
+      // QR/token holder); same get/list split as the nudges rule above.
+      allow list: if false;
       allow delete: if request.auth != null
         && !exists(/databases/$(database)/documents/deletionJobs/$(request.auth.uid))
         && (resource == null || resource.data.expiresAt > request.time);

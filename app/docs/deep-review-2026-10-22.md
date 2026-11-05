@@ -1,5 +1,7 @@
 # Deep review — 2026-10-22
 
+> **Closeout note 2026-11-05:** test-only tooling named in this ledger (`PairingTestActivity`, `PairingTestEntryPoint`, `PairingHarnessIsolationTest`, the Partner test-alert control, `DomainUsageDebugSection`, zxing) was removed in the final cleanup pass. Rows below describe the audited state at their own dates; see the ADR closeout note for the current state.
+
 Owner mandate (2026-10-22): a deep, deep, deep and thorough code review and trainer, with
 memory and docs brought fully up to date, followed by a double check — and stress testing is
 part of it. Work is tracked as tasks #37–#47. This file is the persistent ledger the audit

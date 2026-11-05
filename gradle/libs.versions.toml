@@ -29,7 +29,6 @@ datastoreTink = "1.3.0-alpha10"
 glance = "1.1.1"
 tinkAndroid = "1.23.0"
 peteroCbor = "4.5.6"
-zxing = "3.5.4"
 biometric = "1.1.0"
 # Release 1 (account plan §8.3): Credential Manager + Google ID token. firebase-auth
 # 24.2.0 already pulls credentials 1.2.0-rc01/googleid 1.1.0 transitively; these pin the
@@ -92,7 +91,6 @@ androidx-navigation-compose = { group = "androidx.navigation", name = "navigatio
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-appcheck-playintegrity = { group = "com.google.firebase", name = "firebase-appcheck-playintegrity" }
 firebase-appcheck-debug = { group = "com.google.firebase", name = "firebase-appcheck-debug" }
-zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
 firebase-firestore = { group = "com.google.firebase", name = "firebase-firestore" }
 firebase-functions = { group = "com.google.firebase", name = "firebase-functions" }

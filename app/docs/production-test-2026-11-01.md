@@ -1,5 +1,7 @@
 # Production test — 2026-11-01
 
+> **Closeout note 2026-11-05:** the Partner "Send a test alert" control named below was later removed in the final cleanup pass; the captures remain evidence of that run.
+
 Live-user end-to-end verification. Evidence only: every row below is a screenshot,
 logcat line, on-device test result, or API response. No outcome is claimed without one.
 

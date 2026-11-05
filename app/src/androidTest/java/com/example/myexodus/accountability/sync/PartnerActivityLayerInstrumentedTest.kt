@@ -65,8 +65,8 @@ import org.junit.runner.RunWith
  * (`PartnerActivityJournalTest`). Leaves A paired with the fresh virtual partners (roster
  * keeps prior harness pairs).
  *
- * Preconditions: app user signed in + warm signing window (PairingTestActivity's "Warm signing
- * window" tap; one 900 s window covers every signature here).
+ * Preconditions: app user signed in + warm signing window (warm it with a production signing
+ * prompt; one 900 s window covers every signature here).
  */
 @RunWith(AndroidJUnit4::class)
 class PartnerActivityLayerInstrumentedTest {

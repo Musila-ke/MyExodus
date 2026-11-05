@@ -35,7 +35,7 @@ import org.junit.runner.RunWith
  * within one pair.
  *
  * Preconditions: the app's anonymous user is signed in, and the biometric signing window is
- * warm (PairingTestActivity's "Warm signing window" tap; one window covers every signature
+ * warm (warm it with a production signing prompt; one window covers every signature
  * below). Run the app process down: `am instrument` starts it fresh.
  *
  * Self-cleaning: both virtual pairs are unpaired by the end, so the roster keeps only pairs

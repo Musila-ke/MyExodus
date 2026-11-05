@@ -55,7 +55,7 @@ import org.junit.runner.RunWith
  * (NudgeInboxRepositoryTest pins the multi-id batch at the exact seam).
  *
  * Preconditions (X6532 rig): app launched + signed in; warm signing window ("Warm signing
- * window" in PairingTestActivity); POST_NOTIFICATIONS on; `/config/features.partnerSosEnabled`
+ * window" via a production signing prompt); POST_NOTIFICATIONS on; `/config/features.partnerSosEnabled`
  * = true for the run window (plan §13.2 item 8, "internal tests with controlled flag
  * enablement") — the test fails with that instruction if the callable refuses. Run with
  * `adb shell am instrument -w -r -e class com.example.myexodus.accountability.sos.NudgeInboxDeviceInstrumentedTest

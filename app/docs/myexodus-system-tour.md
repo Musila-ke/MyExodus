@@ -251,7 +251,8 @@ because check-in is a silent probe, ADR #223). Channel importance is immutable �
 needs a new channel id; the app-side surfaces follow the same rule (`streak_milestones_v2`,
 `domain_usage_status_v1`, `enhanced_mode_health_v1` are HIGH as of ADR #228, with the legacy ids
 deleted at post time; `protection_status` stays LOW because it is the ongoing FGS row). The
-Partner tab's test alert is a **local self-test for one device**, not a partner delivery proof.
+Partner tab surfaces notification health (`PartnerAlertHealth`: permission, channel, provider)
+as an actionable banner; there is no user-triggered test notification.
 
 **Trace it yourself:** pick `milestone_reached`. Follow `HabitRepository.stampAchievedMilestones`
 → journal → `EventPayload` encode → outbox → drainer → server relay → receiver → processor →

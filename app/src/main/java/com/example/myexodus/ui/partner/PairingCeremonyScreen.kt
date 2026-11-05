@@ -140,7 +140,6 @@ fun PairingCeremonyScreen(
      *  partner-activity channel or a missing push provider also breaks alerts. */
     modifier: Modifier = Modifier,
     alertHealth: PartnerAlertHealth.State = PartnerAlertHealth.State.OK,
-    onSendTestAlert: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     // §14 bullet 1 says ONE event per attempt terminal. Taps land faster than recomposition:
@@ -458,7 +457,6 @@ fun PairingCeremonyScreen(
                 notificationsRequestable = notificationsRequestable,
                 onFixNotifications = onFixNotifications,
                 alertHealth = alertHealth,
-                onSendTestAlert = onSendTestAlert,
                 onDone = onExit,
             )
 
@@ -882,7 +880,6 @@ private fun PairedTerminal(
     onFixNotifications: () -> Unit,
     onDone: () -> Unit,
     alertHealth: PartnerAlertHealth.State = PartnerAlertHealth.State.OK,
-    onSendTestAlert: () -> Unit = {},
 ) {
     Surface(
         color = MaterialTheme.colorScheme.tertiaryContainer,
@@ -961,15 +958,6 @@ private fun PairedTerminal(
                     style = MaterialTheme.typography.bodySmall,
                     textAlign = TextAlign.Center,
                 )
-                OutlinedButton(onClick = onSendTestAlert, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.partner_alerts_test_action))
-                }
-            } else {
-                // Plan Step 6: an explicitly user-triggered test alert, at the one moment the
-                // user has just been told pairing worked.
-                OutlinedButton(onClick = onSendTestAlert, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.partner_alerts_test_action))
-                }
             }
         }
     }

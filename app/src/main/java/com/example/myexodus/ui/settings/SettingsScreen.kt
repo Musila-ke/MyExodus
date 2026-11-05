@@ -51,7 +51,6 @@ import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.recovery.RecoveryStateStore
 import com.example.myexodus.blocking.usage.AccountingOutage
 import com.example.myexodus.blocking.usage.AccountingOutageSource
-import com.example.myexodus.domainusage.DomainUsageEngine
 import com.example.myexodus.recovery.RecoveryPlanRepository
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.IntegrityStatus
@@ -92,7 +91,6 @@ fun SettingsScreen(
     /** The coaching editor resolves the active profile through this (Req 20 / v3 W3). */
     rulesRepository: RulesRepository,
     recoveryPrefs: RecoveryPrefs,
-    domainUsageEngine: DomainUsageEngine,
     accountingOutageSource: AccountingOutageSource,
     /** Account plan §8.3: the optional-account pane's driver. */
     account: AccountViewModel,
@@ -154,7 +152,6 @@ fun SettingsScreen(
                     monitor.refresh()
                     scope.launch { checks = withContext(Dispatchers.IO) { readProtectionChecks(context) } }
                 },
-                domainUsageEngine = domainUsageEngine,
                 // D1: the offer, and the one place its request is fired from. Consuming the
                 // offer is part of firing it — the eligibility it came from is spent.
                 batteryPrompt = outage?.promptRoute,

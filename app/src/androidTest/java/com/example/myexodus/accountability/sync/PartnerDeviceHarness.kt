@@ -64,10 +64,12 @@ internal suspend fun pairDeviceWith(
 
 /**
  * The §12 harness preconditions on any device: a signed-in identity and a warm signing
- * window (PairingTestActivity's "Warm signing window"). A rig that never ran the harness —
- * a fresh AVD, which can never pair (attestation wall) — reports these legs SKIPPED in the
- * runner rather than red, and never green without proof; the X6532 harness run satisfies
- * the assumption and executes the leg for real.
+ * window. A production signing action warms it for 900 s — Send on a partner message
+ * (with a pair) or Check now on the partner hub when events are queued; each raises the
+ * device-key prompt. A rig that cannot reach that state — a fresh AVD, which can never
+ * pair (attestation wall) — reports these legs SKIPPED in the runner rather than red, and
+ * never green without proof; the X6532 harness run satisfies the assumption and executes
+ * the leg for real.
  */
 internal fun assumePartnerHarness(ep: RoundTripTestEntryPoint) {
     Assume.assumeTrue(
@@ -75,9 +77,8 @@ internal fun assumePartnerHarness(ep: RoundTripTestEntryPoint) {
         FirebaseAuth.getInstance().currentUser?.uid != null,
     )
     Assume.assumeTrue(
-        "signing window is cold — tap \"Warm signing window\" in PairingTestActivity " +
-            "(adb shell am start -n com.example.myexodus/.accountability.PairingTestActivity) " +
-            "and re-run",
+        "signing window is cold — warm it with a production signing prompt (Send a partner " +
+            "message, or Check now with queued events) and re-run within 900 s",
         isWarmSigningWindow(ep.signer()),
     )
 }

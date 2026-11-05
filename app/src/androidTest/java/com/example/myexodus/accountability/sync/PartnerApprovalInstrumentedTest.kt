@@ -56,10 +56,10 @@ import org.junit.runner.RunWith
  * generic on the lockscreen (FR-13).
  *
  * Preconditions: the app's anonymous user is signed in, and the biometric signing window is
- * warm — tap "Warm signing window" in PairingTestActivity first (one tap covers A's and B's
+ * warm — warm it with a production signing prompt first (one tap covers A's and B's
  * keys; every signature below fits the 900 s window):
  *   adb install -r app-debug.apk + app-debug-androidTest.apk
- *   adb shell am start -n com.example.myexodus/.accountability.PairingTestActivity
+ *   (warm the window in the app UI, then:)
  *   adb shell am instrument -w -r -e class \
  *     com.example.myexodus.accountability.sync.PartnerApprovalInstrumentedTest \
  *     com.example.myexodus.test/androidx.test.runner.AndroidJUnitRunner

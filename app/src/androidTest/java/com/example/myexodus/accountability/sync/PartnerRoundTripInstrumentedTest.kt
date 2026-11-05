@@ -38,7 +38,7 @@ import org.junit.runner.RunWith
  * attestor does not exist; emulators cannot attest — 2026-09-16, vault).
  *
  * Preconditions: the app's anonymous user is signed in, and the biometric signing window is
- * warm — run PairingTestActivity's "Warm signing window" tap first, then:
+ * warm — warm it with a production signing prompt first, then:
  *   adb install -r app-debug.apk + app-debug-androidTest.apk
  *   adb shell am instrument -w -r -e class \
  *     com.example.myexodus.accountability.sync.PartnerRoundTripInstrumentedTest \

@@ -168,7 +168,6 @@ dependencies {
     implementation(libs.firebase.auth)
     implementation(libs.firebase.crashlytics)
     implementation(libs.firebase.config)
-    implementation(libs.zxing.core)
     implementation(libs.bcprov.jdk18on)
     implementation(libs.zxcvbn)
     implementation(libs.androidx.datastore.tink)

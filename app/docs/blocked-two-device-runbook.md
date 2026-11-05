@@ -59,8 +59,6 @@ sanctioned rehearsal and already covers most behavioral legs; its evidence is la
   notification on `partner_accountability_events_v1` naming the partner; the sender's pending
   flags clear. On a real device the receiver may be woken by FCM; if it is not, a foreground
   pass/`Check now` must deliver the same event (push is a latency optimization).
-- Also run the local test alert on one device (single-device, no partner needed) to separate
-  channel health from transport.
 
 ### 3. SOS nudge, two physical phones — residual from 2026-10-18
 - X6532 → Reach out (SOS) to the live partner; second phone receives the HIGH-importance

@@ -24,10 +24,9 @@ import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 
 /**
- * Test access to the round-trip harness's singletons (same pattern as
- * [PairingTestEntryPoint]): the instrumented test drives the exact instances the app's real
- * flows use — the real identity's pairing flow, signer, chain store, and sync coordinator —
- * never hand-wired copies.
+ * Test access to the round-trip harness's singletons: the instrumented test drives the exact
+ * instances the app's real flows use — the real identity's pairing flow, signer, chain store,
+ * and sync coordinator — never hand-wired copies.
  */
 @EntryPoint
 @InstallIn(SingletonComponent::class)

@@ -2128,7 +2128,7 @@ All decisions required to implement this version are fixed by this specification
 - [x] Mailbox client updates/deletes are denied. — rules case `mailbox messages are immutable and client-undeletable (AD-18b)`.
 - [x] FCM messages contain no recovery content. — data-only wake, `{messageId, type}` only (ADR #117 wake payloads).
 - [x] Production logs contain no plaintext event data or key material. — ADR #117: the `push-read` seam logs the installation id and explicitly not the token value; event bodies are never logged (§A.1).
-- [x] Debug/test crypto bypasses are absent from the release artifact. — the seams live in the `src/debug` source set (`DeviceVerificationReceiver`, `PairingTestActivity`); the release variant does not compile them in.
+- [x] Debug/test crypto bypasses are absent from the release artifact. — the seams live in the `src/debug` source set (`DeviceVerificationReceiver`, and `PairingTestActivity` while it existed — removed 2026-11-05); the release variant does not compile them in.
 
 ### Reliability acceptance
 

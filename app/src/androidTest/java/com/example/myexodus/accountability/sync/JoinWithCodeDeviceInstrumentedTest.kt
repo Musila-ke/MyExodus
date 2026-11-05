@@ -21,7 +21,7 @@ import org.junit.runner.RunWith
  * ceremony's join path itself is the same production call the UI makes.
  *
  * Preconditions: app launched + signed in on the X6532; warm signing window tapped
- * ("Warm signing window" in PairingTestActivity); a live invitation code from the X6532C.
+ * (warm it with a production signing prompt); a live invitation code from the X6532C.
  * Run: adb shell am instrument -w -r -e joinCode <code> \
  *        -e class com.example.myexodus.accountability.sync.JoinWithCodeDeviceInstrumentedTest \
  *        com.example.myexodus.test/androidx.test.runner.AndroidJUnitRunner
