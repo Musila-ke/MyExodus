@@ -39,11 +39,11 @@
 # Precondition: dismiss Gmail's one-time "New in Gmail" onboarding ("GOT IT") on a fresh AVD.
 # Left up, it relaunches after the reset's HOME and re-foregrounds the blocked package.
 #
-# Usage: scripts/blocking-matrix-sweep.sh [device-serial]
-#        SKIP=33 scripts/blocking-matrix-sweep.sh [device-serial]   # resume at cell 33
+# Usage: scripts/blocking-matrix-sweep.sh <device-serial>
+#        SKIP=33 scripts/blocking-matrix-sweep.sh <device-serial>   # resume at cell 33
 # Writes a TSV to /tmp/blocking-sweep-<date>.tsv and prints a PASS/FAIL summary.
 set -u
-DEV="${1:-LAN-ADDRESS-REDACTED:5555}"
+DEV="${1:?usage: scripts/blocking-matrix-sweep.sh <device-serial>}"
 ADB="$HOME/Library/Android/sdk/platform-tools/adb"
 PKG=com.google.android.gm
 ACT=com.google.android.gm/.ConversationListActivityGmail

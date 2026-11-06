@@ -6,7 +6,7 @@
 set -euo pipefail
 
 ADB_BIN="${ADB_BIN:-$HOME/Library/Android/sdk/platform-tools/adb}"
-DEV="${1:-LAN-ADDRESS-REDACTED:5555}"
+DEV="${1:?usage: rotation-guard.sh <device-serial>}"
 
 ROT_USER=$("$ADB_BIN" -s "$DEV" shell settings get system user_rotation | tr -d '\r')
 case "$ROT_USER" in ''|null) ROT_USER=0 ;; esac
