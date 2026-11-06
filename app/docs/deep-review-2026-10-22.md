@@ -967,7 +967,7 @@ windows are uncapped and the 6 h constant is clock-tamper detection, not a credi
 
 **Hardware reality (evidence-backed):** the X6532 is unreachable (mdns advertises
 `LAN-ADDRESS-REDACTED:5555`; the laptop is on `LAN-SUBNET-REDACTED`, route unreachable; `LAN-ADDRESS-REDACTED` and
-`192.0.2.25` time out; a full `nc -z` scan of `LAN-SUBNET-REDACTED:5555` found nothing). The AVD
+`LAN-ADDRESS-REDACTED` time out; a full `nc -z` scan of the LAN found nothing). The AVD
 cannot be a pairing device at all: pairing requires hardware TEE attestation, and the emulator's
 software keys cannot pass — the virtual-partner harness needs real hardware keys too (ADR #66
 boundary, `pairing_emulator_closed`). Therefore **every real partner-delivery leg is BLOCKED

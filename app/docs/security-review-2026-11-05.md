@@ -188,5 +188,7 @@ the two scripts that defaulted to a redacted LAN address now require an explicit
 `dev` was pushed as the only branch. Fresh-clone verification: 132 commits; the only identity is
 the noreply address; every replaced string 0 occurrences across every commit
 (`git grep` over `git rev-list --all`); gitleaks 8.30.1 clean on both history and working tree.
-The pre-rewrite mirror is kept privately on the owner's machine, outside the repo — it still
-contains the old data and must never be published.
+The pre-rewrite mirror was deleted on owner instruction after the rewrite was verified; the
+rewritten history is now the only copy. One further private LAN address surfaced after the
+rewrite; it is redacted in HEAD but remains in the earlier commits as a non-routable private
+address, not a credential.
