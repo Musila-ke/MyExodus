@@ -184,11 +184,27 @@ history: the author/committer email became `177664660+Musila-ke@users.noreply.gi
 placeholders now used in HEAD (via `--replace-text`). The rewrite changed every commit hash, so
 the pre-rewrite hashes in older docs and ADRs were updated from the filter-repo commit map, and
 the two scripts that defaulted to a redacted LAN address now require an explicit serial
-(`a2bfe82`). The repository was then deleted and recreated empty by the owner, and the rewritten
+(`f4baa83`). The repository was then deleted and recreated empty by the owner, and the rewritten
 `dev` was pushed as the only branch. Fresh-clone verification: 132 commits; the only identity is
 the noreply address; every replaced string 0 occurrences across every commit
 (`git grep` over `git rev-list --all`); gitleaks 8.30.1 clean on both history and working tree.
 The pre-rewrite mirror was deleted on owner instruction after the rewrite was verified; the
-rewritten history is now the only copy. One further private LAN address surfaced after the
-rewrite; it is redacted in HEAD but remains in the earlier commits as a non-routable private
-address, not a credential.
+rewritten history is now the only copy.
+
+**Second history rewrite — completed 2026-11-06, owner-approved.** The first rewrite covered the
+identities and the addresses known at the time but left RFC 1918 addresses belonging to the
+owner's home network in the published tree and history. A pattern-based sweep of every object in
+the repository (not a string list) classified every RFC 1918 literal in all history: four
+belonged to the owner; five were generic (the Android emulator host alias, a `10.0.0.0/8` CIDR
+description, and three test constants) and remain. The four owner addresses were rewritten in
+every blob with a `--blob-callback` that byte-replaces them; unlike `--replace-text`, this also
+covers binary blobs, which the two TLS ClientHello fixtures are. Replacements are RFC 5737
+TEST-NET-1 documentation addresses. The fixture substitutions are same-length, so the SNI
+length byte and file sizes are unchanged, and both fixtures still parse (19/19 parser tests).
+The night-run script now requires `DU_HOST` instead of carrying a private default. Verification:
+404 occurrences in 3,215 blobs before, 0 in 3,217 blobs after (byte-level, in both the rewritten
+repository and a fresh clone); the HEAD tree is byte-identical; 135 commits; gitleaks 8.30.1
+clean over the full history and the working tree; JVM 2,416 tests, 0 failures. The repository
+was deleted and recreated empty again, `dev` pushed as the only branch, and secret scanning plus
+push protection re-enabled. Commit hashes cited in the docs were remapped from the filter-repo
+commit map.

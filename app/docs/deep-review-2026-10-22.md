@@ -49,7 +49,7 @@ pass; carried verdicts are labelled as carried.
   section below), **#47 CLOSED** (stress/adversarial evidence map — see the #47 section below),
   **#52/#53 CLOSED** (monitoring re-check; two-device runbook), and S49-D3-3 FIXED (ack replay
   is read as "already acked"). The ceremony header after success now names the outcome instead
-  of "Invite a partner" (owner report, fixed). **#43 CLOSED (2026-10-23):** commit `8ec5b90`,
+  of "Invite a partner" (owner report, fixed). **#43 CLOSED (2026-10-23):** commit `3fea200`,
   JVM 227/2,046/0/0/0, lint "No issues found", debug APK installed with `install -r` on the
   X6532 (md5 `e1ee7350c7e40fd7699cfb4605838662`, data intact, a11y binding restored, chip
   "Protecting") — see the #43 section below. **Owner routing decision (2026-10-23):**
@@ -247,10 +247,10 @@ pass; carried verdicts are labelled as carried.
 ## Method
 
 - **Campaign of record:** the 2026-10-15 → 2026-10-17 exhaustive review closed at commit
-  `8cf2046` (ADR #170): 329/329 main Kotlin files individually verdicted, findings #12–#66
+  `9c9ce58` (ADR #170): 329/329 main Kotlin files individually verdicted, findings #12–#66
   fixed with regressions, JVM 204 classes / 1,772 tests green, device 12/12. That verdict is
-  reused only for files **unchanged** since `8cf2046`.
-- **Fresh reads in this pass:** every file in the delta since `8cf2046` (272 files at the
+  reused only for files **unchanged** since `9c9ce58`.
+- **Fresh reads in this pass:** every file in the delta since `9c9ce58` (272 files at the
   start of this review, plus the 4 uncommitted Home files), every file in each domain below,
   and the high-risk unchanged files named per domain. No file is assumed clean because an
   earlier campaign passed it.
@@ -276,7 +276,7 @@ pass; carried verdicts are labelled as carried.
 | #40 | Memory audit | Every memory file vs code/git/docs |
 | #43 | Double check | Re-run gates, full verification report, honest residue list |
 
-## Delta since `8cf2046` (campaign close)
+## Delta since `9c9ce58` (campaign close)
 
 Twenty-five commits, 272 files, +33,256 / −1,834 lines. Composition: 129 main Kotlin files,
 61 unit-test files, 6 androidTest files, 6 debug-only sources, 4 Room schema snapshots,
@@ -293,7 +293,7 @@ quick action — ADR #211) and `HomeScreen.kt` (stat scope — same ADR).
 
 ### Files read line-by-line in this pass
 
-Every delta file in the four domain directories since `8cf2046` (33 committed + the 7
+Every delta file in the four domain directories since `9c9ce58` (33 committed + the 7
 uncommitted paths), every file changed by this review pass, plus these high-risk unchanged
 files: `RulesSnapshot`, `RulesRepository`, `RulesSnapshotPublisher`, `RoleHolders`,
 `EmergencyExclusionManager`, `ProtectionStatusMonitor`, `AttemptRecorder`, `UsageLedger`
@@ -309,7 +309,7 @@ canonicalization call sites, and their tests. New fresh reads closing the delta:
 `DomainUsageHost`, `EngineCounters`, `FlowOwner`, `InspectingTcpTap`, `SystemWallClock`,
 `TcpSendWindow`.
 
-Carried verdicts (unchanged since `8cf2046`, verdicted in ADR #170; not re-read whole):
+Carried verdicts (unchanged since `9c9ce58`, verdicted in ADR #170; not re-read whole):
 `AccessibilityEventNormalizer`, `AppBlockScanner`, `BlockerActivity`, `BootReceiver`,
 `BootReconciliation`, `DailyMaintenancePass`, `DailyMaintenanceWorker`,
 `EnhancedModeHealthMonitor`, `ForegroundStateMachine`, `HealthCheckWorker`, `LatencyProfiler`,
@@ -433,10 +433,10 @@ and `res/drawable-nodpi/widget_preview.png` (verified 624×348 RGBA — the widg
 
 App wiring read fresh: `MainActivity.kt`, `MyExodusApp.kt`, `ReceiverRegistration.kt`; the data
 contract the Home quick action writes (`data/db/entity/RecoverySession.kt`); and the widget
-surface's write path, `widget/WidgetActionViewModel.kt` (unchanged since `8cf2046`, read in full
+surface's write path, `widget/WidgetActionViewModel.kt` (unchanged since `9c9ce58`, read in full
 because `WidgetActionActivity`'s dismissal guard depends on its state machine).
 
-Carried verdicts (unchanged since `8cf2046`, verdicted in ADR #170; not re-read whole — the
+Carried verdicts (unchanged since `9c9ce58`, verdicted in ADR #170; not re-read whole — the
 36 remaining present UI files): `Adaptive`, `AppLabels`, `BackRow`, `BrandMark`, `LinkRow`,
 `ScheduleFields`, `ScheduleFormat`, `SecureSurface`, `home/MilestoneSectionCard`,
 `home/NudgeInboxViewModel`, `home/SosViewModel`, `partner/PartnerPresentation`,
@@ -541,7 +541,7 @@ The crypto/conversion seams, read in full because this pass edits or re-verifies
 failure contract this domain owns: `streaks/HabitRepository`, `streaks/MilestoneScheduler`,
 `ui/streaks/StreaksViewModel`.
 
-Carried verdicts (unchanged since `8cf2046`, verdicted in ADR #170; not re-read whole): the
+Carried verdicts (unchanged since `9c9ce58`, verdicted in ADR #170; not re-read whole): the
 other ten DAOs (`CoachingStepDao`, `DailyUsageTrackerDao`, `PartnerActivityDao`,
 `PolicyVersionDao`, `RecoveryPolicyDao`, `RecoverySessionDao`, `RecoveryStateDao`,
 `RestrictionRuleDao`, `RiskWindowDao`, `UserProfileDao`), the other 21 entities, and the
@@ -660,7 +660,7 @@ attestation (`attestation`, `proof`), maintenance (`cleanup`, `sweep`, `mailbox-
 (244 lines, rule by rule) and `firestore.indexes.json` checked against every server query.
 
 **Client — 56 of the 93 present `accountability/**` files, read fresh.** All 32 delta files in
-the domain were read (delta split re-checked with `git diff --name-only 8cf2046..HEAD --
+the domain were read (delta split re-checked with `git diff --name-only 9c9ce58..HEAD --
 app/src/main/java/com/example/myexodus/accountability` plus the uncommitted tree; no delta
 file is carried). The fresh-read set, by directory:
 
@@ -689,7 +689,7 @@ file is carried). The fresh-read set, by directory:
 (`ui/partner/PairingCeremonyScreen`, `ui/partner/PartnerScreen`) were read cover-to-cover in
 #38 C, and `ui/partner/PartnerDashboardSource` in #38 C/#39 B.
 
-Carried verdicts (unchanged since `8cf2046`, verdicted in ADR #170; not in the delta, verified
+Carried verdicts (unchanged since `9c9ce58`, verdicted in ADR #170; not in the delta, verified
 by the split above): the 37 remaining present files — `crypto/BiometricEnrollmentMonitor`,
 `EcdsaLowS`, `Hkdf`, `IdentityEpochStore`, `IdentityMigration`, `SigningPath`;
 `enrollment/CekDerivation`, `Ecdh`, `EnrollmentFlow`, `EnrollmentPayload`, `EnrollmentRecord`,
@@ -786,7 +786,7 @@ and data-extraction XMLs, `accessibility_service_config.xml`, `app/proguard-rule
 `app/build.gradle.kts`, `settings.gradle.kts`, `gradle/libs.versions.toml`, the wrapper
 properties, and the merged release manifest produced by the build below. The 227 unit-test
 files, 36 androidTest files, and 19 debug sources present today are covered by those reads
-or by unchanged-since-`8cf2046` carry.
+or by unchanged-since-`9c9ce58` carry.
 
 Each delta suite was checked for the thing tests actually have to do — fail when the code
 breaks. Every one is tied to a dated device incident or ADR and none is tautological:
@@ -930,8 +930,8 @@ record. (2) BUILT status lines added to `myexodus-secure-persistence-implementat
   — recorded in V1 as not written; `MEMORY.md` — the index itself; generated/runtime paths such
   as `shared_prefs/*.xml`, `/tmp/tier_d_stress.sh`; `sonar.sh` — inside the wiped Sonar install,
   described as historical). `b6-soak-rerun.sh` exists at `app/build/tierb-evidence/` as stated.
-- **Commit hashes:** every quoted hash that is claimed as a commit (`d98ba29`, `cb72c60`,
-  `8cf2046`) resolves; the only dead hashes are pre-2026-09-16-purge hashes that
+- **Commit hashes:** every quoted hash that is claimed as a commit (`ee1af50`, `77e5aa2`,
+  `9c9ce58`) resolves; the only dead hashes are pre-2026-09-16-purge hashes that
   `project_no_git_remote.md` itself declares dead, UUIDs/numbers caught by the pattern, and the
   session ids in frontmatter.
 - **Current-state claims spot-verified:** no git remote (`git remote -v` empty); zero product
@@ -1396,7 +1396,7 @@ failures (`PartnerNotificationsTest` 26 incl. the new plan-publish test, `Partne
 
 ## #43 — Double check: full verification pass + honest report (complete)
 
-**Commit:** `8ec5b90` — the tree carried the #54/#55/#59/#60/#61 fixes, the S49-D3-3 ack fix,
+**Commit:** `3fea200` — the tree carried the #54/#55/#59/#60/#61 fixes, the S49-D3-3 ack fix,
 the plan-publish notification test, the ceremony header fix, the #47/#49 ledger close-outs and
 `app/docs/blocked-two-device-runbook.md` (12 files, +379/−29).
 

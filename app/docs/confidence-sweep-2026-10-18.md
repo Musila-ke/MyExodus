@@ -161,7 +161,7 @@ APK provenance check (2026-10-18): after the reboot leg, the X6532 was found run
 before HEAD (installed md5 `5b21ccc7…` vs local `4d8be5c1…`; `lastUpdateTime` 17:04 predates the
 17:50 commit). Gradle builds are deterministic here (two rebuilds byte-identical), so the md5
 mismatch proved different source. The E-21 reboot leg therefore ran on that pre-HEAD build — but
-the 17:04→17:50 diff (`git log --name-only 193aa61`) touches only domainusage/VPN/rules/UI files,
+the 17:04→17:50 diff (`git log --name-only 715a51a`) touches only domainusage/VPN/rules/UI files,
 not the boot receivers, `MyExodusApp`, or the FGS, so the leg exercised identical boot code. The
 device was then reinstalled with `install -r` and the on-device md5 matched exactly (data intact:
 streak and block counts unchanged); the package-replace kill re-raised the ADR #156 stop gate,

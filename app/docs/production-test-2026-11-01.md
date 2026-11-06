@@ -207,7 +207,7 @@ see below).
 ### Uninstalled-app rule hiding — AVD, fresh build (18:06–18:07)
 
 Round-trip on emulator-5554 after installing the 18:05 build (`lastUpdateTime` advanced;
-the earlier failure was a stale APK from 2026-10-31 that predated commit ef3211c).
+the earlier failure was a stale APK from 2026-10-31 that predated commit a391d88).
 
 | Step | Action | Observed | Evidence |
 |---|---|---|---|

@@ -10,10 +10,10 @@ as carried.
 ## Method and honest limits
 
 - **Campaign of record:** the 2026-10-15 → 2026-10-17 exhaustive review closed at commit
-  `8cf2046` (ADR #170): 329/329 main Kotlin files individually verdicted, findings #12–#66 fixed
-  with regressions. That verdict is reused only where a file is unchanged since `8cf2046`.
+  `9c9ce58` (ADR #170): 329/329 main Kotlin files individually verdicted, findings #12–#66 fixed
+  with regressions. That verdict is reused only where a file is unchanged since `9c9ce58`.
 - **Freshly read end-to-end in this pass:**
-  - every main Kotlin file changed since `8cf2046` — 35 files, all read line by line (none was
+  - every main Kotlin file changed since `9c9ce58` — 35 files, all read line by line (none was
     assumed clean because it had passed the earlier campaign);
   - every worktree-changed file — 16 files (overlapping the 35);
   - the complete `blocking/`, `domainusage/` and `vpn/` packages — the enforcement surface the
@@ -36,7 +36,7 @@ as carried.
 | `ui/rules`, `ui/settings`, `ui/streaks` changed files | 5 | Fresh | Clean; one deliberate non-split (below) |
 | `widget/` changed files | 3 | Fresh | Clean |
 | `data/db/dao/AttemptLogDao.kt` | 1 | Fresh | Clean |
-| Everything else | 294 | Campaign verdict carried | Unchanged since `8cf2046` |
+| Everything else | 294 | Campaign verdict carried | Unchanged since `9c9ce58` |
 
 No new SRP violations, no new real duplication (3+ occurrences), no misplaced files were found in
 the freshly read set. The two reuse defects that existed are fixed below.
