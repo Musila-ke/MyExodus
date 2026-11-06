@@ -42,6 +42,10 @@
         Direct-APK distribution (ADR #15): the installer still gates each install behind the
         per-app "install unknown apps" grant (canRequestPackageInstalls). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Update plan v1.1 §8.5: conditional unattended self-update on API 31+. Android still
+        applies its own target-SDK/installer eligibility checks and may return a normal user
+        prompt instead; it is never treated as guaranteed. -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
 
     <!-- App picker (Rules screen): needed on API 30+ for queryIntentActivities on
         launcher apps and for the app-label lookup on the picked package. -->
@@ -133,11 +137,32 @@
             android:name=".streaks.MilestoneAlarmReceiver"
             android:exported="false" />
 
-        <!-- ADR #171: PackageInstaller session status (in-process PendingIntent only);
-            the user-action stage is launched from here as a NEW_TASK activity. -->
+        <!-- Update plan v1.1 §8.5: explicit non-exported PackageInstaller status callback,
+            correlated to the owned attempt/session. It never launches UI from the background;
+            a pending user action is presented from a resumed activity or a user tap. -->
         <receiver
             android:name=".update.UpdateInstallReceiver"
             android:exported="false" />
+
+        <!-- Update plan v1.1 §8.6: reconcile the owned attempt against the installed version
+            after package replacement. Non-blocking; no foreground service starts here. -->
+        <receiver
+            android:name=".update.UpdatePackageReplacedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Plan revision 2026-11-06: DownloadManager's completion broadcast is the only
+            wake-up for a finished transfer; verification runs in an expedited worker. -->
+        <receiver
+            android:name=".update.UpdateDownloadReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
+            </intent-filter>
+        </receiver>
 
         <!-- Partner Pillar v2 plan §8 Step 7 (client FCM transport): receives the relay's
             data-only wake signal (AD-11 — generic messageId + type, never content) and

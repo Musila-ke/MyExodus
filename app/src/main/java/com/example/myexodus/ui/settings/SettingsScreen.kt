@@ -436,7 +436,10 @@ private fun SettingsIndex(
                 )
 
                 RowDivider()
-                UpdateSettingsSection(update)
+                UpdateSettingsSection(
+                    update = update,
+                    onOpenProtection = { onOpenPane(PANE_PROTECTION) },
+                )
 
                 RowDivider()
                 IndexRow(

@@ -42,6 +42,7 @@ import com.example.myexodus.blocking.ProtectionStatusMonitor
 import com.example.myexodus.blocking.ProtectionStatusStore
 import com.example.myexodus.blocking.enqueueDailyMaintenance
 import com.example.myexodus.update.UpdateCheckWorker
+import com.example.myexodus.update.UpdateCoordinator
 import com.example.myexodus.blocking.systemBootCount
 import com.example.myexodus.data.db.ActivityLogStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
@@ -106,6 +107,9 @@ class MyExodusApp : Application(), Configuration.Provider {
     // Account plan §6.8/§6.9.3: a deletion accepted before the last restart erases local data
     // before any store of that identity opens.
     @Inject lateinit var deletionLocalData: DeletionLocalData
+    // Plan §8.3/§8.6: the updater's durable record has one main-process owner; this startup
+    // touch reconciles it after process death and after package replacement.
+    @Inject lateinit var updateCoordinator: UpdateCoordinator
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -292,6 +296,10 @@ class MyExodusApp : Application(), Configuration.Provider {
             if (localSessionManager.current() != null) enqueuePartnerSync(this)
             enqueueDailyMaintenance(this)
             UpdateCheckWorker.enqueue(this)
+            UpdateCheckWorker.enqueueForegroundIfDue(this)
+            // Off the main thread: the sweep, the installer query, and the cached-envelope
+            // signature check are all disk or crypto work (plan §11).
+            applicationScope.launch { updateCoordinator.onMainProcessStart() }
             startupTrace.lap("wm-rest")
             // Owner report 2026-10-15 (ADR #152): XOS kills the FGS-hosting process ("prcp
             // FGS" cgroup kill, X6532 15:31:40) and ignores START_STICKY — the old re-arm

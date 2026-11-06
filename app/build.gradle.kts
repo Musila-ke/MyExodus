@@ -30,6 +30,16 @@ android {
         // Blank until the owner registers the OAuth client; the Account pane hides Google and
         // offers email/password instead (the guaranteed non-GMS path).
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"\"")
+
+        // Plan §13.2: the dedicated public releases-only repo, pinned at build time with
+        // -Pmyexodus.updateRepository=owner/repo. Empty means this build has no update
+        // channel and Settings says so instead of checking.
+        val updateRepository = (findProperty("myexodus.updateRepository") as? String).orEmpty()
+        buildConfigField(
+            "String",
+            "UPDATE_RELEASE_REPOSITORY",
+            "\"${updateRepository.replace("\\", "\\\\").replace("\"", "\\\"")}\"",
+        )
     }
 
     buildTypes {

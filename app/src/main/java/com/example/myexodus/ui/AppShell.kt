@@ -119,6 +119,7 @@ import com.example.myexodus.ui.settings.AccountViewModel
 import com.example.myexodus.ui.settings.BackupKeyViewModel
 import com.example.myexodus.ui.settings.NudgeSettingsViewModel
 import com.example.myexodus.ui.settings.SettingsScreen
+import com.example.myexodus.ui.settings.UpdateAvailablePrompt
 import com.example.myexodus.ui.settings.UpdateNoticeDialog
 import com.example.myexodus.ui.settings.UpdateViewModel
 import com.example.myexodus.ui.insights.InsightsViewModel
@@ -592,6 +593,19 @@ fun AppShell(
     // First launch after an in-place update: say so once. The notes come from the signed
     // manifest that was installed, when it is still available.
     UpdateNoticeDialog(update)
+
+    // Plan revision 2026-11-06: one prompt per offered version, on app open only. Review
+    // lands on the Settings update dialog so the download stays a deliberate choice.
+    val updateState by update.state.collectAsStateWithLifecycle()
+    UpdateAvailablePrompt(
+        versionName = updateState.availablePrompt?.versionName,
+        onReview = {
+            update.dismissAvailablePrompt()
+            tab = Tabs.indexOfFirst { it.key == NavKeys.SETTINGS }
+            update.requestOpenDialog()
+        },
+        onDismiss = update::dismissAvailablePrompt,
+    )
 
     // Home's urge quick action: the Recovery tab's sheet, saved through the same repository
     // path (terminal-born `none` row, never mirrored) and confirmed by a snackbar. The note is

@@ -28,35 +28,35 @@ class UpdateInstallFlowTest {
     @Test
     fun everyInstallerStatusMapsToOneStoredFailure() {
         assertEquals(
-            InstallStatus.FAILED_ABORTED,
+            AttemptError.INSTALL_FAILED,
             UpdateInstallReceiver.failureFor(PackageInstaller.STATUS_FAILURE_ABORTED),
         )
         assertEquals(
-            InstallStatus.FAILED_BLOCKED,
+            AttemptError.INSTALL_BLOCKED,
             UpdateInstallReceiver.failureFor(PackageInstaller.STATUS_FAILURE_BLOCKED),
         )
         assertEquals(
-            InstallStatus.FAILED_CONFLICT,
+            AttemptError.INSTALL_CONFLICT,
             UpdateInstallReceiver.failureFor(PackageInstaller.STATUS_FAILURE_CONFLICT),
         )
         assertEquals(
-            InstallStatus.FAILED_INCOMPATIBLE,
+            AttemptError.RELEASE_INCOMPATIBLE,
             UpdateInstallReceiver.failureFor(PackageInstaller.STATUS_FAILURE_INCOMPATIBLE),
         )
         assertEquals(
-            InstallStatus.FAILED_INVALID,
+            AttemptError.INSTALL_FAILED,
             UpdateInstallReceiver.failureFor(PackageInstaller.STATUS_FAILURE_INVALID),
         )
         assertEquals(
-            InstallStatus.FAILED_STORAGE,
+            AttemptError.INSUFFICIENT_STORAGE,
             UpdateInstallReceiver.failureFor(PackageInstaller.STATUS_FAILURE_STORAGE),
         )
         assertEquals(
-            InstallStatus.FAILED_TIMEOUT,
+            AttemptError.INSTALL_TIMEOUT,
             UpdateInstallReceiver.failureFor(PackageInstaller.STATUS_FAILURE_TIMEOUT),
         )
         assertEquals(
-            InstallStatus.FAILED_UNKNOWN,
+            AttemptError.UPDATE_STATUS_UNKNOWN,
             UpdateInstallReceiver.failureFor(PackageInstaller.STATUS_FAILURE),
         )
     }

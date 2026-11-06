@@ -179,7 +179,16 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
 Debug builds run the domain-usage engine in `ENFORCE` mode so enforcement is testable on-device.
-Release signing and the GitHub Releases channel are described in the build doc.
+
+The in-app updater reads a dedicated public releases-only repository. A build without the
+property fails closed (Settings shows "This build has no update channel"):
+
+```bash
+./gradlew :app:assembleRelease -Pmyexodus.updateRepository=<owner>/<releases-repo>
+```
+
+Release signing, the signed policy envelope and the publisher runbook are described in
+[`app/docs/app-update-channel.md`](app/docs/app-update-channel.md).
 
 Backend deploys use the Firebase CLI against `myexodus-53804`:
 
@@ -200,8 +209,8 @@ Run tests and lint as **two separate invocations** — combining them is a known
 ./gradlew :app:lintDebug
 ```
 
-- Current unit suite: **263 classes / 2,405 tests / 0 failures / 0 errors / 0 skipped**
-  (2026-10-31).
+- Current unit suite: **265 classes / 2,462 tests / 0 failures / 0 errors / 0 skipped**
+  (2026-11-07).
 - Lint is the platform gate; the bar is **0 errors / 0 warnings**.
 - Coverage (Gate 2.5 / SonarQube): `./gradlew :app:createDebugUnitTestCoverageReport`; the
   JaCoCo number is a floor, not the true reach.

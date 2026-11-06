@@ -1,61 +1,59 @@
 package com.example.myexodus.update
 
 import android.content.Context
-import android.content.pm.PackageInfo
-import android.content.pm.PackageManager
 import android.os.Build
 import java.io.File
+import java.io.InputStream
+import java.security.MessageDigest
 
+/**
+ * Plan §8.5: exact byte count and SHA-256 over the platform-provided stream, then archive
+ * package/version/SDK checks. Signing continuity is left to Android's package manager;
+ * client code deliberately performs no certificate-set equality.
+ */
 internal class ApkVerifier(private val context: Context) {
-    fun verify(file: File, manifest: UpdateManifest, installedVersionCode: Long) {
-        if (manifest.versionCode <= installedVersionCode) throw UpdateException(UpdateFailure.DOWNGRADE)
-        if (file.length() != manifest.apkSizeBytes) throw UpdateException(UpdateFailure.INTEGRITY)
-        if (sha256Hex(file) != manifest.apkSha256) throw UpdateException(UpdateFailure.INTEGRITY)
-        val archive = archiveInfo(file) ?: throw UpdateException(UpdateFailure.INVALID_APK)
-        if (archive.packageName != context.packageName) throw UpdateException(UpdateFailure.WRONG_PACKAGE)
-        if (versionCode(archive) != manifest.versionCode) {
-            throw UpdateException(UpdateFailure.VERSION_MISMATCH)
+    fun verifyBytes(open: () -> InputStream?, release: UpdateRelease): Boolean {
+        val input = open() ?: return false
+        val digest = MessageDigest.getInstance("SHA-256")
+        var total = 0L
+        input.use { stream ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = stream.read(buffer)
+                if (read < 0) break
+                total += read
+                if (total > release.apkSizeBytes) return false
+                digest.update(buffer, 0, read)
+            }
         }
-        val archiveSigners = signerDigests(archive)
-        val installedSigners = installedSignerDigests()
-        if (archiveSigners.isEmpty() || installedSigners.isEmpty() ||
-            archiveSigners != installedSigners
-        ) {
-            throw UpdateException(UpdateFailure.SIGNER_MISMATCH)
-        }
+        return total == release.apkSizeBytes && digest.hex() == release.apkSha256Hex
     }
 
-    private fun archiveInfo(file: File): PackageInfo? =
-        context.packageManager.getPackageArchiveInfo(file.absolutePath, signatureFlags())
-
-    private fun installedSignerDigests(): Set<String> {
-        val info = context.packageManager.getPackageInfo(context.packageName, signatureFlags())
-        return signerDigests(info)
-    }
-
-    private fun signerDigests(info: PackageInfo): Set<String> {
-        val signatures = if (Build.VERSION.SDK_INT >= 28) {
-            info.signingInfo?.apkContentsSigners.orEmpty()
-        } else {
-            @Suppress("DEPRECATION")
-            info.signatures.orEmpty()
-        }
-        return signatures.mapTo(LinkedHashSet()) { sha256Hex(it.toByteArray()) }
-    }
-
-    private fun versionCode(info: PackageInfo): Long =
-        if (Build.VERSION.SDK_INT >= 28) {
+    fun verifyArchive(
+        path: String?,
+        release: UpdateRelease,
+        installedVersionCode: Long,
+        highestTrustedVersionCode: Long,
+    ): AttemptError? {
+        if (release.versionCode <= installedVersionCode) return AttemptError.RELEASE_INCOMPATIBLE
+        if (release.versionCode < highestTrustedVersionCode) return AttemptError.RELEASE_INCOMPATIBLE
+        if (release.minSdk > Build.VERSION.SDK_INT) return AttemptError.RELEASE_INCOMPATIBLE
+        val file = path?.let(::File)
+        if (file == null || !file.isFile) return AttemptError.APK_INTEGRITY_FAILURE
+        val info = runCatching {
+            context.packageManager.getPackageArchiveInfo(file.absolutePath, 0)
+        }.getOrNull() ?: return AttemptError.RELEASE_INCOMPATIBLE
+        if (info.packageName != context.packageName) return AttemptError.RELEASE_INCOMPATIBLE
+        val versionCode = if (Build.VERSION.SDK_INT >= 28) {
             info.longVersionCode
         } else {
             @Suppress("DEPRECATION")
             info.versionCode.toLong()
         }
-
-    private fun signatureFlags(): Int =
-        if (Build.VERSION.SDK_INT >= 28) {
-            PackageManager.GET_SIGNING_CERTIFICATES
-        } else {
-            @Suppress("DEPRECATION")
-            PackageManager.GET_SIGNATURES
-        }
+        if (versionCode != release.versionCode) return AttemptError.RELEASE_INCOMPATIBLE
+        val appInfo = info.applicationInfo ?: return AttemptError.RELEASE_INCOMPATIBLE
+        if (appInfo.minSdkVersion != release.minSdk) return AttemptError.RELEASE_INCOMPATIBLE
+        if (appInfo.targetSdkVersion != release.targetSdk) return AttemptError.RELEASE_INCOMPATIBLE
+        return null
+    }
 }

@@ -117,6 +117,7 @@ import com.example.myexodus.vpn.VpnLifecycle
 import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.settings.WidgetSettings
 import com.example.myexodus.telemetry.CrashReporting
+import com.example.myexodus.update.UpdateCheckWorker
 import com.example.myexodus.telemetry.StartupTrace
 import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.ui.AppShell
@@ -214,7 +215,16 @@ class MainActivity : FragmentActivity() {
         requestedPlan = intent.getStringExtra(EXTRA_OPEN_PLAN)
         requestedPartner = intent.getStringExtra(EXTRA_OPEN_PARTNER)
         requestedPartnerView = intent.getStringExtra(EXTRA_OPEN_PARTNER_VIEW)
+        handleUpdateIntent(intent)
         handlePartnerNudgeIntent(intent)
+    }
+
+    /** Plan revision 2026-11-06: an update notification tap opens the Settings update dialog. */
+    private fun handleUpdateIntent(intent: Intent) {
+        if (!intent.getBooleanExtra(EXTRA_OPEN_UPDATE, false)) return
+        requestedTab = TAB_SETTINGS
+        updateViewModel.requestOpenDialog()
+        intent.removeExtra(EXTRA_OPEN_UPDATE)
     }
 
     /**
@@ -355,6 +365,8 @@ class MainActivity : FragmentActivity() {
         // (consent permitting), down when the last one leaves. Runs at this boundary so a
         // return from the consent dialog or system settings lands the freshly-valid answer.
         refreshWebsiteLimitTunnel()
+        // Updater R01: foreground entry joins the 24-hour discovery check when one is due.
+        UpdateCheckWorker.enqueueForegroundIfDue(this)
     }
 
     /**
@@ -518,6 +530,7 @@ class MainActivity : FragmentActivity() {
         requestedPlan = intent.getStringExtra(EXTRA_OPEN_PLAN)
         requestedPartner = intent.getStringExtra(EXTRA_OPEN_PARTNER)
         requestedPartnerView = intent.getStringExtra(EXTRA_OPEN_PARTNER_VIEW)
+        handleUpdateIntent(intent)
         handlePartnerNudgeIntent(intent)
         startPartnerLiveSync()
         startPartnerSigningHeal()
@@ -1320,6 +1333,9 @@ class MainActivity : FragmentActivity() {
 
         /** Which surface opened the Recovery tab — a `RecoverySession.ENTRY_*` constant. */
         const val EXTRA_RECOVERY_ENTRY = "extra_recovery_entry"
+
+        /** Plan revision 2026-11-06: an update notification asks for the Settings dialog. */
+        const val EXTRA_OPEN_UPDATE = "extra_open_update"
 
         // Tab deep-link values (ADR #91): one definition shared with the shell's tab list —
         // `NavKeys` — so the extra carries a protocol key, never a display label.

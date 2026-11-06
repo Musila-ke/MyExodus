@@ -1,5 +1,14 @@
 # In-App Update Channel, Research Dossier (2026-11-06)
 
+> **Superseded in part, 2026-11-06 (later the same day).** The owner supplied
+> `app/plans/direct-apk-self-updater-plan.md` v1.1 and the updater was rebuilt to it. Where this
+> dossier recommends the existing source repository, client-side certificate-set equality,
+> normal non-prerelease releases, or `minSupportedVersionCode`, plan v1.1 supersedes it: a
+> dedicated releases-only repository, immutable artifact prereleases plus separate immutable
+> policy releases, a signed policy envelope with sequence/OFFER/HALT/cohort, and no client
+> certificate comparison (Android enforces lineage). The implementation contract is
+> `app/docs/app-update-channel.md`. This file remains research history only.
+
 **Feature:** self-update for a direct-APK Android app via GitHub Releases, with a Settings "Check for updates" surface.
 **Audience:** the implementation engineer (this session), and any future maintainer changing the channel.
 **Status of this document:** research record. The implementation contract is `app/docs/app-update-channel.md`; ADR #171 carries the decision record.
