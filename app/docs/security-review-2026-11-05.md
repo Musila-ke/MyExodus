@@ -171,13 +171,22 @@ chain and an independent second engine.
   JSON or APK is tracked, and none appears in history.
 
 **Residual exposures (personal data, not credentials).** Not secrets, so gitleaks neither flags
-nor should flag them:
+nor should flag them. Three classes appeared in the published tree and history:
 
-- Every commit is authored with `177664660+Musila-ke@users.noreply.github.com` — public in the commit metadata.
-- The X6532 serial `DEVICE-SERIAL-REDACTED` and three `192.168.*` LAN addresses appear in `app/docs/`
-  and the ADR log.
-- The Firebase owner account email appeared in two docs; both are redacted in HEAD on 2026-11-06.
+- The owner's personal email as the author/committer of every commit.
+- The X6532 serial and three `192.168.*` LAN addresses (plus the `/24`) in `app/docs/`, the
+  ADR log, and two script defaults.
+- The Firebase owner account email in two docs (redacted in HEAD on 2026-11-06).
 
-Removing these from *history* requires a history rewrite (filter-repo), which changes every
-commit hash and force-pushes the public branch. It needs explicit owner approval; none of the
-above is a credential or grants access.
+**History rewrite — completed 2026-11-06, owner-approved.** `git filter-repo` rewrote all
+history: the author/committer email became `177664660+Musila-ke@users.noreply.github.com`
+(id 177664660, via `--email-callback`), and the literal strings above were replaced with the
+placeholders now used in HEAD (via `--replace-text`). The rewrite changed every commit hash, so
+the pre-rewrite hashes in older docs and ADRs were updated from the filter-repo commit map, and
+the two scripts that defaulted to a redacted LAN address now require an explicit serial
+(`a2bfe82`). The repository was then deleted and recreated empty by the owner, and the rewritten
+`dev` was pushed as the only branch. Fresh-clone verification: 132 commits; the only identity is
+the noreply address; every replaced string 0 occurrences across every commit
+(`git grep` over `git rev-list --all`); gitleaks 8.30.1 clean on both history and working tree.
+The pre-rewrite mirror is kept privately on the owner's machine, outside the repo — it still
+contains the old data and must never be published.
