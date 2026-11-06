@@ -110,12 +110,12 @@ import com.example.myexodus.settings.biometricEnrollSettingsIntent
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.HomeSettings
 import com.example.myexodus.settings.SetupStateStore
+import com.example.myexodus.settings.ThemeSettings
 import com.example.myexodus.settings.notificationSettingsIntent
 import com.example.myexodus.settings.StrictModeManager
 import com.example.myexodus.vpn.VpnLifecycle
 import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.settings.WidgetSettings
-import com.example.myexodus.settings.readProtectionChecks
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.telemetry.StartupTrace
 import com.example.myexodus.notifications.NotificationAccess
@@ -132,10 +132,11 @@ import com.example.myexodus.ui.partner.PartnerDashboardSource
 import com.example.myexodus.ui.partner.PartnerSelection
 import com.example.myexodus.ui.partner.UnpairOutcome
 import com.example.myexodus.widget.ProtectionSnapshotWriter
-import com.example.myexodus.ui.setup.SetupScreen
+import com.example.myexodus.ui.setup.OnboardingScreen
 import com.example.myexodus.ui.insights.InsightsViewModel
 import com.example.myexodus.ui.streaks.StreaksViewModel
 import com.example.myexodus.ui.theme.MyExodusTheme
+import com.example.myexodus.ui.theme.rememberDarkTheme
 import dagger.hilt.android.AndroidEntryPoint
 import java.security.Signature
 import kotlin.coroutines.resume
@@ -253,6 +254,7 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var protectionStatusMonitor: ProtectionStatusMonitor
     @Inject lateinit var crashReporting: CrashReporting
     @Inject lateinit var setupStateStore: SetupStateStore
+    @Inject lateinit var themeSettings: ThemeSettings
     @Inject lateinit var widgetSettings: WidgetSettings
     @Inject lateinit var homeSettings: HomeSettings
     @Inject lateinit var partnerDashboardSource: PartnerDashboardSource
@@ -518,7 +520,10 @@ class MainActivity : FragmentActivity() {
         startupTrace.lap("intents")
         enableEdgeToEdge()
         setContent {
-            MyExodusTheme {
+            // Hoisted so a Settings change repaints the whole app in the same frame; the store
+            // is the durable copy, this is the live one.
+            var themeMode by remember { mutableStateOf(themeSettings.mode) }
+            MyExodusTheme(darkTheme = rememberDarkTheme(themeMode)) {
                 // Plan §8.10: new clients read the server-published minimum version at startup
                 // and show the update-required message below it. This is a UX signal only —
                 // rules and callables enforce independently, so a failed read is not a bypass.
@@ -625,22 +630,13 @@ class MainActivity : FragmentActivity() {
                             .onFailure { Log.w(TAG, "Profile bootstrap failed", it) }
                     }
                 }
-                // Plan §8 Step 7 gate: the wizard runs once, only while a required mechanism
-                // is missing. Evaluated-and-complete is recorded so a later revocation never
-                // re-opens onboarding — Settings rows and the degraded banner own those fixes.
+                // First-run onboarding (owner request 2026-11-06): the full journey — capability
+                // slides, account choice, permissions — runs once per install, recorded the same
+                // way as the plan §8 Step 7 wizard it replaces. A later revocation never
+                // re-opens it; Settings rows and the degraded banner own those fixes.
                 var showSetup by remember { mutableStateOf<Boolean?>(null) }
                 LaunchedEffect(Unit) {
-                    showSetup = withContext(Dispatchers.IO) {
-                        if (setupStateStore.setupSeen) {
-                            false
-                        } else {
-                            val checks = readProtectionChecks(this@MainActivity)
-                            val needed = !checks.usageAccess || !checks.overlayGranted ||
-                                !monitor.isServiceEnabled()
-                            if (!needed) setupStateStore.setupSeen = true
-                            needed
-                        }
-                    }
+                    showSetup = withContext(Dispatchers.IO) { !setupStateStore.setupSeen }
                 }
                 // §19.4 item 4: what the ceremony needs from the Activity — the protocol, the
                 // uid (anonymous sign-in), the device's self-chosen name, and the biometric
@@ -684,13 +680,14 @@ class MainActivity : FragmentActivity() {
                         )
                     }
                 } else if (usable && showSetup == true) {
-                    SetupScreen(
+                    OnboardingScreen(
                         monitor = monitor,
+                        accountViewModel = accountViewModel,
                         onFinish = {
                             setupStateStore.setupSeen = true
                             showSetup = false
-                            // Plan §8 Step 7 ends the wizard by starting enforcement while
-                            // the app is foregrounded.
+                            // The journey ends the same way the plan §8 Step 7 wizard did:
+                            // start enforcement while the app is foregrounded.
                             refreshProtectionChecks()
                         },
                     )
@@ -713,6 +710,11 @@ class MainActivity : FragmentActivity() {
                         homeSettings = homeSettings,
                         widgetSettings = widgetSettings,
                         onWidgetSettingsChanged = widgetSnapshotWriter::publish,
+                        themeMode = themeMode,
+                        onThemeModeChange = { mode ->
+                            themeSettings.mode = mode
+                            themeMode = mode
+                        },
                         degradation = degradation,
                         authority = authority,
                         streaks = streaksViewModel,

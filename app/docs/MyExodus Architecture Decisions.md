@@ -5002,3 +5002,65 @@ The implementation went the other way on the owner's explicit 2026-09-19 ruling:
 **Verified (JVM, 2026-11-05).** `PartnerNotificationsTest` — `blockedAttempt_namesTheActTheAppAndTheBatch` (title, in-batch body and the lockscreen-public fallback), `blockedAttemptOutsideABatch_hasNoBatchTail`, `overrideAttempt_namesTheOverride`, `recoveryStep_names_theTechniqueAndOutcome` — green. Android lint clean (alone per ADR #208); `assembleDebug` green; APK (50,544,300 bytes, built 17:24) installed on X6532 at 17:25:20 and on X6532C at 17:35:35. **Partner display PASSED:** a blocked AI Gallery launch at 17:41:33 produced "Musila tried to open a blocked app" / "AI Gallery was blocked." in X6532C's notification record on the 17:24 build.
 
 **Consequences / honest limits.** (1) Both notification families now name the person and the act, and the body names the target. (2) An app not installed on the partner phone falls back to the sender's label, then the package id (ADR #257). (3) A batch name is user-authored text and is rendered verbatim in the body (already sanitized on the wire, ADR #249). (4) The lockscreen deliberately stays generic, so the specific target is visible only after unlock (FR-13).
+
+## #261 — The First Run Teaches the Capabilities Before It Asks for Permissions (owner request 2026-11-06)
+
+**Status:** Accepted; implemented and device-verified 2026-11-06 (X6532). Replaces the missing-mechanism gate of plan §8 Step 7; the wizard itself is unchanged and still owns the permission steps.
+
+**Context.** The V1 first run opened directly on the permission wizard, and only when Usage Access, Accessibility or overlay was actually missing; an install evaluated as complete never saw any onboarding. The owner's 2026-11-06 request: a first-run journey that teaches the three capabilities (app blocking, home-screen widget, partner accountability), then offers an account or a deliberate guest choice, and only then asks for permissions, at a visual bar that does not read as generated. The existing wizard, the Settings account form and the shared back affordance were all reusable; the missing piece was the journey around them.
+
+**Decision.**
+
+1. **One entry, one gate.** `ui/setup/OnboardingScreen.kt` replaces `SetupScreen` as the first-run entry in `MainActivity`; the gate is `!setupStateStore.setupSeen` alone. The "evaluate the required mechanisms and record seen if already complete" branch is gone: the journey teaches what the app does, so it runs once per install regardless of permission state. `SetupScreen` is reused unchanged as the journey's last page, so permission behavior, deep links, on-resume status reads and skip rules cannot drift.
+2. **Journey order.** Slide 1 blocking, slide 2 daily rhythm (streak and widget), slide 3 accountability; then the account page (create, sign in, Google, or "Continue without an account"); then the five permission steps. Skip on the slides jumps to the account page. Back is the shared `BackRow` in the top bar for every page past the first (ADR #90); `SetupScreen`'s own `BackHandler` steps the wizard first, and at its first step the outer handler returns to the account page (ADR #91 behavior preserved). An `AnimatedContent` slide carries the journey between pages.
+3. **The account form is the Settings one.** `AccountAuthForm` was extracted from `AccountPane.kt`'s `GuestAccount` into an `internal` composable and is called by both Settings → Account and onboarding, so validation and failure copy cannot diverge. Onboarding passes `prepared = false` (a fresh install links in place). A signed-in state renders a confirmation page the user leaves with Next; no auto-advance, so returning from the wizard via Back cannot bounce forward again.
+4. **Visual system.** Photographic hero cards (282 dp, 28 dp radius, gold kicker rule and uppercase label over a bottom scrim), Fraunces `headlineLarge` (36/42 sp) for slide headlines, Work Sans body, segmented wizard progress (gold current, teal passed), gold Solar glyphs tinted at runtime. No tinted plates behind icons.
+5. **Assets are sourced, licensed and recorded.** Photos from the Unsplash CDN; icons from Iconify's Solar set (480 Design, CC BY 4.0) converted to 384 px PNGs in `drawable-nodpi` and tinted by `Icon(painter, tint)`. CC BY requires credit, so Settings → About carries a quiet credits line naming Solar, its license and Unsplash. Exact files, source ids and licenses: `app/docs/MyExodus Build & Dependencies.md` → "Assets and licenses".
+
+**Alternatives considered.** (a) *Keep the missing-mechanism gate and show slides only when permissions were needed* — rejected: the journey is the product introduction, not a permission preamble; an install with permissions pre-granted still benefits from it. (b) *Auto-advance when sign-in succeeds* — rejected: Back from the wizard would land on the account page and immediately advance again, and it hides the confirmation that backup now exists. (c) *Require an account before the wizard* — rejected by the product rule that the app works without one; the guest continue is explicit and the hint names where to create an account later. (d) *A second account form for onboarding* — rejected: copy and validation drift. (e) *Tinted icon plates, a coloured box behind each icon* — rejected by the owner as the generated look being replaced.
+
+**Verified (2026-11-06).** X6532, `install -r`, `setup_state.xml` deleted to force first run: slides 1–3 render; slide 1 has no back and a Skip; every later page carries `BackRow`; back from slide 2 returns to slide 1, back from the account page returns to slide 3; the wizard's five steps render with their own header, Back, Skip and Continue; finishing writes `setup_state.xml` (`seen=true`), leaves onboarding and lands on Home. Light and dark both rendered. JVM suite 2,416 tests / 0 failures, Android lint alone clean (ADR #208), `assembleDebug` green. Slide 2's photo was replaced after the owner rejected two earlier images as unrelated to the page; the marked-calendar image is the shipped one, device-verified.
+
+**Consequences / honest limits.** (1) An install that finishes the journey and later revokes a permission is never shown it again; Settings rows and the degraded banner own those fixes (unchanged from the old gate). (2) The partner photo shows identifiable people without a model release (Unsplash does not provide one); it is used as non-endorsing editorial art in a free, direct-distribution app, so do not place advertising or implied-endorsement copy around it. (3) The three bundled photos add about 322 KB to the APK. (4) Slide copy is fixed English in `strings.xml` like the rest of the app; there is no dynamic personalization.
+
+## #262 — Appearance Is a Stored Setting: System, Light or Dark (owner request 2026-11-06)
+
+**Status:** Accepted; implemented and device-verified 2026-11-06 (X6532, both modes).
+
+**Context.** The app followed the system dark-mode setting at its Compose roots. The owner asked for a Settings control. A per-activity `isSystemInDarkTheme()` call cannot honour a user override, and each activity had its own theme root, so the setting had to be readable everywhere and changeable live in the main activity.
+
+**Decision.** `settings/ThemeSettings.kt` stores `ThemeMode.SYSTEM|LIGHT|DARK` in `SharedPreferences("theme_settings")`, default `SYSTEM`. `ui/theme/Theme.kt` gains `rememberDarkTheme(mode)`, the single ThemeMode→Boolean conversion, used by `MainActivity`, `BlockerActivity` and `WidgetActionActivity`. `MainActivity` hoists `themeMode` state at the theme root and passes it plus the setter (which writes the store and the state together) through `AppShell` to Settings, so a change repaints the whole app in the same frame. Settings' Appearance row shows the current mode as its subtitle and opens a radio dialog (`Modifier.selectable(role = Role.RadioButton)`).
+
+**Alternatives considered.** (a) *Per-activity state only* — rejected: the store is the durable copy and three activities must agree. (b) *DataStore* — rejected: one enum over the project's established SharedPreferences stores; no async read is needed at startup. (c) *A three-way switch instead of a dialog* — rejected: the row pattern already carries a subtitle, and a dialog states the three named choices explicitly and accessibly.
+
+**Verified (2026-11-06).** Settings row opens the dialog; choosing Light repaints immediately and survives relaunch; choosing Dark likewise; the block screen and widget action activities read the same stored mode on creation. JVM suite and lint green with the rest of the 2026-11-06 work.
+
+**Consequences / honest limits.** (1) A mode change applies to another already-alive activity at its next creation, not while it is backgrounded. (2) The stored mode is read synchronously at startup, one small SharedPreferences read.
+
+## #263 — App Icons Leave the Composition Path: the Rules Scroll Lag (owner report 2026-11-06)
+
+**Status:** Accepted; root cause read from source; fixed and JVM-verified 2026-11-06. A populated-list device reproduction was not available on the handset.
+
+**Context.** The owner reported the Rules page scrolling badly and asked for the root cause. `AppMark` resolved every row's icon inside composition: `remember(packageName, sizePx) { packageManager.getApplicationIcon(pkg).toBitmap(sizePx, sizePx) }`. `remember` only avoids recomputation on recomposition of the same node; each row entering the viewport is a new node, so scrolling ran a binder call into the system package manager plus a bitmap decode on the main thread, for every icon, every time it came back into view. Labels had already been moved off this path (ADR #251); icons had not.
+
+**Decision.** `ui/AppLabels.kt` gains `iconCache` (snapshot map keyed `package@sizePx`) and `iconLoads` (in-flight set). `cachedAppIcon()` returns the cached bitmap or null and queues exactly one background load per key on the existing bounded `appLabelLoader` scope; a failed resolution caches nothing and falls back to the placeholder glyph (the honest result for an uninstalled package). `publishLabel` is generalized into `publish(cache, key, value)` so icons reuse ADR #251's snapshot-conflict retry. `AppMark` calls only `cachedAppIcon`.
+
+**Alternatives considered.** (a) *Keep `remember` and accept it* — rejected: it is still a main-thread binder call per new row. (b) *A size-independent cache* — rejected: call sites render different mark sizes, and caching one decoded size for all would render blurry upscales. (c) *Preload every installed icon at startup* — rejected: unbounded work for targets the user may never see. (d) *Switch `AppMark` to a Coil/AsyncImage dependency* — rejected: the existing loader and snapshot map already do this without a new dependency.
+
+**Verified (JVM, 2026-11-06).** `AppLabelsTest` adds `iconMissReturnsNullImmediately_thenTheBackgroundLoadPopulatesTheCache` (one resolver call, cache fills) and `concurrentIconMissesForOneTargetQueueExactlyOneLoad` (five simultaneous misses share one in-flight load). Full JVM suite green; Android lint alone clean; `assembleDebug` green.
+
+**Consequences / honest limits.** (1) The first frames of a row show the fallback glyph until the background decode lands, so a fast fling may briefly show placeholders instead of stalling the main thread. (2) The cache is process-wide and grows with distinct `(package, sizePx)` pairs actually rendered, not with scroll passes; it is not evicted. (3) The owner's lag was not re-measured on a populated list; the mechanism that caused it is removed, and the scroll path now issues no package-manager calls.
+
+## #264 — User-Facing Copy Carries No Em Dashes (owner ruling 2026-11-06)
+
+**Status:** Accepted; sweep applied 2026-11-06.
+
+**Context.** The owner asked for em dashes out of the app's copy. Many strings used them as a rhetorical aside in permission, recovery, streak and widget text; three JVM tests pinned the old sentences.
+
+**Decision.** No em dash in any user-facing string. Use a period, colon or comma as the sentence needs. The rule covers `strings.xml`, `strings_recovery.xml` and Kotlin copy literals rendered to users; comments and documentation are unaffected.
+
+**Alternatives considered.** (a) *Replace every em dash with a spaced hyphen* — rejected: it reads as a typo. (b) *Keep them in long-form disclosure copy* — rejected: the owner's rule is about the app's voice, and the disclosure is user-facing.
+
+**Verified (2026-11-06).** Programmatic parse of both string resource files: zero em dashes in `<string>` and plural `<item>` text outside XML comments. `StreaksPresentation.kt`, `ProtectionScreen.kt`, `CoachingPlanScreen.kt` and `RiskWindowsScreen.kt` literals swept. The three tests that pin exact copy (`WidgetContentTest`, `StreakPluralCopyTest`, `RecoveryDelayCopyTest`) updated and green.
+
+**Consequences.** Copy-only change; no runtime behavior changes.

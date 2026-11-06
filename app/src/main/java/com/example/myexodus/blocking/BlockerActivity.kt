@@ -36,7 +36,9 @@ import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.ui.AppMark
 import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.rememberTypeScaleFactor
+import com.example.myexodus.settings.ThemeSettings
 import com.example.myexodus.ui.theme.MyExodusTheme
+import com.example.myexodus.ui.theme.rememberDarkTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
@@ -71,6 +73,7 @@ class BlockerActivity : ComponentActivity() {
     @Inject lateinit var engine: BlockDecisionEngine
     @Inject lateinit var publisher: RulesSnapshotPublisher
     @Inject lateinit var recoveryStore: RecoveryStateStore
+    @Inject lateinit var themeSettings: ThemeSettings
 
     private val targetPackage: String by lazy { checkNotNull(intent.getStringExtra(EXTRA_PACKAGE)) }
     private val targetRuleId: String by lazy { checkNotNull(intent.getStringExtra(EXTRA_RULE_ID)) }
@@ -89,7 +92,7 @@ class BlockerActivity : ComponentActivity() {
             override fun handleOnBackPressed() { /* no-op */ }
         })
         setContent {
-            MyExodusTheme {
+            MyExodusTheme(darkTheme = rememberDarkTheme(themeSettings.mode)) {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     BlockScreen(
                         appLabel = rememberAppLabel(targetPackage),

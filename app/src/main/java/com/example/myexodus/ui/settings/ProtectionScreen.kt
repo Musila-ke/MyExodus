@@ -227,7 +227,7 @@ private fun StatusRow(
                 // The button is a sibling of the title, not its child, so its own label is all
                 // TalkBack has to go on — six rows of "Open"/"Fix" announce identically with no
                 // subject (WCAG 2.4.6; finding #26, the Rules switches' same defect in #25).
-                modifier = Modifier.semantics { contentDescription = "$actionLabel — $title" },
+                modifier = Modifier.semantics { contentDescription = "$actionLabel, $title" },
             ) {
                 Text(actionLabel)
             }

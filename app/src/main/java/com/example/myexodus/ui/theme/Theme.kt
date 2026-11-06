@@ -9,6 +9,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import com.example.myexodus.settings.ThemeMode
 import com.example.myexodus.ui.rememberWindowWidth
 import com.example.myexodus.ui.typeScaleFactor
 
@@ -98,6 +99,14 @@ internal val DarkColorScheme = darkColorScheme(
  * elevated ink surface in dark (container-high); neither role alone means "the bar".
  */
 internal val LocalIsDarkTheme = staticCompositionLocalOf { false }
+
+/** The one place ThemeMode becomes a boolean, shared by every activity's theme root. */
+@Composable
+fun rememberDarkTheme(mode: ThemeMode): Boolean = when (mode) {
+    ThemeMode.SYSTEM -> isSystemInDarkTheme()
+    ThemeMode.LIGHT -> false
+    ThemeMode.DARK -> true
+}
 
 /** Type steps up once past 600dp and twice past 840dp; the ramp itself lives in
  *  Adaptive.kt (`WindowWidth.typeScaleFactor`) so the View-world block surfaces ramp with

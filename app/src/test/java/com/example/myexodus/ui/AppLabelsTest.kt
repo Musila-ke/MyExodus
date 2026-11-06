@@ -3,6 +3,7 @@ package com.example.myexodus.ui
 import android.content.Context
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshots.SnapshotApplyResult
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.test.core.app.ApplicationProvider
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -127,6 +128,47 @@ class AppLabelsTest {
         // No read-back: after churn this heavy the runtime can make the whole map unreadable to
         // every snapshot (Google issue 346818437 — reproduced without any app code). The
         // label-becomes-visible path is what the other tests in this class pin.
+    }
+
+    @Test
+    fun iconMissReturnsNullImmediately_thenTheBackgroundLoadPopulatesTheCache() {
+        // The owner-reported Rules scroll lag: AppMark used to run getApplicationIcon + a
+        // bitmap decode inside composition for every row entering the viewport.
+        val calls = AtomicInteger(0)
+        val pkg = "icon.populate.test"
+        val sizePx = 36
+        val bitmap = android.graphics.Bitmap
+            .createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888)
+            .asImageBitmap()
+        assertNull(cachedAppIcon(pkg, context, sizePx, appLabelLoader) {
+            calls.incrementAndGet()
+            bitmap
+        })
+        pollUntil { cachedAppIcon(pkg, context, sizePx, appLabelLoader) != null }
+        assertEquals("resolver ran exactly once", 1, calls.get())
+    }
+
+    @Test
+    fun concurrentIconMissesForOneTargetQueueExactlyOneLoad() {
+        val calls = AtomicInteger(0)
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val pkg = "icon.dedup.test"
+        val bitmap = android.graphics.Bitmap
+            .createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888)
+            .asImageBitmap()
+        repeat(5) {
+            cachedAppIcon(pkg, context, 36, appLabelLoader) {
+                started.countDown()
+                release.await()
+                calls.incrementAndGet()
+                bitmap
+            }
+        }
+        assertTrue("the load started", started.await(5, TimeUnit.SECONDS))
+        release.countDown()
+        pollUntil { cachedAppIcon(pkg, context, 36, appLabelLoader) != null }
+        assertEquals("five misses share one in-flight load", 1, calls.get())
     }
 
     @Test

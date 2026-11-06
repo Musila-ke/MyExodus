@@ -235,7 +235,7 @@ private fun KindSection(
                 // to — the same missing-subject defect as findings #25/#26 (WCAG 2.4.6).
                 Icon(
                     Icons.Default.Add,
-                    contentDescription = "${stringResource(R.string.recovery_plan_add)} — $header",
+                    contentDescription = "${stringResource(R.string.recovery_plan_add)}, $header",
                 )
             }
         }

@@ -11,8 +11,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Person
@@ -21,10 +23,14 @@ import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.Widgets
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.semantics.Role
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -56,6 +62,7 @@ import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.IntegrityStatus
 import com.example.myexodus.settings.ProtectionChecks
 import com.example.myexodus.settings.StrictModeManager
+import com.example.myexodus.settings.ThemeMode
 import com.example.myexodus.settings.WidgetSettings
 import com.example.myexodus.settings.readProtectionChecks
 import com.example.myexodus.settings.requestBatteryExemption
@@ -85,6 +92,8 @@ fun SettingsScreen(
     crashReporting: CrashReporting,
     widgetSettings: WidgetSettings,
     onWidgetSettingsChanged: () -> Unit,
+    themeMode: ThemeMode,
+    onThemeModeChange: (ThemeMode) -> Unit,
     planRepository: RecoveryPlanRepository,
     /** Owner request 2026-11-01: the friction timer pane reads/writes the policy row. */
     recoveryStore: RecoveryStateStore,
@@ -205,6 +214,8 @@ fun SettingsScreen(
             crashReporting = crashReporting,
             widgetSettings = widgetSettings,
             onWidgetSettingsChanged = onWidgetSettingsChanged,
+            themeMode = themeMode,
+            onThemeModeChange = onThemeModeChange,
             partnerBlock = partnerBlock,
             onPartnerBlockChange = onPartnerBlockChange,
             onOpenPane = { pane = it },
@@ -231,6 +242,8 @@ private fun SettingsIndex(
     crashReporting: CrashReporting,
     widgetSettings: WidgetSettings,
     onWidgetSettingsChanged: () -> Unit,
+    themeMode: ThemeMode,
+    onThemeModeChange: (ThemeMode) -> Unit,
     partnerBlock: NudgeSettingsViewModel.UiState?,
     onPartnerBlockChange: (Boolean) -> Unit,
     onOpenPane: (String) -> Unit,
@@ -242,6 +255,7 @@ private fun SettingsIndex(
     // Owned here so switching Strict on recomposes the Enhanced row in the same frame (its
     // switch must grey out at once, not up to 60 s later on its own tick).
     var strictOn by remember { mutableStateOf(strictMode.strictModeEnabled) }
+    var themeDialogOpen by remember { mutableStateOf(false) }
     // Null until the checks land: the row shows no status rather than claiming one it hasn't read.
     val attention = checks?.let { attentionCount(it, serviceEnabled) }
     // §8.3: the identity row states the current mode without implying an account is required.
@@ -341,6 +355,20 @@ private fun SettingsIndex(
 
                 RowDivider()
                 IndexRow(
+                    icon = Icons.Outlined.DarkMode,
+                    title = stringResource(R.string.settings_appearance_title),
+                    subtitle = stringResource(
+                        when (themeMode) {
+                            ThemeMode.SYSTEM -> R.string.settings_theme_system
+                            ThemeMode.LIGHT -> R.string.settings_theme_light
+                            ThemeMode.DARK -> R.string.settings_theme_dark
+                        },
+                    ),
+                    onClick = { themeDialogOpen = true },
+                )
+
+                RowDivider()
+                IndexRow(
                     icon = Icons.Outlined.Checklist,
                     title = stringResource(R.string.recovery_plan_editor_title),
                     subtitle = stringResource(R.string.recovery_plan_editor_intro),
@@ -408,6 +436,51 @@ private fun SettingsIndex(
                 )
             }
         }
+    }
+
+    if (themeDialogOpen) {
+        AlertDialog(
+            onDismissRequest = { themeDialogOpen = false },
+            title = { Text(stringResource(R.string.settings_appearance_title)) },
+            text = {
+                Column {
+                    ThemeMode.entries.forEach { mode ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = mode == themeMode,
+                                    role = Role.RadioButton,
+                                    onClick = {
+                                        onThemeModeChange(mode)
+                                        themeDialogOpen = false
+                                    },
+                                )
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = mode == themeMode, onClick = null)
+                            Text(
+                                stringResource(
+                                    when (mode) {
+                                        ThemeMode.SYSTEM -> R.string.settings_theme_system
+                                        ThemeMode.LIGHT -> R.string.settings_theme_light
+                                        ThemeMode.DARK -> R.string.settings_theme_dark
+                                    },
+                                ),
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.padding(start = 12.dp),
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { themeDialogOpen = false }) {
+                    Text(stringResource(R.string.db_health_cancel))
+                }
+            },
+        )
     }
 }
 

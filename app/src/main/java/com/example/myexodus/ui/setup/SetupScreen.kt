@@ -5,27 +5,26 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -41,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -189,99 +189,147 @@ fun SetupScreen(
     }
 
     Scaffold(modifier = modifier.fillMaxSize()) { padding ->
-        // Centred when it fits, scrollable when it doesn't (landscape / short screens must
-        // never strand the action buttons below the fold).
-        Box(
-            modifier = Modifier
+        Column(
+            Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(24.dp),
-            contentAlignment = Alignment.Center,
+                .padding(horizontal = 20.dp, vertical = 10.dp),
         ) {
-            Column(
+            Row(
                 modifier = Modifier
-                    .widthIn(max = 520.dp)
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                    .height(52.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Brand moment on the first stop only — repeating it on all five permission
-                // steps would be chrome on a screen whose job is granting access.
-                if (index == 0) {
-                    BrandLockup()
-                }
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        stringResource(R.string.setup_title),
-                        style = MaterialTheme.typography.headlineSmall,
+                BrandLockup(height = 40.dp)
+                Spacer(Modifier.weight(1f))
+                Text(
+                    stringResource(R.string.setup_step_counter, index + 1, SetupSteps.size),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            SetupProgress(index = index)
+            // Centred as a poster when it fits, scrollable when it doesn't — the actions stay
+            // pinned to the bottom either way.
+            BoxWithConstraints(Modifier.weight(1f)) {
+                Column(
+                    Modifier
+                        .verticalScroll(rememberScrollState())
+                        .heightIn(min = maxHeight),
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Icon(
+                        painter = painterResource(stepIcon(step)),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier.size(56.dp),
                     )
+                    Spacer(Modifier.height(26.dp))
+                    EditorialKicker(stringResource(R.string.setup_title))
+                    Spacer(Modifier.height(14.dp))
                     Text(
-                        stringResource(R.string.setup_step_of, index + 1, SetupSteps.size),
-                        style = MaterialTheme.typography.bodyMedium,
+                        stringResource(titleRes),
+                        style = MaterialTheme.typography.headlineLarge,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        stringResource(bodyRes),
+                        style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
-                LinearProgressIndicator(
-                    progress = { (index + 1) / SetupSteps.size.toFloat() },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    shape = MaterialTheme.shapes.medium,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(stringResource(titleRes), style = MaterialTheme.typography.titleLarge)
-                        Text(
-                            stringResource(bodyRes),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        granted?.let { StatusLine(granted = it) }
+                    granted?.let {
+                        Spacer(Modifier.height(18.dp))
+                        StepStatus(granted = it)
                     }
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    if (index > 0) {
-                        TextButton(onClick = { index-- }) { Text(stringResource(R.string.setup_back)) }
-                    }
-                    Spacer(Modifier.weight(1f))
-                    if (step != SetupStep.DISCLOSURE && granted != true) {
-                        TextButton(onClick = ::advance) { Text(stringResource(R.string.setup_skip)) }
-                    }
-                    Button(onClick = primary.second) { Text(primary.first) }
                 }
             }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (index > 0) {
+                    TextButton(onClick = { index-- }) { Text(stringResource(R.string.setup_back)) }
+                }
+                Spacer(Modifier.weight(1f))
+                if (step != SetupStep.DISCLOSURE && granted != true) {
+                    TextButton(onClick = ::advance) { Text(stringResource(R.string.setup_skip)) }
+                }
+                Button(onClick = primary.second, modifier = Modifier.height(52.dp)) {
+                    Text(primary.first)
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+        }
+    }
+}
+
+/** Segmented progress: one bar per permission, so the shape of the journey is visible at a
+ *  glance instead of a percentage fill. The current stop is gold; passed stops are teal. */
+@Composable
+private fun SetupProgress(index: Int) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        repeat(SetupSteps.size) { bar ->
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(3.dp)
+                    .background(
+                        when {
+                            bar == index -> MaterialTheme.colorScheme.tertiary
+                            bar < index -> MaterialTheme.colorScheme.primary
+                            else -> MaterialTheme.colorScheme.outlineVariant
+                        },
+                        CircleShape,
+                    ),
+            )
         }
     }
 }
 
 @Composable
-private fun StatusLine(granted: Boolean) {
-    val tint = if (granted) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
+private fun StepStatus(granted: Boolean) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Icon(
-            imageVector = if (granted) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
-            contentDescription = null,
-            tint = tint,
-            modifier = Modifier.size(18.dp),
-        )
-        Text(
-            stringResource(
-                if (granted) R.string.setup_status_granted else R.string.setup_status_missing,
-            ),
-            style = MaterialTheme.typography.labelLarge,
-            color = tint,
-        )
+        if (granted) {
+            Icon(
+                painter = painterResource(R.drawable.onb_check),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
+            Text(
+                stringResource(R.string.setup_status_granted),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        } else {
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .background(MaterialTheme.colorScheme.outline, CircleShape),
+            )
+            Text(
+                stringResource(R.string.setup_status_missing),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
+}
+
+private fun stepIcon(step: SetupStep): Int = when (step) {
+    SetupStep.USAGE -> R.drawable.onb_usage
+    SetupStep.DISCLOSURE -> R.drawable.onb_disclosure
+    SetupStep.ACCESSIBILITY -> R.drawable.onb_accessibility
+    SetupStep.NOTIFICATIONS -> R.drawable.onb_notifications
+    SetupStep.OVERLAY -> R.drawable.onb_overlay
 }

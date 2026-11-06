@@ -48,6 +48,21 @@ Baseline current as of 2026-09-13 (all versions verified together: `assembleDebu
 | com.upokecenter:cbor (petero) | 4.5.6 | RFC 8949 deterministic CBOR encoding (protocol §6.2.1, ADR) |
 | Glance (`androidx.glance:glance-appwidget` + `:glance-material3`) | 1.1.1 | Home-screen widget (V1 Req 36, ADR #40). Pinned per widget spec §5 Decision 12′; version re-verified against the AndroidX release page 2026-09-16 (1.1.1 stable; 1.2.0-rc01 is RC-only). Lockfiles regenerated. **Resolved 2026-09-16**: Google's Maven CDN was briefly unreachable when the dependency was added; after regenerating the lockfile (`:app:dependencies --write-locks`) the artifacts resolved and every build target is green |
 
+## Assets and licenses (added 2026-11-06, ADR #261)
+
+Bundled onboarding/brand art is real, sourced material; nothing here is generated. Recorded so a later licensing question is answered from the repo.
+
+| File | Source | License |
+|---|---|---|
+| `drawable-nodpi/onboarding_block.jpg` (1200×676) | Unsplash photo `1584433144859-1fc3ab64a957`, fetched at `w=1200&q=80` | Unsplash License |
+| `drawable-nodpi/onboarding_rhythm.jpg` (1200×801) | Unsplash photo `1633526543814-9718c8922b7a`, fetched at `w=1200&q=80` | Unsplash License |
+| `drawable-nodpi/onboarding_partner.jpg` (1080×721) | Unsplash photo `1573496546038-82f9c39f6365`, fetched at `w=1080&q=80` | Unsplash License |
+| `drawable-nodpi/onb_usage.png`, `onb_disclosure.png`, `onb_accessibility.png`, `onb_notifications.png`, `onb_overlay.png`, `onb_check.png` (384×384) | Iconify Solar set: `graph-new-up-bold`, `eye-bold`, `accessibility-bold`, `bell-bold`, `layers-bold`, `check-bold`; Solar by 480 Design | CC BY 4.0 |
+| `drawable-nodpi/logo_lockup.png`, `logo_mark.png` | Project's own brand art | Project-owned |
+
+- Photo URLs: `https://images.unsplash.com/photo-{id}?w={width}&q=80`. The Unsplash License permits free commercial use, needs no permission or attribution, forbids selling unmodified copies and compiling images to replicate a competing service. It provides no model or property releases; the partner photo shows identifiable people, so keep its surrounding copy non-endorsing (ADR #261 consequence 2).
+- Icons are fetched as SVG from `https://api.iconify.design/solar/{glyph}.svg` and converted to 384 px PNGs; they are tinted at runtime by `Icon(painterResource(...), tint = ...)`. CC BY 4.0 requires credit and a license link, so Settings → About renders `settings_about_credits` (Solar by 480 Design, CC BY 4.0, iconify.design; photography from Unsplash). Keep that line if the icon art or photos are reused.
+
 ## Pending items
 
 - **`google-services` Gradle plugin**: applied 2026-08-28 (Firebase project `myexodus-53804`). It fails the build without `app/google-services.json` — that file is **local-only: untracked + gitignored as of 2026-09-16** (removed from the repo; regenerable from the Firebase console). It must stay on disk in `app/` for local builds.

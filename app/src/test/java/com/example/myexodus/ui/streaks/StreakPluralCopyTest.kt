@@ -26,11 +26,11 @@ class StreakPluralCopyTest {
     @Test
     fun bestRun_isSingularAtOneDay() {
         assertEquals(
-            "Best run: 1 day — that record stays with you.",
+            "Best run: 1 day. That record stays with you.",
             resources.getQuantityString(R.plurals.streaks_best_run, 1, 1),
         )
         assertEquals(
-            "Best run: 2 days — that record stays with you.",
+            "Best run: 2 days. That record stays with you.",
             resources.getQuantityString(R.plurals.streaks_best_run, 2, 2),
         )
     }

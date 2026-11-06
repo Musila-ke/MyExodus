@@ -52,10 +52,10 @@ private fun milestoneHeadline(milestoneDay: Int): String = when (milestoneDay) {
 
 /** Splash-card body — supportive, non-clinical (Decision 12 tone). */
 private fun milestoneBody(milestoneDay: Int): String = when (milestoneDay) {
-    7 -> "Seven days, counted one at a time. The first week is behind you — keep going."
-    30 -> "A full month of showing up. That's a month of choosing yourself — keep going."
-    90 -> "Ninety days. Three months of holding your line — keep going."
-    else -> "A new milestone is on the board — keep going. The streak is yours."
+    7 -> "Seven days, counted one at a time. The first week is behind you. Keep going."
+    30 -> "A full month of showing up. That's a month of choosing yourself. Keep going."
+    90 -> "Ninety days. Three months of holding your line. Keep going."
+    else -> "A new milestone is on the board. Keep going. The streak is yours."
 }
 
 /** Splash-card headline for its days — one combined card when several milestones stack up
@@ -76,7 +76,7 @@ fun milestoneCardLabel(days: List<Int>): String =
 /** Splash-card body for its days. */
 fun milestoneCardBody(days: List<Int>): String =
     if (days.size == 1) milestoneBody(days.first())
-    else "You crossed every one of these already — each was earned, and they count. Keep going."
+    else "You crossed every one of these already. Each was earned, and they count. Keep going."
 
 /**
  * Post-relapse line (design research: non-punitive copy, celebrate the streak that was —
@@ -84,12 +84,12 @@ fun milestoneCardBody(days: List<Int>): String =
  */
 fun relapseSupportNote(endedDays: Int, bestDays: Int): String =
     if (endedDays < 1) {
-        "Every run starts somewhere — this one's count begins now."
+        "Every run starts somewhere. This one's count begins now."
     } else {
         buildString {
             append("You showed up ")
             append(if (endedDays == 1) "1 day" else "$endedDays days")
-            append(" in a row — that progress is real and it stays with you.")
+            append(" in a row. That progress is real and it stays with you.")
             if (bestDays > endedDays) append(" Your best run of $bestDays days is still on record.")
             append(" Day 1 of the next run starts now.")
         }
@@ -113,13 +113,13 @@ fun weekLabel(week: WithdrawalWeek): String =
 
 /** General expectation-setting copy per week (Decision 12: estimation, not clinical fact). */
 fun weekExpectation(weekNumber: Int): String = when (weekNumber) {
-    1 -> "Cravings often come on strongest early on. Expect the pull to show up often — that's the habit talking, not a failure."
+    1 -> "Cravings often come on strongest early on. Expect the pull to show up often. That's the habit talking, not a failure."
     2 -> "Usually still a loud week, but the peaks tend to start coming further apart."
     3 -> "The urge waves often get shorter and easier to ride out around here."
-    4 -> "For many people the steadiest week yet — the pull is quieter, and the new routine starts to feel like yours."
+    4 -> "For many people this is the steadiest week yet. The pull is quieter, and the new routine starts to feel like yours."
     else -> ""
 }
 
 /** Decision 12: wherever the timeline renders, it says what it is. */
 const val TIMELINE_DISCLAIMER =
-    "This timeline is a general estimate to help set expectations — not a clinical measurement."
+    "This timeline is a general estimate to help set expectations. It is not a clinical measurement."

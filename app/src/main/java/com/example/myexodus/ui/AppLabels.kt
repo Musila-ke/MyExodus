@@ -11,8 +11,10 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshots.SnapshotApplyResult
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -47,6 +49,37 @@ private val labelCache = mutableStateMapOf<String, String>()
 // Targets whose load is in flight or done, so N rows of the same list don't queue N loads.
 private val labelLoads = ConcurrentHashMap.newKeySet<String>()
 
+// Icons are the same class of cost as labels — a PackageManager binder call plus a bitmap
+// decode — and the owner's Rules scroll lag was exactly that happening in composition. Keyed
+// by pixel size because call sites render different mark sizes. A failed load never retries
+// (the fallback glyph is the honest result for an uninstalled package).
+private val iconCache = mutableStateMapOf<String, ImageBitmap>()
+private val iconLoads = ConcurrentHashMap.newKeySet<String>()
+
+private fun iconKey(packageName: String, sizePx: Int) = "$packageName@$sizePx"
+
+/** Composition-path read: cached icon if known, else null and one background load queued. */
+internal fun cachedAppIcon(
+    packageName: String,
+    context: Context,
+    sizePx: Int,
+    load: CoroutineScope,
+    resolve: () -> ImageBitmap? = {
+        runCatching {
+            context.packageManager.getApplicationIcon(packageName)
+                .toBitmap(sizePx, sizePx)
+                .asImageBitmap()
+        }.getOrNull()
+    },
+): ImageBitmap? {
+    val key = iconKey(packageName, sizePx)
+    iconCache[key]?.let { return it }
+    if (iconLoads.add(key)) {
+        load.launch { resolve()?.let { publish(iconCache, key, it) } }
+    }
+    return null
+}
+
 // At most 4 parallel PackageManager lookups: enough to drain a 4000-target list quickly,
 // bounded so a long list can't flood the system server with binder traffic.
 internal val appLabelLoader: CoroutineScope =
@@ -63,10 +96,16 @@ internal fun peekAppLabel(target: String): String? {
 // expected, not exceptional — Compose's contract is to retry. Throw-on-conflict here killed
 // the app three times in the app picker (task #75 device run, SnapshotApplyConflictException).
 internal fun publishLabel(target: String, label: String) {
+    publish(labelCache, target, label)
+}
+
+// Shared by labels and icons: a background apply that loses the race with composition is
+// expected, so retry rather than throw (ADR #251).
+private fun <T> publish(cache: SnapshotStateMap<String, T>, key: String, value: T) {
     while (true) {
         val snapshot = Snapshot.takeMutableSnapshot()
         try {
-            snapshot.enter { labelCache[target] = label }
+            snapshot.enter { cache[key] = value }
         } catch (failure: Throwable) {
             snapshot.dispose()
             throw failure
@@ -161,13 +200,7 @@ fun AppMark(
 ) {
     val context = LocalContext.current
     val sizePx = with(LocalDensity.current) { size.roundToPx() }
-    val icon = remember(packageName, sizePx) {
-        packageName?.let {
-            runCatching {
-                context.packageManager.getApplicationIcon(it).toBitmap(sizePx, sizePx).asImageBitmap()
-            }.getOrNull()
-        }
-    }
+    val icon = packageName?.let { cachedAppIcon(it, context, sizePx, appLabelLoader) }
     if (icon != null) {
         Image(bitmap = icon, contentDescription = null, modifier = modifier.size(size))
     } else {

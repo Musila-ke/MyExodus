@@ -8,7 +8,7 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
 
     <string name="recovery_suggested_title">Try right now</string>
-    <string name="recovery_risk_window_note">You\'re inside one of your risk windows — low-effort options first.</string>
+    <string name="recovery_risk_window_note">You\'re inside one of your risk windows. Low-effort options first.</string>
 
     <!-- Hub tiles: the Recovery page's subpages, reached by icon + label. -->
     <string name="recovery_tile_techniques">Techniques</string>
@@ -50,7 +50,7 @@
     <!-- Friction timer (owner request 2026-11-01): the wait is the user\'s choice, 1 minute to
          24 hours, instead of the fixed 60 s. Title reuses recovery_timer_label. -->
     <string name="settings_friction_timer_body">How long a block holds before it lifts on its own. From 1 minute to 24 hours; an override can still end it early.</string>
-    <string name="friction_timer_intro">The wait before a block lifts on its own. It applies to new sessions — a countdown already running keeps its length.</string>
+    <string name="friction_timer_intro">The wait before a block lifts on its own. It applies to new sessions. A countdown already running keeps its length.</string>
     <string name="friction_timer_hours">Hours</string>
     <string name="friction_timer_minutes">Minutes</string>
     <string name="friction_timer_current">Now set to %1$s</string>
@@ -76,13 +76,13 @@
     <!-- The chip label stays a bare numeral; this names the control for screen readers, where
          "7" alone is unlabelled. -->
     <string name="recovery_log_intensity_chip">Intensity %1$d of 10</string>
-    <string name="recovery_log_note">Logging keeps the block in place — this is not an override. Nothing here is shared with your partner.</string>
+    <string name="recovery_log_note">Logging keeps the block in place. This is not an override. Nothing here is shared with your partner.</string>
     <string name="recovery_log_cancel">Cancel</string>
     <string name="recovery_log_submit">Log it</string>
 
     <!-- Technique titles and descriptions (catalog-driven, W4) -->
     <string name="recovery_tech_urge_surfing_title">Paced breathing</string>
-    <string name="recovery_tech_urge_surfing_desc">Breathe 4 seconds in, 6 seconds out. Follow the circle — no need to count.</string>
+    <string name="recovery_tech_urge_surfing_desc">Breathe 4 seconds in, 6 seconds out. Follow the circle. No need to count.</string>
     <string name="recovery_tech_delay_timer_title">Wait 10 minutes</string>
     <string name="recovery_tech_delay_timer_desc">Start a timer and read your if-then plans while you wait.</string>
     <string name="recovery_tech_sober_title">Walk through the urge</string>
@@ -109,7 +109,7 @@
     <string name="recovery_pacer_extend">Do another set</string>
     <string name="recovery_pacer_haptics">Vibrate at each change</string>
     <string-array name="recovery_pacer_prompts">
-        <item>Notice where you feel it — chest, shoulders, hands.</item>
+        <item>Notice where you feel it: chest, shoulders, hands.</item>
         <item>You don\'t have to act on it. Just keep breathing.</item>
         <item>Let the air come out slower than it came in.</item>
         <item>Stay with the count. Nothing else needs deciding right now.</item>
@@ -118,35 +118,35 @@
 
     <!-- Delay timer -->
     <plurals name="recovery_delay_body">
-        <item quantity="one">Set the timer for %1$d minute. When it ends, decide then — not now.</item>
-        <item quantity="other">Set the timer for %1$d minutes. When it ends, decide then — not now.</item>
+        <item quantity="one">Set the timer for %1$d minute. When it ends, decide then, not now.</item>
+        <item quantity="other">Set the timer for %1$d minutes. When it ends, decide then, not now.</item>
     </plurals>
     <string name="recovery_delay_start">Start the timer</string>
     <string name="recovery_delay_remaining">%1$d:%2$02d</string>
     <string name="recovery_delay_finished">Time\'s up. Decide what you want to do now.</string>
-    <string name="recovery_delay_no_ifthen">No if-then plans yet — add some in Settings → Coaching plan.</string>
+    <string name="recovery_delay_no_ifthen">No if-then plans yet. Add some in Settings → Coaching plan.</string>
 
     <!-- Five-phase walkthrough -->
     <string name="recovery_sober_progress">Phase %1$d of %2$d</string>
     <string name="recovery_sober_stop_title">Stop</string>
     <string name="recovery_sober_stop_body">Pause. Don\'t move toward it and don\'t push it away. Just stop for a moment.</string>
     <string name="recovery_sober_observe_title">Observe</string>
-    <string name="recovery_sober_observe_body">What does it feel like right now — where is it, and how strong? Say it plainly, without judging it.</string>
+    <string name="recovery_sober_observe_body">What does it feel like right now? Where is it, and how strong? Say it plainly, without judging it.</string>
     <string name="recovery_sober_breathe_title">Breathe</string>
     <string name="recovery_sober_breathe_body">Slow the breath. Breathe into the place you noticed, not against it.</string>
     <string name="recovery_sober_expand_title">Expand</string>
-    <string name="recovery_sober_expand_body">Widen your attention past the urge — your body, the room, the sounds around you.</string>
+    <string name="recovery_sober_expand_body">Widen your attention past the urge: your body, the room, the sounds around you.</string>
     <string name="recovery_sober_respond_title">Respond</string>
     <string name="recovery_sober_respond_body">Choose your next move deliberately. Your if-then plans are below.</string>
     <string name="recovery_sober_back">Back</string>
     <string name="recovery_sober_next">Next</string>
     <string name="recovery_sober_finish">Done</string>
-    <string name="recovery_sober_no_ifthen">No if-then plans yet — add some in Settings → Coaching plan.</string>
+    <string name="recovery_sober_no_ifthen">No if-then plans yet. Add some in Settings → Coaching plan.</string>
 
     <!-- Values card -->
     <string name="recovery_values_label">What matters to me</string>
     <string name="recovery_values_next">Next</string>
-    <string name="recovery_values_empty">No values added yet — add some in Settings → Coaching plan.</string>
+    <string name="recovery_values_empty">No values added yet. Add some in Settings → Coaching plan.</string>
 
     <!-- Shared run controls -->
     <string name="recovery_done">I\'m done</string>
@@ -196,7 +196,7 @@
     <string name="recovery_crisis_link">Need urgent help?</string>
     <string name="recovery_crisis_back">Get help now</string>
     <string name="recovery_crisis_title">Get help now</string>
-    <string name="recovery_crisis_intro">If you\'re in immediate danger, call your local emergency number. These services are run by independent organizations — the numbers below were checked by hand.</string>
+    <string name="recovery_crisis_intro">If you\'re in immediate danger, call your local emergency number. These services are run by independent organizations. The numbers below were checked by hand.</string>
     <string name="recovery_crisis_not_emergency">These are not emergency services unless stated. If you are in immediate danger, contact emergency services in your country.</string>
     <string name="recovery_crisis_call">Call %1$s</string>
     <string name="recovery_crisis_open">Open website</string>

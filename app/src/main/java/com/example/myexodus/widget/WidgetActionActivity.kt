@@ -60,7 +60,10 @@ import com.example.myexodus.R
 import com.example.myexodus.ui.home.SosViewModel
 import com.example.myexodus.ui.sosStateMessage
 import com.example.myexodus.ui.theme.MyExodusTheme
+import com.example.myexodus.settings.ThemeSettings
+import com.example.myexodus.ui.theme.rememberDarkTheme
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -90,6 +93,8 @@ import kotlinx.coroutines.withContext
 @AndroidEntryPoint
 class WidgetActionActivity : ComponentActivity() {
 
+    @Inject lateinit var themeSettings: ThemeSettings
+
     private val viewModel: WidgetActionViewModel by viewModels()
 
     private var openTarget by mutableStateOf<String?>(null)
@@ -100,7 +105,7 @@ class WidgetActionActivity : ComponentActivity() {
         enableEdgeToEdge()
         if (!parseTarget(intent)) return
         setContent {
-            MyExodusTheme {
+            MyExodusTheme(darkTheme = rememberDarkTheme(themeSettings.mode)) {
                 val target = openTarget
                 if (target != null) {
                     // Re-opened as a different action (singleTop → onNewIntent): a fresh key

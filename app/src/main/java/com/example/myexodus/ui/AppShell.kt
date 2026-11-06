@@ -98,6 +98,7 @@ import com.example.myexodus.recovery.RecoverySessionRepository
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.HomeSettings
 import com.example.myexodus.settings.StrictModeManager
+import com.example.myexodus.settings.ThemeMode
 import com.example.myexodus.settings.WidgetSettings
 import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.telemetry.CrashReporting
@@ -172,6 +173,9 @@ fun AppShell(
     homeSettings: HomeSettings,
     widgetSettings: WidgetSettings,
     onWidgetSettingsChanged: () -> Unit,
+    /** Settings' appearance row; the live mode the activity's theme root is painting. */
+    themeMode: ThemeMode,
+    onThemeModeChange: (ThemeMode) -> Unit,
     degradation: ProtectionDegradation?,
     authority: ProtectionAuthority? = null,
     onReenable: () -> Unit,
@@ -512,6 +516,8 @@ fun AppShell(
                         crashReporting = crashReporting,
                         widgetSettings = widgetSettings,
                         onWidgetSettingsChanged = onWidgetSettingsChanged,
+                        themeMode = themeMode,
+                        onThemeModeChange = onThemeModeChange,
                         planRepository = planRepository,
                         recoveryStore = recoveryStore,
                         rulesRepository = rulesRepository,

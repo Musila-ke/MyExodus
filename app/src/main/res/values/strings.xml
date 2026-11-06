@@ -8,7 +8,7 @@
     <string name="limit_blocked_title">%1$s is done for today</string>
     <string name="limit_blocked_message">Today’s time limit is used up. It resets tomorrow.</string>
     <string name="limit_warning_title">About %1$d min of today’s time left</string>
-    <string name="limit_warning_title_final">Almost out of time — about %1$d min left</string>
+    <string name="limit_warning_title_final">Almost out of time. About %1$d min left</string>
     <string name="overlay_wall_dismiss">Close</string>
     <string name="block_screen_hint">Blocking resumes when you come back.</string>
     <string name="enhanced_mode_service_label">MyExodus blocker</string>
@@ -26,7 +26,7 @@
     <string name="enhanced_mode_body">Block restricted apps and websites when you open them.</string>
     <string name="enhanced_mode_strict_title">Strict Mode</string>
     <string name="enhanced_mode_strict_body">Lock in-app controls for 24 hours after enabling.</string>
-    <string name="enhanced_mode_strict_cooldown">Strict Mode active — in-app controls unlock in %1$s</string>
+    <string name="enhanced_mode_strict_cooldown">Strict Mode active. In-app controls unlock in %1$s</string>
     <string name="enhanced_mode_restricted_settings_hint">If Android blocks the accessibility service, allow it via App Info → ⋮ → “Allow restricted settings”.</string>
     <string name="enhanced_mode_unsupported">Enhanced Mode isn\'t supported with Advanced Protection enabled on this device.</string>
     <string name="enhanced_mode_strict_unsupported">Strict Mode is locked while Advanced Protection is on this device.</string>
@@ -79,10 +79,10 @@
     <string name="protection_stopped_action">Re-enable</string>
     <!-- Banner-only copies (the banner offers its own fix actions; the notification variants
          above open the app instead of jumping into system screens). -->
-    <string name="protection_notif_off_banner_text">Notifications are off for MyExodus — protection status may be hidden. Turn them on in Settings.</string>
+    <string name="protection_notif_off_banner_text">Notifications are off for MyExodus. Protection status may be hidden. Turn them on in Settings.</string>
     <string name="protection_notif_off_banner_action">Fix</string>
     <string name="protection_hidden_title">Protection status hidden</string>
-    <string name="protection_hidden_text">Notifications are off for MyExodus — open the app to see protection status.</string>
+    <string name="protection_hidden_text">Notifications are off for MyExodus. Open the app to see protection status.</string>
     <string name="protection_hidden_action">Open app</string>
 
     <!-- Outage surfaces (§8.7/D1): notification, Home banner, Settings row. The copy states
@@ -157,8 +157,8 @@
     <string name="home_streak_caption_loading">Reading your streak…</string>
     <string name="home_streak_caption_none">No habit tracked yet. A streak starts counting the day you set one up.</string>
     <plurals name="home_streak_caption_next">
-        <item quantity="one">Next milestone: %1$d-day mark — %2$d day to go.</item>
-        <item quantity="other">Next milestone: %1$d-day mark — %2$d days to go.</item>
+        <item quantity="one">Next milestone: %1$d-day mark. %2$d day to go.</item>
+        <item quantity="other">Next milestone: %1$d-day mark. %2$d days to go.</item>
     </plurals>
     <!-- Milestone celebration modal (owner directive 2026-10-21): the achievement takes the
          screen once, then leaves the day hero unobstructed. -->
@@ -173,8 +173,8 @@
     <string name="home_action_log_urge">Log an urge</string>
     <!-- Home's confirmation makes no claim about a block: the note is habitless and rule-less,
          and a reader with no rule at all must not be told a block is "still in place". -->
-    <string name="home_urge_saved">Urge logged — this is only a note.</string>
-    <string name="home_streak_caption_complete">Milestone ladder complete — extraordinary.</string>
+    <string name="home_urge_saved">Urge logged. This is only a note.</string>
+    <string name="home_streak_caption_complete">Milestone ladder complete. Extraordinary.</string>
     <plurals name="home_streak_days_unit">
         <item quantity="one">day</item>
         <item quantity="other">days</item>
@@ -226,7 +226,7 @@
     <string name="partner_rule_event_updated">A rule you watch was changed.</string>
     <string name="partner_rule_event_disabled">A rule you watch was turned off.</string>
     <string name="partner_rule_event_deleted">A rule you watch was deleted.</string>
-    <string name="partner_rule_event_expired">A rule you watch ended — its set duration ran out.</string>
+    <string name="partner_rule_event_expired">A rule you watch ended. Its set duration ran out.</string>
     <!-- Wire v2 identity (ADR #227): the body names what changed. Three shapes: a standalone
          rule, a member inside a named batch, and the batch itself (with its item count). -->
     <string name="partner_rule_event_added_labeled">You were added as accountability partner on %1$s.</string>
@@ -234,13 +234,13 @@
     <string name="partner_rule_event_disabled_labeled">%1$s was turned off.</string>
     <string name="partner_rule_event_deleted_labeled">%1$s was deleted.</string>
     <string name="partner_rule_event_unassigned_labeled">You were removed from %1$s.</string>
-    <string name="partner_rule_event_expired_labeled">%1$s ended — its set duration ran out.</string>
+    <string name="partner_rule_event_expired_labeled">%1$s ended. Its set duration ran out.</string>
     <string name="partner_rule_event_added_in_batch">You were added as accountability partner on %1$s in the %2$s batch.</string>
     <string name="partner_rule_event_updated_in_batch">%1$s was changed in the %2$s batch.</string>
     <string name="partner_rule_event_disabled_in_batch">%1$s was turned off in the %2$s batch.</string>
     <string name="partner_rule_event_deleted_in_batch">%1$s was deleted from the %2$s batch.</string>
     <string name="partner_rule_event_unassigned_in_batch">You were removed from %1$s in the %2$s batch.</string>
-    <string name="partner_rule_event_expired_in_batch">%1$s ended in the %2$s batch — its set duration ran out.</string>
+    <string name="partner_rule_event_expired_in_batch">%1$s ended in the %2$s batch. Its set duration ran out.</string>
     <plurals name="partner_rule_event_added_batched">
         <item quantity="one">You were added as accountability partner on the %1$s batch (%2$d item).</item>
         <item quantity="other">You were added as accountability partner on the %1$s batch (%2$d items).</item>
@@ -262,8 +262,8 @@
         <item quantity="other">You were removed from the %1$s batch (%2$d items).</item>
     </plurals>
     <plurals name="partner_rule_event_expired_batched">
-        <item quantity="one">The %1$s batch ended — its set duration ran out (%2$d item).</item>
-        <item quantity="other">The %1$s batch ended — its set duration ran out (%2$d items).</item>
+        <item quantity="one">The %1$s batch ended. Its set duration ran out (%2$d item).</item>
+        <item quantity="other">The %1$s batch ended. Its set duration ran out (%2$d items).</item>
     </plurals>
     <!-- Owner mandate 2026-10-04: a relapse/milestone alert states which streak and when,
          using the wire-v2 fields (ADR #134). Unlocked copy only — the plain forms above stay
@@ -316,7 +316,7 @@
     <string name="rules_apps_empty_body">Block an app to cap its daily time, or wall it off completely.</string>
     <string name="rules_apps_empty_action">Add an app</string>
     <string name="rules_websites_empty_title">No websites blocked yet</string>
-    <string name="rules_websites_empty_body">Pick a category to review a curated list and block it in one go — or add your own address.</string>
+    <string name="rules_websites_empty_body">Pick a category to review a curated list and block it in one go, or add your own address.</string>
     <string name="rules_websites_add_own">Add your own website</string>
     <string name="rules_websites_categories">Categories</string>
     <string name="rules_loading">Reading your blocks…</string>
@@ -332,7 +332,7 @@
     <string name="rules_preset_news">News</string>
     <string name="rules_preset_shopping">Shopping</string>
     <string name="rules_presets_sheet_title">Block by category</string>
-    <string name="rules_presets_sheet_body">Curated sites, chosen for you. Review the list — nothing is blocked until you tap Block.</string>
+    <string name="rules_presets_sheet_body">Curated sites, chosen for you. Review the list. Nothing is blocked until you tap Block.</string>
     <string name="rules_presets_selected_count" tools:ignore="PluralsCandidate">%1$d of %2$d selected</string>
     <string name="rules_presets_select_all">Select all</string>
     <string name="rules_presets_clear">Clear</string>
@@ -345,9 +345,9 @@
     </plurals>
     <string name="rules_presets_write_failed">MyExodus couldn’t write the change.</string>
     <string name="rules_presets_error">Couldn’t block these websites. %1$s Try again.</string>
-    <string name="rules_presets_partial" tools:ignore="PluralsCandidate">Blocked %1$d of %2$d sites. %3$s Try again — sites that are already blocked won’t be added twice.</string>
+    <string name="rules_presets_partial" tools:ignore="PluralsCandidate">Blocked %1$d of %2$d sites. %3$s Try again. Sites that are already blocked won’t be added twice.</string>
     <string name="rules_presets_engine_title">Protection is off</string>
-    <string name="rules_presets_engine_body">Website blocks need MyExodus’s VPN to be on. Turn it on now, or block these sites anyway — they start working when protection is on.</string>
+    <string name="rules_presets_engine_body">Website blocks need MyExodus’s VPN to be on. Turn it on now, or block these sites anyway. They start working when protection is on.</string>
     <string name="rules_presets_engine_turn_on">Turn on protection</string>
     <string name="rules_presets_engine_anyway">Block anyway</string>
     <string name="editor_presets_hint">Don’t know the address? Start from a category.</string>
@@ -371,8 +371,8 @@
     <string name="rules_cleanup">Remove all</string>
     <!-- Owner ruling 2026-11-01: uninstalling a blocked app hides its block but keeps it. -->
     <plurals name="rules_hidden_uninstalled">
-        <item quantity="one">%1$d block is saved but hidden — its app isn’t installed. It returns when you reinstall the app.</item>
-        <item quantity="other">%1$d blocks are saved but hidden — their apps aren’t installed. They return when you reinstall the apps.</item>
+        <item quantity="one">%1$d block is saved but hidden. Its app isn’t installed. It returns when you reinstall the app.</item>
+        <item quantity="other">%1$d blocks are saved but hidden. Their apps aren’t installed. They return when you reinstall the apps.</item>
     </plurals>
     <string name="rules_cleanup_title">Remove all deactivated rules?</string>
     <plurals name="rules_cleanup_body">
@@ -443,12 +443,12 @@
     <string name="editor_daily_limit_title">Limit daily use</string>
     <string name="editor_daily_limit_hint">Blocked after this much use each day.</string>
     <string name="editor_scope_title">When it applies</string>
-    <string name="editor_website_limits_unavailable">Website daily limits aren\'t available in this build — website metering is turned off. Blocking and time windows still work.</string>
+    <string name="editor_website_limits_unavailable">Website daily limits aren\'t available in this build. Website metering is turned off. Blocking and time windows still work.</string>
     <string name="editor_limit_hours">Hours</string>
     <string name="editor_limit_minutes">Minutes</string>
     <string name="editor_limit_preview">= blocked after %1$s a day</string>
     <string name="editor_daily_limit_invalid">Enter at least 1 minute for the daily limit.</string>
-    <string name="editor_daily_limit_too_large">A daily limit must be under 24 hours. A day only has 24 hours, so this would never block — pick a shorter limit.</string>
+    <string name="editor_daily_limit_too_large">A daily limit must be under 24 hours. A day only has 24 hours, so this would never block. Pick a shorter limit.</string>
     <!-- Website daily limits: save-time validation, scope notices (plan §8 S9, FR-2/FR-10) -->
     <string name="editor_site_limit_has_path">Limits apply to a whole site. Use “%1$s” instead.</string>
     <string name="editor_site_limit_use_it">Use it</string>
@@ -458,12 +458,12 @@
     <string name="editor_site_limit_never_block">This site is needed for internet connectivity or help resources and can’t be limited.</string>
     <string name="editor_site_limit_resolver">This is a DNS service and can’t be limited.</string>
     <string name="editor_site_limit_duplicate">This site already has a limit set.</string>
-    <string name="editor_limit_scope_notice">Limits count this site and its subdomains in browsers. Other apps — including the site’s own app — aren’t counted. Other domains used by the same service aren’t counted.</string>
-    <string name="editor_limit_connection_notice">Usage is measured per connection your device makes to this site, not per page or request — a site that reuses one connection for several pages may show usage differently than expected.</string>
+    <string name="editor_limit_scope_notice">Limits count this site and its subdomains in browsers. Other apps, including the site’s own app, aren’t counted. Other domains used by the same service aren’t counted.</string>
+    <string name="editor_limit_connection_notice">Usage is measured per connection your device makes to this site, not per page or request. A site that reuses one connection for several pages may show usage differently than expected.</string>
     <string name="editor_active_days">Active on</string>
     <string name="editor_from">From</string>
     <string name="editor_to">To</string>
-    <string name="editor_overnight">Overnight — ends the next day.</string>
+    <string name="editor_overnight">Overnight: ends the next day.</string>
     <string name="editor_days">Days</string>
     <string name="editor_days_every">Every day</string>
     <string name="editor_days_weekdays">Weekdays</string>
@@ -474,12 +474,12 @@
     <string name="editor_partner_title">Accountability partner</string>
     <string name="editor_partner_hint">They see changes to this rule and any attempts it blocks.</string>
     <string name="editor_partner_none">No partner</string>
-    <string name="editor_partner_none_hint">This rule stays on this device — no one else is told about it.</string>
+    <string name="editor_partner_none_hint">This rule stays on this device. No one else is told about it.</string>
     <string name="editor_partner_departed_title">Former partner</string>
     <string name="editor_partner_departed_hint">No longer paired. Choose No partner to clear, or pick someone on your roster.</string>
     <string name="editor_partner_empty">No partners yet. Pairing happens on the Partner tab.</string>
     <string name="rules_watched_by">Watched by %1$s</string>
-    <string name="rules_unsupervised">Unsupervised — the assigned partner is no longer paired</string>
+    <string name="rules_unsupervised">Unsupervised: the assigned partner is no longer paired</string>
     <string name="rules_not_shared">Not shared with a partner</string>
     <string name="editor_never">Never</string>
     <string name="editor_clear">Clear</string>
@@ -487,7 +487,7 @@
     <string name="editor_use_device_zone">Use device time zone</string>
     <string name="editor_save">Save</string>
     <string name="editor_saving">Saving…</string>
-    <string name="editor_not_saved">Not saved — %1$s</string>
+    <string name="editor_not_saved">Not saved: %1$s</string>
     <string name="editor_wall_time_hint">Blocks start and end at these times in the time zone shown.</string>
 
     <string name="editor_rule_gone">This block was removed on another screen. Go back to see your current blocks.</string>
@@ -496,8 +496,8 @@
 
     <!-- Website engine off (owner report 2026-10-17): the rule editor states the tunnel
          dependency up front and asks again at save, so a rule is never created silently inert. -->
-    <string name="editor_engine_off_consent">Website blocking is off — this rule won’t block the site or count its usage until you turn it on.</string>
-    <string name="editor_engine_off_retry">Website blocking is off — this rule won’t work until the connection starts. Another VPN app can block it.</string>
+    <string name="editor_engine_off_consent">Website blocking is off. This rule won’t block the site or count its usage until you turn it on.</string>
+    <string name="editor_engine_off_retry">Website blocking is off. This rule won’t work until the connection starts. Another VPN app can block it.</string>
     <string name="editor_engine_off_turn_on">Turn on</string>
     <string name="editor_engine_off_try_again">Try again</string>
     <string name="editor_engine_off_dialog_title">Turn on website blocking?</string>
@@ -505,7 +505,7 @@
     <string name="editor_engine_off_save_anyway">Save anyway</string>
 
     <!-- Write failures -->
-    <string name="error_self_block">MyExodus can’t block itself — pick a different app.</string>
+    <string name="error_self_block">MyExodus can’t block itself. Pick a different app.</string>
     <string name="error_limit_reached">You’ve reached the maximum number of blocks.</string>
     <string name="error_write_failed">the change couldn’t be written. Try again.</string>
 
@@ -523,49 +523,51 @@
     <string name="settings_action_fix">Fix</string>
     <string name="settings_action_open">Open</string>
     <string name="settings_accessibility_title">Accessibility service</string>
-    <string name="settings_accessibility_ok">On — MyExodus sees when a blocked app opens</string>
-    <string name="settings_accessibility_off">Off — blocked apps open normally</string>
+    <string name="settings_accessibility_ok">On: MyExodus sees when a blocked app opens</string>
+    <string name="settings_accessibility_off">Off: blocked apps open normally</string>
     <string name="settings_usage_title">Usage access</string>
-    <string name="settings_usage_ok">On — MyExodus can tell which app is in front</string>
-    <string name="settings_usage_off">Off — app blocking can’t run</string>
+    <string name="settings_usage_ok">On: MyExodus can tell which app is in front</string>
+    <string name="settings_usage_off">Off: app blocking can’t run</string>
     <string name="settings_battery_title">Android battery optimization</string>
-    <string name="settings_battery_ok">Exempt — Android won’t pause MyExodus</string>
-    <string name="settings_battery_off">Not exempt — Android may pause MyExodus in the background</string>
-    <string name="settings_battery_hint">Opens your phone’s battery settings — you still make the change there.</string>
+    <string name="settings_battery_ok">Exempt: Android won’t pause MyExodus</string>
+    <string name="settings_battery_off">Not exempt: Android may pause MyExodus in the background</string>
+    <string name="settings_battery_hint">Opens your phone’s battery settings. You still make the change there.</string>
     <string name="settings_oem_title">OEM background restrictions</string>
     <string name="settings_oem_status">Android doesn’t report this. %1$s manages background apps in its own settings.</string>
     <string name="settings_overlay_title">Display over other apps</string>
     <string name="settings_overlay_ok">Allowed</string>
-    <string name="settings_overlay_off">Not allowed — the block screen can’t be shown</string>
+    <string name="settings_overlay_off">Not allowed: the block screen can’t be shown</string>
     <string name="settings_integrity_title">Enforcement integrity</string>
-    <string name="settings_integrity_verified">Verified — hardware-backed device key</string>
-    <string name="settings_integrity_unverified">Unverified — device key is not StrongBox-backed</string>
-    <string name="settings_integrity_unavailable">Unavailable — no device identity set up yet</string>
-    <string name="settings_integrity_failed">Failed — the device key couldn’t be read</string>
+    <string name="settings_integrity_verified">Verified: hardware-backed device key</string>
+    <string name="settings_integrity_unverified">Unverified: device key is not StrongBox-backed</string>
+    <string name="settings_integrity_unavailable">Unavailable: no device identity set up yet</string>
+    <string name="settings_integrity_failed">Failed: the device key couldn’t be read</string>
     <string name="settings_integrity_recheck">Recheck</string>
     <string name="settings_crash_reports_title">Crash reports</string>
-    <string name="settings_crash_reports_body">Send anonymous crash diagnostics — error type, device model, Android version. Never app names, usage times, or limits.</string>
+    <string name="settings_crash_reports_body">Send anonymous crash diagnostics: error type, device model, Android version. Never app names, usage times, or limits.</string>
 
     <!-- About: the recovery plans' required footer (v2 M1.5) — the docs claimed it shipped on
          Settings → About before any About surface existed. -->
     <string name="settings_about_title">About</string>
     <string name="settings_about_version">Version %1$s</string>
     <string name="settings_about_disclaimer">MyExodus is a self-help tool, not medical treatment.</string>
+    <!-- CC BY 4.0 attribution for the Solar icon set used on the first-run screens. -->
+    <string name="settings_about_credits">Art credits: Solar icons by 480 Design (CC BY 4.0, iconify.design), tinted by the app. Photography from Unsplash (unsplash.com/license).</string>
 
     <!-- Recovery screen -->
     <string name="recovery_title">Recovery</string>
     <string name="recovery_subtitle">Techniques, your plan, and support when an urge hits</string>
     <string name="recovery_timer_label">Friction timer</string>
     <string name="recovery_blocked_target">Blocked: %1$s</string>
-    <string name="recovery_time_change_frozen">Time change detected — countdown frozen</string>
+    <string name="recovery_time_change_frozen">Time change detected: countdown frozen</string>
     <string name="recovery_override">Use it now (override)</string>
-    <string name="recovery_override_unavailable">Override unavailable — try again later</string>
+    <string name="recovery_override_unavailable">Override unavailable. Try again later.</string>
     <string name="recovery_overrides_logged">Overrides are logged on this device.</string>
     <string name="recovery_leave_alone">Leave the block alone</string>
-    <string name="recovery_leave_alone_caption">Back to your home screen. The block stays — nothing is unlocked or deleted.</string>
-    <string name="recovery_leave_note">Leaving MyExodus won’t stop the timer — the block lifts when it ends or when you override.</string>
+    <string name="recovery_leave_alone_caption">Back to your home screen. The block stays. Nothing is unlocked or deleted.</string>
+    <string name="recovery_leave_note">Leaving MyExodus won’t stop the timer. The block lifts when it ends or when you override.</string>
     <string name="recovery_override_confirm_title">Override the block?</string>
-    <string name="recovery_override_confirm_text">The block ends for good — it won’t restart on its own. To block it again later you’d create a new rule under Rules. This override is logged on this device.</string>
+    <string name="recovery_override_confirm_text">The block ends for good. It won’t restart on its own. To block it again later you’d create a new rule under Rules. This override is logged on this device.</string>
     <string name="recovery_override_confirm_action">End the block</string>
     <string name="recovery_override_confirm_cancel">Keep waiting</string>
     <string name="recovery_idle_title">No active block</string>
@@ -607,12 +609,37 @@
     <!-- Encryption conversion pending: shared by the bootstrap gate and Home's notice — the
          two surfaces that state the same state (one blocks with retry, one informs). -->
     <string name="encryption_pending_title">Data protection upgrade pending</string>
-    <string name="encryption_pending_home_body">MyExodus is applying an extra layer of encryption to your local data. Everything works normally — this finishes automatically on a future launch.</string>
+    <string name="encryption_pending_home_body">MyExodus is applying an extra layer of encryption to your local data. Everything works normally. This finishes automatically on a future launch.</string>
+
+    <!-- Appearance (owner request 2026-11-06): system follows the phone; light/dark pin it. -->
+    <string name="settings_appearance_title">Appearance</string>
+    <string name="settings_theme_system">Match your phone</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
+
+    <!-- First-run onboarding (owner request 2026-11-06): three capability slides, then the
+         optional-account choice, then the permission steps. Slide copy names only shipped
+         capability (blocking both apps and sites, the streak widget, partner check-ins). -->
+    <string name="onboarding_slide_block_kicker">Blocking</string>
+    <string name="onboarding_slide_widget_kicker">Daily rhythm</string>
+    <string name="onboarding_slide_partner_kicker">Accountability</string>
+    <string name="onboarding_account_kicker">Your account</string>
+    <string name="onboarding_account_signed_in_title">You’re all set</string>
+    <string name="onboarding_account_signed_in_label">Signed in as</string>
+    <string name="onboarding_slide_block_title">Block the apps that pull you under</string>
+    <string name="onboarding_slide_block_body">Choose the apps and sites you want out of reach. When one opens, a block screen stands in its place, with a pause before any override and a way to reach for help.</string>
+    <string name="onboarding_slide_widget_title">Keep your streak in sight</string>
+    <string name="onboarding_slide_widget_body">A home-screen widget carries your day count, your next milestone and whether protection is on. Log an urge or reach out without opening the app.</string>
+    <string name="onboarding_slide_partner_title">Someone has your back</string>
+    <string name="onboarding_slide_partner_body">Pair with a person you trust. They can see how you’re doing and send a check-in when you’ve gone quiet.</string>
+    <string name="onboarding_account_continue">Continue without an account</string>
+    <string name="onboarding_account_hint">You can create an account anytime in Settings → Account. Everything above works without one.</string>
+    <string name="onboarding_account_signed_in_body">Your progress is backed up to this account. You can manage it anytime in Settings → Account.</string>
 
     <!-- First-run setup wizard (plan §8 Step 7): one screen per permission, each stating
          plainly what breaks if denied, matching ProtectionStatusMonitor behavior. -->
     <string name="setup_title">Set up protection</string>
-    <string name="setup_step_of">Step %1$d of %2$d</string>
+    <string name="setup_step_counter">%1$02d / %2$02d</string>
     <string name="setup_status_granted">Granted</string>
     <string name="setup_status_missing">Not allowed yet</string>
     <string name="setup_back">Back</string>
@@ -623,13 +650,13 @@
     <string name="setup_usage_body">MyExodus uses this to tell which app is in front. Without it, app blocking can’t run.</string>
     <string name="setup_usage_action">Open Usage Access settings</string>
     <string name="setup_disclosure_title">What MyExodus sees</string>
-    <string name="setup_disclosure_body">To block apps and sites, MyExodus checks the name of the app you switch to — and, in supported browsers only, the address-bar text. App names and usage times stay on this device.</string>
+    <string name="setup_disclosure_body">To block apps and sites, MyExodus checks the name of the app you switch to. In supported browsers only, it also checks the address-bar text. App names and usage times stay on this device.</string>
     <string name="setup_disclosure_action">Continue</string>
     <string name="setup_accessibility_title">Accessibility service</string>
-    <string name="setup_accessibility_body">Detects when you open an app or website on your list and shows the block screen right away. Without it, blocks still work — they just start up to a few seconds later while detection falls back to polling.</string>
+    <string name="setup_accessibility_body">Detects when you open an app or website on your list and shows the block screen right away. Without it, blocks still work. They just start up to a few seconds later while detection falls back to polling.</string>
     <string name="setup_accessibility_action">Open Accessibility settings</string>
     <string name="setup_notifications_title">Notifications</string>
-    <string name="setup_notifications_body">Used only for a warning before a daily limit runs out and for protection alerts. Blocking works without it — you just won’t get a heads-up.</string>
+    <string name="setup_notifications_body">Used only for a warning before a daily limit runs out and for protection alerts. Blocking works without it. You just won’t get a heads-up.</string>
     <string name="setup_notifications_action">Allow notifications</string>
     <string name="setup_notifications_action_settings">Open notification settings</string>
     <string name="setup_overlay_title">Display over other apps</string>
@@ -701,30 +728,30 @@
     <string name="widget_hold_reset_title">Reset the count?</string>
     <string name="widget_hold_reset_body">The current count ends and a new one starts at Day 1.</string>
     <string name="widget_hold_urge_title">Log an urge?</string>
-    <string name="widget_hold_urge_body">Your block stays in place — this is not an override, and nothing is shared.</string>
+    <string name="widget_hold_urge_body">Your block stays in place. This is not an override, and nothing is shared.</string>
     <string name="widget_hold_urge_title_discreet">Save this moment?</string>
-    <string name="widget_hold_urge_body_discreet">It stays on your phone — nothing is shared.</string>
+    <string name="widget_hold_urge_body_discreet">It stays on your phone. Nothing is shared.</string>
     <string name="widget_hold_sos_title">Reach out?</string>
     <string name="widget_hold_sos_body">Let %1$s know you could use a check-in.</string>
     <string name="widget_hold_sos_body_generic">Let your partner know you could use a check-in.</string>
-    <string name="widget_hold_no_partner">No partner is set up yet — pair one in the app.</string>
+    <string name="widget_hold_no_partner">No partner is set up yet. Pair one in the app.</string>
     <string name="widget_hold_checking">Checking…</string>
-    <string name="widget_hold_hint">Keep holding — release to cancel</string>
+    <string name="widget_hold_hint">Keep holding to cancel</string>
     <string name="widget_hold_close">Close</string>
     <!-- The urge outcome. FR-5 makes the write best-effort by contract (a store that is not
          open skips the write rather than failing the user — the same stance the app's own sheet
          takes), so "saved" is the only terminal outcome, and the copy reports the practice, not
          storage. Content pinned by WidgetActionStateTest's vocabulary guard. -->
-    <string name="widget_urge_saved">Urge logged — your block is still in place.</string>
-    <string name="widget_urge_saved_discreet">Saved — nothing was shared.</string>
+    <string name="widget_urge_saved">Urge logged. Your block is still in place.</string>
+    <string name="widget_urge_saved_discreet">Saved. Nothing was shared.</string>
     <!-- The relapse outcomes. "Already logged" is the idempotency window talking: the rollover
          the user asked for just happened, so it is reported as success-adjacent, not as an
          error. The logged/gone/failed outcomes carry the same discreet pair as the titles/bodies
          — the surface a hold opens must not print the word the card just refused to show (device
          leg caught "Relapse logged" on a discreet surface, 2026-10-16). Content pinned by
          WidgetActionStateTest's vocabulary guards. -->
-    <string name="widget_relapse_logged">Relapse logged — a new streak starts at Day 1.</string>
-    <string name="widget_relapse_logged_discreet">Count reset — a new one starts at Day 1.</string>
+    <string name="widget_relapse_logged">Relapse logged. A new streak starts at Day 1.</string>
+    <string name="widget_relapse_logged_discreet">Count reset. A new one starts at Day 1.</string>
     <string name="widget_relapse_already_logged">Already logged.</string>
     <string name="widget_relapse_gone">This streak is no longer active. Open the app.</string>
     <string name="widget_relapse_gone_discreet">This count is no longer active. Open the app.</string>
@@ -794,10 +821,10 @@
     <string name="partner_plans_unavailable">Couldn’t read your plans. Reopen this page to try again.</string>
     <string name="partner_plans_new">New plan</string>
     <string name="partner_plans_for_whom">Who is this plan for?</string>
-    <string name="partner_plans_for_self">Just me — stays on this phone</string>
+    <string name="partner_plans_for_self">Just me: stays on this phone</string>
     <string name="partner_plans_cancel">Cancel</string>
     <string name="partner_plans_progress" tools:ignore="PluralsCandidate">%1$d of %2$d done</string>
-    <string name="partner_plans_daily_reset">Checks reset each day — this plan starts fresh tomorrow.</string>
+    <string name="partner_plans_daily_reset">Checks reset each day. This plan starts fresh tomorrow.</string>
     <string name="partner_plans_from">From %1$s</string>
     <string name="partner_plans_with">With %1$s</string>
     <string name="partner_plans_unknown_partner">your partner</string>
@@ -829,7 +856,7 @@
     <string name="partner_plan_body_named">Plan: %1$s</string>
     <string name="partner_chain_verified_mark">Shared activity is verified</string>
     <string name="partner_requests_empty_title">Nothing waiting</string>
-    <string name="partner_requests_empty_body">Approval asks appear here — the ones waiting on your decision, and the ones you\'ve sent.</string>
+    <string name="partner_requests_empty_body">Approval asks appear here: the ones waiting on your decision, and the ones you\'ve sent.</string>
     <string name="partner_loading">Loading saved partner state…</string>
     <string name="partner_unpaired_title">No partner yet</string>
     <string name="partner_unpaired_body">After you pair with an accountability partner, the activity their phone shares shows up here.</string>
@@ -844,16 +871,16 @@
     <string name="partner_unreachable_body">This phone is no longer recognized by your pairing, so nothing has been syncing. That happens when the app’s data was cleared or the app was reinstalled, or when the pairing was ended from the other side. Pair again with a new code to reconnect. Until then, nothing is shared.</string>
     <string name="partner_paired_with">Paired with %1$s</string>
     <string name="partner_paired_since">Since %1$s</string>
-    <string name="partner_paired_explainer">That code identifies your partner’s device — they see the same code for you, so you can both confirm you paired with the right person.</string>
+    <string name="partner_paired_explainer">That code identifies your partner’s device. They see the same code for you, so you can both confirm you paired with the right person.</string>
     <string name="partner_never_synced">Never synced yet</string>
     <string name="partner_last_synced">Last synced %1$s</string>
-    <string name="partner_sync_delayed">Sync is taking longer than usual — the phone may be offline or paused by Android.</string>
+    <string name="partner_sync_delayed">Sync is taking longer than usual. The phone may be offline or paused by Android.</string>
     <string name="partner_sync_note">Updates arrive as soon as both phones are online.</string>
     <string name="partner_sync_rate_limited">Some recent updates came in faster than the server allows, so they weren’t sent as instant alerts. They’ll arrive with the next sync.</string>
     <string name="partner_check_now">Check now</string>
     <string name="partner_check_now_running">Checking…</string>
     <string name="partner_check_now_failed">Couldn’t reach the server. Check your connection and try again.</string>
-    <string name="partner_check_now_ok">Checked just now — you’re up to date.</string>
+    <string name="partner_check_now_ok">Checked just now. You’re up to date.</string>
     <string name="partner_nothing_shared_title">Nothing shared yet</string>
     <string name="partner_nothing_shared_body">%1$s can’t see your streaks, check-ins or recovery updates until you choose what to share.</string>
     <string name="partner_nothing_shared_action">Choose what to share</string>
@@ -861,7 +888,7 @@
     <!-- Owner report 2026-11-02: bare counts ("1 today, 5 this week", a bar reading "4") did
          not say what was counted. Every count on this card is a shared event; the window is a
          rolling seven days, so it is never labelled as a calendar "week". -->
-    <string name="partner_activity_counted">Counted: blocks and overrides, recovery steps, relapses, milestones and rule changes — the events your partner shared with you.</string>
+    <string name="partner_activity_counted">Counted: blocks and overrides, recovery steps, relapses, milestones and rule changes. These are the events your partner shared with you.</string>
     <string name="partner_activity_today">Today</string>
     <string name="partner_activity_today_stat">Events today</string>
     <string name="partner_activity_week">Events last 7 days</string>
@@ -872,7 +899,7 @@
     <!-- Owner directive 2026-11-01: the activity page shows the week as a picture. Each bar is
          a local day, today on the right; the plural merges a column into one spoken sentence. -->
     <string name="partner_activity_chart_title">Shared events per day</string>
-    <string name="partner_activity_chart_caption">The last 7 days — blocks and overrides, recovery steps, relapses, milestones and rule changes. Today is on the right.</string>
+    <string name="partner_activity_chart_caption">The last 7 days: blocks and overrides, recovery steps, relapses, milestones and rule changes. Today is on the right.</string>
     <plurals name="partner_activity_chart_bar">
         <item quantity="one">%1$s, %2$d event</item>
         <item quantity="other">%1$s, %2$d events</item>
@@ -891,7 +918,7 @@
     <string name="partner_summary_relapses">Relapses logged</string>
     <string name="partner_summary_coaching_label">Coaching items</string>
     <string name="partner_summary_last_event">Last shared %1$s</string>
-    <string name="partner_summary_no_events">Nothing shared yet. This shows what your partner chooses to share — streaks, relapses and milestones.</string>
+    <string name="partner_summary_no_events">Nothing shared yet. This shows what your partner chooses to share: streaks, relapses and milestones.</string>
     <string name="partner_summary_partial">Some history is missing, so these numbers may be behind.</string>
     <string name="partner_summary_pinned_label">Their message to you</string>
     <!-- §7 Step 7 / §8.13 device monitoring: their app's own encrypted status report. Kept
@@ -907,7 +934,7 @@
     <string name="partner_monitoring_body_off">Their phone isn’t checking apps or websites right now.</string>
     <string name="partner_monitoring_body_unknown">Their phone hasn’t sent a current status, so this can’t be confirmed.</string>
     <string name="partner_monitoring_report_fresh">Updated %1$s</string>
-    <string name="partner_monitoring_report_stale">Last report %1$s — too old to rely on.</string>
+    <string name="partner_monitoring_report_stale">Last report %1$s. Too old to rely on.</string>
     <string name="partner_monitoring_delayed">Some of their updates may be delayed.</string>
     <!-- Plan Step 8 (§4/§8.13): server-derived connection. Coarse buckets only; never a
          timestamp. "Not shared" is a distinct state, not a claim of lateness. -->
@@ -918,7 +945,7 @@
     <string name="partner_connection_state_no_data">No data yet</string>
     <string name="partner_connection_state_not_shared">Not shared</string>
     <string name="partner_connection_body_checking_in">Their phone checked in with the server recently.</string>
-    <string name="partner_connection_body_late">No check-in for 45–90 minutes. This can be normal — Android may defer background work.</string>
+    <string name="partner_connection_body_late">No check-in for 45–90 minutes. This can be normal. Android may defer background work.</string>
     <string name="partner_connection_body_not_checking_in">No check-in for over 90 minutes.</string>
     <string name="partner_connection_body_no_data">No check-in has reached the server yet.</string>
     <string name="partner_connection_body_not_shared">Your partner hasn’t chosen to share device availability.</string>
@@ -966,7 +993,7 @@
     <string name="partner_compose_too_long" tools:ignore="PluralsCandidate">Your message is too long. Trim it to %1$d characters or fewer, then send again.</string>
     <string name="partner_compose_suggestion_1">Thinking of you today.</string>
     <string name="partner_compose_suggestion_2">Proud of you for keeping going.</string>
-    <string name="partner_compose_suggestion_3">One day at a time — you\'re doing it.</string>
+    <string name="partner_compose_suggestion_3">One day at a time. You\'re doing it.</string>
     <string name="partner_compose_characters">%1$d/%2$d</string>
     <!-- #96: the composer and every partner subpage name which supported user they act on —
          a device can hold several pairings, so "your partner" alone is ambiguous. -->
@@ -1025,7 +1052,7 @@
          the Partner tab 2026-10-21): every decision is per (item, partner) — three levels,
          middle one collapsed with a single partner. Nothing is shared until a switch is on;
          master off hides the streak's name too; category switches grey out under an off master. -->
-    <string name="settings_sharing_intro">Nothing is shared until you choose it. You pick, streak by streak and partner by partner, who sees what. Changes apply right away, and anything switched off is never sent — not even a streak’s name.</string>
+    <string name="settings_sharing_intro">Nothing is shared until you choose it. You pick, streak by streak and partner by partner, who sees what. Changes apply right away, and anything switched off is never sent, not even a streak’s name.</string>
     <string name="settings_sharing_streaks_header">Streaks</string>
     <string name="settings_sharing_other_header">Other information</string>
     <string name="settings_sharing_other_title">Blocked apps, recovery &amp; device</string>
@@ -1039,19 +1066,19 @@
     <string name="settings_sharing_summary_off">Not shared</string>
     <string name="settings_sharing_summary_streak">Day count &amp; name</string>
     <string name="settings_sharing_relapses_title">Relapses</string>
-    <string name="settings_sharing_relapses_body">%1$s — your partner is told when it ends and how long it ran</string>
+    <string name="settings_sharing_relapses_body">%1$s: your partner is told when it ends and how long it ran</string>
     <string name="settings_sharing_milestones_title">Milestones</string>
-    <string name="settings_sharing_milestones_body">%1$s — your partner hears which days you reach</string>
+    <string name="settings_sharing_milestones_body">%1$s: your partner hears which days you reach</string>
     <string name="settings_sharing_checkins_title">Blocked apps</string>
     <string name="settings_sharing_checkins_body">Your partner hears when you try a blocked app and when you use an override.</string>
     <string name="settings_sharing_recovery_title">Recovery &amp; coaching</string>
     <string name="settings_sharing_recovery_body">Your partner hears when you finish a recovery session or update your coaching plan.</string>
     <string name="settings_sharing_availability_title">Device availability</string>
     <string name="settings_sharing_availability_body">Your partner sees whether blocking is switched on and working on this device, and whether it checked in recently. Never your apps or usage.</string>
-    <string name="settings_sharing_availability_pending">Waiting for the server to confirm this change. It finishes automatically when you’re back online — the switch above is already in effect on this device.</string>
+    <string name="settings_sharing_availability_pending">Waiting for the server to confirm this change. It finishes automatically when you’re back online. The switch above is already in effect on this device.</string>
     <string name="settings_sharing_empty">No streaks yet. Set one up under Streaks, then choose here what your partner can see.</string>
-    <string name="settings_sharing_failed">Couldn’t save that change. MyExodus can’t reach its local database right now. Your data is safe — try again in a moment.</string>
-    <string name="settings_sharing_unavailable">Couldn’t read your sharing settings. MyExodus can’t reach its local database right now. Your data is safe — try again in a moment.</string>
+    <string name="settings_sharing_failed">Couldn’t save that change. MyExodus can’t reach its local database right now. Your data is safe. Try again in a moment.</string>
+    <string name="settings_sharing_unavailable">Couldn’t read your sharing settings. MyExodus can’t reach its local database right now. Your data is safe. Try again in a moment.</string>
     <!-- The recipient's block switch (plan §8.19 Step 11): names the partner the switch
          configures (§19.5 target), so the N-partner case is never ambiguous. -->
     <string name="settings_partner_block_title">Block check-ins</string>
@@ -1062,8 +1089,8 @@
          public copy and the fallback when the push carries no resolvable pair. No habit
          detail (FR-13). -->
     <string name="partner_nudge_title">Accountability Check-in</string>
-    <string name="partner_nudge_text">Your partner reached out — check in when you can.</string>
-    <string name="partner_nudge_text_named">%1$s reached out — check in when you can.</string>
+    <string name="partner_nudge_text">Your partner reached out. Check in when you can.</string>
+    <string name="partner_nudge_text_named">%1$s reached out. Check in when you can.</string>
     <!-- The sender card (plan §8.15 Step 8). Result copy mirrors the plan's state names —
          deliberately terse; the plan's "chill, subtle" direction (OPD #7) and FR-25's rule
          that the tap path never shows an emergency warning. -->
@@ -1114,12 +1141,12 @@
     <string name="partner_approvals_title">Requests awaiting your decision (%1$d)</string>
     <string name="partner_approvals_expires">Expires in %1$s</string>
     <string name="partner_approvals_badge_ok">Verified against your partner’s chain</string>
-    <string name="partner_approvals_badge_ok_catching_up">Verified — some earlier events are still coming in</string>
+    <string name="partner_approvals_badge_ok_catching_up">Verified: some earlier events are still coming in</string>
     <string name="partner_approvals_badge_blocked">Your partner’s chain can’t be trusted, so responding is blocked. Pair again to restore trust.</string>
     <string name="partner_approvals_approve">Approve</string>
     <string name="partner_approvals_reject">Reject</string>
     <string name="partner_approvals_working">Waiting for your confirmation…</string>
-    <string name="partner_approvals_failed">Couldn’t record your decision. The request is still open — try again.</string>
+    <string name="partner_approvals_failed">Couldn’t record your decision. The request is still open. Try again.</string>
     <string name="partner_my_requests_title">Your requests (%1$d)</string>
     <string name="partner_my_requests_requested">Awaiting your partner’s decision</string>
     <string name="partner_my_requests_approved">Approved</string>
@@ -1151,20 +1178,20 @@
     <!-- §8.2/§9 identity migration (task #68): enrollment change or a permanently invalidated
          key resets the device identity — the severed partner connections are never silent. -->
     <string name="identity_reset_title">Security keys reset</string>
-    <string name="identity_reset_body">Your screen lock or biometrics changed, so MyExodus reset this device’s security keys to protect your account. Partner connections using the old keys no longer work — open Partner to pair again.</string>
+    <string name="identity_reset_body">Your screen lock or biometrics changed, so MyExodus reset this device’s security keys to protect your account. Partner connections using the old keys no longer work. Open Partner to pair again.</string>
     <!-- Step 14 unpair (§8 Step 13 copy — AD-13b: local is guaranteed, remote is best-effort
          and only ever claimed from the partner device's own confirmation). -->
     <string name="partner_unpair_title">End partnership</string>
-    <string name="partner_unpair_body">This erases your partner’s data on this device immediately. Your partner’s phone erases its own copy next time it’s online — that part can’t be forced.</string>
+    <string name="partner_unpair_body">This erases your partner’s data on this device immediately. Your partner’s phone erases its own copy next time it’s online. That part can’t be forced.</string>
     <string name="partner_unpair_action">End partnership</string>
     <string name="partner_unpair_dialog_title">End this partnership?</string>
-    <string name="partner_unpair_dialog_body">Your partner’s data on this device is erased right away. Their phone erases its copy the next time it connects — you’ll see here when that’s confirmed. If their phone never connects again, it can’t be confirmed.</string>
+    <string name="partner_unpair_dialog_body">Your partner’s data on this device is erased right away. Their phone erases its copy the next time it connects. You’ll see here when that’s confirmed. If their phone never connects again, it can’t be confirmed.</string>
     <string name="partner_unpair_dialog_cancel">Keep partnership</string>
     <string name="partner_unpair_working">Ending the partnership…</string>
     <string name="partner_unpair_failed">Couldn’t end the partnership. Check your connection and try again.</string>
     <string name="partner_unpair_local_done">Your data on this device has been erased</string>
     <string name="partner_unpair_waiting">Waiting to confirm your partner’s device has also erased its data</string>
-    <string name="partner_unpair_revocation_pending">Finishing the exit on the server. Nothing new can be sent to your partner — it finishes automatically when you’re back online.</string>
+    <string name="partner_unpair_revocation_pending">Finishing the exit on the server. Nothing new can be sent to your partner. It finishes automatically when you’re back online.</string>
     <string name="partner_unpair_confirmed">Your partner’s device has also erased its data.</string>
     <string name="partner_unpair_unconfirmed">Could not confirm your partner’s device erased its data.</string>
     <string name="partner_unpair_responder_done">Your partner ended the partnership. Your data for it on this device has been erased.</string>
@@ -1178,7 +1205,7 @@
     <string name="partner_pair_join_cta">Join with a code</string>
     <string name="partner_pair_join_body">Enter the one-time code they show you.</string>
     <string name="partner_pair_add_user_title">Support another person</string>
-    <string name="partner_pair_add_user_body">This phone can stay paired with more than one person. Each pairing is separate — switching between them never mixes up whose activity you are looking at.</string>
+    <string name="partner_pair_add_user_body">This phone can stay paired with more than one person. Each pairing is separate. Switching between them never mixes up whose activity you are looking at.</string>
     <string name="partner_users_title">People you support</string>
     <string name="partner_users_since">Paired %1$s</string>
     <string name="partner_users_rename_action">Rename %1$s</string>
@@ -1187,7 +1214,7 @@
     <string name="partner_users_rename_note">Shown on this phone only.</string>
     <string name="partner_users_rename_save">Save</string>
     <string name="partner_users_rename_saving">Saving…</string>
-    <string name="partner_users_rename_failed">Couldn’t save the name — the change wasn’t written. Try again.</string>
+    <string name="partner_users_rename_failed">Couldn’t save the name. The change wasn’t written. Try again.</string>
     <string name="partner_users_rename_cancel">Cancel</string>
 
     <!-- Pairing ceremony (§19.4 item 4). The screen shows only mapped copy: protocol
@@ -1212,9 +1239,9 @@
         <item quantity="one">Valid for %1$d more minute</item>
         <item quantity="other">Valid for %1$d more minutes</item>
     </plurals>
-    <string name="partner_ceremony_code_expiring">Expiring now — create a new code if your partner isn’t finished.</string>
+    <string name="partner_ceremony_code_expiring">Expiring now. Create a new code if your partner isn’t finished.</string>
     <string name="partner_ceremony_waiting_partner_match">Waiting for your partner to compare the code and tap “They match” on their phone. Keep this screen open.</string>
-    <string name="partner_ceremony_waiting_activation">Finishing the pairing — this takes a few seconds. Keep both screens open.</string>
+    <string name="partner_ceremony_waiting_activation">Finishing the pairing. This takes a few seconds. Keep both screens open.</string>
     <string name="partner_ceremony_copy">Copy</string>
     <string name="partner_ceremony_share">Share</string>
     <string name="partner_ceremony_share_text">MyExodus pairing code: %1$s</string>
@@ -1222,8 +1249,8 @@
     <string name="partner_ceremony_waiting">Waiting for your partner to enter the code…</string>
     <string name="partner_ceremony_cancel">Cancel invitation</string>
     <string name="partner_ceremony_sas_overline">Safety code</string>
-    <string name="partner_ceremony_sas_body_joiner">Your phone shows the safety code first. Read the digits aloud to your partner, then tap Confirm — their phone will show the same code so they can check it.</string>
-    <string name="partner_ceremony_sas_body_initiator">Your partner read these digits aloud from their phone. If they match what you heard, tap “They match”. If anything is different, stop — don’t continue.</string>
+    <string name="partner_ceremony_sas_body_joiner">Your phone shows the safety code first. Read the digits aloud to your partner, then tap Confirm. Their phone will show the same code so they can check it.</string>
+    <string name="partner_ceremony_sas_body_initiator">Your partner read these digits aloud from their phone. If they match what you heard, tap “They match”. If anything is different, stop. Don’t continue.</string>
     <string name="partner_ceremony_sas_match">They match</string>
     <string name="partner_ceremony_sas_no_match">They don’t match</string>
     <string name="partner_ceremony_sas_confirm">Confirm</string>
@@ -1237,7 +1264,7 @@
     <string name="partner_ceremony_offline_title">Couldn’t reach the server</string>
     <string name="partner_ceremony_offline_body">Pairing needs a connection on both phones. Check your connection, then try again.</string>
     <string name="partner_ceremony_expired_title">The invitation ran out</string>
-    <string name="partner_ceremony_expired_body">Invitation codes last 10 minutes and work once. Create a new one — or ask your partner to — then try again.</string>
+    <string name="partner_ceremony_expired_body">Invitation codes last 10 minutes and work once. Create a new one, or ask your partner to, then try again.</string>
     <string name="partner_ceremony_used_title">That code was already used</string>
     <string name="partner_ceremony_used_body">Each invitation works once, and this one was already claimed. Ask for a new invitation, then try again.</string>
     <string name="partner_ceremony_failed_title">Pairing didn’t finish</string>
@@ -1247,7 +1274,7 @@
     <string name="partner_ceremony_failed_stale_title">The attempts didn’t line up</string>
     <string name="partner_ceremony_failed_stale_body">The two phones were taking part in different pairing attempts. Close this and start a fresh pairing from scratch on both phones.</string>
     <string name="partner_ceremony_failed_same_device_title">Both sides came from one phone</string>
-    <string name="partner_ceremony_failed_same_device_body">This attempt was set up twice from the same phone. Pairing needs one phone on each side — start again with each phone in its own role.</string>
+    <string name="partner_ceremony_failed_same_device_body">This attempt was set up twice from the same phone. Pairing needs one phone on each side. Start again with each phone in its own role.</string>
     <string name="partner_ceremony_failed_same_account_title">Same identity on both phones</string>
     <string name="partner_ceremony_failed_same_account_body">Both phones are using the same My Exodus identity, so they can’t partner with each other. Your partner’s phone needs its own setup first.</string>
     <string name="partner_ceremony_failed_verify_title">Couldn’t verify the other phone</string>
@@ -1280,7 +1307,7 @@
          names the system screen about to appear so it doesn't surprise, and says it's
          reversible. -->
     <string name="domain_usage_off_title">Website blocking is off</string>
-    <string name="domain_usage_off_body">Blocked websites and daily limits only apply while the app’s connection is on. Tap to turn it on — Android will ask about a VPN connection; choose OK there. You can turn it off anytime.</string>
+    <string name="domain_usage_off_body">Blocked websites and daily limits only apply while the app’s connection is on. Tap to turn it on. Android will ask about a VPN connection; choose OK there. You can turn it off anytime.</string>
     <string name="domain_usage_off_retry">The connection couldn’t start. Another VPN app can block it. Tap to try again.</string>
 
     <!-- Streaks (ADR #85). The surface was the last one whose copy lived as Kotlin literals;
@@ -1297,8 +1324,8 @@
     <string name="streaks_day_singular">day</string>
     <string name="streaks_day_plural">days</string>
     <plurals name="streaks_best_run">
-        <item quantity="one">Best run: %1$d day — that record stays with you.</item>
-        <item quantity="other">Best run: %1$d days — that record stays with you.</item>
+        <item quantity="one">Best run: %1$d day. That record stays with you.</item>
+        <item quantity="other">Best run: %1$d days. That record stays with you.</item>
     </plurals>
     <!-- Owner decision 2026-10-03: the chosen stop date is shown as a since-label (identity), never as credited days — the side-by-side reads as two facts, not two counters. -->
     <string name="streaks_free_since">Free since %1$s</string>
@@ -1315,7 +1342,7 @@
     <string name="streaks_relapse_action">Log a relapse</string>
     <string name="streaks_relapse_in_flight">Logging…</string>
     <string name="streaks_relapse_confirm_title">Log a relapse?</string>
-    <string name="streaks_relapse_confirm_body">This resets “%1$s” to Day 1 — your current run of %2$d %3$s ends, and your best run stays on record.</string>
+    <string name="streaks_relapse_confirm_body">This resets “%1$s” to Day 1. Your current run of %2$d %3$s ends, and your best run stays on record.</string>
     <string name="streaks_relapse_confirm_action">Log it</string>
     <string name="streaks_relapse_error_before_start">That relapse time is earlier than this streak\'s start. Check your device\'s date and time settings, then try again.</string>
     <string name="streaks_relapse_error_store">MyExodus can\'t reach its local database right now, so nothing was logged. Try again in a moment.</string>
@@ -1342,7 +1369,7 @@
     <!-- Timeline spoke. Its week labels and expectation copy stay in StreaksPresentation.kt —
          see the scope note above. -->
     <string name="streaks_timeline_here">You are here</string>
-    <string name="streaks_timeline_subtitle_past">Your first month, week by week — you\'re past the four-week curve now.</string>
+    <string name="streaks_timeline_subtitle_past">Your first month, week by week. You\'re past the four-week curve now.</string>
     <string name="streaks_timeline_subtitle">Your four-week curve, week by week.</string>
     <!-- Habit setup (REQ-18) -->
     <string name="streaks_setup_title">Set up your habit</string>
@@ -1357,27 +1384,27 @@
     <string name="streaks_setup_duration_5_10">5–10 years</string>
     <string name="streaks_setup_duration_over_10">Over 10 years</string>
     <string name="streaks_setup_severity">How hard was it to go without it?</string>
-    <string name="streaks_setup_severity_mild">Mild — occasionally</string>
-    <string name="streaks_setup_severity_moderate">Moderate — most days</string>
-    <string name="streaks_setup_severity_severe">Severe — constantly, hard to control</string>
+    <string name="streaks_setup_severity_mild">Mild: occasionally</string>
+    <string name="streaks_setup_severity_moderate">Moderate: most days</string>
+    <string name="streaks_setup_severity_severe">Severe: constantly, hard to control</string>
     <string name="streaks_setup_counting_from">Free since</string>
     <string name="streaks_setup_change">Change</string>
-    <string name="streaks_setup_date_note">Your count starts now, on this phone — only tracked time adds days. The date is remembered as when you stopped; it doesn\'t add days by itself.</string>
+    <string name="streaks_setup_date_note">Your count starts now, on this phone. Only tracked time adds days. The date is remembered as when you stopped; it doesn\'t add days by itself.</string>
     <string name="streaks_setup_start">Start my streak</string>
     <string name="streaks_setup_error_future">That start date is in the future, so the count can\'t begin there. Pick today or an earlier date and try again.</string>
     <string name="streaks_setup_error_invalid">Something in the setup didn\'t look right. Check your answers and try again.</string>
     <string name="streaks_setup_error_clock">Your device\'s date looks off, so MyExodus can\'t start counting safely. Check your date and time settings, then try again.</string>
-    <string name="streaks_setup_error_store">MyExodus can\'t reach its local database right now. Your data is safe — try again in a moment.</string>
+    <string name="streaks_setup_error_store">MyExodus can\'t reach its local database right now. Your data is safe. Try again in a moment.</string>
     <string name="streaks_picker_confirm">OK</string>
     <string name="streaks_picker_title">Your habits</string>
     <string name="streaks_picker_add">Add habit</string>
 
     <!-- Insights (owner task #22): last-7-days reading of the local journals -->
     <string name="insights_title">Insights</string>
-    <string name="insights_subtitle">What MyExodus counted on this phone — today and the 6 days before it.</string>
+    <string name="insights_subtitle">What MyExodus counted on this phone: today and the 6 days before it.</string>
     <string name="insights_loading">Reading your journals…</string>
     <string name="insights_unavailable_title">Your journals won\'t open right now</string>
-    <string name="insights_unavailable_body">The encrypted database didn\'t open, so there\'s nothing honest to show. Your data is safe — try again.</string>
+    <string name="insights_unavailable_body">The encrypted database didn\'t open, so there\'s nothing honest to show. Your data is safe. Try again.</string>
     <string name="insights_retry">Try again</string>
     <string name="insights_empty_title">Nothing counted yet</string>
     <string name="insights_empty_body">Once blocking, screen time, urge practice, or a streak records something, it shows up here. Nothing leaves this phone.</string>
@@ -1385,7 +1412,7 @@
     <string name="insights_overrides_label">Overrides</string>
     <string name="insights_stat_caption">Last 7 days, ending today</string>
     <string name="insights_blocks_title">Blocked and overridden</string>
-    <string name="insights_blocks_caption">One bar per day — blocked attempts on top, overrides below.</string>
+    <string name="insights_blocks_caption">One bar per day: blocked attempts on top, overrides below.</string>
     <string name="insights_blocks_empty">No blocked attempts or overrides in the last 7 days.</string>
     <string name="insights_legend_blocked">Blocked</string>
     <string name="insights_legend_overrides">Overrides</string>
@@ -1404,9 +1431,9 @@
     <string name="insights_habits_title">Every streak</string>
     <string name="insights_habits_empty">No streaks yet.</string>
     <string name="insights_habit_no_best">No best run yet</string>
-    <string name="insights_attempt_bar_description">%1$s — blocked: %2$d, overrides: %3$d</string>
-    <string name="insights_attempt_bar_none">%1$s — nothing counted</string>
-    <string name="insights_usage_bar_description">%1$s — %2$s in limited apps</string>
+    <string name="insights_attempt_bar_description">%1$s. Blocked: %2$d, overrides: %3$d</string>
+    <string name="insights_attempt_bar_none">%1$s. Nothing counted.</string>
+    <string name="insights_usage_bar_description">%1$s: %2$s in limited apps</string>
     <plurals name="insights_recovery_all_time">
         <item quantity="one">%d urge session recorded in total</item>
         <item quantity="other">%d urge sessions recorded in total</item>
@@ -1428,12 +1455,12 @@
          failures never reveal whether an account exists; errors state what happened, why, and
          the action (project error standard). -->
     <string name="account_settings_title">Account</string>
-    <string name="account_settings_subtitle_guest">Guest mode — data stays on this device</string>
+    <string name="account_settings_subtitle_guest">Guest mode: data stays on this device</string>
     <string name="account_settings_subtitle_signed_in">Signed in as %1$s</string>
-    <string name="account_settings_subtitle_unverified">%1$s — email not verified</string>
+    <string name="account_settings_subtitle_unverified">%1$s: email not verified</string>
 
     <string name="account_guest_intro_title">Accounts are optional</string>
-    <string name="account_guest_intro_body">Everything stays on this device. An account lets you back up and recover your progress if this phone is lost — including your partner connection.</string>
+    <string name="account_guest_intro_body">Everything stays on this device. An account lets you back up and recover your progress if this phone is lost, including your partner connection.</string>
     <string name="account_email_label">Email</string>
     <string name="account_password_label">Password</string>
     <string name="account_create">Create account</string>
@@ -1459,10 +1486,10 @@
     <string name="account_error_invalid_credentials">The email or password didn\'t match. Check both and try again.</string>
     <string name="account_error_network">Couldn\'t reach the server. Check your connection and try again.</string>
     <string name="account_error_too_many">Too many attempts. Wait a few minutes, then try again.</string>
-    <string name="account_error_weak_password">Choose a stronger password — at least 6 characters.</string>
+    <string name="account_error_weak_password">Choose a stronger password: at least 6 characters.</string>
     <string name="account_error_invalid_email">That email address doesn\'t look valid. Check it and try again.</string>
     <string name="account_error_provider_unavailable">This sign-in method isn\'t available right now. Use email and password instead.</string>
-    <string name="account_error_transition">Signing in to an existing account from guest mode needs the account-switch flow. Finish account setup first, then switch — your guest data stays on this device until then.</string>
+    <string name="account_error_transition">Signing in to an existing account from guest mode needs the account-switch flow. Finish account setup first, then switch. Your guest data stays on this device until then.</string>
     <string name="account_error_requires_recent">For your security, sign in again before making this change.</string>
     <string name="account_error_already_signed_in">An account is already signed in. Sign out first.</string>
     <string name="account_error_not_signed_in">Sign in to an account first.</string>
@@ -1472,7 +1499,7 @@
     <string name="account_error_transition_in_progress">Another account change is already in progress. Wait for it to finish, then try again.</string>
     <string name="account_pending_writes_discard">Discard unsent changes and retry</string>
     <string name="account_restart">Restart app</string>
-    <string name="account_cloud_blocked">Accounts are paused for this launch — the app couldn\'t clear an old local cache after updating. Your data on this device is untouched. Restart the app to finish setup.</string>
+    <string name="account_cloud_blocked">Accounts are paused for this launch. The app couldn\'t clear an old local cache after updating. Your data on this device is untouched. Restart the app to finish setup.</string>
     <string name="account_error_generic">Something went wrong. Try again in a moment.</string>
 
     <string name="account_verify_title">Verify your email</string>
@@ -1537,7 +1564,7 @@
     <string name="account_deletion_working">Deleting…</string>
     <string name="account_deletion_accepted_title">Deletion started</string>
     <string name="account_deletion_accepted_body">Your account and data are scheduled for deletion. Sign out to finish on this device.</string>
-    <string name="account_deletion_blocked_title">Deletion started — finish signing out</string>
+    <string name="account_deletion_blocked_title">Deletion started. Finish signing out.</string>
     <string name="account_deletion_blocked_body">Some changes saved on this device haven\'t reached the server yet. Sign out now and discard them, or wait and try again.</string>
     <string name="account_deletion_sign_out">Sign out now</string>
     <string name="account_deletion_sign_out_discard">Discard unsent changes and sign out</string>
@@ -1554,7 +1581,7 @@
     <string name="account_delete_error_security">This device couldn\'t be verified. Restart the app and try again.</string>
 
     <string name="account_transition_title">Switch to an existing account?</string>
-    <string name="account_transition_body">Your guest progress can move into the account or be left behind — you choose. Either way, partner connections you made in guest mode end once you sign in, and this guest session can’t be restored afterwards.</string>
+    <string name="account_transition_body">Your guest progress can move into the account or be left behind. You choose. Either way, partner connections you made in guest mode end once you sign in, and this guest session can’t be restored afterwards.</string>
     <string name="account_transition_import">Import my progress</string>
     <string name="account_transition_discard">Discard guest progress</string>
     <string name="account_transition_stay_guest">Stay a guest</string>
@@ -1565,7 +1592,7 @@
     <string name="account_transition_prepared_title">Ready to switch</string>
     <string name="account_transition_prepared_body">Sign in to your existing account to finish the switch. Partner connections from guest mode end when the switch completes.</string>
     <string name="account_transition_finish_title">Finish the switch</string>
-    <string name="account_transition_finish_body">You’re signed in. The switch finishes once the server confirms — tap “Try again” if it didn’t restart on its own.</string>
+    <string name="account_transition_finish_body">You’re signed in. The switch finishes once the server confirms. Tap “Try again” if it didn’t restart on its own.</string>
     <string name="account_transition_completed_title">Account switched</string>
     <string name="account_transition_retry">Try again</string>
     <string name="account_transition_error_network">Couldn’t reach the server. Check your connection and try again.</string>
@@ -1587,13 +1614,13 @@
 
     <!-- Account plan §8.4/§6.3: the encrypted guest snapshot and its post-switch import. -->
     <string name="account_transition_error_quarantine">Your guest data couldn’t be secured on this device, so the switch didn’t start and nothing was changed. Try again; if it keeps failing, restart the app.</string>
-    <string name="account_transition_error_quarantine_bind">The switch finished, but this device couldn’t record where to import your guest data. Tap “Try again” to finish — don’t sign out.</string>
+    <string name="account_transition_error_quarantine_bind">The switch finished, but this device couldn’t record where to import your guest data. Tap “Try again” to finish. Don’t sign out.</string>
     <string name="account_import_title">Import your guest data</string>
-    <string name="account_import_body">Your guest data is stored encrypted on this device. Review the counts and confirm — nothing is added until you do.</string>
+    <string name="account_import_body">Your guest data is stored encrypted on this device. Review the counts and confirm. Nothing is added until you do.</string>
     <string name="account_import_counts">To add: %1$d · Already here: %2$d · Updated rows: %3$d</string>
     <plurals name="account_import_conflicts">
-        <item quantity="one">%1$d record breaks data rules and can’t be imported. Nothing has been changed — you can keep this copy or delete it.</item>
-        <item quantity="other">%1$d records break data rules and can’t be imported. Nothing has been changed — you can keep this copy or delete it.</item>
+        <item quantity="one">%1$d record breaks data rules and can’t be imported. Nothing has been changed. You can keep this copy or delete it.</item>
+        <item quantity="other">%1$d records break data rules and can’t be imported. Nothing has been changed. You can keep this copy or delete it.</item>
     </plurals>
     <string name="account_import_retention">A copy stays on this device for 7 days (until %1$s) so the import can be replayed. Replaying never restores the guest account or its partners.</string>
     <string name="account_import_portable">Also import recovery friction and override cooldown</string>
@@ -1601,8 +1628,8 @@
     <string name="account_import_working">Importing your data…</string>
     <string name="account_import_done_title">Guest data imported</string>
     <plurals name="account_import_done_body">
-        <item quantity="one">Added %1$d record; already here: %2$d. The encrypted copy stays until %3$s — deleting it now is permanent.</item>
-        <item quantity="other">Added %1$d records; already here: %2$d. The encrypted copy stays until %3$s — deleting it now is permanent.</item>
+        <item quantity="one">Added %1$d record; already here: %2$d. The encrypted copy stays until %3$s. Deleting it now is permanent.</item>
+        <item quantity="other">Added %1$d records; already here: %2$d. The encrypted copy stays until %3$s. Deleting it now is permanent.</item>
     </plurals>
     <string name="account_import_delete">Delete quarantined data now</string>
     <string name="account_import_delete_title">Delete quarantined guest data?</string>
@@ -1619,14 +1646,14 @@
     <string name="account_import_restore_action">Restore backup</string>
     <string name="account_import_check_again">Check again</string>
     <string name="account_import_conflict_title">This account’s backup is newer</string>
-    <string name="account_import_conflict_body">This account already has a newer backup in the cloud, and this phone holds data that isn’t in it. Your guest data hasn’t been imported yet. Choose what to do first — nothing has changed so far.</string>
+    <string name="account_import_conflict_body">This account already has a newer backup in the cloud, and this phone holds data that isn’t in it. Your guest data hasn’t been imported yet. Choose what to do first. Nothing has changed so far.</string>
     <string name="account_import_conflict_restore">Restore the backup, then merge</string>
     <string name="account_import_conflict_merge">Merge into this phone only</string>
     <string name="account_import_conflict_upload_note">Until the backup is restored or replaced, this phone won’t upload new backups.</string>
 
     <!-- ADR #239: data retained under an identity this account never imported. -->
     <string name="account_recovery_title">Data from a previous profile</string>
-    <string name="account_recovery_body">This device still holds data saved before this account was used on it, and it was never imported. Review the counts and confirm — nothing is added until you do.</string>
+    <string name="account_recovery_body">This device still holds data saved before this account was used on it, and it was never imported. Review the counts and confirm. Nothing is added until you do.</string>
     <string name="account_recovery_action">Import this data</string>
     <string name="account_recovery_error_unreadable">The saved data on this device can’t be opened, so nothing was imported. It has been left untouched on this device.</string>
 
@@ -1637,7 +1664,7 @@
     <string name="backup_key_loading">Checking your backup key…</string>
     <string name="backup_key_working">Securing your backup key… this can take a few seconds on slower phones.</string>
     <string name="backup_key_setup_title">Set up encrypted backup</string>
-    <string name="backup_key_setup_body">Your data is encrypted on this device before it is uploaded. Choose a backup passphrase now — it is the only way to restore on a new phone, and MyExodus cannot reset it.</string>
+    <string name="backup_key_setup_body">Your data is encrypted on this device before it is uploaded. Choose a backup passphrase now. It is the only way to restore on a new phone, and MyExodus cannot reset it.</string>
     <string name="backup_key_mode_manual">My own passphrase</string>
     <string name="backup_key_mode_generated">Generate six words</string>
     <string name="backup_key_passphrase_label">Backup passphrase</string>
@@ -1648,12 +1675,12 @@
     <string name="backup_key_passphrase_short">Use at least 16 characters.</string>
     <string name="backup_key_passphrase_weak">This is too easy to guess. Make it longer, add unusual words, or use generated words.</string>
     <string name="backup_key_policy_hint">At least 16 characters. A long, unusual phrase is strongest.</string>
-    <string name="backup_key_generated_body">Six random words, chosen on this device. Write them down or memorise them — you need this exact phrase to back up and to restore.</string>
+    <string name="backup_key_generated_body">Six random words, chosen on this device. Write them down or memorise them. You need this exact phrase to back up and to restore.</string>
     <string name="backup_key_generate">Show new words</string>
     <string name="backup_key_create">Create backup key</string>
     <string name="backup_key_create_note">If you forget the passphrase, your recovery key is the only way back in. Keep both somewhere safe.</string>
     <string name="backup_key_configured_title">Backup key is set up</string>
-    <string name="backup_key_configured_body">Your passphrase and recovery key unlock this account’s encrypted backups. Change either one here — your existing backups stay readable.</string>
+    <string name="backup_key_configured_body">Your passphrase and recovery key unlock this account’s encrypted backups. Change either one here. Your existing backups stay readable.</string>
     <string name="backup_key_change">Change passphrase</string>
     <string name="backup_key_rotate">Replace recovery key</string>
     <string name="backup_key_unlock_passphrase">Current passphrase</string>
@@ -1679,7 +1706,7 @@
     <string name="backup_key_error_deleting">This account is being deleted, so encrypted backup is unavailable.</string>
     <string name="backup_key_error_exists">A backup key already exists for this account. Reload to manage it.</string>
     <string name="backup_key_error_missing">No backup key exists for this account yet.</string>
-    <string name="backup_key_error_conflict">Your backup key was changed somewhere else. It has been reloaded — try again and enter your passphrase when asked.</string>
+    <string name="backup_key_error_conflict">Your backup key was changed somewhere else. It has been reloaded. Try again and enter your passphrase when asked.</string>
     <string name="backup_key_error_version">This backup key was made by a newer version of MyExodus. Update the app and try again.</string>
     <string name="backup_key_error_rollback">This account’s backup key looks older than one this device has seen. Nothing was changed.</string>
     <string name="backup_key_error_unlock">That didn’t unlock your backup key. Check the passphrase or the 24 words and try again.</string>
@@ -1702,7 +1729,7 @@
     <string name="backup_now_error_profile">This account can’t back up right now.</string>
     <string name="backup_now_error_deleting">This account is being deleted, so backup is unavailable.</string>
     <string name="backup_now_error_feature">Encrypted backup is turned off for this app version. Update MyExodus and try again.</string>
-    <string name="backup_now_error_conflict">The cloud backup changed while you were working. Nothing was replaced — check the current state and try again.</string>
+    <string name="backup_now_error_conflict">The cloud backup changed while you were working. Nothing was replaced. Check the current state and try again.</string>
     <string name="backup_now_error_rollback">The cloud offered an older backup than this phone has already seen. Nothing was uploaded or replaced.</string>
     <string name="backup_now_error_equivocation">The cloud offered a different backup with the same number as one this phone has already seen. Nothing was uploaded or replaced.</string>
     <string name="backup_now_error_limit">Too many backup attempts in the last day. Wait a while and try again.</string>

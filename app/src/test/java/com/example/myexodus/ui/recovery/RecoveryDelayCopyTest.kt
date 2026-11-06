@@ -27,7 +27,7 @@ class RecoveryDelayCopyTest {
     @Test
     fun delayBody_readsSingularAtOneMinute() {
         assertEquals(
-            "Set the timer for 1 minute. When it ends, decide then — not now.",
+            "Set the timer for 1 minute. When it ends, decide then, not now.",
             resources.getQuantityString(R.plurals.recovery_delay_body, 1, 1),
         )
     }
@@ -35,7 +35,7 @@ class RecoveryDelayCopyTest {
     @Test
     fun delayBody_readsPluralAboveOne() {
         assertEquals(
-            "Set the timer for 10 minutes. When it ends, decide then — not now.",
+            "Set the timer for 10 minutes. When it ends, decide then, not now.",
             resources.getQuantityString(R.plurals.recovery_delay_body, 10, 10),
         )
     }

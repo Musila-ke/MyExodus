@@ -198,7 +198,7 @@ private fun WindowRow(
                 onCheckedChange = onToggle,
                 // The switch is a sibling of the schedule text, so without this its accessible
                 // name is a bare "On/Off" with no window attached (findings #25/#26's class).
-                modifier = Modifier.semantics { contentDescription = "$toggleLabel — $schedule" },
+                modifier = Modifier.semantics { contentDescription = "$toggleLabel, $schedule" },
             )
             Box {
                 IconButton(onClick = { menuOpen = true }) {

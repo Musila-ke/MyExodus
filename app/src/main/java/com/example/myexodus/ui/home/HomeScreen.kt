@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -989,6 +990,12 @@ private fun StatePill(label: String, active: Boolean) {
  * several senders the arrows page newest-to-oldest. The age line is the message's own send
  * time — same honesty rule the dashboard follows, a stale message must not read as if it
  * just arrived.
+ *
+ * Revised 2026-11-06 (owner: the two partner cards read "basic, generic, slot"): ADR #255's
+ * grammar is unchanged — glyph, sender + age, authored bubble, footer pager — but the card is
+ * now a poster: extra-large radius, a 56 dp surface tile bearing the accent glyph, and a
+ * titleLarge sender line. Emphasis order still holds (reach-out primaryContainer above this
+ * card's secondaryContainer, operational cards quieter below).
  */
 @Composable
 private fun PinnedMessageCard(
@@ -1003,61 +1010,35 @@ private fun PinnedMessageCard(
     Surface(
         color = MaterialTheme.colorScheme.secondaryContainer,
         contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-        shape = MaterialTheme.shapes.large,
+        shape = MaterialTheme.shapes.extraLarge,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
             Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            // Same grammar as the reach-out card it sits under: a glyph naming the event, the
-            // sender and the message's own send time stacked, and the partner's words in their
-            // own bubble so they read as authored, not as app copy.
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .background(MaterialTheme.colorScheme.secondary, CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Outlined.Chat,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSecondary,
-                        modifier = Modifier.size(22.dp),
-                    )
-                }
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        if (senderName != null) {
-                            stringResource(R.string.home_pinned_from, senderName)
-                        } else {
-                            stringResource(R.string.home_pinned_title)
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    sentAtMillis?.let { sent ->
-                        Text(
-                            stringResource(R.string.home_pinned_sent, relativeTimeText(nowMillis, sent)),
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    }
-                }
-            }
+            PartnerCardHeader(
+                glyph = Icons.AutoMirrored.Outlined.Chat,
+                glyphTint = MaterialTheme.colorScheme.secondary,
+                title = if (senderName != null) {
+                    stringResource(R.string.home_pinned_from, senderName)
+                } else {
+                    stringResource(R.string.home_pinned_title)
+                },
+                age = sentAtMillis?.let {
+                    stringResource(R.string.home_pinned_sent, relativeTimeText(nowMillis, it))
+                },
+            )
             Surface(
                 color = MaterialTheme.colorScheme.surface,
                 contentColor = MaterialTheme.colorScheme.onSurface,
-                shape = MaterialTheme.shapes.medium,
+                shape = MaterialTheme.shapes.large,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
                     text,
                     style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier.padding(16.dp),
                 )
             }
             if (position != null) {
@@ -1086,6 +1067,50 @@ private fun PinnedMessageCard(
                 }
             }
         }
+    }
+}
+
+/**
+ * The shared partner-card masthead (ADR #255 grammar, restyled 2026-11-06): a surface tile
+ * carrying the accent glyph — the card's anchor, one size up from an avatar circle — and the
+ * sender line with its own send time underneath. [trailing] is the reach-out card's dismiss.
+ */
+@Composable
+private fun PartnerCardHeader(
+    glyph: ImageVector,
+    glyphTint: Color,
+    title: String,
+    age: String?,
+    trailing: @Composable (() -> Unit)? = null,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(18.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                glyph,
+                contentDescription = null,
+                tint = glyphTint,
+                modifier = Modifier.size(28.dp),
+            )
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            age?.let {
+                Text(it, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+        trailing?.invoke()
     }
 }
 
@@ -1453,67 +1478,46 @@ private fun NudgeCardView(
     Surface(
         color = MaterialTheme.colorScheme.primaryContainer,
         contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        shape = MaterialTheme.shapes.large,
+        shape = MaterialTheme.shapes.extraLarge,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
             Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             // Owner directive 2026-11-01: the reach-out leads Home, so it wears the strongest
             // surface on the page — a glyph that names the event, the sender's words in their
             // own bubble, and a title naming who needs the check-in. No reply action: the
             // partner answers by calling or messaging, not in the app.
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .background(MaterialTheme.colorScheme.primary, CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Outlined.Handshake,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(22.dp),
-                    )
-                }
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        partnerName?.let { stringResource(R.string.sos_card_title_named, it) }
-                            ?: stringResource(R.string.sos_card_title),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        stringResource(
-                            R.string.sos_card_sent,
-                            relativeTimeText(nowMillis, card.createdAtMs),
-                        ),
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-                IconButton(onClick = onAcknowledge) {
-                    Icon(
-                        Icons.Default.Close,
-                        contentDescription = stringResource(R.string.sos_card_dismiss),
-                    )
-                }
-            }
+            PartnerCardHeader(
+                glyph = Icons.Outlined.Handshake,
+                glyphTint = MaterialTheme.colorScheme.primary,
+                title = partnerName?.let { stringResource(R.string.sos_card_title_named, it) }
+                    ?: stringResource(R.string.sos_card_title),
+                age = stringResource(
+                    R.string.sos_card_sent,
+                    relativeTimeText(nowMillis, card.createdAtMs),
+                ),
+                trailing = {
+                    IconButton(onClick = onAcknowledge) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = stringResource(R.string.sos_card_dismiss),
+                        )
+                    }
+                },
+            )
             card.message?.let {
                 Surface(
                     color = MaterialTheme.colorScheme.surface,
                     contentColor = MaterialTheme.colorScheme.onSurface,
-                    shape = MaterialTheme.shapes.medium,
+                    shape = MaterialTheme.shapes.large,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(
                         it,
                         style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.padding(12.dp),
+                        modifier = Modifier.padding(16.dp),
                     )
                 }
             }

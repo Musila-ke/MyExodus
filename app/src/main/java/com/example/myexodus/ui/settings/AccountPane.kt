@@ -587,15 +587,17 @@ private sealed interface PendingSwitch {
     data object Google : PendingSwitch
 }
 
+/**
+ * The one auth surface: create/sign-in switch, email + password (+ confirmation), and Google
+ * when it is compiled in. Shared by Settings → Account and first-run onboarding so validation
+ * and copy can never drift between the two entry points.
+ */
 @Composable
-private fun GuestAccount(
+internal fun AccountAuthForm(
     hasGuestUid: Boolean,
     prepared: Boolean,
     googleAvailable: Boolean,
     viewModel: AccountViewModel,
-    retainedLocal: Boolean,
-    onDeleteGuest: () -> Unit,
-    onRemoveLocal: () -> Unit,
     onSignIn: (String, String) -> Unit,
     onGoogle: () -> Unit,
 ) {
@@ -624,12 +626,6 @@ private fun GuestAccount(
         if (emailInvalid || passwordErrorRes != 0 || confirmMismatch) return
         if (signInMode) onSignIn(cleanEmail, password) else viewModel.createAccount(cleanEmail, password)
     }
-
-    AccountCard(
-        icon = Icons.Outlined.PersonOutline,
-        title = stringResource(R.string.account_guest_intro_title),
-        body = stringResource(R.string.account_guest_intro_body),
-    )
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -827,6 +823,34 @@ private fun GuestAccount(
             }
         }
     }
+}
+
+@Composable
+private fun GuestAccount(
+    hasGuestUid: Boolean,
+    prepared: Boolean,
+    googleAvailable: Boolean,
+    viewModel: AccountViewModel,
+    retainedLocal: Boolean,
+    onDeleteGuest: () -> Unit,
+    onRemoveLocal: () -> Unit,
+    onSignIn: (String, String) -> Unit,
+    onGoogle: () -> Unit,
+) {
+    AccountCard(
+        icon = Icons.Outlined.PersonOutline,
+        title = stringResource(R.string.account_guest_intro_title),
+        body = stringResource(R.string.account_guest_intro_body),
+    )
+
+    AccountAuthForm(
+        hasGuestUid = hasGuestUid,
+        prepared = prepared,
+        googleAvailable = googleAvailable,
+        viewModel = viewModel,
+        onSignIn = onSignIn,
+        onGoogle = onGoogle,
+    )
 
     if (retainedLocal) {
         AccountCard(
