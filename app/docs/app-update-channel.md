@@ -72,7 +72,7 @@ permission and installer status on every resume.
 | `NOT_CONFIGURED` | This build has no update channel | none |
 | `CHECKING` | Checking for updates… | none |
 | `UP_TO_DATE` | Up to date, checked <when> | Check again |
-| `NO_RELEASE` | No release published yet | Check again |
+| `NO_RELEASE` | No updates | Check again |
 | `AVAILABLE` | Version <name> is ready to download | Download and install / Allow app installs |
 | `DOWNLOADING` | Downloading: <n>% | none |
 | `INSTALLING` | Waiting for the system installer | none (no Close) |

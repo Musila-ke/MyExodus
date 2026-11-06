@@ -557,7 +557,7 @@
     <string name="settings_update_subtitle_up_to_date">Up to date, checked %1$s</string>
     <string name="settings_update_subtitle_up_to_date_short">Up to date</string>
     <string name="settings_update_subtitle_failed">Couldn’t check for updates</string>
-    <string name="settings_update_subtitle_no_release">No release published yet</string>
+    <string name="settings_update_subtitle_no_release">No updates</string>
     <string name="settings_update_subtitle_downloading">Downloading: %1$d%%</string>
     <string name="settings_update_subtitle_installing">Waiting for the system installer</string>
     <string name="settings_update_dialog_title">Updates</string>
