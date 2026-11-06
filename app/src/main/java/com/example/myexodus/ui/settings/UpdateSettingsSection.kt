@@ -99,10 +99,8 @@ private fun UpdateDialog(update: UpdateViewModel, state: UpdateUiState, onDismis
                         CircularProgressIndicator()
                         Text(stringResource(R.string.settings_update_checking))
                     }
-                    UpdatePhase.UP_TO_DATE -> Text(
-                        stringResource(R.string.settings_update_up_to_date, BuildConfig.VERSION_NAME),
-                    )
-                    UpdatePhase.NO_RELEASE -> Text(stringResource(R.string.settings_update_no_release))
+                    UpdatePhase.UP_TO_DATE -> Text(stringResource(R.string.settings_update_up_to_date))
+                    UpdatePhase.NO_RELEASE -> Text(stringResource(R.string.settings_update_up_to_date))
                     UpdatePhase.AVAILABLE -> {
                         Text(
                             stringResource(
