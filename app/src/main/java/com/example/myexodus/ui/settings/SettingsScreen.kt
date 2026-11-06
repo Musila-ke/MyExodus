@@ -105,6 +105,8 @@ fun SettingsScreen(
     account: AccountViewModel,
     /** Account plan §7 Release 2 step 12: the ABK key-bundle pane. */
     backupKey: BackupKeyViewModel,
+    /** ADR #171: the GitHub Releases check-and-install state machine. */
+    update: UpdateViewModel,
     /** SOS §8.19 (Step 11): the recipient's block switch — null hides the row (no partner). */
     modifier: Modifier = Modifier,
     partnerBlock: NudgeSettingsViewModel.UiState? = null,
@@ -135,6 +137,7 @@ fun SettingsScreen(
                 scope.launch { checks = withContext(Dispatchers.IO) { readProtectionChecks(context) } }
                 scope.launch { outage = withContext(Dispatchers.IO) { accountingOutageSource.current() } }
                 onPartnerBlockRefresh()
+                update.onResume()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -144,7 +147,10 @@ fun SettingsScreen(
     // SOS §8.19: tab entry is not a resume (the activity never left), so the switch's state is
     // also re-read here — a pairing finished elsewhere in the app must land before this
     // composition shows the row.
-    LaunchedEffect(Unit) { onPartnerBlockRefresh() }
+    LaunchedEffect(Unit) {
+        onPartnerBlockRefresh()
+        update.onResume()
+    }
 
     val loaded = checks
     when (pane) {
@@ -208,6 +214,7 @@ fun SettingsScreen(
             serviceEnabled = serviceEnabled,
             checks = loaded,
             account = account,
+            update = update,
             monitor = monitor,
             strictMode = strictMode,
             settings = settings,
@@ -236,6 +243,7 @@ private fun SettingsIndex(
     serviceEnabled: Boolean,
     checks: ProtectionChecks?,
     account: AccountViewModel,
+    update: UpdateViewModel,
     monitor: EnhancedModeHealthMonitor,
     strictMode: StrictModeManager,
     settings: EnhancedModeSettings,
@@ -426,6 +434,9 @@ private fun SettingsIndex(
                         crashReportsOn = enabled
                     },
                 )
+
+                RowDivider()
+                UpdateSettingsSection(update)
 
                 RowDivider()
                 IndexRow(

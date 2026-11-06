@@ -119,6 +119,8 @@ import com.example.myexodus.ui.settings.AccountViewModel
 import com.example.myexodus.ui.settings.BackupKeyViewModel
 import com.example.myexodus.ui.settings.NudgeSettingsViewModel
 import com.example.myexodus.ui.settings.SettingsScreen
+import com.example.myexodus.ui.settings.UpdateNoticeDialog
+import com.example.myexodus.ui.settings.UpdateViewModel
 import com.example.myexodus.ui.insights.InsightsViewModel
 import com.example.myexodus.ui.streaks.HabitPickerSheet
 import com.example.myexodus.ui.streaks.StreaksScreen
@@ -192,6 +194,8 @@ fun AppShell(
     account: AccountViewModel,
     /** Account plan §7 Release 2 step 12: the ABK key-bundle pane. */
     backupKey: BackupKeyViewModel,
+    /** ADR #171: the update row and the one-time post-update notice. */
+    update: UpdateViewModel,
     partnerSource: PartnerDashboardSource,
     /** Plan Step 8 (§8.10): the partner's server-derived connection reading, coarse buckets
      *  only. The client bounds callable traffic; null = no honest answer right now. */
@@ -525,6 +529,7 @@ fun AppShell(
                         accountingOutageSource = accountingOutage,
                         account = account,
                         backupKey = backupKey,
+                        update = update,
                         // SOS §8.19 (Step 11): the block switch's state + refresh/write paths.
                         partnerBlock = partnerBlock,
                         onPartnerBlockRefresh = nudgeSettings::refresh,
@@ -583,6 +588,10 @@ fun AppShell(
             },
         )
     }
+
+    // First launch after an in-place update: say so once. The notes come from the signed
+    // manifest that was installed, when it is still available.
+    UpdateNoticeDialog(update)
 
     // Home's urge quick action: the Recovery tab's sheet, saved through the same repository
     // path (terminal-born `none` row, never mirrored) and confirmed by a snackbar. The note is

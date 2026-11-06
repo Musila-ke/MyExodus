@@ -546,6 +546,53 @@
     <string name="settings_crash_reports_title">Crash reports</string>
     <string name="settings_crash_reports_body">Send anonymous crash diagnostics: error type, device model, Android version. Never app names, usage times, or limits.</string>
 
+    <!-- Settings: update channel (ADR #171 revision 2026-11-06). Updates come from GitHub
+         Releases only; the signed manifest is what makes that channel trustworthy. Errors
+         follow the standard: what happened, why, what to do. -->
+    <string name="settings_update_title">Updates</string>
+    <string name="settings_update_subtitle_idle">Check for a new version</string>
+    <string name="settings_update_subtitle_not_configured">This build has no update channel</string>
+    <string name="settings_update_subtitle_checking">Checking for updates…</string>
+    <string name="settings_update_subtitle_available">Version %1$s is ready to download</string>
+    <string name="settings_update_subtitle_up_to_date">Up to date, checked %1$s</string>
+    <string name="settings_update_subtitle_up_to_date_short">Up to date</string>
+    <string name="settings_update_subtitle_failed">Couldn’t check for updates</string>
+    <string name="settings_update_subtitle_no_release">No release published yet</string>
+    <string name="settings_update_subtitle_downloading">Downloading: %1$d%%</string>
+    <string name="settings_update_subtitle_installing">Waiting for the system installer</string>
+    <string name="settings_update_dialog_title">Updates</string>
+    <string name="settings_update_dialog_title_available">Version %1$s is available</string>
+    <string name="settings_update_body_idle">MyExodus checks GitHub Releases for new versions. The check sends nothing about you or this device.</string>
+    <string name="settings_update_body_not_configured">This build was made without an update channel, so it can’t check for new versions.</string>
+    <string name="settings_update_checking">Checking GitHub Releases…</string>
+    <string name="settings_update_up_to_date">You’re on version %1$s, the latest release.</string>
+    <string name="settings_update_no_release">MyExodus hasn’t published a release yet, so there’s nothing to install.</string>
+    <string name="settings_update_available">Version %1$s is available.</string>
+    <string name="settings_update_whats_new">What’s new</string>
+    <string name="settings_update_downloading">Downloading the update…</string>
+    <string name="settings_update_installing">Waiting for the system installer. Follow its prompt to finish.</string>
+    <string name="settings_update_check_now">Check now</string>
+    <string name="settings_update_check_again">Check again</string>
+    <string name="settings_update_download_install">Download and install</string>
+    <string name="settings_update_allow_installs">Allow app installs</string>
+    <string name="settings_update_try_again">Try again</string>
+    <string name="settings_update_close">Close</string>
+    <string name="settings_update_failure_offline">Couldn’t reach GitHub. Check your internet connection, then try again.</string>
+    <string name="settings_update_failure_server">GitHub didn’t answer as expected. Try again in a few minutes.</string>
+    <string name="settings_update_failure_invalid_manifest">The update information failed its security check. Nothing was installed. Try again later.</string>
+    <string name="settings_update_failure_download">The download didn’t finish. Check your connection, then try again.</string>
+    <string name="settings_update_failure_integrity">The downloaded file didn’t match its expected fingerprint, so it was deleted. Try again later.</string>
+    <string name="settings_update_failure_invalid_apk">The downloaded file isn’t a valid app, so it was deleted. Try again later.</string>
+    <string name="settings_update_failure_wrong_package">The downloaded file is a different app, so it was deleted. Try again later.</string>
+    <string name="settings_update_failure_version">The update doesn’t match the published version, so it was deleted. Try again later.</string>
+    <string name="settings_update_failure_signer">The update wasn’t signed with this app’s key, so it was deleted. Install updates only from the official release page.</string>
+    <string name="settings_update_failure_install">Android couldn’t install the update. Try again, or download the release from GitHub directly.</string>
+    <string name="settings_update_failure_permission">Android is blocking installs from MyExodus. Allow “install unknown apps” here, then try again.</string>
+    <string name="settings_update_failure_storage">There isn’t enough free space for the update. Free up space, then try again.</string>
+    <string name="settings_update_notice_title">MyExodus is now on version %1$s</string>
+    <string name="settings_update_notice_body">You’re running version %1$s now. Release notes are on the GitHub Releases page.</string>
+    <string name="settings_update_notice_ok">OK</string>
+
     <!-- About: the recovery plans' required footer (v2 M1.5) — the docs claimed it shipped on
          Settings → About before any About surface existed. -->
     <string name="settings_about_title">About</string>

@@ -41,6 +41,7 @@ import com.example.myexodus.blocking.HealthCheckWorker
 import com.example.myexodus.blocking.ProtectionStatusMonitor
 import com.example.myexodus.blocking.ProtectionStatusStore
 import com.example.myexodus.blocking.enqueueDailyMaintenance
+import com.example.myexodus.update.UpdateCheckWorker
 import com.example.myexodus.blocking.systemBootCount
 import com.example.myexodus.data.db.ActivityLogStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
@@ -290,6 +291,7 @@ class MyExodusApp : Application(), Configuration.Provider {
             // pairs to serve. Anonymous sessions are fenced-active and keep syncing (ADR #125).
             if (localSessionManager.current() != null) enqueuePartnerSync(this)
             enqueueDailyMaintenance(this)
+            UpdateCheckWorker.enqueue(this)
             startupTrace.lap("wm-rest")
             // Owner report 2026-10-15 (ADR #152): XOS kills the FGS-hosting process ("prcp
             // FGS" cgroup kill, X6532 15:31:40) and ignores START_STICKY — the old re-arm

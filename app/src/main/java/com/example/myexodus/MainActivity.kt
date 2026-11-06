@@ -126,6 +126,7 @@ import com.example.myexodus.ui.home.NudgeInboxViewModel
 import com.example.myexodus.ui.settings.AccountViewModel
 import com.example.myexodus.ui.settings.BackupKeyViewModel
 import com.example.myexodus.ui.settings.NudgeSettingsViewModel
+import com.example.myexodus.ui.settings.UpdateViewModel
 import com.example.myexodus.ui.home.SosViewModel
 import com.example.myexodus.ui.partner.PairingCeremonyDeps
 import com.example.myexodus.ui.partner.PartnerDashboardSource
@@ -329,6 +330,9 @@ class MainActivity : FragmentActivity() {
 
     /** Account plan §7 Release 2 step 12 (R2.12): the ABK key-bundle pane's driver. */
     private val backupKeyViewModel: BackupKeyViewModel by viewModels()
+
+    /** ADR #171: GitHub Releases update check and install state. */
+    private val updateViewModel: UpdateViewModel by viewModels()
 
     /** Plan §8 Step 5 / Decision 9: the foreground evaluation trigger lives here, at the
      *  Activity lifecycle boundary — never inside composition. The ViewModel's own `init`
@@ -724,6 +728,7 @@ class MainActivity : FragmentActivity() {
                         nudgeSettings = nudgeSettingsViewModel,
                         account = accountViewModel,
                         backupKey = backupKeyViewModel,
+                        update = updateViewModel,
                         partnerSource = partnerDashboardSource,
                         onLoadPartnerStatus = { pairId -> partnerDmsClient.status(pairId) },
                         partnerSelection = partnerSelection,

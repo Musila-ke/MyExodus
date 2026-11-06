@@ -38,6 +38,10 @@
         acceptable-use table does not gate this app; ruling recorded in
         BatteryPromptGate.DIRECT_REQUEST_PERMITTED). Never requested at first launch. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- ADR #171 self-update: PackageInstaller sessions for the GitHub Releases channel.
+        Direct-APK distribution (ADR #15): the installer still gates each install behind the
+        per-app "install unknown apps" grant (canRequestPackageInstalls). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- App picker (Rules screen): needed on API 30+ for queryIntentActivities on
         launcher apps and for the app-label lookup on the picked package. -->
@@ -127,6 +131,12 @@
         <!-- Milestone alarm firing (§6/§8 Step 4). Component-explicit; never exported. -->
         <receiver
             android:name=".streaks.MilestoneAlarmReceiver"
+            android:exported="false" />
+
+        <!-- ADR #171: PackageInstaller session status (in-process PendingIntent only);
+            the user-action stage is launched from here as a NEW_TASK activity. -->
+        <receiver
+            android:name=".update.UpdateInstallReceiver"
             android:exported="false" />
 
         <!-- Partner Pillar v2 plan §8 Step 7 (client FCM transport): receives the relay's
