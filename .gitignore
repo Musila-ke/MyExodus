@@ -40,3 +40,20 @@ node_modules/
 # Firebase Auth credential stores from the pairing rig (test accounts) — never committed
 .tmp-auth-backup/
 .tmp-auth-rig-snapshot/
+
+# Environment files (Firebase Functions supports functions/.env) — local only
+.env
+.env.*
+!.env.example
+
+# Firebase service-account credentials — never committed
+*firebase-adminsdk*.json
+service-account*.json
+
+# IDE device selection records the physical device serial — local only
+.idea/deploymentTargetSelector.xml
+
+# Packaged app artifacts (build outputs are ignored above; this catches strays)
+*.apk
+*.aab
+*.pfx

@@ -116,6 +116,8 @@ Audit Resolution Note: Document updated on Aug 24, 2026 to refine compliance cla
 
 **Revision 2026-10-23 — no updater exists yet.** No in-app updater, manifest-signature verifier or install path is present in the codebase; distribution is manual (`install -r` or APK hand-off). ADR #171 accepts GitHub Releases as the future APK channel and deliberately defers implementation. If an updater is built, the verification contract above is mandatory.
 
+**Revision 2026-11-06 — the repository is public.** `github.com/Musila-ke/MyExodus` is now publicly readable (default branch `dev`, no releases yet). Release assets and the signed manifest will therefore be world-downloadable, and a fork can publish a lookalike APK — the signed-manifest + APK-certificate verification contract in the Decision above is the only integrity boundary and is mandatory, not optional. Key custody is unchanged: the release key stays offline. Public-visibility secret gate re-run clean: gitleaks 8.30.1 over 129 commits and the published tree, Trivy secret scan, opengrep, plus GitHub-native secret scanning and push protection now enabled. Evidence: `app/docs/security-review-2026-11-05.md` → "Public-repo secret-exposure gate — 2026-11-06".
+
 ## #12 — Confidence-Level Tamper Model
 
 **Status:** Accepted  

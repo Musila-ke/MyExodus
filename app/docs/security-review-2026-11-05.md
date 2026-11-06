@@ -135,3 +135,49 @@ written, no availability testing.
 - No App Check-bearing authenticated DAST from a host was possible (see above); authenticated
   callable semantics were assessed from source and the emulator rules suite, and remain covered
   by the on-device adversarial pass.
+
+## Public-repo secret-exposure gate — 2026-11-06
+
+`github.com/Musila-ke/MyExodus` was made public on 2026-11-06 (default branch `dev`, zero
+releases). Re-ran the secret-exposure gate against the published tree with an updated tool
+chain and an independent second engine.
+
+- **gitleaks 8.24.3 → 8.30.1** (official darwin_x64 release; SHA-256 verified against
+  `gitleaks_8.30.1_checksums.txt`:
+  `dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709`).
+- **Control test (proves the new binary detects, not just exits 0):** a throwaway repo with a
+  randomized fake AWS access key + secret → **2 leaks found**. Trap recorded: AWS's documented
+  example key (`AKIAIOSFODNN7EXAMPLE` / `wJalrXUtnFEMI/...`) is allowlisted by gitleaks defaults
+  and scores 0 — never use it as the control.
+- **Full history:** 129 commits, ~17.18 MB, **no leaks**.
+- **Working tree:** ~14.79 MB, **no leaks**.
+- **Exact published tree** (`git archive HEAD` into a clean directory, so no build or local-only
+  noise): gitleaks dir ~13.72 MB **no leaks**; Trivy secret scanner **0 findings**.
+- **Opengrep** custom rules (7 Kotlin security rules): **0 findings**.
+- **Trivy dependency scan** (ghcr DBs): `app/gradle.lockfile` **45 HIGH/CRITICAL (41/4)** —
+  identical to the 2026-11-05 posture, every entry configuration-attributed to build/test
+  tooling (netty via AGP's UTP, guava, bcprov-jdk18on; the shipped runtime carries bcprov
+  1.85.2); `functions/package-lock.json` **0**.
+- **GitHub-native scanning:** secret scanning and push protection were **disabled** on the repo
+  (alerts API returned 404 "Secret scanning is disabled"). Both are now **enabled**. Non-provider
+  patterns and validity checks report `disabled` even after an explicit API PATCH; enable them
+  in Settings → Code security if the toggles are offered there.
+- **Ignore-rule audit:** added `.env` / `.env.*` (with `.env.example` allowed), Firebase admin
+  service-account keys (`*firebase-adminsdk*.json`, `service-account*.json`), stray packaged
+  artifacts (`*.apk`, `*.aab`, `*.pfx`), and `.idea/deploymentTargetSelector.xml` (records the
+  physical device serial). That IDE file is now untracked (`git rm --cached`); the copy stays on
+  disk. Keystores, `keystore.properties`, `google-services.json`, `local.properties`, tool
+  caches and pairing-rig auth stores were already covered. No `.env`, keystore, service-account
+  JSON or APK is tracked, and none appears in history.
+
+**Residual exposures (personal data, not credentials).** Not secrets, so gitleaks neither flags
+nor should flag them:
+
+- Every commit is authored with `177664660+Musila-ke@users.noreply.github.com` — public in the commit metadata.
+- The X6532 serial `DEVICE-SERIAL-REDACTED` and three `192.168.*` LAN addresses appear in `app/docs/`
+  and the ADR log.
+- The Firebase owner account email appeared in two docs; both are redacted in HEAD on 2026-11-06.
+
+Removing these from *history* requires a history rewrite (filter-repo), which changes every
+commit hash and force-pushes the public branch. It needs explicit owner approval; none of the
+above is a credential or grants access.

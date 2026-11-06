@@ -33,7 +33,7 @@ names are implemented as compatibility adapters, not parallel collections (§4.3
 | App version | `versionCode = 1`, `versionName = "1.0"` — **never bumped across builds** | `app/build.gradle.kts:22-23` |
 | Signing | **No `signingConfig`**; release variant is unsigned, shipped installs are debug-signed | `app/build.gradle.kts` |
 | Rules source | `firestore.rules` (244 lines, 2026-10-22). Deployed ruleset not compared live in this step. | repo |
-| Firebase CLI | logged in (`project-owner@example.invalid`); no `.firebaserc` — project comes from `google-services.json` | local CLI |
+| Firebase CLI | logged in (project-owner account); no `.firebaserc` — project comes from `google-services.json` | local CLI |
 | Firestore cache | **memory-only already configured** (`MemoryCacheSettings`) | `AccountabilityModule.kt:189-192` |
 | Legacy Firestore disk cache | shipped APKs before B-10 (2026-10-15) used default disk persistence; no purge exists yet | module comment |
 | Storage | **no dependency, no usage** (Release 2 starts from zero) | `app/build.gradle.kts`, grep |
