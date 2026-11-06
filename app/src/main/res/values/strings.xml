@@ -565,7 +565,7 @@
     <string name="settings_update_body_idle">MyExodus checks GitHub Releases for new versions. The check sends nothing about you or this device.</string>
     <string name="settings_update_body_not_configured">This build was made without an update channel, so it can’t check for new versions.</string>
     <string name="settings_update_checking">Checking GitHub Releases…</string>
-    <string name="settings_update_up_to_date">You’re on the latest version.</string>
+    <string name="settings_update_up_to_date">You’re on version %1$s, the latest version.</string>
     <string name="settings_update_no_release">MyExodus hasn’t published a release yet, so there’s nothing to install.</string>
     <string name="settings_update_available">Version %1$s is available.</string>
     <string name="settings_update_whats_new">What’s new</string>
