@@ -37,8 +37,9 @@ pgrep -f "$BUSY" >/dev/null && { say "a test batch is still running after 2 h �
 SERIAL=$(pick_serial)
 [[ -n "$SERIAL" ]] || { say "no physical device attached — stopping"; exit 1; }
 say "device=$SERIAL"
-# The host LAN IP is DHCP and changes across reboots (it did on 2026-09-22); override with DU_HOST.
-HOST="${DU_HOST:-192.0.2.100}"
+# The host LAN IP is DHCP and changes across reboots (it did on 2026-09-22) — pass this machine's
+# current LAN address explicitly.
+HOST="${DU_HOST:?usage: DU_HOST=<this machine's LAN IP> $0}"
 curl -s -m 5 "http://$HOST:8080/hello" >/dev/null 2>&1 \
   || { say "host test server not answering on $HOST:8080 — stopping"; exit 1; }
 say "host test server alive"

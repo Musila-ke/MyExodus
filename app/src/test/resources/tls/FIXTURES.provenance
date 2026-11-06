@@ -18,7 +18,9 @@ notes=hello-01.bin of 20; arrived as two TCP segments, 1448 B + 546 B (pcap /tmp
       carries X25519MLKEM768 key share and 0xFE0D (GREASE ECH, 250 B payload — the target
       publishes no HTTPS RR with an ECH config), so the parser verdict is Ech and the plaintext
       SNI (du-b.192.0.2.99.nip.io, a spec-mandated public name) is ignored.
-sha256=e7924e69e8ee72d3fda5f54b4f635ff40cb4e4442c631f7c04ed572beb3c06fe
+      At publication the embedded SNI IP was rewritten to a TEST-NET-1 documentation address
+      (same length, so the SNI length byte and file size are unchanged).
+sha256=595b6b7b3527977233a4ec71123d3e54330823978f614d2febbec60fd22e88c3
 
 fixture_c_chrome_ech.bin
 source=scripts/domainusage-tls-hello-capture.py (same session as fixture B)
@@ -28,7 +30,9 @@ client=Chrome 153.0.8010.47 (Android)
 notes=hello-06.bin of 20; smallest ECH extension in the session (186 B, plausible-config shape);
       all 20 captures carried 0xFE0D, so no real Chrome hello without ECH existed to capture.
       RFC 9849 §6.2 makes GREASE indistinguishable from a real config by design.
-sha256=80ca19987a3689bf7fe3c9f55a26ae83d8f5d32a472104b5dc65a5a14249d4bc
+      At publication the embedded SNI IP was rewritten to a TEST-NET-1 documentation address
+      (same length, so the SNI length byte and file size are unchanged).
+sha256=08a2ea18f9e123167a7688d698789febfa77010794e4d521b0f7aa051c4865d2
 
 fixture_d_android17_ech.bin
 source=scripts/domainusage-tls-hello-capture.py 9447 /tmp/hello-capture-api37 (host listener), Chrome to https://du-b.10.0.2.2.nip.io:9447
