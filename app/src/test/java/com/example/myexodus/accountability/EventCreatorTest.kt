@@ -183,7 +183,7 @@ class EventCreatorTest {
     // (covered by ChainStateStoreTest); under the current deletion protocol the delivery
     // retry rides the journal — see BilateralDeletionTest's
     // undeliveredRequest_journalBytesSurviveForLaterRedelivery and
-    // reEnteringInitiate_continuesWithoutSecondRequest (the 79141a0 rewrite replaced the
+    // reEnteringInitiate_continuesWithoutSecondRequest (the d85768c rewrite replaced the
     // older duplicateDeletionRequest_stillTransmits this note used to cite).
 
     private fun signing(): Signature = Signature.getInstance("SHA256withECDSA").apply {

@@ -6,7 +6,7 @@ fully; record results in `docs/domainusage-test-report.md`"; this project's docs
 day — §5.1 items 14–16); **PF-5 drain PASSed 2026-09-29 overnight** (unplugged, wireless adb —
 §4.2), closing §12.3 at 8/8 and the AC tally at 21 PASS / 0 PENDING / 1 N/A.
 **Branch:** `dev` (the feature work was uncommitted at S10 writing; it has since been committed —
-revision 2026-10-17). **Baseline commit:** `cc7a13b`.
+revision 2026-10-17). **Baseline commit:** `ddd25ab`.
 **Per-step implementation record:** `app/docs/domainusage-implementation-log.md` (S1–S9; S10 appended
 at close-out). **S0 gate:** `app/docs/domainusage-baseline-check.md`.
 
@@ -590,7 +590,7 @@ no open rows.
 
 ### 9.1 DoD diff-check
 
-Against `cc7a13b` (baseline), `git diff --name-only` shows exactly: `DnsSinkholeVpnService.kt` +
+Against `ddd25ab` (baseline), `git diff --name-only` shows exactly: `DnsSinkholeVpnService.kt` +
 `DomainBlocklist.kt` + `VpnPacket.kt` (baseline DNS handler / packet construction — §3.3 modify
 list), `AppRulesStore.kt` + `AppRulesStoreFactory.kt` (Room database class + migration pair),
 `RuleEditor.kt` + `RulesScreen.kt` + `strings.xml` (RuleEditor UI + its strings),

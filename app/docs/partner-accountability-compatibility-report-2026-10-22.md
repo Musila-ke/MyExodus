@@ -75,7 +75,7 @@ Per §12: a passing test on one model never proves all skins work. Tier-1 famili
 | Check | Result |
 |---|---|
 | No code path auto-clicks, navigates, or blocks system settings to prevent revocation/uninstall | PASS — accessibility service only acts on user-configured blocked packages, excludes its own package, uses `GLOBAL_ACTION_HOME` solely to close a blocked app; no Settings automation. Settings deep links are user-initiated fix routing |
-| Manifest declarations for sensitive APIs | PASS — `AndroidManifest.xml` unchanged across all PA Step 1–10 commits (`git log a8f5418..HEAD -- app/src/main/AndroidManifest.xml` empty) |
+| Manifest declarations for sensitive APIs | PASS — `AndroidManifest.xml` unchanged across all PA Step 1–10 commits (`git log e670155..HEAD -- app/src/main/AndroidManifest.xml` empty) |
 | No new Accessibility, Notification Listener, exact-alarm, full-screen-intent, or FGS permission for this feature | PASS — no `SCHEDULE_EXACT_ALARM`, `USE_FULL_SCREEN_INTENT`, `NotificationListenerService`, or `setExact*`; `FOREGROUND_SERVICE_SPECIAL_USE` predates the feature (enforcement FGS, 2026-08-27) and the heartbeat only piggybacks on it; `PartnerMessagingService` is `exported=false` |
 | Static analysis (opengrep, 7 custom rules) | PASS — 0 findings / 361 tracked files after rewording one diagnostic label that named "dek"/"key" while logging only elapsed milliseconds (message-text false positive, same class as the documented `.keySet()` FP) |
 | Secret scanning (gitleaks) | PASS — history scan 78 commits, no leaks. Working-tree hits are 3 gitignored cache artifacts (`.cache/web-search-pro/*.json`, `scripts/.cache/du-test-server.pem`) |

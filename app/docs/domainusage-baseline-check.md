@@ -1,7 +1,7 @@
 # Domain Usage Metering — S0 Baseline Check
 
 **Plan:** `app/plans/myexodus-domain-usage-metering-implementation-plan (1).md` §8 S0.
-**Date:** 2026-09-20. **Verified against:** branch `dev`, commit `cc7a13b` working tree.
+**Date:** 2026-09-20. **Verified against:** branch `dev`, commit `ddd25ab` working tree.
 **Scope:** verify Baseline Contract P1–P10 against the actual `DnsSinkholeVpnService` and its
 collaborators before any feature code is written (AC-1). Path note: the plan says
 `docs/domainusage-baseline-check.md`; this project's docs folder is `app/docs/`, used here.
