@@ -1393,8 +1393,14 @@ Photography from Unsplash (unsplash.com/license)."
   the composition path, one background load per `(package, sizePx)` key on the existing bounded
   loader, ADR #251's snapshot-conflict retry generalized, and a placeholder glyph until the load
   lands. Two new `AppLabelsTest` cases (cache fills from one background load; five concurrent
-  misses share one load) are green. The owner's lag was not re-measured on a populated list; the
-  main-thread package-manager call is removed from the scroll path.
+  misses share one load) are green. Device measurement on a 14-app populated list (X6532,
+  `dumpsys gfxinfo`, six injected swipe pairs): cold first pass 97.65% janky / p50 97 ms while
+  the one-time icon loads landed; warm pass 39.47% janky / p50 17 ms / "Slow bitmap uploads" 0,
+  at or below the no-icon Settings control (46.52% / 32 ms) on jank share and median. The
+  p90 tail stayed worse than the control (105 vs 44 ms) on synthetic input in a debug build,
+  stated as a limit rather than smoothed over. Cross-page audit: every AppMark site and every
+  composition label read funnels through the cache; the only remaining direct icon call is
+  `BlockOverlayView.showTarget`, once per block-wall bind.
 - **Copy rule (ADR #264).** User-facing strings carry no em dashes; a programmatic parse of
   `strings.xml` and `strings_recovery.xml` finds zero outside XML comments, and the Kotlin copy
   literals in `StreaksPresentation.kt`, `ProtectionScreen.kt`, `CoachingPlanScreen.kt` and
