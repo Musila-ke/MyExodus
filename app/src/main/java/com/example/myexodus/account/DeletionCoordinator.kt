@@ -1,8 +1,5 @@
 package com.example.myexodus.account
 
-import android.content.Context
-import com.example.myexodus.data.db.LocalDatabaseMigration
-import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
@@ -38,7 +35,6 @@ sealed interface DeletionCredential {
  */
 @Singleton
 class DeletionCoordinator @Inject constructor(
-    @ApplicationContext private val context: Context,
     private val auth: AuthCoordinator,
     private val api: DeletionApi,
     private val localData: DeletionLocalData,
@@ -47,7 +43,11 @@ class DeletionCoordinator @Inject constructor(
     private val _state = MutableStateFlow<DeletionState>(DeletionState.Idle)
     val state: StateFlow<DeletionState> = _state.asStateFlow()
 
-    suspend fun deleteAccount(phrase: String, credential: DeletionCredential) {
+    suspend fun deleteAccount(
+        phrase: String,
+        credential: DeletionCredential,
+        deleteDeviceData: Boolean = false,
+    ) {
         if (_state.value == DeletionState.Working) return
         _state.value = DeletionState.Working
         when (credential) {
@@ -61,14 +61,14 @@ class DeletionCoordinator @Inject constructor(
             _state.value = DeletionState.Failed(DeletionFailure.REAUTH_FAILED)
             return
         }
-        request(active.uid) { api.requestAccountDeletion(phrase) }
+        request(active.uid, deleteDeviceData) { api.requestAccountDeletion(phrase) }
     }
 
     /** §6.8.9: the guest path is double-confirmed in the UI; the server checks the phrase. */
     suspend fun deleteGuestData(phrase: String) {
         if (_state.value == DeletionState.Working) return
         val uid = (auth.state.value as? AuthState.GuestActive)?.uid ?: return
-        request(uid) { api.requestGuestDeletion(phrase) }
+        request(uid, deleteDeviceData = false) { api.requestGuestDeletion(phrase) }
     }
 
     /**
@@ -101,13 +101,12 @@ class DeletionCoordinator @Inject constructor(
         }
     }
 
-    /** §6.9.3 while signed out: the retained scope is the only thing left to name. */
+    /** §6.9.3 while signed out: every local scope goes, so none can resurface at the relaunch. */
     suspend fun removeRetainedLocalData() {
         if (_state.value == DeletionState.Working) return
-        // Never the journal fallback: that is the install's live local store, not a signed-out account.
-        val hash = LocalDatabaseMigration.activeScopeHash(context) ?: return
+        if (!localData.hasLocalData()) return
         _state.value = DeletionState.Working
-        localData.markPendingHash(hash)
+        localData.markAllPending()
         localData.purgePendingFiles()
         localData.finishPendingPurge()
         _state.value = DeletionState.Accepted(signOutBlocked = false)
@@ -122,7 +121,11 @@ class DeletionCoordinator @Inject constructor(
         _state.value = DeletionState.Idle
     }
 
-    private suspend fun request(uid: String, call: suspend () -> String) {
+    private suspend fun request(
+        uid: String,
+        deleteDeviceData: Boolean,
+        call: suspend () -> String,
+    ) {
         _state.value = DeletionState.Working
         try {
             call()
@@ -137,6 +140,7 @@ class DeletionCoordinator @Inject constructor(
         }
         // Written before the sign-out relaunch; the next launch purges before any store opens.
         localData.markPending(uid)
+        if (deleteDeviceData) localData.markAllPending()
         auth.signOut()
         if (auth.state.value is AuthState.SignedOut) {
             _state.value = DeletionState.Accepted(signOutBlocked = false)

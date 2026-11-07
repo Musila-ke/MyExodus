@@ -136,13 +136,13 @@ class LocalDatabaseMigrationInstrumentedTest {
     }
 
     /**
-     * §6.9.3's signed-out card names the account scope that sign-out retained. The journal scope
-     * is this install's own local/guest store — offering it as "your last account" was a live
-     * defect (AVD 2026-10-30: the card survived erasing the account's scope because the fallback
-     * hash is always non-null), and its action was a silent no-op while signed in as a guest.
+     * §6.9.3, superseding ADR #244 item 7 (X6532, 2026-11-07): every scope a launch would adopt
+     * is offered while signed out. The deletion purge clears the switch pointer but leaves the
+     * journal scope, and the next launch reopens it; gating the card on the pointer alone hid a
+     * live store (the stale pre-relapse history seen after deleting the account).
      */
     @Test
-    fun onlyASwitchedAccountScopeIsOfferedAsRetained() {
+    fun everyLocalScopeTheNextLaunchWouldAdoptIsOffered() {
         seedRules(legacyRulesFile(), RulesStoreKeyManager(context).getOrCreateDek())
         assertTrue(LocalDatabaseMigration.migrateForTest(context, UID))
         val local = DeletionLocalData(
@@ -154,8 +154,8 @@ class LocalDatabaseMigrationInstrumentedTest {
             Provider { throw UnsupportedOperationException("accountability") },
             Provider { throw UnsupportedOperationException("anchors") },
         )
-        assertFalse(
-            "the install's own local store must never be named as a signed-out account's data",
+        assertTrue(
+            "the install's own journal scope is data the next launch would open",
             runBlocking { local.removalInfo() }.retainedScope,
         )
 
@@ -163,8 +163,14 @@ class LocalDatabaseMigrationInstrumentedTest {
         assertTrue(runBlocking { local.removalInfo() }.retainedScope)
 
         assertTrue(LocalDatabaseMigration.forgetScope(context, scopeOf(OTHER_UID).uidHash))
+        assertTrue(
+            "the install's journal scope outlives the erased account scope",
+            runBlocking { local.removalInfo() }.retainedScope,
+        )
+
+        assertTrue(LocalDatabaseMigration.forgetScope(context, scopeOf(UID).uidHash))
         assertFalse(
-            "erasing the retained account scope must take the card with it",
+            "with every scope erased, the card must go",
             runBlocking { local.removalInfo() }.retainedScope,
         )
     }

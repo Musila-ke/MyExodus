@@ -59,6 +59,8 @@ internal object LocalDatabaseMigration {
     private const val KEY_CLEANED = "legacy_cleaned"
     private const val ROLLBACK_WINDOW_MS = 7L * 24 * 60 * 60 * 1000
     private val SQLITE_MAGIC = "SQLite format 3".toByteArray(Charsets.ISO_8859_1) + 0.toByte()
+    private val SCOPED_STORE_NAME =
+        Regex("myexodus_(?:rules|activity|accountability)_([0-9a-f]{32})\\.db")
 
     private val lock = Any()
 
@@ -140,6 +142,19 @@ internal object LocalDatabaseMigration {
 
     /** Domain-separated hash for a uid, so the session layer can compare pointers cheaply. */
     fun scopeHashOf(uid: String): String = uidHash(uid)
+
+    /**
+     * Every uid hash with at least one scoped store on disk. The journal names only the scope
+     * the install migrated to; a switched install holds one per identity it opened. Key prefs
+     * are not evidence of data: a completed purge empties them and leaves the file in place.
+     */
+    fun scopedHashesOnDisk(context: Context): Set<String> {
+        val hashes = mutableSetOf<String>()
+        context.getDatabasePath("x").parentFile?.list()?.forEach { name ->
+            SCOPED_STORE_NAME.matchEntire(name)?.groupValues?.get(1)?.let(hashes::add)
+        }
+        return hashes
+    }
 
     /**
      * ADR #239: remembers a scope this install no longer serves but must not lose. [forUid]

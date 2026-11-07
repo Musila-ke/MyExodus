@@ -3,6 +3,8 @@ package com.example.myexodus.account
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.example.myexodus.data.db.LocalDatabaseMigration
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -77,7 +79,7 @@ class DeletionCoordinatorTest {
         )
         val ops = ops
         val auth = AuthCoordinator(ops, sessions)
-        val deletion = DeletionCoordinator(context, auth, api, local, Relauncher { })
+        val deletion = DeletionCoordinator(auth, api, local, Relauncher { })
     }
 
     @Test
@@ -183,6 +185,40 @@ class DeletionCoordinatorTest {
         h.deletion.removeRetainedLocalData()
 
         assertEquals(DeletionState.Idle, h.deletion.state.value)
+    }
+
+    @Test
+    fun signedOutRemovalSeesTheJournalScopeTheNextLaunchAdopts() = runTest {
+        val journal = LocalDatabaseMigration.scopeHashOf("previous-identity")
+        context.getSharedPreferences("local_db_migration", Context.MODE_PRIVATE).edit()
+            .putString("scope_uid_hash", journal).commit()
+        val h = Harness(FakeAuthOps(null))
+
+        assertTrue("the journal scope must count as removable local data", h.deletion.removalInfo().retainedScope)
+    }
+
+    @Test
+    fun deviceWipeMarksEveryLocalScopeNotJustTheAccounts() = runTest {
+        val journal = LocalDatabaseMigration.scopeHashOf("previous-identity")
+        context.getSharedPreferences("local_db_migration", Context.MODE_PRIVATE).edit()
+            .putString("scope_uid_hash", journal).commit()
+        val dbDir = context.getDatabasePath("probe.db").parentFile!!
+        File(dbDir, "myexodus_rules_$journal.db").createNewFile()
+        val h = Harness(FakeAuthOps(accountMemberUser))
+
+        h.deletion.deleteAccount(
+            DeletionPhrases.ACCOUNT,
+            DeletionCredential.Password("secret"),
+            deleteDeviceData = true,
+        )
+
+        val pending = context.getSharedPreferences("local_data_purge", Context.MODE_PRIVATE)
+            .getStringSet("pending_scopes", emptySet()).orEmpty()
+        assertTrue("the retained journal scope must be marked", journal in pending)
+        assertTrue(
+            "the signed-in account's scope must stay marked",
+            LocalDatabaseMigration.scopeHashOf(accountMemberUser.uid) in pending,
+        )
     }
 
     @Test

@@ -75,13 +75,15 @@ class AccountViewModel @Inject constructor(
     private val _removal = MutableStateFlow<LocalRemovalInfo?>(null)
     val removal: StateFlow<LocalRemovalInfo?> = _removal.asStateFlow()
 
-    fun deleteAccount(phrase: String, password: String) = viewModelScope.launch {
-        deletion.deleteAccount(phrase, DeletionCredential.Password(password))
-    }
+    fun deleteAccount(phrase: String, password: String, deleteDeviceData: Boolean) =
+        viewModelScope.launch {
+            deletion.deleteAccount(phrase, DeletionCredential.Password(password), deleteDeviceData)
+        }
 
-    fun deleteAccountWithGoogle(phrase: String, idToken: String) = viewModelScope.launch {
-        deletion.deleteAccount(phrase, DeletionCredential.Google(idToken))
-    }
+    fun deleteAccountWithGoogle(phrase: String, idToken: String, deleteDeviceData: Boolean) =
+        viewModelScope.launch {
+            deletion.deleteAccount(phrase, DeletionCredential.Google(idToken), deleteDeviceData)
+        }
 
     fun deleteGuestData(phrase: String) = viewModelScope.launch { deletion.deleteGuestData(phrase) }
 

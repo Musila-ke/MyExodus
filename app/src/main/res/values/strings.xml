@@ -1641,6 +1641,8 @@
     <string name="account_delete_phrase_label">Type DELETE MY ACCOUNT to confirm</string>
     <string name="account_delete_confirm">Delete permanently</string>
     <string name="account_delete_google">Confirm with Google</string>
+    <string name="account_delete_device_data_label">Also delete all data on this device</string>
+    <string name="account_delete_device_data_body">Erases every MyExodus database and key on this phone, including copies kept from an earlier sign-in. This can\'t be undone.</string>
 
     <string name="account_guest_delete_title">Delete my data</string>
     <string name="account_guest_delete_body">Deletes this guest session\'s progress from our servers and this device. This can\'t be undone.</string>
@@ -1657,7 +1659,7 @@
     <string name="account_local_title">Remove local data</string>
     <string name="account_local_body">Removes this account\'s encrypted data from this device only. Your account, backups and partner connections stay in the cloud.</string>
     <string name="account_local_action">Remove from this device</string>
-    <string name="account_local_retained_body">This device still holds encrypted data from your last account. Removing it doesn\'t touch the account, its backups or its partner connections.</string>
+    <string name="account_local_retained_body">This device still holds encrypted data from an earlier session. Removing it doesn\'t touch any account, its backups or its partner connections.</string>
     <string name="account_local_dialog_title">Remove this device\'s copy?</string>
     <string name="account_local_dialog_body">This device\'s encrypted database and keys are erased. The account, its backups and partner connections stay in the cloud.</string>
     <string name="account_local_pending_yes">Some changes haven\'t been sent to the server yet. They will be lost.</string>

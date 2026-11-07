@@ -59,6 +59,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -167,11 +169,11 @@ internal fun AccountPane(
         }
     }
 
-    fun runGoogleDelete(phrase: String) {
+    fun runGoogleDelete(phrase: String, deleteDeviceData: Boolean) {
         scope.launch {
             when (val result = viewModel.requestGoogleCredential(context)) {
                 is GoogleCredentialOutcome.Success ->
-                    viewModel.deleteAccountWithGoogle(phrase, result.idToken)
+                    viewModel.deleteAccountWithGoogle(phrase, result.idToken, deleteDeviceData)
                 GoogleCredentialOutcome.Cancelled -> Unit
                 is GoogleCredentialOutcome.Unavailable -> {
                     statusEvent = null
@@ -374,13 +376,13 @@ internal fun AccountPane(
             providers = (state as? AuthState.PersistentActive)?.providers.orEmpty(),
             googleAvailable = viewModel.googleAvailable,
             onDismiss = { showDeleteAccount = false },
-            onPassword = { phrase, password ->
+            onPassword = { phrase, password, deleteDeviceData ->
                 showDeleteAccount = false
-                viewModel.deleteAccount(phrase, password)
+                viewModel.deleteAccount(phrase, password, deleteDeviceData)
             },
-            onGoogle = { phrase ->
+            onGoogle = { phrase, deleteDeviceData ->
                 showDeleteAccount = false
-                runGoogleDelete(phrase)
+                runGoogleDelete(phrase, deleteDeviceData)
             },
         )
     }
@@ -415,11 +417,13 @@ private fun DeleteAccountDialog(
     providers: Set<AuthProvider>,
     googleAvailable: Boolean,
     onDismiss: () -> Unit,
-    onPassword: (String, String) -> Unit,
-    onGoogle: (String) -> Unit,
+    onPassword: (String, String, Boolean) -> Unit,
+    onGoogle: (String, Boolean) -> Unit,
 ) {
     var phrase by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
+    var deleteDeviceData by rememberSaveable { mutableStateOf(false) }
     val phraseOk = phrase == DeletionPhrases.ACCOUNT
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -434,13 +438,44 @@ private fun DeleteAccountDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                val deviceDataLabel = stringResource(R.string.account_delete_device_data_label)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = deleteDeviceData,
+                        onCheckedChange = { deleteDeviceData = it },
+                        modifier = Modifier.semantics { contentDescription = deviceDataLabel },
+                    )
+                    Column {
+                        Text(deviceDataLabel)
+                        Text(
+                            stringResource(R.string.account_delete_device_data_body),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 if (AuthProvider.PASSWORD in providers) {
                     OutlinedTextField(
                         value = password,
                         onValueChange = { password = it },
                         label = { Text(stringResource(R.string.account_password_label)) },
+                        trailingIcon = {
+                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                Icon(
+                                    imageVector =
+                                        if (passwordVisible) Icons.Outlined.VisibilityOff
+                                        else Icons.Outlined.Visibility,
+                                    contentDescription = stringResource(
+                                        if (passwordVisible) R.string.account_password_hide
+                                        else R.string.account_password_show,
+                                    ),
+                                )
+                            }
+                        },
                         singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
+                        visualTransformation =
+                            if (passwordVisible) VisualTransformation.None
+                            else PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Password,
                             imeAction = ImeAction.Done,
@@ -448,7 +483,7 @@ private fun DeleteAccountDialog(
                         modifier = Modifier.fillMaxWidth(),
                     )
                     TextButton(
-                        onClick = { onPassword(phrase, password) },
+                        onClick = { onPassword(phrase, password, deleteDeviceData) },
                         enabled = phraseOk && password.isNotEmpty(),
                     ) {
                         Text(
@@ -459,7 +494,7 @@ private fun DeleteAccountDialog(
                 }
                 if (googleAvailable) {
                     TextButton(
-                        onClick = { onGoogle(phrase) },
+                        onClick = { onGoogle(phrase, deleteDeviceData) },
                         enabled = phraseOk,
                     ) { Text(stringResource(R.string.account_delete_google)) }
                 }
@@ -1019,6 +1054,7 @@ private fun ReauthCard(
     onGoogle: () -> Unit,
 ) {
     var password by rememberSaveable { mutableStateOf("") }
+    var passwordVisible by rememberSaveable { mutableStateOf(false) }
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = MaterialTheme.shapes.medium,
@@ -1039,8 +1075,23 @@ private fun ReauthCard(
                     value = password,
                     onValueChange = { password = it },
                     label = { Text(stringResource(R.string.account_password_label)) },
+                    trailingIcon = {
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(
+                                imageVector =
+                                    if (passwordVisible) Icons.Outlined.VisibilityOff
+                                    else Icons.Outlined.Visibility,
+                                contentDescription = stringResource(
+                                    if (passwordVisible) R.string.account_password_hide
+                                    else R.string.account_password_show,
+                                ),
+                            )
+                        }
+                    },
                     singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
+                    visualTransformation =
+                        if (passwordVisible) VisualTransformation.None
+                        else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Password,
                         imeAction = ImeAction.Done,

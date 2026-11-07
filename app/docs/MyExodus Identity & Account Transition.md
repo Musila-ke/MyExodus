@@ -131,11 +131,17 @@ with a reason. "Where" names the primary surfaces, not every call site.
   token; completion cancels account-scoped work and restarts the process. A signed-out install
   never mints a guest; signing in again reopens the same retained scope. Explicit local-data
   removal with unsent/unbacked-up confirmation is **IMPLEMENTED (R3.16, 2026-10-30, ADR #244)**:
-  the signed-in pane offers "Remove local data" and the signed-out pane offers the same action
-  only while a **switched account scope** is retained — the journal hash is this install's own
-  local/guest store, never "your last account". The dialog names unsent outbox events and the
-  last known backup revision before the destructive button. Sign-out deletes no key; only this
-  removal action deletes the encrypted database and its UID-scoped Keystore alias.
+  the signed-in pane offers "Remove local data"; account deletion additionally offers "Also
+  delete all data on this device" (both credential paths), which marks every scope instead of
+  only the account's. The signed-out pane offers removal whenever a launch would adopt any local
+  scope: the switch pointer, the migration journal, or any scoped store found on disk
+  (`DeletionLocalData.hasLocalData()`), and the action purges all of them. Pointer-only detection
+  was a real defect: the deletion purge clears `active_scope_uid_hash`, so a live journal-named
+  store was hidden while the app reopened it at the next launch (X6532, 2026-11-07). The journal
+  hash is this install's original local/guest store, never "your last account". The dialog names
+  unsent outbox events and the last known backup revision before the destructive button.
+  Sign-out deletes no key; only this removal action deletes the encrypted database and its
+  UID-scoped Keystore alias.
 - **A4. Account switching.** Recommended: single account per install; switching wipes local data and
   re-syncs from the account. Multi-account profiles would require a Room schema change and are
   rejected unless a real need appears.

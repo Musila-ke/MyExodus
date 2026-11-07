@@ -52,6 +52,27 @@ class DeletionLocalData @Inject constructor(
         }
     }
 
+    /**
+     * §6.9.3 "also delete this device": every scope the install can name, not just the
+     * signed-in account's. The journal scope survives an account switch (ADR #125), so marking
+     * only the account hash would let the previous identity's stores resurface at the next
+     * launch (X6532 2026-11-07).
+     */
+    fun markAllPending() {
+        val hashes = LocalDatabaseMigration.scopedHashesOnDisk(context) +
+            listOfNotNull(LocalDatabaseMigration.effectiveScopeHash(context))
+        if (hashes.isEmpty()) return
+        synchronized(lock) {
+            val current = prefs().getStringSet(KEY_PENDING, null).orEmpty()
+            prefs().edit(commit = true) { putStringSet(KEY_PENDING, current + hashes) }
+        }
+    }
+
+    /** True when a launch right now would adopt a local store (switch pointer or journal scope). */
+    fun hasLocalData(): Boolean =
+        LocalDatabaseMigration.effectiveScopeHash(context) != null ||
+            LocalDatabaseMigration.scopedHashesOnDisk(context).isNotEmpty()
+
     fun clearPending(uid: String) = clearPendingHash(LocalDatabaseMigration.scopeHashOf(uid))
 
     fun clearPendingHash(hash: String) {
@@ -102,9 +123,9 @@ class DeletionLocalData @Inject constructor(
         }
         val anchors = runCatching { backupAnchors.get().read() }.getOrNull()
         LocalRemovalInfo(
-            // §6.9.3 names the signed-out account's scope. The journal hash is this install's
-            // own local/guest store — only a switched account scope is "a last account".
-            retainedScope = LocalDatabaseMigration.activeScopeHash(context) != null,
+            // §6.9.3: a signed-out launch adopts the switch pointer, else the journal scope.
+            // Both belong in the disclosure; the pointer is cleared by the deletion purge itself.
+            retainedScope = hasLocalData(),
             pendingEvents = pendingEvents,
             backupChecked = anchors != null,
             backupRevision = anchors?.highWater?.revision,
