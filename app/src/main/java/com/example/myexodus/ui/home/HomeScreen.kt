@@ -668,8 +668,9 @@ private fun StreakHeroCard(
                 onSwitch = if (habitLabel != null) onSwitchHabit else null,
             )
             // The numeral slot reserves its exact height in every state (no layout jump):
-            // loading shows a skeleton bar, no-habit leaves the slot empty — never a stray
-            // em-dash glyph that reads as glitched content.
+            // loading shows a skeleton bar; with no habit the slot previews "Day 1" — the value
+            // the first day will read — instead of leaving a blank gap above the caption
+            // (owner directive 2026-11-07). Never a stray em-dash glyph that reads as glitched.
             Box(Modifier.height(72.dp), contentAlignment = Alignment.BottomStart) {
                 when {
                     loading -> Box(
@@ -697,6 +698,13 @@ private fun StreakHeroCard(
                             modifier = Modifier.padding(bottom = 10.dp),
                         )
                     }
+                    else -> Text(
+                        stringResource(R.string.home_streak_empty_hero, 1),
+                        style = MaterialTheme.typography.displayMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.tertiary,
+                        maxLines = 1,
+                    )
                 }
             }
             if (freeSinceEpochMillis != null) {

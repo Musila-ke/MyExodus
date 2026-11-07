@@ -764,6 +764,10 @@ class HabitRepository(
         currentStreakElapsedMs: Long,
         tWallMillis: Long,
     ) {
+        // Milestones are rows, not a fixed enum of three: the ladder grew after some streaks
+        // already existed (owner ruling 2026-11-07), so every evaluation backs the missing
+        // rungs in before stamping. IGNORE keeps it a no-op once they exist.
+        db.milestoneEventDao().insertMissing(milestoneRows(streak.streakId))
         db.milestoneEventDao().getForStreak(streak.streakId)
             .filter {
                 it.achievedAt == null && currentStreakElapsedMs >= it.milestoneDay * StreakTimer.DAY_MS

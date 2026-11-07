@@ -166,7 +166,7 @@ class HabitRepositoryTest {
         assertEquals(0L, streak.currentStreakElapsedMs)
 
         val milestones = store.milestoneEventDao().getForStreak(state.streakId)
-        assertEquals(listOf(7, 30, 90), milestones.map { it.milestoneDay })
+        assertEquals(listOf(7, 30, 90, 180, 365), milestones.map { it.milestoneDay })
         assertTrue(milestones.all { it.achievedAt == null && it.notificationSentAt == null && it.acknowledgedAt == null })
     }
 
@@ -310,7 +310,7 @@ class HabitRepositoryTest {
 
         // The first habit keeps its own streak and milestone rows — nothing was rewritten.
         assertNotNull(store.recoveryStreakDao().getActiveStreak(first.habitId))
-        assertEquals(3, store.milestoneEventDao().getForStreak(first.streakId).size)
+        assertEquals(5, store.milestoneEventDao().getForStreak(first.streakId).size)
     }
 
     @Test
@@ -452,9 +452,9 @@ class HabitRepositoryTest {
         assertEquals(0L, newStreak.currentStreakElapsedMs)
 
         // Both streaks keep their own 7/30/90 rows (§5 Decision 8).
-        assertEquals(3, store.milestoneEventDao().getForStreak(firstStreakId).size)
+        assertEquals(5, store.milestoneEventDao().getForStreak(firstStreakId).size)
         val fresh = store.milestoneEventDao().getForStreak(state.streakId)
-        assertEquals(listOf(7, 30, 90), fresh.map { it.milestoneDay })
+        assertEquals(listOf(7, 30, 90, 180, 365), fresh.map { it.milestoneDay })
         assertTrue(fresh.all { it.achievedAt == null && it.notificationSentAt == null })
     }
 
@@ -527,6 +527,29 @@ class HabitRepositoryTest {
         val later = repository.evaluate(habitIdOf())!!
         assertEquals(achieved.achievedAt, later.milestones.single { it.milestoneDay == 7 }.achievedAt)
         assertEquals(achieved.achievedAt, store.milestoneEventDao().get(streakId, 7)!!.achievedAt)
+    }
+
+    @Test
+    fun evaluate_backfillsRungsTheStreakPredates() = runBlocking {
+        seedProfile()
+        val streakId = (onboard() as HabitRepository.OnboardingResult.Ready).state.streakId
+
+        // A streak created before the ladder grew (or restored from an old backup) has only
+        // the original three rows; the first evaluation after the upgrade must add the rest.
+        store.milestoneEventDao().deleteAll()
+        assertTrue(store.milestoneEventDao().getForStreak(streakId).isEmpty())
+
+        now = TimeReadings(
+            tWallMillis = T0 + 100 * StreakTimer.DAY_MS,
+            rBootMillis = 1_000 + 100 * StreakTimer.DAY_MS,
+            bootCount = 7,
+        )
+        val state = repository.evaluate(habitIdOf())!!
+
+        val rows = store.milestoneEventDao().getForStreak(streakId)
+        assertEquals(listOf(7, 30, 90, 180, 365), rows.map { it.milestoneDay })
+        assertEquals(listOf(7, 30, 90), rows.filter { it.achievedAt != null }.map { it.milestoneDay })
+        assertEquals(5, state.milestones.size)
     }
 
     @Test
@@ -825,7 +848,7 @@ class HabitRepositoryTest {
         assertEquals("Instagram (work)", repository.habits().single().label)
         // Rename is a label write only: the same streak keeps its identity and milestones.
         assertEquals(seeded.streakId, repository.state.value!!.streakId)
-        assertEquals(3, store.milestoneEventDao().getForStreak(seeded.streakId).size)
+        assertEquals(5, store.milestoneEventDao().getForStreak(seeded.streakId).size)
     }
 
     @Test
@@ -867,7 +890,7 @@ class HabitRepositoryTest {
         assertNull(store.pairSharingDao().streakFor("pair-1", second.habitId))
         // The surviving habit is untouched.
         assertNotNull(store.recoveryStreakDao().getActiveStreak(first.habitId))
-        assertEquals(3, store.milestoneEventDao().getForStreak(first.streakId).size)
+        assertEquals(5, store.milestoneEventDao().getForStreak(first.streakId).size)
         assertEquals(listOf("Instagram"), repository.habits().map { it.label })
     }
 

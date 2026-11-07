@@ -35,7 +35,8 @@ data class MilestoneEvent(
     @ColumnInfo(name = "acknowledged_at") val acknowledgedAt: Long? = null,
 ) {
     companion object {
-        /** Milestone thresholds in days (plan §12: 7/30/90), single source of truth. */
-        val MILESTONE_DAYS = listOf(7, 30, 90)
+        /** Milestone thresholds in days, single source of truth. The ladder originally stopped
+         *  at 90 (plan §12); the owner extended it on 2026-11-07 to six months and a year. */
+        val MILESTONE_DAYS = listOf(7, 30, 90, 180, 365)
     }
 }

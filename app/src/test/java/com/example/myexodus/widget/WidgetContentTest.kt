@@ -45,11 +45,15 @@ class WidgetContentTest {
         // Day 7 is reached, not ahead: the line must point at 30, not repeat the current day.
         assertEquals(30 to 23, nextMilestone(7))
         assertEquals(90 to 1, nextMilestone(89))
+        // The ladder continues past 90 (owner ruling 2026-11-07).
+        assertEquals(180 to 90, nextMilestone(90))
+        assertEquals(365 to 185, nextMilestone(180))
+        assertEquals(365 to 1, nextMilestone(364))
     }
 
     @Test
     fun pastTheLastRung_showsNothing() {
-        assertNull(nextMilestone(90))
+        assertNull(nextMilestone(365))
         assertNull(nextMilestone(400))
     }
 

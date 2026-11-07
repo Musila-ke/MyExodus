@@ -2,6 +2,8 @@
 
 *Revision 2026-10-17 (docs audit): §16's "whether Play Store distribution is ever planned" is closed — never (ADR #15, direct APK only); the other §16 questions are plan-time and were resolved or deferred during build, not current blockers. **Status 2026-10-22: ✅ BUILT** — habit streaks, milestones and the widget shipped (V1.md features 18–20 and ADRs #87/#104/#128/#166/#173); this file is the spec of record for intent, while the ADRs and V1.md carry shipped behavior.*
 
+*Revision 2026-11-07 (owner ruling, ADR #265): REQ-12's ladder continues past 90 — six months (180) and one year (365) join 7/30/90. Rows are backfilled lazily on the next evaluation (`INSERT OR IGNORE`), with no schema change, so streaks and restores that predate the extension repair themselves. Home and Streaks show one stretch at a time (days 1–90, 91–180, 181–365), each restarting its count at the top left; a relapse returns to the first stretch.*
+
 ## 1. Feature Overview
 
 Build the offline-first habit recovery tracking system: a days-free streak counter, a personalized withdrawal-expectation timeline, and milestone celebration (7/30/90 days) with notifications and in-app splash cards. The app runs fully offline (no GMS/FCM, no network dependency), is sideloaded, and must run correctly across all Android device skins (stock/Pixel, Samsung OneUI, Xiaomi/HyperOS, Oppo/ColorOS, Transsion/XOS, etc.), not one specific device.

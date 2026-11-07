@@ -83,7 +83,10 @@ class MilestoneSchedulerTest {
         // every milestone is a full milestone-day span from the first anchor.
         onboard(recoveryStartAt = T0 - 5 * DAY)
 
-        assertEquals(listOf(T0 + 7 * DAY, T0 + 30 * DAY, T0 + 90 * DAY), triggers())
+        assertEquals(
+            listOf(T0 + 7 * DAY, T0 + 30 * DAY, T0 + 90 * DAY, T0 + 180 * DAY, T0 + 365 * DAY),
+            triggers(),
+        )
         // Decision 10: inexact + doze-permitted, no exact-alarm permission.
         assertTrue(alarms().all { it.allowWhileIdle })
     }
@@ -92,13 +95,16 @@ class MilestoneSchedulerTest {
     fun reconcile_cancelsAchievedMilestone_afterEvaluation() = runBlocking {
         seedProfile()
         onboard()
-        assertEquals(3, alarms().size)
+        assertEquals(5, alarms().size)
 
         now = TimeReadings(tWallMillis = T0 + 7 * DAY, rBootMillis = 1_000 + 7 * DAY, bootCount = 7)
         repository.evaluate(habitIdOf())
 
-        // Day 7 is achieved: its alarm is gone; Day 30/90 keep their projected times.
-        assertEquals(listOf(T0 + 30 * DAY, T0 + 90 * DAY), triggers())
+        // Day 7 is achieved: its alarm is gone; the rungs ahead keep their projected times.
+        assertEquals(
+            listOf(T0 + 30 * DAY, T0 + 90 * DAY, T0 + 180 * DAY, T0 + 365 * DAY),
+            triggers(),
+        )
     }
 
     @Test
@@ -111,7 +117,10 @@ class MilestoneSchedulerTest {
 
         // Per-(streak, day) identity: the new streak's alarms replace the old streak's without
         // colliding (T0+30d vs T0+31d are distinct entries, not one shared slot).
-        assertEquals(listOf(T0 + 8 * DAY, T0 + 31 * DAY, T0 + 91 * DAY), triggers())
+        assertEquals(
+            listOf(T0 + 8 * DAY, T0 + 31 * DAY, T0 + 91 * DAY, T0 + 181 * DAY, T0 + 366 * DAY),
+            triggers(),
+        )
     }
 
     @Test
@@ -124,7 +133,10 @@ class MilestoneSchedulerTest {
         now = TimeReadings(tWallMillis = T0 + 2 * DAY, rBootMillis = 1_000, bootCount = 8)
         scheduler.reconcileAll()
 
-        assertEquals(listOf(T0 + 7 * DAY, T0 + 30 * DAY, T0 + 90 * DAY), triggers())
+        assertEquals(
+            listOf(T0 + 7 * DAY, T0 + 30 * DAY, T0 + 90 * DAY, T0 + 180 * DAY, T0 + 365 * DAY),
+            triggers(),
+        )
     }
 
     @Test
@@ -139,7 +151,10 @@ class MilestoneSchedulerTest {
         now = TimeReadings(tWallMillis = T0 + 20 * DAY, rBootMillis = 1_000, bootCount = 8)
         scheduler.reconcileAll()
 
-        assertEquals(listOf(T0 + 30 * DAY, T0 + 90 * DAY), triggers())
+        assertEquals(
+            listOf(T0 + 30 * DAY, T0 + 90 * DAY, T0 + 180 * DAY, T0 + 365 * DAY),
+            triggers(),
+        )
     }
 
     private fun alarmManager(): AlarmManager = context.getSystemService(AlarmManager::class.java)

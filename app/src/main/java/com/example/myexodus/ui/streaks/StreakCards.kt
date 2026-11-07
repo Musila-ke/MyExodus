@@ -42,7 +42,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
-import com.example.myexodus.data.db.entity.MilestoneEvent
 import com.example.myexodus.streaks.HabitState
 import com.example.myexodus.ui.formatDayMonth
 
@@ -162,17 +161,20 @@ internal fun StreakSummaryCard(state: HabitState, onSwitch: (() -> Unit)? = null
 }
 
 /**
- * The 7/30/90 ladder as three equal rungs inside the hero, day-ordered. Reached rungs carry a
- * filled check; the next unachieved rung is tinted gold — the same gold the numeral uses, and
- * the same thing "Next milestone" said before, stated once instead of twice. The distance is
- * always words, never a bare glyph, so the state never rests on colour alone.
+ * The current stretch's ladder as equal rungs inside the hero, day-ordered: 7/30/90 while
+ * the streak is inside its first 90 days, then the new count toward 180, then toward 365
+ * (owner ruling 2026-11-07 — the strip follows the same window as Home's grid). Reached rungs
+ * carry a filled check; the next unachieved rung is tinted gold — the same gold the numeral
+ * uses, and the same thing "Next milestone" said before, stated once instead of twice. The
+ * distance is always words, never a bare glyph, so the state never rests on colour alone.
  */
 @Composable
 private fun MilestoneRungStrip(state: HabitState) {
     val next = nextMilestone(state)
     val muted = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
+    val rungs = milestoneWindow(daysFree(state.currentStreakElapsedMs)).rungs
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        MilestoneEvent.MILESTONE_DAYS.forEach { day ->
+        rungs.forEach { day ->
             val achieved = state.milestones.firstOrNull { it.milestoneDay == day }?.achievedAt != null
             val isNext = next?.milestoneDay == day
             Column(

@@ -281,7 +281,7 @@ FCM.
   reboot cannot inflate it. `HabitState` carries the current run, best run, milestones and
   relapses. Relapse is explicit and confirm-dialog driven; it resets the live run and stamps the
   record.
-- **Milestones** (`MilestoneScheduler`/`MilestoneAlerter`): one alarm per day 7/30/90 per habit,
+- **Milestones** (`MilestoneScheduler`/`MilestoneAlerter`): one alarm per rung (7/30/90/180/365 days, ADR #265) per habit,
   PendingRequest identity per habit, idempotent atomic claim. Reboots wipe alarms;
   `MilestoneBootReceiver` re-derives them and, with `HabitRepository.catchUpAll()`, delivers any
   achieved-but-unclaimed milestone at boot **and on app foreground** (`StreaksViewModel.refresh`,

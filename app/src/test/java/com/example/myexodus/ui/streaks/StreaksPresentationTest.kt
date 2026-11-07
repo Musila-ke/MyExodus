@@ -157,4 +157,35 @@ class StreaksPresentationTest {
         assertTrue(onlyRun.contains("12 days"))
         assertTrue(!onlyRun.contains("best run"))
     }
+
+    @Test
+    fun milestoneWindow_startsANewCountAfterEachRung_andRelapseLandsInTheFirst() {
+        // Owner ruling 2026-11-07: after 90 the grid restarts toward six months, then a year.
+        assertEquals(MilestoneWindow(1, 90), milestoneWindow(0))
+        assertEquals(MilestoneWindow(1, 90), milestoneWindow(90))
+        assertEquals(MilestoneWindow(91, 180), milestoneWindow(91))
+        assertEquals(MilestoneWindow(91, 180), milestoneWindow(180))
+        assertEquals(MilestoneWindow(181, 365), milestoneWindow(181))
+        // Past the last rung the final stretch stays up rather than blanking the section.
+        assertEquals(MilestoneWindow(181, 365), milestoneWindow(400))
+        assertEquals(MilestoneWindow(1, 90), milestoneWindow(1))
+    }
+
+    @Test
+    fun milestoneWindow_rungsAreTheLadderDaysInsideTheStretch() {
+        assertEquals(listOf(7, 30, 90), milestoneWindow(45).rungs)
+        assertEquals(listOf(180), milestoneWindow(120).rungs)
+        assertEquals(listOf(365), milestoneWindow(300).rungs)
+        assertEquals(90, milestoneWindow(45).length)
+        assertEquals(90, milestoneWindow(120).length)
+        assertEquals(185, milestoneWindow(300).length)
+    }
+
+    @Test
+    fun milestoneCopy_namesSixMonths_andOneYear() {
+        assertEquals("Six months free", milestoneCardHeadline(listOf(180)))
+        assertEquals("One year free", milestoneCardHeadline(listOf(365)))
+        assertTrue(milestoneCardBody(listOf(180)).contains("Six months"))
+        assertTrue(milestoneCardBody(listOf(365)).contains("A full year"))
+    }
 }

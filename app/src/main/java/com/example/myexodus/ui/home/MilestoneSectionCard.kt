@@ -24,11 +24,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
 import com.example.myexodus.data.db.entity.MilestoneEvent
 import com.example.myexodus.streaks.HabitState
+import com.example.myexodus.ui.streaks.MilestoneWindow
 import com.example.myexodus.ui.streaks.daysFree
+import com.example.myexodus.ui.streaks.milestoneWindow
 
 /**
  * Home's milestone ladder as a permanent section (product call 2026-09-29): it used to render
@@ -41,9 +44,9 @@ import com.example.myexodus.ui.streaks.daysFree
  *    to start one;
  *  - **error** — the streak read failed (store refused to open, or the read threw); the retry
  *    re-runs the refresh that produced it;
- *  - **success** — one cell per day of the top rung's window (7/30/90 in
- *    [MilestoneEvent.MILESTONE_DAYS]), filled to the current day, with each rung ringed and
- *    gold once the milestone row says it was actually reached.
+ *  - **success** — one cell per day of the current ladder stretch (days 1..90, then the new
+ *    count from 91 toward 180, then 181 toward 365), filled to the current day, with each
+ *    rung ringed and gold once the milestone row says it was actually reached.
  *
  * Every value here is the same state the hero renders, so the two can never disagree.
  */
@@ -85,7 +88,7 @@ internal fun MilestoneSectionCard(
                 )
                 SkeletonBar(Modifier.width(72.dp).height(14.dp))
             }
-            SkeletonBar(Modifier.fillMaxWidth().height(GridHeight))
+            SkeletonBar(Modifier.fillMaxWidth().height(gridHeight(EmptyMilestoneWindow)))
             SkeletonBar(Modifier.width(180.dp).height(14.dp))
         }
 
@@ -97,7 +100,8 @@ internal fun MilestoneSectionCard(
             MilestoneGrid(
                 days = 0,
                 achieved = emptyList(),
-                modifier = Modifier.fillMaxWidth().height(GridHeight),
+                window = EmptyMilestoneWindow,
+                modifier = Modifier.fillMaxWidth().height(gridHeight(EmptyMilestoneWindow)),
             )
             Text(
                 stringResource(R.string.home_grid_empty_body),
@@ -137,7 +141,7 @@ private fun MilestoneCardShell(content: @Composable ColumnScope.() -> Unit) {
 
 @Composable
 private fun MilestoneCardContent(days: Int, achieved: List<Int>) {
-    val window = MilestoneEvent.MILESTONE_DAYS.last()
+    val window = milestoneWindow(days)
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -148,10 +152,10 @@ private fun MilestoneCardContent(days: Int, achieved: List<Int>) {
             style = MaterialTheme.typography.titleMedium,
         )
         Text(
-            if (days > window) {
-                stringResource(R.string.home_grid_all_days, window)
+            if (days > window.endDay) {
+                stringResource(R.string.home_grid_all_days, window.endDay)
             } else {
-                stringResource(R.string.home_grid_day_of, days, window)
+                stringResource(R.string.home_grid_day_of, days, window.endDay)
             },
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -162,12 +166,13 @@ private fun MilestoneCardContent(days: Int, achieved: List<Int>) {
     MilestoneGrid(
         days = days,
         achieved = achieved,
-        modifier = Modifier.fillMaxWidth().height(GridHeight),
+        window = window,
+        modifier = Modifier.fillMaxWidth().height(gridHeight(window)),
     )
     Text(
         stringResource(
-            R.string.home_grid_legend,
-            MilestoneEvent.MILESTONE_DAYS.joinToString(", "),
+            if (window.rungs.size == 1) R.string.home_grid_legend_single else R.string.home_grid_legend,
+            window.rungs.joinToString(", "),
         ),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -186,22 +191,34 @@ private fun SkeletonBar(modifier: Modifier) {
     )
 }
 
-/** Reading order is day order: day 1 is the first cell of the top row, day 31 opens the second.
- *  Declared before [GridRows] — top-level properties initialise in file order. */
-private val GridColumns = 30
-private val GridRows = MilestoneEvent.MILESTONE_DAYS.last() / GridColumns
+/** Reading order is day order: the stretch's first day opens the top row. The empty and
+ *  loading states always draw the first stretch, the only one reachable without data. */
+private const val GridColumns = 30
 private val GridCellHeight = 12.dp
 private val GridGap = 2.dp
-private val GridHeight = GridCellHeight * GridRows + GridGap * (GridRows - 1)
+private val EmptyMilestoneWindow = milestoneWindow(0)
+
+private fun gridRows(window: MilestoneWindow): Int =
+    (window.length + GridColumns - 1) / GridColumns
+
+private fun gridHeight(window: MilestoneWindow): Dp {
+    val rows = gridRows(window)
+    return GridCellHeight * rows + GridGap * (rows - 1)
+}
 
 @Composable
-private fun MilestoneGrid(days: Int, achieved: List<Int>, modifier: Modifier = Modifier) {
+private fun MilestoneGrid(
+    days: Int,
+    achieved: List<Int>,
+    window: MilestoneWindow,
+    modifier: Modifier = Modifier,
+) {
     val filled = MaterialTheme.colorScheme.primary
     val gold = MaterialTheme.colorScheme.tertiary
     val track = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
     val ring = MaterialTheme.colorScheme.outline
     val achievedDays = remember(achieved) { achieved.toSet() }
-    val total = GridRows * GridColumns
+    val total = gridRows(window) * GridColumns
 
     Canvas(modifier) {
         val gap = GridGap.toPx()
@@ -209,7 +226,10 @@ private fun MilestoneGrid(days: Int, achieved: List<Int>, modifier: Modifier = M
         val cellWidth = (size.width - gap * (GridColumns - 1)) / GridColumns
         val corner = CornerRadius(cellHeight / 2f)
         repeat(total) { index ->
-            val day = index + 1
+            // The tail of the last row has no day belonging to this stretch; leave it blank
+            // so the grid visibly ends where the stretch does.
+            if (index >= window.length) return@repeat
+            val day = window.startDay + index
             val topLeft = Offset(
                 x = (index % GridColumns) * (cellWidth + gap),
                 y = (index / GridColumns) * (cellHeight + gap),

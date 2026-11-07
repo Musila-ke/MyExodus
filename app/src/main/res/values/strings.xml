@@ -146,6 +146,7 @@
          suppressed per string rather than pluralised: the count is fixed by construction. -->
     <string name="home_grid_all_days" tools:ignore="PluralsCandidate">%1$d days and counting</string>
     <string name="home_grid_legend">Rings mark days %1$s.</string>
+    <string name="home_grid_legend_single">Ring marks day %1$s.</string>
     <!-- The milestone section's empty/error states (2026-09-29): the section renders in every
          load state, so both need copy — what happened, and what the user can do about it. -->
     <string name="home_grid_empty_body">Your ladder fills in as each clean day passes.</string>
@@ -155,6 +156,9 @@
          Sweep finding (2026-10-16): these four captions and the day/attempt units were the only
          raw copy literals left in the UI — invisible to the strings.xml copy audits. -->
     <string name="home_streak_caption_loading">Reading your streak…</string>
+    <!-- Owner directive 2026-11-07: the empty hero still carries a value — "Day 1" is what the
+         first day will read, so the card is never a blank gap above its own caption. -->
+    <string name="home_streak_empty_hero">Day %1$d</string>
     <string name="home_streak_caption_none">No habit tracked yet. A streak starts counting the day you set one up.</string>
     <plurals name="home_streak_caption_next">
         <item quantity="one">Next milestone: %1$d-day mark. %2$d day to go.</item>
@@ -171,6 +175,11 @@
     <string name="home_quick_actions_open">Open quick actions</string>
     <string name="home_quick_actions_close">Close quick actions</string>
     <string name="home_action_log_urge">Log an urge</string>
+    <!-- Owner directive 2026-11-07: "Log a relapse" stays visible with no habit, but it cannot
+         write anything — the action explains what is missing and offers the way to start. -->
+    <string name="home_relapse_no_habit_title">Nothing to track yet</string>
+    <string name="home_relapse_no_habit_body">A relapse is only meaningful against a streak. Set up a habit first, then this action records a slip against it.</string>
+    <string name="home_relapse_no_habit_action">Set up a habit</string>
     <!-- Home's confirmation makes no claim about a block: the note is habitless and rule-less,
          and a reader with no rule at all must not be told a block is "still in place". -->
     <string name="home_urge_saved">Urge logged. This is only a note.</string>

@@ -36,6 +36,28 @@ fun nextMilestone(state: HabitState): MilestoneEvent? =
 fun daysUntil(state: HabitState, milestoneDay: Int): Int =
     (milestoneDay - daysFree(state.currentStreakElapsedMs)).coerceAtLeast(0)
 
+/**
+ * One stretch of the milestone ladder as the surfaces draw it: the grid counts [startDay]
+ * from the top left and rings the rungs inside. Owner ruling 2026-11-07: after 90 days the
+ * block starts a new count toward six months, then a year, so a long streak does not sit on
+ * a full grid with nothing ahead. The day after the previous rung opens each new stretch,
+ * and a relapse (day 1) always lands back in the first one.
+ */
+data class MilestoneWindow(val startDay: Int, val endDay: Int) {
+    val length: Int get() = endDay - startDay + 1
+    val rungs: List<Int> get() = MilestoneEvent.MILESTONE_DAYS.filter { it in startDay..endDay }
+}
+
+private val MILESTONE_WINDOWS = listOf(
+    MilestoneWindow(1, 90),
+    MilestoneWindow(91, 180),
+    MilestoneWindow(181, 365),
+)
+
+/** The stretch containing [day]; past the last rung the final stretch stays on screen. */
+fun milestoneWindow(day: Int): MilestoneWindow =
+    MILESTONE_WINDOWS.firstOrNull { day <= it.endDay } ?: MILESTONE_WINDOWS.last()
+
 /** Unacknowledged milestone cards for the splash surface (REQ-12), day-ordered. */
 fun splashMilestones(state: HabitState): List<MilestoneEvent> =
     state.milestones
@@ -47,6 +69,8 @@ private fun milestoneHeadline(milestoneDay: Int): String = when (milestoneDay) {
     7 -> "One week free"
     30 -> "One month free"
     90 -> "Three months free"
+    180 -> "Six months free"
+    365 -> "One year free"
     else -> "Day $milestoneDay reached"
 }
 
@@ -55,6 +79,8 @@ private fun milestoneBody(milestoneDay: Int): String = when (milestoneDay) {
     7 -> "Seven days, counted one at a time. The first week is behind you. Keep going."
     30 -> "A full month of showing up. That's a month of choosing yourself. Keep going."
     90 -> "Ninety days. Three months of holding your line. Keep going."
+    180 -> "Half a year of showing up. Six months of choosing yourself. Keep going."
+    365 -> "A full year of holding your line. Every one of those days was a choice, and they all count. Keep going."
     else -> "A new milestone is on the board. Keep going. The streak is yours."
 }
 

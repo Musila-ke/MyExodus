@@ -2,14 +2,21 @@ package com.example.myexodus.data.db.dao
 
 import androidx.room3.Dao
 import androidx.room3.Insert
+import androidx.room3.OnConflictStrategy
 import androidx.room3.Query
 import androidx.room3.Update
 import com.example.myexodus.data.db.entity.MilestoneEvent
 
 @Dao
 interface MilestoneEventDao {
-    /** Pre-create a new streak's 7/30/90 rows (plan §6, habit setup). */
+    /** Pre-create a new streak's milestone rows (plan §6, habit setup). */
     @Insert suspend fun insertAll(events: List<MilestoneEvent>)
+
+    /** Adds rungs a streak predates — the ladder grows across versions (owner ruling
+     *  2026-11-07 added 180/365), so the first evaluation after an upgrade backfills them.
+     *  IGNORE makes that backfill a no-op once the rows exist. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertMissing(events: List<MilestoneEvent>)
 
     @Query("SELECT * FROM milestone_events WHERE streak_id = :streakId ORDER BY milestone_day")
     suspend fun getForStreak(streakId: String): List<MilestoneEvent>

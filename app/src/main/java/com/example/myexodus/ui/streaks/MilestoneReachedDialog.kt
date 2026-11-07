@@ -96,7 +96,8 @@ fun MilestoneReachedDialog(
                     )
                 }
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(20.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     MilestoneEvent.MILESTONE_DAYS.forEach { day ->
