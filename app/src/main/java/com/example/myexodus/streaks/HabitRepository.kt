@@ -606,6 +606,8 @@ class HabitRepository(
                     db.milestoneEventDao().deleteForHabit(habitId)
                     db.recoveryStreakDao().deleteForHabit(habitId)
                     db.pairSharingDao().deleteStreakForHabit(habitId)
+                    // Urge rows are the user's own record: they survive, unlinked.
+                    db.recoverySessionDao().clearHabitLink(habitId)
                     db.habitProgressDao().delete(habit)
                 }
                 if (!wasDisplayed) return@withLock _state.value

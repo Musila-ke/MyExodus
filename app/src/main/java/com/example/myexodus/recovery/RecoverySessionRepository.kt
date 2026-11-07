@@ -27,6 +27,7 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
         entry: String,
         zoneId: String,
         nowEpochMs: Long,
+        habitId: String? = null,
     ): String {
         val id = UUID.randomUUID().toString()
         val store = storeFactory.open() ?: return id
@@ -34,6 +35,7 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
             RecoverySession(
                 id = id,
                 technique = technique,
+                habitId = habitId,
                 intensityStart = intensityStart,
                 startedAtEpochMs = nowEpochMs,
                 zoneId = zoneId,
@@ -84,12 +86,14 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
         entry: String,
         zoneId: String,
         nowEpochMs: Long,
+        habitId: String? = null,
     ) {
         val store = storeFactory.open() ?: return
         store.recoverySessionDao().insert(
             RecoverySession(
                 id = UUID.randomUUID().toString(),
                 technique = RecoverySession.TECHNIQUE_NONE,
+                habitId = habitId,
                 intensityStart = intensity,
                 state = RecoverySession.STATE_COMPLETED,
                 startedAtEpochMs = nowEpochMs,
@@ -114,14 +118,27 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
         )
     }
 
-    suspend fun page(limit: Int, offset: Int): List<RecoverySession> =
-        storeFactory.open()?.recoverySessionDao()?.page(limit, offset) ?: emptyList()
+    /**
+     * Removes one row from this device. The session goes before its mirror links: a link that
+     * survives its session is inert, but a link removed while the session still exists would let
+     * the drain deliver the event to that pair a second time. A copy already delivered stays
+     * with the partner; nothing retracts it.
+     */
+    suspend fun delete(id: String) {
+        val dao = storeFactory.open()?.recoverySessionDao() ?: return
+        dao.deleteById(id)
+        dao.deleteLinksFor(id)
+    }
+
+    /** [habitId] null = every row, including rows logged with no habit. */
+    suspend fun page(limit: Int, offset: Int, habitId: String? = null): List<RecoverySession> =
+        storeFactory.open()?.recoverySessionDao()?.page(limit, offset, habitId) ?: emptyList()
 
     suspend fun count(): Long = storeFactory.open()?.recoverySessionDao()?.count() ?: 0
 
     /** Per-(state, technique) counts at or after [fromMs] (`0` = all time), for the history summary. */
-    suspend fun countsByStateSince(fromMs: Long): List<SessionCount> =
-        storeFactory.open()?.recoverySessionDao()?.countsByStateSince(fromMs) ?: emptyList()
+    suspend fun countsByStateSince(fromMs: Long, habitId: String? = null): List<SessionCount> =
+        storeFactory.open()?.recoverySessionDao()?.countsByStateSince(fromMs, habitId) ?: emptyList()
 
     /** Mirror queue for the sync pass (W5), per pair (ADR #111); [sinceMs] = pairing time. */
     suspend fun pendingMirror(pairId: String, sinceMs: Long, limit: Int): List<RecoverySession> =

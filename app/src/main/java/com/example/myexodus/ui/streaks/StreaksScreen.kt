@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Timeline
 import androidx.compose.material.icons.outlined.Tune
@@ -33,19 +34,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
+import com.example.myexodus.recovery.RecoverySessionRepository
 import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.streaks.HabitState
+import com.example.myexodus.streaks.HabitSummary
 import com.example.myexodus.streaks.WithdrawalSeverity
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.NavTile
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.insights.InsightsScreen
 import com.example.myexodus.ui.insights.InsightsViewModel
+import com.example.myexodus.ui.recovery.HistoryView
+import com.example.myexodus.ui.recovery.RecoveryPrefs
 import com.example.myexodus.ui.rememberWindowWidth
 
 private const val VIEW_TIMELINE = "timeline"
 private const val VIEW_MANAGE = "manage"
 private const val VIEW_INSIGHTS = "insights"
+private const val VIEW_HISTORY = "history"
 
 /**
  * Streaks tab (plan §8 Step 5): live streak state from the repository's `StateFlow` collected
@@ -64,6 +70,9 @@ private const val VIEW_INSIGHTS = "insights"
  * ([onOpenHabitPicker]), and the same [HabitSetupCard] serves first setup and "add another" —
  * `onCancel` only exists in the latter case, where there is something to go back to.
  *
+ * History lives here (owner ruling 2026-11-07) rather than on Recovery: it is retrospective,
+ * and since every urge row carries its habit it reads as the streak's own record.
+ *
  * `state == null` renders setup: the only ways to be null are "no habit yet" or a transient
  * resolve at first composition — the repository's refresh completes in the same launch and
  * re-emits, and a non-null state is never replaced by null without a resolved no-habit read.
@@ -81,6 +90,11 @@ fun StreaksScreen(
     /** Owner task #22: the Insights spoke loads on open, never with the hub. */
     insights: InsightsViewModel.State,
     onRefreshInsights: () -> Unit,
+    /** The habit-linked log (owner ruling 2026-11-07): reads on open, scoped to the
+     *  displayed habit with an All habits option. */
+    sessions: RecoverySessionRepository,
+    historyPrefs: RecoveryPrefs,
+    habits: List<HabitSummary>,
     onRenameHabit: (habitId: String, label: String) -> Unit,
     onDeleteHabit: (habitId: String) -> Unit,
     onClearManageFeedback: () -> Unit,
@@ -122,6 +136,20 @@ fun StreaksScreen(
             view = null
             onClearManageFeedback()
         }
+    }
+    // History hosts its own LazyColumn (paging plus a pinned filter row), so it must not sit
+    // inside this hub's vertical scroll — two scrollables measuring each other in the same
+    // axis is a crash, not a layout. Every other spoke is plain content and stays inside.
+    if (view == VIEW_HISTORY) {
+        HistoryView(
+            sessions = sessions,
+            prefs = historyPrefs,
+            habits = habits,
+            displayedHabitId = state?.habitId,
+            onBack = { view = null },
+            modifier = modifier,
+        )
+        return
     }
     Column(
         modifier = modifier
@@ -171,7 +199,11 @@ fun StreaksScreen(
                     submitting = onboardingInFlight,
                     onOnboard = onOnboard,
                     onCancel = if (addingHabit) onCancelAddHabit else null,
+                    firstHabit = state == null,
                 )
+                // Rows from before a habit existed (techniques run from Recovery) still need a
+                // way in; with no habit the page opens on All habits.
+                if (state == null) HistoryTile(onClick = { view = VIEW_HISTORY })
             } else {
                 // Owner ruling 2026-09-23 (ADR #85): the milestone ladder lives in the hero as a
                 // rung strip — as its own card it restated the hero's caption and pushed this
@@ -206,6 +238,7 @@ fun StreaksScreen(
                     onClick = { view = VIEW_INSIGHTS },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                HistoryTile(onClick = { view = VIEW_HISTORY })
                 RelapseCard(
                     habitLabel = state.targetLabel,
                     currentDays = daysFree(state.currentStreakElapsedMs),
@@ -216,6 +249,19 @@ fun StreaksScreen(
             }
         }
     }
+}
+
+/** The retrospective log, one tap from the hub in both states (see [StreaksScreen]). Its
+ *  caption states the scope before the tap. */
+@Composable
+private fun HistoryTile(onClick: () -> Unit) {
+    NavTile(
+        icon = Icons.Outlined.History,
+        label = stringResource(R.string.recovery_history_title),
+        status = stringResource(R.string.recovery_history_tile_caption),
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 /**

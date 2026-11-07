@@ -165,6 +165,75 @@ class RecoverySessionRepositoryTest {
         )
     }
 
+    /** Owner ruling 2026-11-07: every row carries the habit that was displayed when it was
+     *  written, and both the page and the summary count filter on it. Unlinked rows stay
+     *  visible under All habits. */
+    @Test
+    fun rowsCarryTheirHabit_andPageAndCountsFilterByIt() = runTest {
+        sessions.logOnly(3, RecoverySession.ENTRY_TAB, "UTC", now, habitId = "habit-a")
+        val technique = sessions.start("sober", null, RecoverySession.ENTRY_TAB, "UTC", now, habitId = "habit-b")
+        sessions.finish(technique, RecoverySession.STATE_COMPLETED, null, now + 60_000)
+        sessions.logOnly(6, RecoverySession.ENTRY_HOME, "UTC", now + 120_000)
+        factory.open()!!.recoverySessionDao().insert(
+            RecoverySession(
+                id = "s-legacy",
+                technique = RecoverySession.TECHNIQUE_NONE,
+                state = RecoverySession.STATE_COMPLETED,
+                startedAtEpochMs = now - 60_000,
+                endedAtEpochMs = now - 60_000,
+                durationSec = 0,
+                zoneId = "UTC",
+                entry = RecoverySession.ENTRY_TAB,
+            ),
+        )
+
+        assertEquals(
+            "null habit = every row, legacy ones included",
+            4,
+            sessions.page(10, 0).size,
+        )
+        assertEquals(
+            listOf("habit-a"),
+            sessions.page(10, 0, habitId = "habit-a").map { it.habitId },
+        )
+        assertEquals(
+            listOf("habit-b"),
+            sessions.page(10, 0, habitId = "habit-b").map { it.habitId },
+        )
+        val all = sessions.countsByStateSince(0L, habitId = null).associateBy { it.technique }
+        assertEquals("three bare logs, linked and unlinked alike", 3, all.getValue(RecoverySession.TECHNIQUE_NONE).count)
+        assertEquals(1, all.getValue("sober").count)
+        assertEquals(
+            "the filtered summary counts only the requested habit's rows",
+            1,
+            sessions.countsByStateSince(0L, habitId = "habit-b").single().count,
+        )
+    }
+
+    /** W7 per-row deletion: the session and its mirror links go, everything else stays. Links
+     *  follow the session so no pair can be handed the event a second time. */
+    @Test
+    fun delete_removesTheRowAndItsMirrorLinks_andLeavesOtherRowsAlone() = runTest {
+        val kept = sessions.start("sober", null, RecoverySession.ENTRY_TAB, "UTC", now - 60_000)
+        sessions.finish(kept, RecoverySession.STATE_COMPLETED, null, now - 30_000)
+        val doomed = sessions.start("delay_timer", null, RecoverySession.ENTRY_TAB, "UTC", now)
+        sessions.finish(doomed, RecoverySession.STATE_COMPLETED, null, now + 60_000)
+        sessions.linkEvent(doomed, "pair-a", 7L)
+
+        sessions.delete(doomed)
+
+        assertEquals(listOf(kept), sessions.page(10, 0).map { it.id })
+        assertNull(
+            "the removed session's link must not outlive it",
+            factory.open()!!.recoverySessionDao().linkSequence(doomed, "pair-a"),
+        )
+        assertEquals(
+            "a pair that never received the row sees it disappear with it",
+            listOf(kept),
+            sessions.pendingMirror("pair-b", sinceMs = 0L, limit = 10).map { it.id },
+        )
+    }
+
     /** The pre-v12 marker, recovery side: `event_sequence` set means the row was delivered once
      *  before per-pair links existed — excluded for every pair, never duplicated (ADR #111). */
     @Test

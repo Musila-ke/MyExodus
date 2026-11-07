@@ -292,6 +292,7 @@ private fun WidgetActionScreen(
 
                     else -> UrgeSurface(
                         viewModel = viewModel,
+                        habitId = habitId,
                         discreet = surfaceInfo.discreet,
                         outcome = urge,
                     )
@@ -389,6 +390,7 @@ private fun RelapseSurface(
 @Composable
 private fun UrgeSurface(
     viewModel: WidgetActionViewModel,
+    habitId: String?,
     discreet: Boolean,
     outcome: WidgetActionViewModel.UrgeOutcome,
 ) {
@@ -412,7 +414,7 @@ private fun UrgeSurface(
     Spacer(Modifier.height(24.dp))
     HoldRing(
         enabled = urgeHoldArmed(outcome),
-        onConfirm = viewModel::logUrge,
+        onConfirm = { viewModel.logUrge(habitId) },
         fill = MaterialTheme.colorScheme.surfaceVariant,
     ) {
         if (outcome == WidgetActionViewModel.UrgeOutcome.InFlight) {

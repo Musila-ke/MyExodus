@@ -24,7 +24,6 @@ import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.DirectionsWalk
-import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.SelfImprovement
 import androidx.compose.material.icons.outlined.SupportAgent
@@ -86,7 +85,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private const val VIEW_HISTORY = "history"
 private const val VIEW_CRISIS = "crisis"
 private const val VIEW_TECHNIQUES = "techniques"
 private const val VIEW_PLAN = "plan"
@@ -117,6 +115,8 @@ fun RecoveryScreen(
     entryHint: String?,
     onRouteHome: () -> Unit,
     modifier: Modifier = Modifier,
+    /** The habit whose streak this surface displays; urge rows logged here carry its id. */
+    habitId: String? = null,
     onEntryConsumed: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
@@ -236,12 +236,6 @@ fun RecoveryScreen(
     val technique = view?.let { RecoveryResourceCatalog.byId(it) }
 
     when {
-        view == VIEW_HISTORY -> HistoryView(
-            sessions = sessions,
-            prefs = prefs,
-            onBack = { view = null },
-            modifier = modifier,
-        )
         view == VIEW_CRISIS -> Column(modifier) {
             BackRow(label = stringResource(R.string.recovery_crisis_back), onBack = { view = null })
             CrisisScreen()
@@ -265,6 +259,7 @@ fun RecoveryScreen(
                 planItems = planItems,
                 prefs = prefs,
                 entry = visitEntry,
+                habitId = habitId,
                 sessions = sessions,
                 onRouteHome = onRouteHome,
                 onBack = { view = null },
@@ -291,7 +286,6 @@ fun RecoveryScreen(
             onOpenTechnique = { view = it.id },
             onOpenTechniques = { view = VIEW_TECHNIQUES },
             onOpenPlan = { view = VIEW_PLAN },
-            onOpenHistory = { view = VIEW_HISTORY },
             onOpenCrisis = { view = VIEW_CRISIS },
             logOnly = { intensity ->
                 scope.launch(Dispatchers.IO) {
@@ -300,6 +294,7 @@ fun RecoveryScreen(
                         entry = visitEntry,
                         zoneId = ZoneId.systemDefault().id,
                         nowEpochMs = System.currentTimeMillis(),
+                        habitId = habitId,
                     )
                     onRouteHome()
                 }
@@ -316,6 +311,7 @@ private fun TechniqueSession(
     planItems: List<CoachingStep>,
     prefs: RecoveryPrefs,
     entry: String,
+    habitId: String?,
     sessions: RecoverySessionRepository,
     onRouteHome: () -> Unit,
     onBack: () -> Unit,
@@ -338,6 +334,7 @@ private fun TechniqueSession(
                 entry = entry,
                 zoneId = ZoneId.systemDefault().id,
                 nowEpochMs = System.currentTimeMillis(),
+                habitId = habitId,
             )
         }
     }
@@ -430,7 +427,6 @@ private fun HomeView(
     onOpenTechnique: (RecoveryTechnique) -> Unit,
     onOpenTechniques: () -> Unit,
     onOpenPlan: () -> Unit,
-    onOpenHistory: () -> Unit,
     onOpenCrisis: () -> Unit,
     logOnly: (Int?) -> Unit,
     modifier: Modifier = Modifier,
@@ -509,9 +505,10 @@ private fun HomeView(
             TechniqueCard(technique = suggested, onOpen = { onOpenTechnique(suggested) })
         }
 
-        // Icon + label subpages, four in a calm 2×2 grid. The crisis path keeps its one-tap
-        // presence (standing rule: emergency access is never gated) and signs itself with the
-        // error role while the three reference pages stay neutral.
+        // Icon + label subpages. History moved to the Streaks tab (owner ruling 2026-11-07):
+        // it is a retrospective page, and with rows linked to habits it belongs with the
+        // progress tab. The crisis path keeps its one-tap presence (standing rule: emergency
+        // access is never gated) and signs itself with the error role.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             NavTile(
                 icon = Icons.Outlined.SelfImprovement,
@@ -526,21 +523,13 @@ private fun HomeView(
                 modifier = Modifier.weight(1f),
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            NavTile(
-                icon = Icons.Outlined.History,
-                label = stringResource(R.string.recovery_history_title),
-                onClick = onOpenHistory,
-                modifier = Modifier.weight(1f),
-            )
-            NavTile(
-                icon = Icons.Outlined.SupportAgent,
-                label = stringResource(R.string.recovery_crisis_link),
-                onClick = onOpenCrisis,
-                modifier = Modifier.weight(1f),
-                iconTint = MaterialTheme.colorScheme.error,
-            )
-        }
+        NavTile(
+            icon = Icons.Outlined.SupportAgent,
+            label = stringResource(R.string.recovery_crisis_link),
+            onClick = onOpenCrisis,
+            modifier = Modifier.fillMaxWidth(),
+            iconTint = MaterialTheme.colorScheme.error,
+        )
     }
 
     if (logging) {

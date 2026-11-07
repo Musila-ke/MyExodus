@@ -154,7 +154,6 @@
 
     <!-- History (W7, behind the privacy gate) -->
     <string name="recovery_history_title">History</string>
-    <string name="recovery_history_empty">No sessions logged yet.</string>
     <string name="recovery_history_more">Load more</string>
     <string name="recovery_history_completed">Completed</string>
     <string name="recovery_history_abandoned">Stopped</string>
@@ -167,21 +166,33 @@
          Interrupted, and deliberately is not the word "Stopped", which the row pill uses for
          only one of the two. -->
     <string name="recovery_history_summary_eyebrow">Urges logged</string>
+    <!-- Breakdown is one prose line ("Completed 4 · Not finished 1 · Logged only 2"), not three
+         equal columns: %1$s is the bucket label, %2$d its count in the selected range. -->
+    <string name="recovery_history_summary_part">%1$s %2$d</string>
     <string name="recovery_history_bucket_not_finished">Not finished</string>
-    <!-- One line at a third of the card width, so the three bucket figures stay on one baseline.
-         Shorter than the row title "Logged, no technique" on purpose; it collides with no row
-         outcome pill, which is the only vocabulary that has to match exactly. -->
+    <!-- Shorter than the row title "Logged, no technique" because it shares one line with the
+         other two buckets; it collides with no row outcome pill, which is the only vocabulary
+         that has to match exactly. -->
     <string name="recovery_history_bucket_logged_only">Logged only</string>
     <string name="recovery_history_summary_none">No urges logged in this period.</string>
     <string name="recovery_history_range_week">Week</string>
     <string name="recovery_history_range_month">Month</string>
     <string name="recovery_history_range_all">All time</string>
-    <string name="recovery_history_log_header">All urges</string>
+    <string name="recovery_history_empty_hint">Urges you log and techniques you run will appear here, grouped by day.</string>
+    <string name="recovery_history_delete_action">Delete entry</string>
+    <string name="recovery_history_delete_title">Delete this entry?</string>
+    <string name="recovery_history_delete_body">It is removed from this device. If it was shared with a partner, they keep the copy they already received. This can\'t be undone.</string>
+    <string name="recovery_history_delete_confirm">Delete</string>
     <!-- Row trailing stamp: the day is spoken only while it is still current. -->
     <string name="recovery_history_today">Today</string>
     <string name="recovery_history_yesterday">Yesterday</string>
     <string name="recovery_history_intensity">Intensity %1$d/10</string>
     <string name="recovery_history_duration">%1$dm %2$ds</string>
+    <!-- Habit scope (owner ruling 2026-11-07): the page opens on the displayed habit; All
+         habits also reaches rows logged before the link existed. -->
+    <string name="recovery_history_habit_filter">Habit</string>
+    <string name="recovery_history_all_habits">All habits</string>
+    <string name="recovery_history_tile_caption">Urges and practice, by habit</string>
 
     <!-- Privacy gate (W6) -->
     <string name="recovery_gate_title_history">Unlock to see your history</string>

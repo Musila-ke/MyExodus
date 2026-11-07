@@ -19,12 +19,17 @@ import androidx.room3.PrimaryKey
     indices = [
         Index(value = ["started_at_epoch_ms"]),
         Index(value = ["event_sequence"]),
+        Index(value = ["habit_id"]),
     ],
 )
 data class RecoverySession(
     @PrimaryKey @ColumnInfo(name = "id") val id: String,
     /** Catalog technique id, or [TECHNIQUE_NONE] for a log-only episode. */
     @ColumnInfo(name = "technique") val technique: String,
+    /** The habit whose streak was displayed when this row was written (schema v25), or null for
+     *  a row logged with no habit / before habits had this link. No FK: a deleted habit clears
+     *  the link instead of deleting the user's urge record. */
+    @ColumnInfo(name = "habit_id") val habitId: String? = null,
     /** Optional 1–10 rating from the log form (both nullable — the form is skippable). */
     @ColumnInfo(name = "intensity_start") val intensityStart: Int? = null,
     @ColumnInfo(name = "intensity_end") val intensityEnd: Int? = null,

@@ -110,15 +110,15 @@ class DesertDawnWidget : GlanceAppWidget() {
                     openApp = actionStartActivity(appLaunchIntent(context)),
                     // The icon controls' hold-confirm surface (widget v2.2). The relapse control
                     // binds the exact track the day count above it displays — no bound habit,
-                    // no control. The urge log is a habitless recovery-session row (the app's
-                    // own log sheet writes the same one), and reach-out has no track at all.
+                    // no control. Urge rows carry the same track (v25 habit link) so History can
+                    // group them; reach-out has no track at all.
                     logRelapse = view.habitId?.let { habitId ->
                         actionStartActivity(
                             widgetActionIntent(context, WidgetActionActivity.TARGET_RELAPSE, habitId),
                         )
                     },
                     logUrge = actionStartActivity(
-                        widgetActionIntent(context, WidgetActionActivity.TARGET_URGE),
+                        widgetActionIntent(context, WidgetActionActivity.TARGET_URGE, view.habitId),
                     ),
                     reachOut = actionStartActivity(
                         widgetActionIntent(context, WidgetActionActivity.TARGET_SOS),

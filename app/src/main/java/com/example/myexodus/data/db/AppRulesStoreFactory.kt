@@ -1448,6 +1448,61 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * v24 → v25 (owner directive 2026-11-07): an urge row can name the habit whose streak
+         * was displayed when it was logged — the same attribution block attempts already carry
+         * (`attempt_log.rule_id`). Nullable: rows written before this column, and rows logged
+         * with no habit, stay unlinked and readable. No FK on purpose — deleting a habit clears
+         * the link (HabitRepository.deleteHabit) instead of deleting the urge record.
+         */
+        val MIGRATION_24_25 = object : Migration(24, 25) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE recovery_session ADD COLUMN habit_id TEXT",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_recovery_session_habit_id " +
+                        "ON recovery_session (habit_id)",
+                ).use { it.step() }
+            }
+        }
+
+        /** v25 rollback (older build reinstalled): table rebuild removes the link column (not
+         *  DROP COLUMN — SQLite 3.35+ only, same rationale as [MIGRATION_19_18]); every session
+         *  row survives, minus its habit attribution. */
+        val MIGRATION_25_24 = object : Migration(25, 24) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS recovery_session_old (" +
+                        "id TEXT NOT NULL, technique TEXT NOT NULL, intensity_start INTEGER, " +
+                        "intensity_end INTEGER, state TEXT NOT NULL, " +
+                        "started_at_epoch_ms INTEGER NOT NULL, ended_at_epoch_ms INTEGER, " +
+                        "duration_sec INTEGER, zone_id TEXT NOT NULL, entry TEXT NOT NULL, " +
+                        "false_alarm INTEGER NOT NULL, event_sequence INTEGER, PRIMARY KEY(id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO recovery_session_old (id, technique, intensity_start, " +
+                        "intensity_end, state, started_at_epoch_ms, ended_at_epoch_ms, " +
+                        "duration_sec, zone_id, entry, false_alarm, event_sequence) " +
+                        "SELECT id, technique, intensity_start, intensity_end, state, " +
+                        "started_at_epoch_ms, ended_at_epoch_ms, duration_sec, zone_id, entry, " +
+                        "false_alarm, event_sequence FROM recovery_session",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE recovery_session").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE recovery_session_old RENAME TO recovery_session",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_recovery_session_started_at_epoch_ms " +
+                        "ON recovery_session (started_at_epoch_ms)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_recovery_session_event_sequence " +
+                        "ON recovery_session (event_sequence)",
+                ).use { it.step() }
+            }
+        }
+
         /** v23 rollback (older build reinstalled): table rebuilds remove the identity and
          *  batch columns while every rule and journal row survives. */
         val MIGRATION_23_22 = object : Migration(23, 22) {
@@ -1760,6 +1815,7 @@ class AppRulesStoreFactory(
             MIGRATION_16_15, MIGRATION_17_16, MIGRATION_18_17, MIGRATION_19_18, MIGRATION_20_19,
             MIGRATION_21_20, MIGRATION_21_22, MIGRATION_22_21, MIGRATION_22_23, MIGRATION_23_22,
             MIGRATION_23_24, MIGRATION_24_23,
+            MIGRATION_24_25, MIGRATION_25_24,
         )
     }
 }

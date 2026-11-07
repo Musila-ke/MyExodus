@@ -488,6 +488,7 @@ fun AppShell(
                         onEntryConsumed = onRecoveryEntryConsumed,
                         onRouteHome = onRouteHome,
                         modifier = contentModifier,
+                        habitId = habit?.habitId,
                     )
                     contentTab == 3 -> StreaksScreen(
                         state = habit,
@@ -500,6 +501,9 @@ fun AppShell(
                         manageInFlight = manageInFlight,
                         insights = insightsState,
                         onRefreshInsights = insights::refresh,
+                        sessions = sessions,
+                        historyPrefs = prefs,
+                        habits = habits,
                         onRenameHabit = streaks::renameHabit,
                         onDeleteHabit = streaks::deleteHabit,
                         onClearManageFeedback = streaks::clearManageFeedback,
@@ -701,6 +705,7 @@ fun AppShell(
                         entry = RecoverySession.ENTRY_HOME,
                         zoneId = ZoneId.systemDefault().id,
                         nowEpochMs = System.currentTimeMillis(),
+                        habitId = habit?.habitId,
                     )
                     snackbarHostState.showSnackbar(urgeSavedMessage)
                 }

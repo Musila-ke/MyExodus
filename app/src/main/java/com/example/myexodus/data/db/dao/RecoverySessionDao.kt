@@ -30,11 +30,26 @@ interface RecoverySessionDao {
     @Query("DELETE FROM recovery_mirror_link")
     suspend fun deleteAllLinks()
 
+    /** One user-visible history row ([deleteLinksFor] follows it, not precedes: see the
+     *  repository). */
+    @Query("DELETE FROM recovery_session WHERE id = :id")
+    suspend fun deleteById(id: String): Int
+
+    /** This table has no foreign key, so a removed session's links are cleaned by hand. */
+    @Query("DELETE FROM recovery_mirror_link WHERE session_id = :id")
+    suspend fun deleteLinksFor(id: String)
+
+    /** A deleted habit must not keep claiming its urge rows: they survive as unlinked. */
+    @Query("UPDATE recovery_session SET habit_id = NULL WHERE habit_id = :habitId")
+    suspend fun clearHabitLink(habitId: String)
+
+    /** History page; [habitId] null = every row (including unlinked legacy rows). */
     @Query(
-        "SELECT * FROM recovery_session ORDER BY started_at_epoch_ms DESC " +
-            "LIMIT :limit OFFSET :offset",
+        "SELECT * FROM recovery_session " +
+            "WHERE (:habitId IS NULL OR habit_id = :habitId) " +
+            "ORDER BY started_at_epoch_ms DESC LIMIT :limit OFFSET :offset",
     )
-    suspend fun page(limit: Int, offset: Int): List<RecoverySession>
+    suspend fun page(limit: Int, offset: Int, habitId: String? = null): List<RecoverySession>
 
     @Query("SELECT count(*) FROM recovery_session")
     suspend fun count(): Long
@@ -50,9 +65,10 @@ interface RecoverySessionDao {
      */
     @Query(
         "SELECT state AS state, technique AS technique, COUNT(*) AS count FROM recovery_session " +
-            "WHERE started_at_epoch_ms >= :fromMs GROUP BY state, technique",
+            "WHERE started_at_epoch_ms >= :fromMs AND (:habitId IS NULL OR habit_id = :habitId) " +
+            "GROUP BY state, technique",
     )
-    suspend fun countsByStateSince(fromMs: Long): List<SessionCount>
+    suspend fun countsByStateSince(fromMs: Long, habitId: String? = null): List<SessionCount>
 
     /** One statement = one transaction: every row a process death left STARTED past the cutoff
      *  closes as INTERRUPTED with the v2 M2.4 bound (`endedAt = startedAt + 15 min`). Rows are

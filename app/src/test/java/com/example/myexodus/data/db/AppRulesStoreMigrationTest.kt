@@ -1007,6 +1007,55 @@ class AppRulesStoreMigrationTest {
         context.deleteDatabase("recovery-sessions-test.db")
     }
 
+    /** v25 adds `recovery_session.habit_id` (owner ruling 2026-11-07). Upgrade keeps every
+     *  existing row, unlinked; rollback rebuilds the table without the column and keeps the
+     *  rows, since an older build must not lose the user's urge record. */
+    @Test
+    fun migration24to25AndBack_addsTheHabitLink_andKeepsEveryRow() {
+        val scratchPath = context.getDatabasePath("recovery-habit-link-test.db").absolutePath
+        AndroidSQLiteDriver().open(scratchPath).use { conn ->
+            conn.prepare("CREATE TABLE sentinel_table (id INTEGER NOT NULL, PRIMARY KEY(id))").use { it.step() }
+            conn.prepare(
+                "CREATE TABLE recovery_session (" +
+                    "id TEXT NOT NULL, technique TEXT NOT NULL, intensity_start INTEGER, " +
+                    "intensity_end INTEGER, state TEXT NOT NULL, " +
+                    "started_at_epoch_ms INTEGER NOT NULL, ended_at_epoch_ms INTEGER, " +
+                    "duration_sec INTEGER, zone_id TEXT NOT NULL, entry TEXT NOT NULL, " +
+                    "false_alarm INTEGER NOT NULL, event_sequence INTEGER, PRIMARY KEY(id))",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO recovery_session (id, technique, state, started_at_epoch_ms, " +
+                    "zone_id, entry, false_alarm) " +
+                    "VALUES ('s-1', 'urge_surfing', 'COMPLETED', 111, 'UTC', 'tab', 0)",
+            ).use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_24_25.migrate(conn) }
+
+            assertTrue("habit_id" in columnNames(conn, "recovery_session"))
+            conn.prepare("SELECT habit_id FROM recovery_session WHERE id = 's-1'").use { stmt ->
+                assertTrue("the pre-link row survives", stmt.step())
+                assertTrue("and is unlinked", stmt.isNull(0))
+            }
+            conn.prepare("UPDATE recovery_session SET habit_id = 'habit-a' WHERE id = 's-1'").use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_25_24.migrate(conn) }
+
+            assertFalse("habit_id" in columnNames(conn, "recovery_session"))
+            conn.prepare("SELECT id, technique, zone_id FROM recovery_session").use { stmt ->
+                assertTrue("rollback keeps the row", stmt.step())
+                assertEquals("s-1", stmt.getText(0))
+                assertEquals("urge_surfing", stmt.getText(1))
+                assertEquals("UTC", stmt.getText(2))
+                assertFalse(stmt.step())
+            }
+            assertTrue(
+                "nothing else is touched on either direction",
+                "id" in columnNames(conn, "sentinel_table"),
+            )
+        }
+        context.deleteDatabase("recovery-habit-link-test.db")
+    }
+
     private fun columnNames(conn: androidx.sqlite.SQLiteConnection, table: String): List<String> {
         val names = mutableListOf<String>()
         conn.prepare("PRAGMA table_info($table)").use { stmt ->

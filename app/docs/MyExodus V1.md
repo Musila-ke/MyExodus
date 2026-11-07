@@ -324,7 +324,7 @@ Every functional requirement below specifies a testable behavior. Before any of 
 
 **Home quick-action addendum (2026-10-22, ADR #211):** the Home action dial's "Log an urge" shortcut now performs the log in place instead of switching to the Recovery tab. It opens the Recovery screen's own `UrgeLogSheet` and writes through `RecoverySessionRepository.logOnly` with `entry = RecoverySession.ENTRY_HOME` — a terminal-born `COMPLETED` row with `technique = none`, habitless and rule-less, never partner-mirrored. The confirmation is the neutral `home_urge_saved` ("Urge logged — this is only a note.") rather than the widget's block claim, which would be false for a note tied to no rule. Each quick-action pill also carries an explicit `contentDescription` so TalkBack names it (the `ExtendedFAB` text slot was not exported on the shipped BOM). Device-proven on the X6532 (row written; Insights "Urges logged only: 1") and the API-37 emulator (sheet, snackbar, `content-desc="Log an urge"` in the accessibility tree).
 
-**Implementation status (2026-09-19): built and device-verified (Recovery Resource UI workstream W2, ADR #61).** The Recovery screen's log action persists the entry (intensity 1–10 skippable, technique, outcome — OPEN-2 defaults; session row updated, never a new unlock path) and then routes to the device home screen via `Intent.ACTION_MAIN` + `CATEGORY_HOME` behind `runCatching` + a logged fallback (`MainActivity.onRouteHome`). **The restriction stays active: a log is not a bypass** — the only two unlock paths remain the friction-countdown expiry and the cooldown-gated override (`ui/recovery.unlockRule` has exactly those two call sites; the log path touches no rule or recovery state). Device evidence (emulator-5554, final timestamped run): rule armed → Chrome blocked → recovery entered from the block screen → urge logged → Chrome relaunched at **28 s of the 60 s friction window** → logcat `decide com.android.chrome -> Block` and the block screen held. The iOS edge case is not applicable to this Android-only build. **Surface sweep (2026-09-27, ADR #88):** the intensity scale now renders all ten chips on two rows (each named "Intensity N of 10"; second tap clears), the sheet opens full-height rather than at M3's halfway anchor, and intensity stays skippable — a completed technique logged with no intensity choice writes a row with no intensity line. The History spoke (FR-9 analog) stamps every row against now ("Today · 3:42 PM" / "Yesterday · …" / "Sep 25 · …"), teal-marking only finished runs and bare logs.
+**Implementation status (2026-09-19): built and device-verified (Recovery Resource UI workstream W2, ADR #61).** The Recovery screen's log action persists the entry (intensity 1–10 skippable, technique, outcome — OPEN-2 defaults; session row updated, never a new unlock path) and then routes to the device home screen via `Intent.ACTION_MAIN` + `CATEGORY_HOME` behind `runCatching` + a logged fallback (`MainActivity.onRouteHome`). **The restriction stays active: a log is not a bypass** — the only two unlock paths remain the friction-countdown expiry and the cooldown-gated override (`ui/recovery.unlockRule` has exactly those two call sites; the log path touches no rule or recovery state). Device evidence (emulator-5554, final timestamped run): rule armed → Chrome blocked → recovery entered from the block screen → urge logged → Chrome relaunched at **28 s of the 60 s friction window** → logcat `decide com.android.chrome -> Block` and the block screen held. The iOS edge case is not applicable to this Android-only build. **Surface sweep (2026-09-27, ADR #88):** the intensity scale now renders all ten chips on two rows (each named "Intensity N of 10"; second tap clears), the sheet opens full-height rather than at M3's halfway anchor, and intensity stays skippable — a completed technique logged with no intensity choice writes a row with no intensity line. The History spoke (FR-9 analog) stamps every row against now ("Today · 3:42 PM" / "Yesterday · …" / "Sep 25 · …"), teal-marking only finished runs and bare logs. **(Redesigned 2026-11-07, ADR #267: the page is an unboxed editorial ledger, not a stack of cards. The summary is a frontispiece — tracked uppercase eyebrow, range as index tabs, the figure in Fraunces display size, a hairline rule, and the three buckets as one prose line. Rows group into unboxed day sections headed by a tracked day label with a hairline to the margin — "Today" / "Yesterday" / "Sep 25" / "Dec 30, 2025" — each row carrying only its local time, and every row gains a delete action. A first boxed-card pass was rejected by the owner the same day as generated-looking; the ADR records the revision.)**
 
 ### 11. Days Free Counter
 
@@ -1003,8 +1003,9 @@ hub-and-spoke split), **ADR #78** (Partner split + shared `BackRow`/`NavTile` ch
   idle screen rendered 8 blocks, four of them stacked technique cards plus the full coaching plan,
   so the page was split. The hub keeps what an urge needs immediately — live state (timer or idle
   card), the log-urge action as a full-width button, and the crisis card, which is never gated —
-  and moves reference material behind three icon+label tiles (**Techniques · My plan · History**,
-  Material's clickable `Surface` so icon+label merge into one TalkBack button at the 48dp
+  and moves reference material behind icon+label tiles (**Techniques · My plan**, plus the crisis
+  path; **History moved to the Streaks tab under ADR #268** — this bullet describes the 2026-09-22
+  split, Material's clickable `Surface` so icon+label merge into one TalkBack button at the 48dp
   minimum). One suggestion leads the hub via `RecoveryResourceCatalog.recommended(rating = null,
   inRiskWindow)` — a v2 M1.3 function that shipped with tests and, until now, had no UI caller;
   the Techniques tile is the "choose another" path its own contract promises. Idle hub: 6 blocks
@@ -1072,6 +1073,19 @@ hub-and-spoke split), **ADR #78** (Partner split + shared `BackRow`/`NavTile` ch
   itself a claim about a period. Device evidence (X6532): eyebrow, figure **5**, three chips on one
   baseline, buckets **Completed 2 · Not finished 3 · Logged only 0**; the surface is privacy-gated and
   secure, so the a11y tree is the verification channel by design.
+* **Urges belong to a habit, and History moves to Streaks (ADR #268, owner directive 2026-11-07):**
+  every urge/recovery row now carries the habit that was displayed when it was written (`habit_id`,
+  store v25, nullable, no foreign key so a deleted habit leaves the user's record intact — the link is
+  cleared on habit delete). All four write paths stamp it (Home quick log, Recovery log-only, technique
+  sessions, widget urge surface), and existing rows backfill as unlinked, reachable through **All
+  habits**. History was retrospective data sitting on the Recovery tab while the Streaks tab owned
+  progress and insights; it now lives on Streaks as a hub tile in **both** states (setup and habit,
+  since technique sessions can predate any habit), opens scoped to the displayed habit, and carries a
+  **Habit** switcher (All habits + one entry per habit) that re-scopes the log and the summary together.
+  The switch is a page filter, not an object: past streak runs stay unaddressable, consistent with
+  ADR #81's "the summary scopes only itself" (there, the range chips still scope just the summary; the
+  habit filter scopes the whole page because it selects which record you are reading). Legacy backups
+  restore unlinked (`putOpt`/`optNullableString`), so an old snapshot never fails to restore.
 * **Settings becomes an index (ADR #82, owner sign-off "Index + Protection subpage"):** one card of
   **eight rows** — Protection · Enhanced Mode · Strict Mode · Discreet widget · Coaching plan · Risk
   windows · Crash reports · About — each row either *is* the control (switch toggles in place) or

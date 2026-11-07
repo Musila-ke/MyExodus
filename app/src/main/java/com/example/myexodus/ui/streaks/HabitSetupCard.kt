@@ -53,6 +53,9 @@ internal fun HabitSetupCard(
         recoveryStartAt: Long,
     ) -> Unit,
     onCancel: (() -> Unit)? = null,
+    /** Drives the title only: the Home FAB opens this form with onCancel set even when no
+     *  habit exists yet, so "Add another habit" must not be keyed on the Cancel button. */
+    firstHabit: Boolean = true,
 ) {
     var label by rememberSaveable { mutableStateOf("") }
     var durationIndex by rememberSaveable { mutableStateOf<Int?>(null) }
@@ -91,8 +94,8 @@ internal fun HabitSetupCard(
                 ) {
                     Text(
                         stringResource(
-                            if (onCancel != null) R.string.streaks_setup_title_add
-                            else R.string.streaks_setup_title,
+                            if (firstHabit) R.string.streaks_setup_title
+                            else R.string.streaks_setup_title_add,
                         ),
                         style = MaterialTheme.typography.titleMedium,
                     )

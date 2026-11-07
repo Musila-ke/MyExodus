@@ -1,25 +1,31 @@
 package com.example.myexodus.ui.recovery
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,19 +35,21 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
 import com.example.myexodus.R
 import com.example.myexodus.data.db.entity.RecoverySession
-import com.example.myexodus.recovery.RecoveryResourceCatalog
 import com.example.myexodus.recovery.RecoverySessionRepository
+import com.example.myexodus.streaks.HabitSummary
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.SecureSurface
 import java.time.Instant
@@ -62,26 +70,40 @@ private const val PAGE_SIZE = 50
  * Local-only by construction — the rows live in the encrypted store and are never mirrored
  * beyond the coarse `recovery:<technique>:<outcome>` event (INV-13).
  *
- * Declares its own [SecureSurface] (INV-11/M2.8) rather than relying on the Recovery tab's
- * being composed above it: the flag must belong to the surface, not to the fact that today
- * the only route here happens to keep the hub mounted.
+ * Lives under the Streaks tab (owner ruling 2026-11-07): it is a retrospective page, and since
+ * schema v25 every row carries the habit it was logged under, so the default view is the
+ * displayed habit's data with an "All habits" escape for rows from before the link existed.
+ *
+ * Declares its own [SecureSurface] (INV-11/M2.8) rather than relying on the tab's being
+ * composed above it: the flag must belong to the surface, not to the fact that today the only
+ * route here happens to keep the hub mounted.
  */
 @Composable
 fun HistoryView(
     sessions: RecoverySessionRepository,
     prefs: RecoveryPrefs,
+    habits: List<HabitSummary>,
+    displayedHabitId: String?,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     SecureSurface()
     GatedContent(prefs = prefs, titleRes = R.string.recovery_gate_title_history) {
-        HistoryList(sessions = sessions, onBack = onBack, modifier = modifier)
+        HistoryList(
+            sessions = sessions,
+            habits = habits,
+            displayedHabitId = displayedHabitId,
+            onBack = onBack,
+            modifier = modifier,
+        )
     }
 }
 
 @Composable
 private fun HistoryList(
     sessions: RecoverySessionRepository,
+    habits: List<HabitSummary>,
+    displayedHabitId: String?,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -90,16 +112,31 @@ private fun HistoryList(
     var offset by remember { mutableIntStateOf(0) }
     var exhausted by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
+    var summaryVersion by remember { mutableIntStateOf(0) }
+    var pendingDelete by remember { mutableStateOf<RecoverySession?>(null) }
+    // null = All habits. A page opened from a habit starts scoped to it; the filter is the
+    // page's own state, so switching habits on the hub never rewrites a page already open.
+    var habitFilter by rememberSaveable(displayedHabitId) { mutableStateOf(displayedHabitId) }
+    val habitLabels = remember(habits) { habits.associate { it.habitId to it.label } }
     // Finding #16 (2026-10-16): the pager reads `offset`, fetches, then appends — two taps
     // inside one fetch window both read the same offset and both append, duplicating rows and
     // advancing past records never shown. The button shows no progress, so the second tap is
     // what a real user does. Serialized: the waiting tap then loads the *next* page, which is
-    // what a double-tap on "Load more" asks for.
+    // what a double-tap on "Load more" asks for. A reset (after a delete) takes the same lock,
+    // so it can never interleave a page fetch.
     val loadLock = remember { Mutex() }
 
-    suspend fun loadMore() = loadLock.withLock {
+    suspend fun load(reset: Boolean = false) = loadLock.withLock {
         withContext(Dispatchers.IO) {
-            val page = sessions.page(PAGE_SIZE, offset)
+            if (reset) {
+                rows = emptyList()
+                offset = 0
+                exhausted = false
+                // A filter change is a new query, not a new page: hold the skeleton so the
+                // previous habit's rows never render under the new label.
+                loaded = false
+            }
+            val page = sessions.page(PAGE_SIZE, offset, habitId = habitFilter)
             rows = rows + page
             offset += page.size
             exhausted = page.size < PAGE_SIZE
@@ -107,44 +144,69 @@ private fun HistoryList(
         }
     }
 
-    LaunchedEffect(Unit) { loadMore() }
+    LaunchedEffect(habitFilter) { load(reset = true) }
 
     Column(modifier = modifier.fillMaxSize()) {
         BackRow(label = stringResource(R.string.recovery_history_title), onBack = onBack)
-        HistorySummaryCard(
-            sessions = sessions,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        )
-        when {
-            !loaded -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-            rows.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    stringResource(R.string.recovery_history_empty),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(24.dp),
-                )
-            }
-            else -> LazyColumn(Modifier.fillMaxSize()) {
-                item {
-                    Text(
-                        stringResource(R.string.recovery_history_log_header),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
+        if (habits.isNotEmpty()) {
+            HistoryHabitFilter(
+                habits = habits,
+                selected = habitFilter,
+                onSelect = { habitFilter = it },
+            )
+        }
+        if (!loaded) {
+            HistorySkeleton()
+        } else {
+            val nowMs = System.currentTimeMillis()
+            val zone = ZoneId.systemDefault()
+            // Observable read (lint NonObservableLocale): a locale change recomposes the list.
+            val locale = LocalConfiguration.current.locales[0]
+            val groups = groupHistoryByDay(
+                rows = rows,
+                nowMs = nowMs,
+                zone = zone,
+                today = stringResource(R.string.recovery_history_today),
+                yesterday = stringResource(R.string.recovery_history_yesterday),
+                locale = locale,
+            )
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp),
+            ) {
+                item(key = "summary") {
+                    HistorySummaryCard(
+                        sessions = sessions,
+                        habitId = habitFilter,
+                        refreshKey = summaryVersion,
                     )
                 }
-                items(rows, key = { it.id }) { row ->
-                    HistoryRow(row)
-                    HorizontalDivider()
+                groups.forEach { group ->
+                    item(key = "day-${group.rows.first().id}") {
+                        HistoryDaySection(
+                            group = group,
+                            locale = locale,
+                            // Under a specific habit the filter already says which one; in
+                            // All habits each row has to say it itself.
+                            habitLabels = if (habitFilter == null) habitLabels else emptyMap(),
+                            onDeleteRequest = { pendingDelete = it },
+                        )
+                    }
                 }
-                if (!exhausted) {
-                    item {
+                if (groups.isEmpty()) {
+                    item(key = "empty") {
+                        Text(
+                            stringResource(R.string.recovery_history_empty_hint),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else if (!exhausted) {
+                    item(key = "more") {
                         TextButton(
-                            onClick = { scope.launch(Dispatchers.IO) { loadMore() } },
-                            modifier = Modifier.fillMaxWidth().padding(8.dp),
+                            onClick = { scope.launch { load() } },
+                            modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(stringResource(R.string.recovery_history_more))
                         }
@@ -153,100 +215,261 @@ private fun HistoryList(
             }
         }
     }
+
+    pendingDelete?.let { row ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text(stringResource(R.string.recovery_history_delete_title)) },
+            text = { Text(stringResource(R.string.recovery_history_delete_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingDelete = null
+                        scope.launch {
+                            withContext(Dispatchers.IO) { sessions.delete(row.id) }
+                            summaryVersion++
+                            load(reset = true)
+                        }
+                    },
+                ) {
+                    Text(
+                        stringResource(R.string.recovery_history_delete_confirm),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) {
+                    Text(stringResource(R.string.streaks_cancel))
+                }
+            },
+        )
+    }
 }
 
 /**
- * One log row, laid out on the reference's `11.56.04` task rows: a rounded accent bar down the
- * left, the title with its day stamp trailing, and one muted line carrying everything else.
- * The bar is the row's only judgement — teal for a run that finished or a bare log, toneless
- * for one that stopped early; the app marks what was practised, not what was not.
+ * The page's one scope control, set in the ledger's own type: a tracked label, the current
+ * value, and a chevron. It pins under the header so switching habits never needs a scroll
+ * back to the top. Rendered only when a habit exists — with none, All habits is the only
+ * choice and the row would be a control that cannot change anything.
  */
 @Composable
-private fun HistoryRow(row: RecoverySession) {
-    Surface(color = MaterialTheme.colorScheme.surface) {
+private fun HistoryHabitFilter(
+    habits: List<HabitSummary>,
+    selected: String?,
+    onSelect: (String?) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    val locale = LocalConfiguration.current.locales[0]
+    val allLabel = stringResource(R.string.recovery_history_all_habits)
+    val current = habits.firstOrNull { it.habitId == selected }?.label ?: allLabel
+    Box {
         Row(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
-                .height(IntrinsicSize.Min),
+                .clickable { open = true }
+                .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
-            Box(
-                Modifier
-                    .width(4.dp)
-                    .fillMaxHeight()
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(
-                        if (row.hasAccent) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outlineVariant,
-                    ),
+            Text(
+                stringResource(R.string.recovery_history_habit_filter).uppercase(locale),
+                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.4.sp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        stringResource(
-                            if (row.technique == RecoverySession.TECHNIQUE_NONE) {
-                                R.string.recovery_history_logged_only
-                            } else {
-                                techniqueTitle(row.technique)
-                            },
-                        ),
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        historyTimestampLabel(
-                            epochMs = row.startedAtEpochMs,
-                            nowMs = System.currentTimeMillis(),
-                            zone = ZoneId.systemDefault(),
-                            today = stringResource(R.string.recovery_history_today),
-                            yesterday = stringResource(R.string.recovery_history_yesterday),
-                        ),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                val details = buildList {
-                    // No outcome for a bare log: its title already says nothing was practised,
-                    // and the row is born COMPLETED, so [outcomeLabel] would call it "Completed"
-                    // — one row claiming both.
-                    if (row.technique != RecoverySession.TECHNIQUE_NONE) {
-                        add(stringResource(outcomeLabel(row.state)))
-                    }
-                    val intensity = row.intensityEnd ?: row.intensityStart
-                    if (intensity != null) {
-                        add(stringResource(R.string.recovery_history_intensity, intensity))
-                    }
-                    val duration = row.durationSec
-                    if (duration != null && duration > 0) {
-                        add(
-                            stringResource(
-                                R.string.recovery_history_duration,
-                                duration / 60,
-                                duration % 60,
-                            ),
-                        )
-                    }
-                }
-                if (details.isNotEmpty()) {
-                    Text(
-                        details.joinToString(" · "),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            Spacer(Modifier.weight(1f))
+            Text(current, style = MaterialTheme.typography.titleSmall)
+            Icon(
+                Icons.Outlined.ExpandMore,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text(allLabel) },
+                onClick = {
+                    open = false
+                    onSelect(null)
+                },
+            )
+            habits.forEach { habit ->
+                DropdownMenuItem(
+                    text = { Text(habit.label) },
+                    onClick = {
+                        open = false
+                        onSelect(habit.habitId)
+                    },
+                )
             }
         }
     }
 }
 
-/** Teal for a finished run or a bare log; a run that stopped early carries no accent. */
-private val RecoverySession.hasAccent: Boolean
-    get() = technique == RecoverySession.TECHNIQUE_NONE ||
-        state == RecoverySession.STATE_COMPLETED
+/** One section per local day, unboxed like a ledger page: a tracked day break with a hairline
+ *  rule running to the margin, then the day's rows with no card around them. The day is spoken
+ *  once, above its rows, instead of repeated in every row's stamp; grouped boxes were the
+ *  same rounded shape stacked down the page, which is what made it read machine-made. Rows
+ *  keep the log's newest-first order inside the section. */
+@Composable
+private fun HistoryDaySection(
+    group: HistoryDayGroup,
+    locale: Locale,
+    habitLabels: Map<String, String>,
+    onDeleteRequest: (RecoverySession) -> Unit,
+) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                group.label.uppercase(locale),
+                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.4.sp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(12.dp))
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        group.rows.forEach { row ->
+            HistoryRow(
+                row = row,
+                locale = locale,
+                habitLabel = row.habitId?.let(habitLabels::get),
+                onDelete = { onDeleteRequest(row) },
+            )
+        }
+    }
+}
+
+/** Loading stands in for the frontispiece and the first day's rows, in the sizes they occupy:
+ *  resolving never reflows the page. */
+@Composable
+private fun HistorySkeleton() {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            SkeletonBar(Modifier.width(104.dp).height(12.dp))
+            SkeletonBar(Modifier.width(64.dp).height(44.dp))
+            SkeletonBar(Modifier.fillMaxWidth().height(1.dp))
+            SkeletonBar(Modifier.width(210.dp).height(14.dp))
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            SkeletonBar(Modifier.width(88.dp).height(12.dp))
+            repeat(3) { SkeletonBar(Modifier.fillMaxWidth().height(34.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun SkeletonBar(modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .clip(MaterialTheme.shapes.small)
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)),
+    )
+}
+
+/**
+ * One log row inside its day section: the time in a fixed ledger column, the title with one
+ * muted line carrying the rest, and the row's own action menu. No card and no accent bar — the
+ * row's judgement lives in its words, and the page's structure is carried by type and rules.
+ */
+@Composable
+private fun HistoryRow(
+    row: RecoverySession,
+    locale: Locale,
+    habitLabel: String?,
+    onDelete: () -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    val label = stringResource(
+        if (row.technique == RecoverySession.TECHNIQUE_NONE) {
+            R.string.recovery_history_logged_only
+        } else {
+            techniqueTitle(row.technique)
+        },
+    )
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.Top,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp, bottom = 4.dp),
+    ) {
+        Text(
+            historyTimeLabel(
+                epochMs = row.startedAtEpochMs,
+                zone = ZoneId.systemDefault(),
+                locale = locale,
+            ),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.width(64.dp).padding(top = 13.dp),
+        )
+        Column(
+            modifier = Modifier.weight(1f).padding(top = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(label, style = MaterialTheme.typography.titleSmall)
+            val details = buildList {
+                // The habit leads: under All habits it is the row's context, and a bare log
+                // with no details otherwise would not say which streak it belongs to.
+                if (habitLabel != null) add(habitLabel)
+                // No outcome for a bare log: its title already says nothing was practised,
+                // and the row is born COMPLETED, so [outcomeLabel] would call it "Completed"
+                // — one row claiming both.
+                if (row.technique != RecoverySession.TECHNIQUE_NONE) {
+                    add(stringResource(outcomeLabel(row.state)))
+                }
+                val intensity = row.intensityEnd ?: row.intensityStart
+                if (intensity != null) {
+                    add(stringResource(R.string.recovery_history_intensity, intensity))
+                }
+                val duration = row.durationSec
+                if (duration != null && duration > 0) {
+                    add(
+                        stringResource(
+                            R.string.recovery_history_duration,
+                            duration / 60,
+                            duration % 60,
+                        ),
+                    )
+                }
+            }
+            if (details.isNotEmpty()) {
+                Text(
+                    details.joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = stringResource(R.string.recovery_plan_item_actions, label),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            stringResource(R.string.recovery_history_delete_action),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    },
+                    onClick = { menuOpen = false; onDelete() },
+                )
+            }
+        }
+    }
+}
 
 /** Shared with the partner dashboard's received-activity rows (W5). */
 internal fun outcomeLabel(state: String): Int = when (state) {
@@ -256,16 +479,16 @@ internal fun outcomeLabel(state: String): Int = when (state) {
 }
 
 /**
- * The trailing day+time stamp of a history row: "Today · 3:42 PM", "Yesterday · 3:42 PM", else
- * "Sep 27 · 3:42 PM" / "Sep 27, 2025 · 3:42 PM" once the year differs from now's. The day is
- * spoken only while it is still current — an absolute date reads as noise on today's row.
+ * The heading a history row sorts under: "Today", "Yesterday", else "Sep 27" /
+ * "Sep 27, 2025" once the year differs from now's. The day is spoken only while it is still
+ * current — an absolute date reads as noise on today's rows.
  *
  * Pure, with the clock, zone and day words passed in: the boundary at midnight is testable on
  * the JVM, and the copy stays in resources. The device's own zone at read time is the one used:
  * the row stores the zone it started in, the list reads in the one the user is in now (travel
  * does not rewrite history).
  */
-internal fun historyTimestampLabel(
+internal fun historyDayLabel(
     epochMs: Long,
     nowMs: Long,
     zone: ZoneId,
@@ -275,15 +498,36 @@ internal fun historyTimestampLabel(
 ): String {
     val then = Instant.ofEpochMilli(epochMs).atZone(zone)
     val now = Instant.ofEpochMilli(nowMs).atZone(zone)
-    val time = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale).format(then)
-    val day = when {
+    return when {
         then.toLocalDate() == now.toLocalDate() -> today
         then.toLocalDate() == now.toLocalDate().minusDays(1) -> yesterday
         then.year == now.year -> DateTimeFormatter.ofPattern("MMM d", locale).format(then)
         else -> DateTimeFormatter.ofPattern("MMM d, yyyy", locale).format(then)
     }
-    return "$day · $time"
 }
+
+/** A row's time inside its day card ("3:42 PM"); the day itself is the card's heading. */
+internal fun historyTimeLabel(
+    epochMs: Long,
+    zone: ZoneId,
+    locale: Locale = Locale.getDefault(),
+): String = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
+    .withLocale(locale)
+    .format(Instant.ofEpochMilli(epochMs).atZone(zone))
+
+/** Rows arrive newest-first; grouping preserves that order both between and inside days. */
+internal data class HistoryDayGroup(val label: String, val rows: List<RecoverySession>)
+
+internal fun groupHistoryByDay(
+    rows: List<RecoverySession>,
+    nowMs: Long,
+    zone: ZoneId,
+    today: String,
+    yesterday: String,
+    locale: Locale = Locale.getDefault(),
+): List<HistoryDayGroup> = rows
+    .groupBy { historyDayLabel(it.startedAtEpochMs, nowMs, zone, today, yesterday, locale) }
+    .map { (label, dayRows) -> HistoryDayGroup(label, dayRows) }
 
 /** Exposed for the coaching editor too: the same gate wraps every private surface (W6). */
 @Composable

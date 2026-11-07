@@ -107,6 +107,8 @@ internal object LogicalSnapshotCodec {
     fun session(s: RecoverySession) = JSONObject()
         .put("id", s.id)
         .put("technique", s.technique)
+        // Schema v25; absent in older backups, which restores as an unlinked row.
+        .putOpt("habitId", s.habitId)
         .putOpt("intensityStart", s.intensityStart)
         .putOpt("intensityEnd", s.intensityEnd)
         .put("state", s.state)
@@ -120,6 +122,7 @@ internal object LogicalSnapshotCodec {
     fun session(j: JSONObject) = RecoverySession(
         id = j.getString("id"),
         technique = j.getString("technique"),
+        habitId = j.optNullableString("habitId"),
         intensityStart = j.optNullableInt("intensityStart"),
         intensityEnd = j.optNullableInt("intensityEnd"),
         state = j.getString("state"),

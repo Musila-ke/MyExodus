@@ -114,7 +114,7 @@ class WidgetActionViewModel @Inject constructor(
      *  ([RecoverySessionRepository.logOnly] — a terminal-born, deliberately never-mirrored row),
      *  so the widget and the app can never log differently. The ring already gates this, but the
      *  VM is the last line: a double delivery must not write twice. */
-    fun logUrge() {
+    fun logUrge(habitId: String?) {
         if (_urge.value == UrgeOutcome.InFlight) return
         _urge.value = UrgeOutcome.InFlight
         viewModelScope.launch {
@@ -124,6 +124,7 @@ class WidgetActionViewModel @Inject constructor(
                     entry = RecoverySession.ENTRY_WIDGET,
                     zoneId = ZoneId.systemDefault().id,
                     nowEpochMs = System.currentTimeMillis(),
+                    habitId = habitId,
                 )
             }
             _urge.value = UrgeOutcome.Saved
