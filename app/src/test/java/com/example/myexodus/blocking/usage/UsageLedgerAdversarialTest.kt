@@ -286,26 +286,34 @@ class UsageLedgerAdversarialTest {
 
     @Test
     fun matrix_streamCrossingRealMidnight_rollsTheTracker_andTheJournalHoldsBothDays() = runBlocking {
-        val zone = ZoneId.of("Africa/Nairobi")
-        val midnight = LocalDateTime.of(2026, 9, 29, 0, 0, 0).atZone(zone).toInstant().toEpochMilli()
-        wallNowMs = midnight - 120_000L // 23:58
-        val rng = Random(47)
-        var elapsed = 0L
+        // The engine resolves the day from the device zone; pin it so the host zone (UTC in CI)
+        // cannot move the midnight instant off the date this fixture asserts.
+        val original = TimeZone.getDefault()
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("Africa/Nairobi"))
+            val zone = ZoneId.of("Africa/Nairobi")
+            val midnight = LocalDateTime.of(2026, 9, 29, 0, 0, 0).atZone(zone).toInstant().toEpochMilli()
+            wallNowMs = midnight - 120_000L // 23:58
+            val rng = Random(47)
+            var elapsed = 0L
 
-        repeat(120) {
-            val inc = rng.nextInt(20_000) + 1L
-            wallNowMs += inc
-            engine.processUsageObservation(PKG, inc, elapsed, UsageLedgerSource.PATH_A)
-            elapsed += inc
-            if (rng.nextInt(10) == 0) wallNowMs += 5_000L // idle gaps are not credit
+            repeat(120) {
+                val inc = rng.nextInt(20_000) + 1L
+                wallNowMs += inc
+                engine.processUsageObservation(PKG, inc, elapsed, UsageLedgerSource.PATH_A)
+                elapsed += inc
+                if (rng.nextInt(10) == 0) wallNowMs += 5_000L // idle gaps are not credit
+            }
+
+            // The day rolled under the stream: the tracker is anchored to the new day, holds only
+            // that day's credit, and the journal is the surviving record of the old one.
+            val t = tracker()
+            assertEquals("2026-09-29", t.localDateAnchor)
+            assertEquals(repo.dayTotal(PKG, "2026-09-29"), t.msUsedToday)
+            assertTrue(repo.dayTotal(PKG, "2026-09-28") > 0L)
+        } finally {
+            TimeZone.setDefault(original)
         }
-
-        // The day rolled under the stream: the tracker is anchored to the new day, holds only
-        // that day's credit, and the journal is the surviving record of the old one.
-        val t = tracker()
-        assertEquals("2026-09-29", t.localDateAnchor)
-        assertEquals(repo.dayTotal(PKG, "2026-09-29"), t.msUsedToday)
-        assertTrue(repo.dayTotal(PKG, "2026-09-28") > 0L)
     }
 
     // --- helpers ---
