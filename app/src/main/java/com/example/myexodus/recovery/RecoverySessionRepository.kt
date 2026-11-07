@@ -28,6 +28,8 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
         zoneId: String,
         nowEpochMs: Long,
         habitId: String? = null,
+        category: String? = null,
+        actionId: String? = null,
     ): String {
         val id = UUID.randomUUID().toString()
         val store = storeFactory.open() ?: return id
@@ -36,6 +38,8 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
                 id = id,
                 technique = technique,
                 habitId = habitId,
+                category = category,
+                actionId = actionId,
                 intensityStart = intensityStart,
                 startedAtEpochMs = nowEpochMs,
                 zoneId = zoneId,
@@ -47,7 +51,13 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
 
     /** Terminal transition. [state] must be COMPLETED or ABANDONED — INTERRUPTED is the
      *  app-start sweep's, and STARTED is not an end. No-op when the row never landed. */
-    suspend fun finish(id: String, state: String, intensityEnd: Int?, nowEpochMs: Long) {
+    suspend fun finish(
+        id: String,
+        state: String,
+        intensityEnd: Int?,
+        nowEpochMs: Long,
+        checkIn: String? = null,
+    ) {
         require(state == RecoverySession.STATE_COMPLETED || state == RecoverySession.STATE_ABANDONED) {
             "finish() takes a terminal state, not $state"
         }
@@ -61,6 +71,7 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
             session.copy(
                 state = state,
                 intensityEnd = intensityEnd,
+                checkIn = checkIn ?: session.checkIn,
                 endedAtEpochMs = nowEpochMs,
                 durationSec = ((nowEpochMs - session.startedAtEpochMs) / 1000).coerceAtLeast(0).toInt(),
             ),
@@ -87,6 +98,8 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
         zoneId: String,
         nowEpochMs: Long,
         habitId: String? = null,
+        category: String? = null,
+        actionId: String? = null,
     ) {
         val store = storeFactory.open() ?: return
         store.recoverySessionDao().insert(
@@ -94,6 +107,8 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
                 id = UUID.randomUUID().toString(),
                 technique = RecoverySession.TECHNIQUE_NONE,
                 habitId = habitId,
+                category = category,
+                actionId = actionId,
                 intensityStart = intensity,
                 state = RecoverySession.STATE_COMPLETED,
                 startedAtEpochMs = nowEpochMs,

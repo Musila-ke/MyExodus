@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Handshake
 import androidx.compose.material.icons.filled.Home
@@ -111,6 +112,8 @@ import com.example.myexodus.ui.partner.ReachOutTarget
 import com.example.myexodus.ui.partner.PartnerScreen
 import com.example.myexodus.ui.partner.PartnerSelection
 import com.example.myexodus.ui.partner.UnpairOutcome
+import com.example.myexodus.ui.recovery.RECOVERY_VIEW_ASSIST
+import com.example.myexodus.ui.recovery.RECOVERY_VIEW_CRISIS
 import com.example.myexodus.ui.recovery.RecoveryPrefs
 import com.example.myexodus.ui.recovery.RecoveryScreen
 import com.example.myexodus.ui.recovery.UrgeLogSheet
@@ -234,6 +237,9 @@ fun AppShell(
      *  requests) — the tap lands on it instead of the hub. */
     requestedPartnerView: String? = null,
     onPartnerViewConsumed: () -> Unit = {},
+    /** Phase 4: a deep link (block screen, widget) opens this Recovery spoke on arrival. */
+    requestedRecoveryView: String? = null,
+    onRecoveryViewConsumed: () -> Unit = {},
     planRepository: RecoveryPlanRepository,
     /** Settings → Coaching plan: the editor resolves the active profile through this. */
     rulesRepository: RulesRepository,
@@ -253,6 +259,12 @@ fun AppShell(
     val contentTab = tab.coerceIn(0, Tabs.lastIndex)
     var pickerOpen by rememberSaveable { mutableStateOf(false) }
     var openRuleId by rememberSaveable { mutableStateOf<String?>(null) }
+    // Phase 4: the Recovery spoke to open next — set by the block screen, the widget, or the
+    // Home action dial, consumed by the Recovery tab's own back stack.
+    var recoveryView by rememberSaveable { mutableStateOf<String?>(null) }
+    // The FAB is an in-app Home entry; the row it lands must say so. Cleared once the
+    // Recovery tab has captured it, same contract as the intent-supplied entry.
+    var fabEntry by rememberSaveable { mutableStateOf<String?>(null) }
     val expanded = rememberWindowWidth() == WindowWidth.EXPANDED
 
     // System back at a tab's root returns to the start destination before exiting (Android's
@@ -313,6 +325,21 @@ fun AppShell(
     // instead of silently disappearing from the dial.
     var reachOutNoPartnerOpen by remember { mutableStateOf(false) }
     var urgeSheetOpen by rememberSaveable { mutableStateOf(false) }
+    // Plan §E2.12: the post-lapse support sheet. "Shown" is per logged relapse: the feedback
+    // resets to null at the start of every logRelapse, so a second lapse re-arms the sheet,
+    // while a rotation (or any recomposition) does not re-show one already dismissed.
+    var lapseSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var lapseSheetShown by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(relapseFeedback) {
+        when (relapseFeedback) {
+            is StreaksViewModel.RelapseFeedback.Support -> if (!lapseSheetShown) {
+                lapseSheetShown = true
+                lapseSheetOpen = true
+            }
+            null -> lapseSheetShown = false
+            else -> Unit
+        }
+    }
     // The Home shortcut writes the row itself — a quick action that only switched tabs left
     // users believing an urge was logged when the sheet had never been opened (owner report
     // 2026-10-22). The sheet and the write path are the Recovery screen's, not a copy.
@@ -353,6 +380,12 @@ fun AppShell(
         }
     }
 
+    LaunchedEffect(requestedRecoveryView) {
+        val requested = requestedRecoveryView ?: return@LaunchedEffect
+        recoveryView = requested
+        onRecoveryViewConsumed()
+    }
+
     // Milestone notification deep link: select the celebrated habit BEFORE its splash card
     // renders, so the card (and the hero) belong to the habit the notification named.
     LaunchedEffect(requestedHabit) {
@@ -371,6 +404,15 @@ fun AppShell(
                 HomeActionsFab(
                     expanded = actionsOpen,
                     onToggle = { actionsOpen = !actionsOpen },
+                    // Owner add-on 2026-11-07: the in-the-moment flow is one tap from Home. The
+                    // request survives the tab switch because the Recovery tab consumes it on
+                    // its next composition.
+                    onUrgeAssist = {
+                        actionsOpen = false
+                        fabEntry = RecoverySession.ENTRY_HOME
+                        recoveryView = RECOVERY_VIEW_ASSIST
+                        tab = Tabs.indexOfFirst { it.key == NavKeys.RECOVERY }
+                    },
                     onReachOut = {
                         actionsOpen = false
                         if (partnerNames.isNotEmpty()) {
@@ -484,11 +526,26 @@ fun AppShell(
                         planRepository = planRepository,
                         sessions = sessions,
                         prefs = prefs,
-                        entryHint = recoveryEntry,
-                        onEntryConsumed = onRecoveryEntryConsumed,
+                        entryHint = recoveryEntry ?: fabEntry,
+                        onEntryConsumed = {
+                            fabEntry = null
+                            onRecoveryEntryConsumed()
+                        },
                         onRouteHome = onRouteHome,
                         modifier = contentModifier,
                         habitId = habit?.habitId,
+                        onOpenHistory = { tab = Tabs.indexOfFirst { it.key == NavKeys.STREAKS } },
+                        partnerName = partnerNames.values.firstOrNull(),
+                        // The same confirmation the Home FAB and the widget use: one recipient,
+                        // one editable message, nothing sends without that dialog.
+                        onReachOut = {
+                            if (sosTargets.isNotEmpty()) sosConfirmOpen = true
+                            else reachOutNoPartnerOpen = true
+                        },
+                        partnerMessageSent = sosState is SosViewModel.SosSendState.Sent,
+                        partnerMessageStatus = sosMessage,
+                        requestedView = recoveryView,
+                        onViewConsumed = { recoveryView = null },
                     )
                     contentTab == 3 -> StreaksScreen(
                         state = habit,
@@ -547,10 +604,6 @@ fun AppShell(
                         onWidgetSettingsChanged = onWidgetSettingsChanged,
                         themeMode = themeMode,
                         onThemeModeChange = onThemeModeChange,
-                        planRepository = planRepository,
-                        recoveryStore = recoveryStore,
-                        rulesRepository = rulesRepository,
-                        recoveryPrefs = prefs,
                         accountingOutageSource = accountingOutage,
                         account = account,
                         backupKey = backupKey,
@@ -609,6 +662,39 @@ fun AppShell(
             dismissButton = {
                 TextButton(onClick = { relapseConfirmOpen = false }) {
                     Text(stringResource(R.string.streaks_cancel))
+                }
+            },
+        )
+    }
+
+    // Plan §E2.12: support after a lapse, never a lecture. The block and the streak reset are
+    // already done; this sheet only offers the three next steps.
+    if (lapseSheetOpen) {
+        AlertDialog(
+            onDismissRequest = { lapseSheetOpen = false },
+            title = { Text(stringResource(R.string.recovery_lapse_title)) },
+            text = { Text(stringResource(R.string.recovery_lapse_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        lapseSheetOpen = false
+                        if (sosTargets.isNotEmpty()) sosConfirmOpen = true
+                        else reachOutNoPartnerOpen = true
+                    },
+                ) { Text(stringResource(R.string.sos_reach_out)) }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(
+                        onClick = {
+                            lapseSheetOpen = false
+                            tab = Tabs.indexOfFirst { it.key == NavKeys.RECOVERY }
+                            recoveryView = RECOVERY_VIEW_CRISIS
+                        },
+                    ) { Text(stringResource(R.string.recovery_crisis_title)) }
+                    TextButton(onClick = { lapseSheetOpen = false }) {
+                        Text(stringResource(R.string.recovery_lapse_not_now))
+                    }
                 }
             },
         )
@@ -897,6 +983,7 @@ private enum class NoHabitPrompt { RELAPSE, URGE }
 private fun HomeActionsFab(
     expanded: Boolean,
     onToggle: () -> Unit,
+    onUrgeAssist: () -> Unit,
     onReachOut: () -> Unit,
     onLogRelapse: () -> Unit,
     onLogUrge: () -> Unit,
@@ -914,6 +1001,11 @@ private fun HomeActionsFab(
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                QuickAction(
+                    icon = { Icon(Icons.Filled.Bolt, contentDescription = null) },
+                    label = stringResource(R.string.home_action_right_now),
+                    onClick = onUrgeAssist,
+                )
                 QuickAction(
                     icon = { Icon(painterResource(R.drawable.ic_log_relapse), contentDescription = null) },
                     label = stringResource(R.string.streaks_relapse_action),

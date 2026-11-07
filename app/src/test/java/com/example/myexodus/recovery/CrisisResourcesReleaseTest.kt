@@ -45,18 +45,67 @@ class CrisisResourcesReleaseTest {
     @Test
     fun everyEntry_offersAChannelTheAppCanOpen() {
         resources.forEach { resource ->
-            val channels = listOf(resource.phone, resource.sms, resource.url).filter { it.isNotBlank() }
-            assertTrue("${resource.id}: at least one of phone/sms/url", channels.isNotEmpty())
-            if (resource.phone.isNotBlank()) {
-                assertTrue(
-                    "${resource.id}: the phone number must be dialable as-is",
-                    resource.phone.removePrefix("+").all { it.isDigit() },
-                )
-            }
+            val channels = listOf(resource.phone, resource.sms, resource.whatsapp, resource.url)
+                .filter { it.isNotBlank() }
+            assertTrue("${resource.id}: at least one channel", channels.isNotEmpty())
+            listOf(resource.phone, resource.sms, resource.whatsapp)
+                .filter { it.isNotBlank() }
+                .forEach { number ->
+                    assertTrue(
+                        "${resource.id}: a channel number must normalize to digits only",
+                        CrisisChannels.digits(number) == number.removePrefix("+").replace("-", ""),
+                    )
+                }
             if (resource.url.isNotBlank()) {
                 assertTrue("${resource.id}: url must be https", resource.url.startsWith("https://"))
             }
         }
+    }
+
+    @Test
+    fun everyEntry_hasABehaviorAndKindFromTheAllowedSet() {
+        resources.forEach { resource ->
+            assertTrue(
+                "${resource.id}: behaviors are the filter keys; one is required",
+                resource.behaviors.isNotEmpty(),
+            )
+            assertTrue(
+                "${resource.id}: unknown behavior ${resource.behaviors}",
+                CrisisResources.BEHAVIORS.containsAll(resource.behaviors),
+            )
+            assertTrue(
+                "${resource.id}: unknown kind '${resource.kind}'",
+                resource.kind in CrisisResources.KINDS,
+            )
+        }
+    }
+
+    @Test
+    fun kenyaRegion_doesNotContainUSEntries() {
+        val forKenya = CrisisResources.forRegion(resources, "KE")
+
+        assertTrue("a US service must stay under the US region", forKenya.none { it.region == "US" })
+    }
+
+    @Test
+    fun kenyaRegion_putsEmergencyServicesFirst() {
+        val forKenya = CrisisResources.forRegion(resources, "KE")
+
+        assertEquals(CrisisResources.KIND_EMERGENCY, forKenya.first().kind)
+        assertEquals(CrisisResources.SECTION_URGENT, CrisisResources.sectionOf(forKenya.first()))
+    }
+
+    @Test
+    fun aMalformedEntry_isSkippedNotFatal() {
+        val json = """
+            {"resources":[
+              {"id":"broken"},
+              {"id":"ok","region":"KE","name":"Service","phone":"999",
+               "behaviors":["emergency"],"kind":"emergency","lastVerifiedAt":"2026-11-07"}
+            ]}
+        """.trimIndent()
+
+        assertEquals(listOf("ok"), CrisisResources.parse(json).map { it.id })
     }
 
     @Test

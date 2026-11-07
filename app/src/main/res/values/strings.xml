@@ -175,6 +175,7 @@
     <string name="home_quick_actions_open">Open quick actions</string>
     <string name="home_quick_actions_close">Close quick actions</string>
     <string name="home_action_log_urge">Log an urge</string>
+    <string name="home_action_right_now">Right now</string>
     <!-- Owner directive 2026-11-07: the log shortcuts stay visible with no habit, but neither
          can write anything — each explains what is missing and offers the way to start. -->
     <string name="home_relapse_no_habit_title">Nothing to track yet</string>
@@ -688,14 +689,11 @@
     <string name="recovery_override_unavailable">Override unavailable. Try again later.</string>
     <string name="recovery_overrides_logged">Overrides are logged on this device.</string>
     <string name="recovery_leave_alone">Leave the block alone</string>
-    <string name="recovery_leave_alone_caption">Back to your home screen. The block stays. Nothing is unlocked or deleted.</string>
     <string name="recovery_leave_note">Leaving MyExodus won’t stop the timer. The block lifts when it ends or when you override.</string>
     <string name="recovery_override_confirm_title">Override the block?</string>
     <string name="recovery_override_confirm_text">The block ends for good. It won’t restart on its own. To block it again later you’d create a new rule under Rules. This override is logged on this device.</string>
     <string name="recovery_override_confirm_action">End the block</string>
     <string name="recovery_override_confirm_cancel">Keep waiting</string>
-    <string name="recovery_idle_title">No active block</string>
-    <string name="recovery_idle_body">A blocked app starts a session from the block screen.</string>
 
     <!-- App picker -->
     <string name="picker_title">Choose an app</string>
@@ -838,6 +836,9 @@
     <string name="widget_action_urge">Log an urge</string>
     <string name="widget_action_urge_discreet">Save this moment</string>
     <string name="widget_action_reach_out">Reach out</string>
+    <!-- Owner add-on 2026-11-07: Urge Assist from the launcher. The glyph is a bolt; the words
+         exist only as a content description. -->
+    <string name="widget_action_assist">Right now</string>
     <!-- The hold-to-confirm surface the controls open (one shared shape for all three actions:
          title, one line of what will happen, the ring, the hint). All actions execute only on a
          completed hold — release early cancels. The log surfaces carry the widget's disclosure

@@ -49,10 +49,6 @@ class SecureSurfacesTest {
      */
     @Test
     fun `every recovery screen declares its own secure surface`() {
-        // Exempt by plan: W6 scopes the gate to the plan editor and history and states it is
-        // "Not applied to the intervention flow, crisis screen".
-        val exempt = setOf("CrisisScreen.kt")
-
         val dir = listOf(
             File("src/main/java/com/example/myexodus/ui/recovery"),
             File("app/src/main/java/com/example/myexodus/ui/recovery"),
@@ -63,7 +59,6 @@ class SecureSurfacesTest {
         assertTrue("expected recovery screen hosts in ${dir.absolutePath}", hosts.isNotEmpty())
 
         val missing = hosts
-            .filter { it.name !in exempt }
             .filterNot { it.readText().contains("SecureSurface()") }
             .map { it.name }
 
@@ -71,11 +66,6 @@ class SecureSurfacesTest {
             "Recovery surfaces must declare their own SecureSurface (W6/INV-11) — a parent's " +
                 "composition is not a guarantee: $missing",
             missing.isEmpty(),
-        )
-        assertEquals(
-            "the exemption list must not silently outlive the screens it names",
-            hosts.map { it.name }.filter { it in exempt }.sorted(),
-            exempt.sorted(),
         )
     }
 }

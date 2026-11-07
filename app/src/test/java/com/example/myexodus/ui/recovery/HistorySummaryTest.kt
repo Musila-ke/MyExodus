@@ -12,8 +12,12 @@ import org.junit.Test
  */
 class HistorySummaryTest {
 
-    private fun count(state: String, technique: String = "urge_surfing", n: Int = 1) =
-        SessionCount(state = state, technique = technique, count = n.toLong())
+    private fun count(
+        state: String,
+        technique: String = "urge_surfing",
+        n: Int = 1,
+        actionId: String? = null,
+    ) = SessionCount(state = state, technique = technique, actionId = actionId, count = n.toLong())
 
     @Test
     fun `started rows are excluded from every bucket`() {
@@ -34,6 +38,40 @@ class HistorySummaryTest {
         assertEquals("only the rows with a technique count as completed", 3, counts.completed)
         assertEquals(4, counts.loggedOnly)
         assertEquals(7, counts.total)
+    }
+
+    @Test
+    fun `a technique-less assist episode is not a bare log`() {
+        val counts = summarize(
+            listOf(
+                count(
+                    RecoverySession.STATE_COMPLETED,
+                    technique = RecoverySession.TECHNIQUE_NONE,
+                    n = 2,
+                    actionId = "move_device",
+                ),
+                count(RecoverySession.STATE_COMPLETED, technique = RecoverySession.TECHNIQUE_NONE, n = 1),
+            ),
+        )
+
+        assertEquals(2, counts.assist)
+        assertEquals(1, counts.loggedOnly)
+        assertEquals(3, counts.total)
+    }
+
+    @Test
+    fun `a running assist episode has no outcome yet`() {
+        val counts = summarize(
+            listOf(
+                count(
+                    RecoverySession.STATE_STARTED,
+                    technique = RecoverySession.TECHNIQUE_NONE,
+                    actionId = "move_device",
+                ),
+            ),
+        )
+
+        assertEquals(0, counts.total)
     }
 
     @Test

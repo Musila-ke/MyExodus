@@ -155,17 +155,29 @@ class InsightsRepository @Inject constructor(
         counts: List<SessionCount>,
         allTime: Long,
     ): RecoveryInsight {
-        fun sumWhere(predicate: (state: String, technique: String) -> Boolean): Int =
-            counts.filter { predicate(it.state, it.technique) }.sumOf { it.count.toInt() }
+        fun sumWhere(predicate: (SessionCount) -> Boolean): Int =
+            counts.filter(predicate).sumOf { it.count.toInt() }
 
-        val logOnly = sumWhere { _, technique -> technique == RecoverySession.TECHNIQUE_NONE }
+        // Insights describes technique practice. A bare log and an Urge Assist step episode are
+        // both technique-less; neither belongs in "logged only" once an action was named, and a
+        // step episode must not read as an abandoned technique.
+        val logOnly = sumWhere {
+            it.technique == RecoverySession.TECHNIQUE_NONE && it.actionId == null
+        }
         return RecoveryInsight(
-            completedTechniques = sumWhere { state, technique ->
-                state == RecoverySession.STATE_COMPLETED && technique != RecoverySession.TECHNIQUE_NONE
+            completedTechniques = sumWhere {
+                it.state == RecoverySession.STATE_COMPLETED &&
+                    it.technique != RecoverySession.TECHNIQUE_NONE
             },
             loggedOnly = logOnly,
-            abandoned = sumWhere { state, _ -> state == RecoverySession.STATE_ABANDONED },
-            interrupted = sumWhere { state, _ -> state == RecoverySession.STATE_INTERRUPTED },
+            abandoned = sumWhere {
+                it.state == RecoverySession.STATE_ABANDONED &&
+                    it.technique != RecoverySession.TECHNIQUE_NONE
+            },
+            interrupted = sumWhere {
+                it.state == RecoverySession.STATE_INTERRUPTED &&
+                    it.technique != RecoverySession.TECHNIQUE_NONE
+            },
             allTime = allTime,
         )
     }

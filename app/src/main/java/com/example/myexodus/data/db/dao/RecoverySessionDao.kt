@@ -62,11 +62,16 @@ interface RecoverySessionDao {
      * `technique` is part of the key because a log-only row is born COMPLETED
      * (`RecoverySessionRepository.logOnly`), so a state-only count reads "logged an urge and
      * went home" as a finished technique session.
+     *
+     * `action_id` splits the technique-less rows further (v26): an Urge Assist episode that ran
+     * a step rather than a technique is also born COMPLETED with `technique = none`, but it is
+     * not a bare log and must not be folded into "Logged only".
      */
     @Query(
-        "SELECT state AS state, technique AS technique, COUNT(*) AS count FROM recovery_session " +
+        "SELECT state AS state, technique AS technique, action_id AS actionId, COUNT(*) AS count " +
+            "FROM recovery_session " +
             "WHERE started_at_epoch_ms >= :fromMs AND (:habitId IS NULL OR habit_id = :habitId) " +
-            "GROUP BY state, technique",
+            "GROUP BY state, technique, action_id",
     )
     suspend fun countsByStateSince(fromMs: Long, habitId: String? = null): List<SessionCount>
 
@@ -106,7 +111,14 @@ interface RecoverySessionDao {
     suspend fun linkSequence(id: String, pairId: String): Long?
 }
 
-/** One `GROUP BY state, technique` bucket from [RecoverySessionDao.countsByStateSince]. The
- *  split only matters for [RecoverySession.TECHNIQUE_NONE] rows — every other technique buckets
- *  the same way and is folded back together by the caller. */
-data class SessionCount(val state: String, val technique: String, val count: Long)
+/** One `GROUP BY state, technique, action_id` bucket from
+ *  [RecoverySessionDao.countsByStateSince]. The split only matters for
+ *  [RecoverySession.TECHNIQUE_NONE] rows — every other technique buckets the same way and is
+ *  folded back together by the caller. [actionId] null means a bare log; non-null means an
+ *  Urge Assist episode. */
+data class SessionCount(
+    val state: String,
+    val technique: String,
+    val count: Long,
+    val actionId: String? = null,
+)

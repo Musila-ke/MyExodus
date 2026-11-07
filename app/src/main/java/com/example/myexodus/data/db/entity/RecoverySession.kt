@@ -13,6 +13,11 @@ import androidx.room3.PrimaryKey
  * app-start sweep for rows left STARTED by process death. Per-pair mirror delivery lives in
  * [RecoveryMirrorLink] (schema v12, ADR #111); [eventSequence] is the pre-v12 single-link
  * column, kept only as the legacy marker the pending query excludes on.
+ *
+ * Schema v26 adds the Urge Assist fields: [category] and [actionId] are the user's optional
+ * choice and the action that ran, and [checkIn] is the one-tap result. All three are nullable,
+ * so pre-v26 rows and technique sessions written by the practice screens read exactly as before.
+ * None of them is ever mirrored to a partner.
  */
 @Entity(
     tableName = "recovery_session",
@@ -30,6 +35,12 @@ data class RecoverySession(
      *  a row logged with no habit / before habits had this link. No FK: a deleted habit clears
      *  the link instead of deleting the user's urge record. */
     @ColumnInfo(name = "habit_id") val habitId: String? = null,
+    /** User-selected behavior category, or null when the user chose "Not sure" (v26). */
+    @ColumnInfo(name = "category") val category: String? = null,
+    /** The Urge Assist action that ran, or null for practice-screen sessions and legacy rows. */
+    @ColumnInfo(name = "action_id") val actionId: String? = null,
+    /** better / same / worse / skipped, or null when no check-in was shown or answered. */
+    @ColumnInfo(name = "check_in") val checkIn: String? = null,
     /** Optional 1–10 rating from the log form (both nullable — the form is skippable). */
     @ColumnInfo(name = "intensity_start") val intensityStart: Int? = null,
     @ColumnInfo(name = "intensity_end") val intensityEnd: Int? = null,
@@ -63,5 +74,11 @@ data class RecoverySession(
 
         /** Process death leaves rows STARTED; past this age the sweep closes them (v2 M2.4). */
         const val STALE_SESSION_MS = 15 * 60 * 1000L
+
+        /** One-tap check-in results (v26). Stored per episode, never shared. */
+        const val CHECK_IN_BETTER = "better"
+        const val CHECK_IN_SAME = "same"
+        const val CHECK_IN_WORSE = "worse"
+        const val CHECK_IN_SKIPPED = "skipped"
     }
 }

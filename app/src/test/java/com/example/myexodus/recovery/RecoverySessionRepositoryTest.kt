@@ -112,6 +112,37 @@ class RecoverySessionRepositoryTest {
     }
 
     @Test
+    fun assistRow_keepsCategoryActionAndCheckIn_andIsNeverMirrored() = runTest {
+        val id = sessions.start(
+            RecoverySession.TECHNIQUE_NONE,
+            intensityStart = null,
+            entry = RecoverySession.ENTRY_BLOCK_SCREEN,
+            zoneId = "UTC",
+            nowEpochMs = now,
+            category = UrgeCategory.PORN.id,
+            actionId = UrgeCatalog.BREATHING,
+        )
+
+        sessions.finish(
+            id,
+            RecoverySession.STATE_COMPLETED,
+            intensityEnd = null,
+            nowEpochMs = now + 90_000,
+            checkIn = UrgeCheckIn.SAME.id,
+        )
+
+        val row = session(id)
+        assertEquals(UrgeCategory.PORN.id, row.category)
+        assertEquals(UrgeCatalog.BREATHING, row.actionId)
+        assertEquals(UrgeCheckIn.SAME.id, row.checkIn)
+        assertEquals(RecoverySession.STATE_COMPLETED, row.state)
+        assertTrue(
+            "an assist-only action must never reach a partner mirror",
+            sessions.pendingMirror("pair-a", sinceMs = 0L, limit = 10).isEmpty(),
+        )
+    }
+
+    @Test
     fun interruptStale_closesOnlyStartedRowsPastTheCutoff() = runTest {
         val stale = sessions.start("urge_surfing", 5, RecoverySession.ENTRY_TAB, "UTC", now - 20 * 60_000)
         val fresh = sessions.start("urge_surfing", 5, RecoverySession.ENTRY_TAB, "UTC", now - 5 * 60_000)

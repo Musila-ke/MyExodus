@@ -49,6 +49,8 @@ import androidx.fragment.app.FragmentActivity
 import com.example.myexodus.R
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.recovery.RecoverySessionRepository
+import com.example.myexodus.recovery.UrgeCatalog
+import com.example.myexodus.recovery.UrgeCategory
 import com.example.myexodus.streaks.HabitSummary
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.SecureSurface
@@ -385,13 +387,16 @@ private fun HistoryRow(
     onDelete: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    val label = stringResource(
-        if (row.technique == RecoverySession.TECHNIQUE_NONE) {
-            R.string.recovery_history_logged_only
-        } else {
-            techniqueTitle(row.technique)
-        },
-    )
+    // Plan §E2.11: a technique-less row that named an action is an Urge Assist episode, not a
+    // bare log. The action is its title; the category and check-in join the detail line.
+    val isAssist = row.technique == RecoverySession.TECHNIQUE_NONE && row.actionId != null
+    val label = when {
+        isAssist -> stringResource(
+            row.actionId?.let { UrgeCatalog.byId(it)?.labelRes } ?: R.string.recovery_history_bucket_assist,
+        )
+        row.technique == RecoverySession.TECHNIQUE_NONE -> stringResource(R.string.recovery_history_logged_only)
+        else -> stringResource(techniqueTitle(row.technique))
+    }
     Row(
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.Top,
@@ -419,25 +424,35 @@ private fun HistoryRow(
                 // The habit leads: under All habits it is the row's context, and a bare log
                 // with no details otherwise would not say which streak it belongs to.
                 if (habitLabel != null) add(habitLabel)
-                // No outcome for a bare log: its title already says nothing was practised,
-                // and the row is born COMPLETED, so [outcomeLabel] would call it "Completed"
-                // — one row claiming both.
-                if (row.technique != RecoverySession.TECHNIQUE_NONE) {
+                if (isAssist) {
+                    // Plan §E2.11: outcome, optional category, check-in. The category is inside
+                    // the History gate, which is the page's whole content.
                     add(stringResource(outcomeLabel(row.state)))
-                }
-                val intensity = row.intensityEnd ?: row.intensityStart
-                if (intensity != null) {
-                    add(stringResource(R.string.recovery_history_intensity, intensity))
-                }
-                val duration = row.durationSec
-                if (duration != null && duration > 0) {
-                    add(
-                        stringResource(
-                            R.string.recovery_history_duration,
-                            duration / 60,
-                            duration % 60,
-                        ),
-                    )
+                    row.category?.let { id ->
+                        UrgeCategory.fromId(id)?.let { add(categoryLabel(it)) }
+                    }
+                    row.checkIn?.let { add(stringResource(checkInLabel(it))) }
+                } else {
+                    // No outcome for a bare log: its title already says nothing was practised,
+                    // and the row is born COMPLETED, so [outcomeLabel] would call it "Completed"
+                    // — one row claiming both.
+                    if (row.technique != RecoverySession.TECHNIQUE_NONE) {
+                        add(stringResource(outcomeLabel(row.state)))
+                    }
+                    val intensity = row.intensityEnd ?: row.intensityStart
+                    if (intensity != null) {
+                        add(stringResource(R.string.recovery_history_intensity, intensity))
+                    }
+                    val duration = row.durationSec
+                    if (duration != null && duration > 0) {
+                        add(
+                            stringResource(
+                                R.string.recovery_history_duration,
+                                duration / 60,
+                                duration % 60,
+                            ),
+                        )
+                    }
                 }
             }
             if (details.isNotEmpty()) {
@@ -469,6 +484,14 @@ private fun HistoryRow(
             }
         }
     }
+}
+
+/** The one-tap check-in an assist row stored (plan §E2.11), in the log's plain words. */
+private fun checkInLabel(checkIn: String): Int = when (checkIn) {
+    RecoverySession.CHECK_IN_BETTER -> R.string.recovery_history_check_better
+    RecoverySession.CHECK_IN_SAME -> R.string.recovery_history_check_same
+    RecoverySession.CHECK_IN_WORSE -> R.string.recovery_history_check_worse
+    else -> R.string.recovery_history_check_skipped
 }
 
 /** Shared with the partner dashboard's received-activity rows (W5). */

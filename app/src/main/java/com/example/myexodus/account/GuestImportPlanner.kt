@@ -466,6 +466,9 @@ class GuestImportPlanner(
 
     private fun sessionContent(session: RecoverySession): SessionContent = SessionContent(
         technique = session.technique,
+        category = session.category,
+        actionId = session.actionId,
+        checkIn = session.checkIn,
         intensityStart = session.intensityStart,
         intensityEnd = session.intensityEnd,
         state = session.state,
@@ -488,6 +491,9 @@ class GuestImportPlanner(
      *  different IDs but equal content"); delivery bookkeeping is not content. */
     private data class SessionContent(
         val technique: String,
+        val category: String?,
+        val actionId: String?,
+        val checkIn: String?,
         val intensityStart: Int?,
         val intensityEnd: Int?,
         val state: String,

@@ -57,3 +57,6 @@ service-account*.json
 *.apk
 *.aab
 *.pfx
+
+# Owner-supplied research documents are local input, not published artifacts
+app/plans/*.docx

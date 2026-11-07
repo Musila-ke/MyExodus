@@ -1503,6 +1503,65 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * v25 → v26 (Urge Assist redesign 2026-11-07): the optional category, the assist action
+         * that ran, and the one-tap check-in. All nullable, so every existing row keeps its
+         * meaning; none of the three is ever mirrored to a partner.
+         */
+        val MIGRATION_25_26 = object : Migration(25, 26) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE recovery_session ADD COLUMN category TEXT",
+                ).use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE recovery_session ADD COLUMN action_id TEXT",
+                ).use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE recovery_session ADD COLUMN check_in TEXT",
+                ).use { it.step() }
+            }
+        }
+
+        /** v26 rollback (older build reinstalled): table rebuild removes the three assist
+         *  columns (not DROP COLUMN — SQLite 3.35+ only, same rationale as [MIGRATION_19_18]);
+         *  every session row survives. */
+        val MIGRATION_26_25 = object : Migration(26, 25) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS recovery_session_old (" +
+                        "id TEXT NOT NULL, technique TEXT NOT NULL, habit_id TEXT, " +
+                        "intensity_start INTEGER, intensity_end INTEGER, state TEXT NOT NULL, " +
+                        "started_at_epoch_ms INTEGER NOT NULL, ended_at_epoch_ms INTEGER, " +
+                        "duration_sec INTEGER, zone_id TEXT NOT NULL, entry TEXT NOT NULL, " +
+                        "false_alarm INTEGER NOT NULL, event_sequence INTEGER, PRIMARY KEY(id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO recovery_session_old (id, technique, habit_id, intensity_start, " +
+                        "intensity_end, state, started_at_epoch_ms, ended_at_epoch_ms, " +
+                        "duration_sec, zone_id, entry, false_alarm, event_sequence) " +
+                        "SELECT id, technique, habit_id, intensity_start, intensity_end, state, " +
+                        "started_at_epoch_ms, ended_at_epoch_ms, duration_sec, zone_id, entry, " +
+                        "false_alarm, event_sequence FROM recovery_session",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE recovery_session").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE recovery_session_old RENAME TO recovery_session",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_recovery_session_started_at_epoch_ms " +
+                        "ON recovery_session (started_at_epoch_ms)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_recovery_session_event_sequence " +
+                        "ON recovery_session (event_sequence)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_recovery_session_habit_id " +
+                        "ON recovery_session (habit_id)",
+                ).use { it.step() }
+            }
+        }
+
         /** v23 rollback (older build reinstalled): table rebuilds remove the identity and
          *  batch columns while every rule and journal row survives. */
         val MIGRATION_23_22 = object : Migration(23, 22) {
@@ -1816,6 +1875,7 @@ class AppRulesStoreFactory(
             MIGRATION_21_20, MIGRATION_21_22, MIGRATION_22_21, MIGRATION_22_23, MIGRATION_23_22,
             MIGRATION_23_24, MIGRATION_24_23,
             MIGRATION_24_25, MIGRATION_25_24,
+            MIGRATION_25_26, MIGRATION_26_25,
         )
     }
 }

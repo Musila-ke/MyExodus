@@ -75,24 +75,34 @@ internal data class HistoryCounts(
     val completed: Int = 0,
     val notFinished: Int = 0,
     val loggedOnly: Int = 0,
+    /** Urge Assist step episodes: technique-less rows that named an action (v26). */
+    val assist: Int = 0,
 ) {
-    val total: Int get() = completed + notFinished + loggedOnly
+    val total: Int get() = completed + notFinished + loggedOnly + assist
 }
 
 internal fun summarize(counts: List<SessionCount>): HistoryCounts {
     var completed = 0
     var notFinished = 0
     var loggedOnly = 0
+    var assist = 0
     counts.forEach { row ->
         val n = row.count.toInt()
         when {
+            row.state == RecoverySession.STATE_STARTED -> Unit
+            row.technique == RecoverySession.TECHNIQUE_NONE && row.actionId != null -> assist += n
             row.technique == RecoverySession.TECHNIQUE_NONE -> loggedOnly += n
             row.state == RecoverySession.STATE_COMPLETED -> completed += n
             row.state == RecoverySession.STATE_ABANDONED ||
                 row.state == RecoverySession.STATE_INTERRUPTED -> notFinished += n
         }
     }
-    return HistoryCounts(completed = completed, notFinished = notFinished, loggedOnly = loggedOnly)
+    return HistoryCounts(
+        completed = completed,
+        notFinished = notFinished,
+        loggedOnly = loggedOnly,
+        assist = assist,
+    )
 }
 
 /** Start of the window, or 0 for all time. Pure so the boundary is testable without a clock. */
@@ -212,12 +222,18 @@ internal fun HistorySummaryCard(
                 val completed = stringResource(R.string.recovery_history_completed)
                 val notFinished = stringResource(R.string.recovery_history_bucket_not_finished)
                 val loggedOnly = stringResource(R.string.recovery_history_bucket_logged_only)
+                val assist = stringResource(R.string.recovery_history_bucket_assist)
                 Text(
-                    listOf(
-                        stringResource(R.string.recovery_history_summary_part, completed, loaded.completed),
-                        stringResource(R.string.recovery_history_summary_part, notFinished, loaded.notFinished),
-                        stringResource(R.string.recovery_history_summary_part, loggedOnly, loaded.loggedOnly),
-                    ).joinToString(" · "),
+                    buildList {
+                        add(stringResource(R.string.recovery_history_summary_part, completed, loaded.completed))
+                        add(stringResource(R.string.recovery_history_summary_part, notFinished, loaded.notFinished))
+                        add(stringResource(R.string.recovery_history_summary_part, loggedOnly, loaded.loggedOnly))
+                        // Only once the event type exists for this user: a permanently zero
+                        // fourth bucket would be noise on every page before Urge Assist is used.
+                        if (loaded.assist > 0) {
+                            add(stringResource(R.string.recovery_history_summary_part, assist, loaded.assist))
+                        }
+                    }.joinToString(" · "),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

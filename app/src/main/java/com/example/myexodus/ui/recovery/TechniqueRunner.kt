@@ -65,8 +65,8 @@ fun TechniqueRunner(
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    when (technique.id) {
-        RecoveryResourceCatalog.URGE_SURFING -> PacedBreathing(
+    when {
+        technique.id == RecoveryResourceCatalog.URGE_SURFING -> PacedBreathing(
             technique = technique,
             hapticEnabled = hapticEnabled,
             onHapticChange = onHapticChange,
@@ -74,22 +74,22 @@ fun TechniqueRunner(
             onStop = onStop,
             modifier = modifier,
         )
-        RecoveryResourceCatalog.DELAY_TIMER -> DelayTimer(
+        technique.id == RecoveryResourceCatalog.DELAY_TIMER -> DelayTimer(
             technique = technique,
             ifThen = planItems,
             onCompleted = onCompleted,
             onStop = onStop,
             modifier = modifier,
         )
-        RecoveryResourceCatalog.SOBER -> SoberWalkthrough(
-            technique = technique,
-            ifThen = planItems.filter { it.kind == CoachingStep.KIND_IF_THEN },
+        technique.id == RecoveryResourceCatalog.VALUES_CARD -> ValuesCard(
+            values = planItems.filter { it.kind == CoachingStep.KIND_VALUE },
             onCompleted = onCompleted,
             onStop = onStop,
             modifier = modifier,
         )
-        RecoveryResourceCatalog.VALUES_CARD -> ValuesCard(
-            values = planItems.filter { it.kind == CoachingStep.KIND_VALUE },
+        technique.phases.isNotEmpty() -> PhaseWalkthrough(
+            technique = technique,
+            ifThen = planItems.filter { it.kind == CoachingStep.KIND_IF_THEN },
             onCompleted = onCompleted,
             onStop = onStop,
             modifier = modifier,
@@ -263,7 +263,7 @@ private fun DelayTimer(
 }
 
 @Composable
-private fun SoberWalkthrough(
+private fun PhaseWalkthrough(
     technique: RecoveryTechnique,
     ifThen: List<CoachingStep>,
     onCompleted: () -> Unit,
@@ -294,16 +294,18 @@ private fun SoberWalkthrough(
                 }
                 StepNode(
                     number = i + 1,
-                    titleRes = soberPhaseTitle(p),
+                    titleRes = phaseTitle(p),
                     state = state,
                     isLast = i == phases.lastIndex,
                 ) {
                     if (state == StepState.Current) {
                         Text(
-                            stringResource(soberPhaseBody(p)),
+                            stringResource(phaseBody(p)),
                             style = MaterialTheme.typography.bodyLarge,
                         )
-                        if (p == RecoveryResourceCatalog.SOBER_RESPOND) {
+                        // The user's own if-then items land on the closing phase (SOBER's
+                        // "respond"), where a next step is what the phase is asking for.
+                        if (technique.showsIfThen && i == phases.lastIndex) {
                             CoachingItems(items = ifThen, emptyRes = R.string.recovery_sober_no_ifthen)
                         }
                     }
@@ -336,20 +338,36 @@ private fun SoberWalkthrough(
     }
 }
 
-private fun soberPhaseTitle(phase: String): Int = when (phase) {
+private fun phaseTitle(phase: String): Int = when (phase) {
     RecoveryResourceCatalog.SOBER_STOP -> R.string.recovery_sober_stop_title
     RecoveryResourceCatalog.SOBER_OBSERVE -> R.string.recovery_sober_observe_title
     RecoveryResourceCatalog.SOBER_BREATHE -> R.string.recovery_sober_breathe_title
     RecoveryResourceCatalog.SOBER_EXPAND -> R.string.recovery_sober_expand_title
-    else -> R.string.recovery_sober_respond_title
+    RecoveryResourceCatalog.SOBER_RESPOND -> R.string.recovery_sober_respond_title
+    RecoveryResourceCatalog.GROUNDING_SEE -> R.string.recovery_grounding_see_title
+    RecoveryResourceCatalog.GROUNDING_HEAR -> R.string.recovery_grounding_hear_title
+    RecoveryResourceCatalog.GROUNDING_FEEL -> R.string.recovery_grounding_feel_title
+    RecoveryResourceCatalog.GROUNDING_SMELL -> R.string.recovery_grounding_smell_title
+    RecoveryResourceCatalog.GROUNDING_TASTE -> R.string.recovery_grounding_taste_title
+    RecoveryResourceCatalog.DEFUSION_NOTICE -> R.string.recovery_defusion_notice_title
+    RecoveryResourceCatalog.DEFUSION_NAME -> R.string.recovery_defusion_name_title
+    else -> R.string.recovery_defusion_release_title
 }
 
-private fun soberPhaseBody(phase: String): Int = when (phase) {
+private fun phaseBody(phase: String): Int = when (phase) {
     RecoveryResourceCatalog.SOBER_STOP -> R.string.recovery_sober_stop_body
     RecoveryResourceCatalog.SOBER_OBSERVE -> R.string.recovery_sober_observe_body
     RecoveryResourceCatalog.SOBER_BREATHE -> R.string.recovery_sober_breathe_body
     RecoveryResourceCatalog.SOBER_EXPAND -> R.string.recovery_sober_expand_body
-    else -> R.string.recovery_sober_respond_body
+    RecoveryResourceCatalog.SOBER_RESPOND -> R.string.recovery_sober_respond_body
+    RecoveryResourceCatalog.GROUNDING_SEE -> R.string.recovery_grounding_see_body
+    RecoveryResourceCatalog.GROUNDING_HEAR -> R.string.recovery_grounding_hear_body
+    RecoveryResourceCatalog.GROUNDING_FEEL -> R.string.recovery_grounding_feel_body
+    RecoveryResourceCatalog.GROUNDING_SMELL -> R.string.recovery_grounding_smell_body
+    RecoveryResourceCatalog.GROUNDING_TASTE -> R.string.recovery_grounding_taste_body
+    RecoveryResourceCatalog.DEFUSION_NOTICE -> R.string.recovery_defusion_notice_body
+    RecoveryResourceCatalog.DEFUSION_NAME -> R.string.recovery_defusion_name_body
+    else -> R.string.recovery_defusion_release_body
 }
 
 private enum class StepState { Done, Current, Upcoming }

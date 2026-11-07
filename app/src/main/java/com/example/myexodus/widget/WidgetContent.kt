@@ -132,6 +132,8 @@ internal fun DesertDawnWidgetContent(
     logRelapse: Action?,
     logUrge: Action,
     reachOut: Action,
+    /** Owner add-on 2026-11-07: opens Urge Assist directly. */
+    urgeAssist: Action,
 ) {
     val context = LocalContext.current
     val statusText = context.getString(view.status.labelRes())
@@ -158,6 +160,7 @@ internal fun DesertDawnWidgetContent(
                 logRelapse = logRelapse,
                 logUrge = logUrge,
                 reachOut = reachOut,
+                urgeAssist = urgeAssist,
             )
 
             LocalSize.current.width < WIDE_MIN_WIDTH -> NarrowContent(
@@ -176,6 +179,7 @@ internal fun DesertDawnWidgetContent(
                 logRelapse = logRelapse,
                 logUrge = logUrge,
                 reachOut = reachOut,
+                urgeAssist = urgeAssist,
             )
         }
     }
@@ -244,6 +248,7 @@ private fun ExpandedContent(
     logRelapse: Action?,
     logUrge: Action,
     reachOut: Action,
+    urgeAssist: Action,
 ) {
     val context = LocalContext.current
     val caption = captionFor(context, view, includeMilestone = true)
@@ -273,7 +278,7 @@ private fun ExpandedContent(
             )
             Spacer(GlanceModifier.height(4.dp))
         }
-        ControlRow(logRelapse, logUrge, reachOut, discreet = view.discreet)
+        ControlRow(logRelapse, logUrge, reachOut, view.discreet, urgeAssist = urgeAssist)
     }
 }
 
@@ -344,6 +349,7 @@ private fun TallContent(
     logRelapse: Action?,
     logUrge: Action,
     reachOut: Action,
+    urgeAssist: Action,
 ) {
     val context = LocalContext.current
     val caption = captionFor(context, view, includeMilestone = false)
@@ -395,6 +401,7 @@ private fun TallContent(
                 logUrge = logUrge,
                 reachOut = reachOut,
                 discreet = view.discreet,
+                urgeAssist = urgeAssist,
                 modifier = GlanceModifier,
             )
         }
@@ -491,16 +498,18 @@ private fun StatusChip(status: DisplayedStatus, text: String) {
  * user is dealing with; a speech bubble tells them nothing. The action's words exist only on the
  * transient hold surface and in the content descriptions (read by TalkBack, never drawn).
  *
- * The two log controls draw the same glyphs as the app's own buttons — [R.drawable.ic_log_urge]
+ * The log controls draw the same glyphs as the app's own buttons — [R.drawable.ic_log_urge]
  * is Recovery's "Log an urge", [R.drawable.ic_log_relapse] is the streak card's "Log a relapse" —
  * so one shape means one action on both surfaces (owner: "avoid confusion and allow
- * recognition"). The relapse circle hides when the sample binds no habit: there would be no
- * track to end. It leads the row because ending a streak is the graver act, and sits tonal like
- * the urge circle; reach-out keeps the one-filled-control role.
+ * recognition"). [R.drawable.ic_widget_assist] opens Urge Assist (owner add-on 2026-11-07) and
+ * leads the row as the in-the-moment entry; the relapse circle follows because ending a streak
+ * is the graver act, and hides when the sample binds no habit (no track to end). All three sit
+ * tonal; reach-out keeps the one-filled-control role.
  *
- * All three are plain taps onto the hold-confirm surface, where the long-press-and-ring
- * protection lives — no launcher RemoteViews host delivers touch streams, so the ring cannot
- * live on the widget itself (ADR #159).
+ * The three write controls are plain taps onto the hold-confirm surface, where the
+ * long-press-and-ring protection lives — no launcher RemoteViews host delivers touch streams, so
+ * the ring cannot live on the widget itself (ADR #159). The assist control writes nothing and
+ * carries no hold: it only opens the app.
  */
 @Composable
 private fun ControlRow(
@@ -508,6 +517,12 @@ private fun ControlRow(
     logUrge: Action,
     reachOut: Action,
     discreet: Boolean,
+    /**
+     * Null on the narrow 2×2: four 28dp circles plus gaps need ~127dp against the cell's ~104dp
+     * of content width, so that variant keeps the three controls it already drew. The two wide
+     * variants have room for the fourth.
+     */
+    urgeAssist: Action? = null,
     size: Dp = 36.dp,
     modifier: GlanceModifier = GlanceModifier.fillMaxWidth(),
     alignment: Alignment.Horizontal = Alignment.End,
@@ -522,6 +537,17 @@ private fun ControlRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalAlignment = alignment,
     ) {
+        urgeAssist?.let {
+            ActionCircle(
+                iconRes = R.drawable.ic_widget_assist,
+                contentDescription = context.getString(R.string.widget_action_assist),
+                action = it,
+                background = colors.secondaryContainer,
+                tint = colors.onSecondaryContainer,
+                size = size,
+            )
+            Spacer(GlanceModifier.width(gap))
+        }
         logRelapse?.let {
             ActionCircle(
                 iconRes = R.drawable.ic_log_relapse,

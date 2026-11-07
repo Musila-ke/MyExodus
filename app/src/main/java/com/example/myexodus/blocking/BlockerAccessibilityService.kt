@@ -1112,6 +1112,8 @@ class BlockerAccessibilityService : AccessibilityService() {
             Intent(this, MainActivity::class.java)
                 .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_RECOVERY)
                 .putExtra(MainActivity.EXTRA_RECOVERY_ENTRY, RecoverySession.ENTRY_BLOCK_SCREEN)
+                // Plan §7 Phase 4 step 5: the block lands on Urge Assist, not the hub.
+                .putExtra(MainActivity.EXTRA_OPEN_ASSIST, true)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
         )
     }

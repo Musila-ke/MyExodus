@@ -5,30 +5,30 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Air
-import androidx.compose.material.icons.outlined.Bookmark
-import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ChevronRight
-import androidx.compose.material.icons.outlined.DirectionsWalk
 import androidx.compose.material.icons.outlined.LockOpen
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SelfImprovement
 import androidx.compose.material.icons.outlined.SupportAgent
 import androidx.compose.material.icons.outlined.Timer
+import androidx.compose.material.icons.outlined.WavingHand
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -49,8 +49,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -70,8 +70,8 @@ import com.example.myexodus.recovery.RecoveryPlanRepository
 import com.example.myexodus.recovery.RecoveryResourceCatalog
 import com.example.myexodus.recovery.RecoverySessionRepository
 import com.example.myexodus.recovery.RecoveryTechnique
+import com.example.myexodus.recovery.UrgeCatalog
 import com.example.myexodus.ui.BackRow
-import com.example.myexodus.ui.NavTile
 import com.example.myexodus.ui.SecureSurface
 import com.example.myexodus.ui.StatusPill
 import com.example.myexodus.ui.WindowWidth
@@ -85,9 +85,17 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private const val VIEW_CRISIS = "crisis"
+/** Exposed for the post-lapse sheet's "Get help now" (plan §E2.12). */
+internal const val RECOVERY_VIEW_CRISIS = "crisis"
 private const val VIEW_TECHNIQUES = "techniques"
 private const val VIEW_PLAN = "plan"
+private const val VIEW_PLAN_EDIT = "plan_edit"
+private const val VIEW_PREFS = "prefs"
+private const val VIEW_RISK_WINDOWS = "risk_windows"
+private const val VIEW_FRICTION_TIMER = "friction_timer"
+
+/** Assist entry points outside this tab (block screen, Home's action dial, widget) request it. */
+internal const val RECOVERY_VIEW_ASSIST = "assist"
 
 /**
  * Recovery tab — the app-side surface of the shipped friction session (V1 Req 13) plus the
@@ -118,6 +126,16 @@ fun RecoveryScreen(
     /** The habit whose streak this surface displays; urge rows logged here carry its id. */
     habitId: String? = null,
     onEntryConsumed: () -> Unit = {},
+    /** History lives on the Streaks tab (owner ruling 2026-11-07); the hub links there. */
+    onOpenHistory: () -> Unit = {},
+    /** Urge Assist support strip + hub reach-out row: the pair's name and the SOS sender. */
+    partnerName: String? = null,
+    onReachOut: () -> Unit = {},
+    partnerMessageSent: Boolean = false,
+    partnerMessageStatus: String? = null,
+    /** Set by the block screen, the widget, or Home's action dial to open Urge Assist on arrival. */
+    requestedView: String? = null,
+    onViewConsumed: () -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
     var view by rememberSaveable { mutableStateOf<String?>(null) }
@@ -143,6 +161,12 @@ fun RecoveryScreen(
             // whichever deep link happened to bring the user here earlier this session.
             onEntryConsumed()
         }
+    }
+
+    LaunchedEffect(requestedView) {
+        val requested = requestedView ?: return@LaunchedEffect
+        view = requested
+        onViewConsumed()
     }
 
     // Repository work on IO: the store open is a synchronous SQLCipher call that can block
@@ -236,12 +260,28 @@ fun RecoveryScreen(
     val technique = view?.let { RecoveryResourceCatalog.byId(it) }
 
     when {
-        view == VIEW_CRISIS -> Column(modifier) {
+        view == RECOVERY_VIEW_ASSIST -> UrgeAssistScreen(
+            sessions = sessions,
+            prefs = prefs,
+            planItems = planItems,
+            entry = visitEntry,
+            habitId = habitId,
+            inRiskWindow = inRiskWindow,
+            partnerName = partnerName,
+            onReachOut = onReachOut,
+            partnerMessageSent = partnerMessageSent,
+            partnerMessageStatus = partnerMessageStatus,
+            onRouteHome = onRouteHome,
+            onBack = { view = null },
+            modifier = modifier,
+        )
+        view == RECOVERY_VIEW_CRISIS -> Column(modifier) {
             BackRow(label = stringResource(R.string.recovery_crisis_back), onBack = { view = null })
             CrisisScreen()
         }
         view == VIEW_TECHNIQUES -> TechniquesView(
             inRiskWindow = inRiskWindow,
+            prefs = prefs,
             onOpenTechnique = { view = it.id },
             onBack = { view = null },
             modifier = modifier,
@@ -249,6 +289,32 @@ fun RecoveryScreen(
         view == VIEW_PLAN -> PlanView(
             items = planItems,
             activeWindowId = activeWindowId,
+            onEdit = { view = VIEW_PLAN_EDIT },
+            onOpenPrefs = { view = VIEW_PREFS },
+            onBack = { view = null },
+            modifier = modifier,
+        )
+        view == VIEW_PREFS -> RecoveryPreferencesScreen(
+            prefs = prefs,
+            onBack = { view = VIEW_PLAN },
+            modifier = modifier,
+        )
+        view == VIEW_PLAN_EDIT -> CoachingPlanScreen(
+            planRepository = planRepository,
+            rulesRepository = repository,
+            prefs = prefs,
+            onBack = { view = VIEW_PLAN },
+            modifier = modifier,
+        )
+        view == VIEW_RISK_WINDOWS -> RiskWindowsScreen(
+            planRepository = planRepository,
+            prefs = prefs,
+            onBack = { view = null },
+            modifier = modifier,
+        )
+        view == VIEW_FRICTION_TIMER -> FrictionTimerScreen(
+            recoveryStore = recoveryStore,
+            prefs = prefs,
             onBack = { view = null },
             modifier = modifier,
         )
@@ -268,7 +334,6 @@ fun RecoveryScreen(
         }
         else -> HomeView(
             liveSessions = liveSessions,
-            inRiskWindow = inRiskWindow,
             onOverride = { ruleId ->
                 val live = liveSessions.firstOrNull { it.state.ruleId == ruleId }
                 if (live != null) {
@@ -283,10 +348,15 @@ fun RecoveryScreen(
                 }
             },
             onLeaveAlone = onRouteHome,
-            onOpenTechnique = { view = it.id },
+            onOpenAssist = { view = RECOVERY_VIEW_ASSIST },
+            partnerName = partnerName,
+            onReachOut = onReachOut,
             onOpenTechniques = { view = VIEW_TECHNIQUES },
             onOpenPlan = { view = VIEW_PLAN },
-            onOpenCrisis = { view = VIEW_CRISIS },
+            onOpenRiskWindows = { view = VIEW_RISK_WINDOWS },
+            onOpenFrictionTimer = { view = VIEW_FRICTION_TIMER },
+            onOpenCrisis = { view = RECOVERY_VIEW_CRISIS },
+            onOpenHistory = onOpenHistory,
             logOnly = { intensity ->
                 scope.launch(Dispatchers.IO) {
                     sessions.logOnly(
@@ -386,6 +456,9 @@ private fun TechniqueSession(
         UrgeLogSheet(
             onDismiss = { logging = false },
             onSubmit = { intensity ->
+                // Closed first: a sheet still on screen during the write takes a second tap
+                // and fires the navigation below twice.
+                logging = false
                 val id = sessionId
                 scope.launch(Dispatchers.IO) {
                     // Awaited before navigating away: this scope dies with the composition, so
@@ -394,7 +467,6 @@ private fun TechniqueSession(
                     if (id != null) {
                         sessions.finish(id, RecoverySession.STATE_COMPLETED, intensity, System.currentTimeMillis())
                     }
-                    logging = false
                     onBack()
                     onRouteHome()
                 }
@@ -403,12 +475,6 @@ private fun TechniqueSession(
     }
 }
 
-/**
- * The Recovery hub. The dense page was split (owner ruling 2026-09-22): reference material
- * (the full catalog, the coaching plan, history) moved behind icon+label tiles, while the
- * three things an urge needs immediately stayed — the live state, the log action, and the
- * crisis path, which is never gated behind a tap.
- */
 /** One live session as the hub renders it: persisted state + the rule that still blocks. */
 private data class LiveSession(
     val state: RecoveryState,
@@ -418,30 +484,38 @@ private data class LiveSession(
     val overrideAvailable: Boolean,
 )
 
+/**
+ * The Recovery hub, "Field Ledger" (plan §E2.1/§E3). One destination, hairline rows, and a
+ * single raised surface for a live block — no icon discs, no card stack. The crisis path keeps
+ * its one-tap presence and is never gated.
+ */
 @Composable
 private fun HomeView(
     liveSessions: List<LiveSession>,
-    inRiskWindow: Boolean,
     onOverride: (String) -> Unit,
     onLeaveAlone: () -> Unit,
-    onOpenTechnique: (RecoveryTechnique) -> Unit,
+    onOpenAssist: () -> Unit,
+    partnerName: String?,
+    onReachOut: () -> Unit,
     onOpenTechniques: () -> Unit,
     onOpenPlan: () -> Unit,
+    onOpenRiskWindows: () -> Unit,
+    onOpenFrictionTimer: () -> Unit,
     onOpenCrisis: () -> Unit,
+    onOpenHistory: () -> Unit,
     logOnly: (Int?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var logging by remember { mutableStateOf(false) }
-    val suggested = RecoveryResourceCatalog.recommended(rating = null, inRiskWindow = inRiskWindow)
     val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
     Column(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = sidePadding, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .padding(horizontal = sidePadding, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
-        Column {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(stringResource(R.string.recovery_title), style = MaterialTheme.typography.headlineSmall)
             Text(
                 stringResource(R.string.recovery_subtitle),
@@ -450,86 +524,82 @@ private fun HomeView(
             )
         }
 
+        // The live block is the only raised surface on the page.
         if (liveSessions.isEmpty()) {
-            IdleCard()
+            IdleLine()
         } else {
-            // Each session is one visual group (timer → its own override): tighter inside the
-            // group than between groups, so a card's escape hatch can never read as belonging
-            // to the next app's timer.
             liveSessions.forEach { live ->
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ActiveTimerCard(
-                        blockedTarget = live.rule.blockedPackage,
-                        remainingSeconds = live.remainingSeconds,
-                        frozenAtSeconds = live.frozenAtSeconds,
-                    )
-                    OverrideCard(
-                        overrideAvailable = live.overrideAvailable,
-                        onOverride = { onOverride(live.state.ruleId) },
-                    )
-                }
+                ActiveSessionBlock(
+                    live = live,
+                    onOverride = { onOverride(live.state.ruleId) },
+                    onChangeWait = onOpenFrictionTimer,
+                    onLeaveAlone = onLeaveAlone,
+                )
             }
         }
 
-        // The one urgent action, above the reference material (owner directive 2026-10-21).
-        // Owner directive 2026-11-01: as an icon-led action card, not a full-width bar — it
-        // leads the idle page in the primary container and steps back to a neutral row while
-        // the live timer keeps the page's visual weight.
-        LogUrgeCard(hero = liveSessions.isEmpty(), onClick = { logging = true })
+        RightNowBlock(onStart = onOpenAssist)
 
-        if (liveSessions.isNotEmpty()) {
-            // Owner request 2026-11-01: the path for "I've come to my senses — I'll leave the
-            // block alone". Nothing is unlocked or deleted; the session rows stay and the
-            // countdowns keep their deadlines, exactly as leaving any other way would.
-            LeaveAloneCard(onClick = onLeaveAlone)
-            Text(
-                stringResource(R.string.recovery_leave_note),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (partnerName != null) {
+                SupportRow(
+                    icon = Icons.Outlined.WavingHand,
+                    title = stringResource(R.string.recovery_reach_out_named, partnerName),
+                    onClick = onReachOut,
+                )
+            }
+            SupportRow(
+                icon = Icons.Outlined.SupportAgent,
+                title = stringResource(R.string.recovery_crisis_link),
+                onClick = onOpenCrisis,
+                alert = true,
             )
+            LogUrgeRow(onClick = { logging = true })
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                stringResource(R.string.recovery_suggested_title),
-                style = MaterialTheme.typography.titleMedium,
+            SectionEyebrow(stringResource(R.string.recovery_prepare_label))
+            Hairline()
+            // Techniques lead: practice is the door a person in an urge is most likely to want.
+            PrepareRow(
+                icon = Icons.Outlined.SelfImprovement,
+                titleRes = R.string.recovery_tile_techniques,
+                descriptionRes = R.string.recovery_prepare_techniques_desc,
+                onClick = onOpenTechniques,
             )
-            if (inRiskWindow) {
-                Text(
-                    stringResource(R.string.recovery_risk_window_note),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            // One suggestion leads (v2 M1.3); the rest of the catalog is one tile away.
-            TechniqueCard(technique = suggested, onOpen = { onOpenTechnique(suggested) })
+            Hairline(alpha = 0.5f)
+            PrepareRow(
+                icon = Icons.Outlined.Checklist,
+                titleRes = R.string.recovery_plan_title,
+                descriptionRes = R.string.recovery_prepare_plan_desc,
+                onClick = onOpenPlan,
+            )
+            Hairline(alpha = 0.5f)
+            PrepareRow(
+                icon = Icons.Outlined.Schedule,
+                titleRes = R.string.recovery_windows_title,
+                descriptionRes = R.string.recovery_prepare_windows_desc,
+                onClick = onOpenRiskWindows,
+            )
+            Hairline(alpha = 0.5f)
+            PrepareRow(
+                icon = Icons.Outlined.Timer,
+                titleRes = R.string.recovery_timer_label,
+                descriptionRes = R.string.recovery_prepare_friction_desc,
+                onClick = onOpenFrictionTimer,
+            )
         }
 
-        // Icon + label subpages. History moved to the Streaks tab (owner ruling 2026-11-07):
-        // it is a retrospective page, and with rows linked to habits it belongs with the
-        // progress tab. The crisis path keeps its one-tap presence (standing rule: emergency
-        // access is never gated) and signs itself with the error role.
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            NavTile(
-                icon = Icons.Outlined.SelfImprovement,
-                label = stringResource(R.string.recovery_tile_techniques),
-                onClick = onOpenTechniques,
-                modifier = Modifier.weight(1f),
-            )
-            NavTile(
-                icon = Icons.Outlined.Checklist,
-                label = stringResource(R.string.recovery_plan_title),
-                onClick = onOpenPlan,
-                modifier = Modifier.weight(1f),
+        TextButton(
+            onClick = onOpenHistory,
+            modifier = Modifier.heightIn(min = 48.dp),
+            contentPadding = PaddingValues(horizontal = 0.dp),
+        ) {
+            Text(
+                stringResource(R.string.recovery_history_link),
+                style = MaterialTheme.typography.labelLarge,
             )
         }
-        NavTile(
-            icon = Icons.Outlined.SupportAgent,
-            label = stringResource(R.string.recovery_crisis_link),
-            onClick = onOpenCrisis,
-            modifier = Modifier.fillMaxWidth(),
-            iconTint = MaterialTheme.colorScheme.error,
-        )
     }
 
     if (logging) {
@@ -543,80 +613,180 @@ private fun HomeView(
     }
 }
 
+/** Signature move (plan §E3): the one block on the hub that reads as a destination. */
 @Composable
-private fun TechniqueCard(technique: RecoveryTechnique, onOpen: () -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+private fun RightNowBlock(onStart: () -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        Hairline()
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                .clickable(onClick = onStart)
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // The reference tile grammar (icon disc + title/body + trailing affordance): one
-            // recognizable glyph per technique, so the list scans by shape before it is read.
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = techniqueIcon(technique.id),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        stringResource(techniqueTitle(technique.id)),
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    // The effort was a grey caption doing the same job as the title; as a pill it
-                    // becomes the thing a scanning user actually sorts these by (the reference row
-                    // geometry: content left, the one label that differs on the trailing edge).
-                    StatusPill(stringResource(effortLabel(technique.effort.name)))
-                }
-                Text(
-                    stringResource(techniqueDescription(technique.id)),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Icon(
-                imageVector = Icons.Outlined.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            SectionEyebrow(stringResource(R.string.recovery_now_eyebrow))
+            Text(
+                stringResource(R.string.recovery_now_title),
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold,
             )
+            Text(
+                stringResource(R.string.recovery_now_body),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(onClick = onStart, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text(stringResource(R.string.recovery_now_start))
+            }
         }
     }
 }
 
-private fun techniqueIcon(id: String): ImageVector = when (id) {
-    RecoveryResourceCatalog.URGE_SURFING -> Icons.Outlined.Air
-    RecoveryResourceCatalog.DELAY_TIMER -> Icons.Outlined.Timer
-    RecoveryResourceCatalog.SOBER -> Icons.Outlined.DirectionsWalk
-    else -> Icons.Outlined.Bookmark
+@Composable
+private fun IdleLine() {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Hairline()
+        Text(
+            stringResource(R.string.recovery_idle_line),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
-/** All four techniques — the "choose another" path the hub's single suggestion promises. */
+@Composable
+private fun SupportRow(
+    icon: ImageVector,
+    title: String,
+    onClick: () -> Unit,
+    alert: Boolean = false,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+        Text(
+            title,
+            style = MaterialTheme.typography.titleMedium,
+            color =
+                if (alert) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            imageVector = Icons.Outlined.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+@Composable
+private fun LogUrgeRow(onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        // The widget's own glyph, so one icon means one action on both surfaces.
+        Icon(
+            painter = painterResource(R.drawable.ic_log_urge),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(stringResource(R.string.recovery_log_action), style = MaterialTheme.typography.titleMedium)
+            Text(
+                stringResource(R.string.recovery_log_caption),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(
+            imageVector = Icons.Outlined.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+@Composable
+private fun PrepareRow(icon: ImageVector, titleRes: Int, descriptionRes: Int, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 64.dp)
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(stringResource(titleRes), style = MaterialTheme.typography.titleMedium)
+            Text(
+                stringResource(descriptionRes),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(
+            imageVector = Icons.Outlined.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+@Composable
+internal fun SectionEyebrow(text: String) {
+    Text(
+        text.uppercase(),
+        style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.6.sp),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+internal fun Hairline(alpha: Float = 0.7f) {
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = alpha))
+}
+
+/** The practice library (plan §E2.6): editorial rows, no icon discs. */
 @Composable
 private fun TechniquesView(
     inRiskWindow: Boolean,
+    prefs: RecoveryPrefs,
     onOpenTechnique: (RecoveryTechnique) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Plan §E2.6: "Not for me" is the user-controlled retry-later mechanism. The disliked set
+    // is stored by action id, because that is what the assist engine filters on.
+    var disliked by remember { mutableStateOf(prefs.dislikedActions) }
     val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
     Column(
         modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()),
@@ -624,8 +794,13 @@ private fun TechniquesView(
         BackRow(label = stringResource(R.string.recovery_tile_techniques), onBack = onBack)
         Column(
             modifier = Modifier.padding(horizontal = sidePadding, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            Text(
+                stringResource(R.string.recovery_techniques_subtitle),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             if (inRiskWindow) {
                 Text(
                     stringResource(R.string.recovery_risk_window_note),
@@ -633,17 +808,122 @@ private fun TechniquesView(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            RecoveryResourceCatalog.ordered(inRiskWindow).forEach { technique ->
-                TechniqueCard(technique = technique, onOpen = { onOpenTechnique(technique) })
+            Hairline()
+            val all = RecoveryResourceCatalog.ordered(inRiskWindow)
+            val techniques = all.filterNot { techniqueId(it) in disliked }
+            techniques.forEachIndexed { index, technique ->
+                TechniqueRow(
+                    technique = technique,
+                    onOpen = { onOpenTechnique(technique) },
+                    onNotForMe = {
+                        prefs.markDisliked(techniqueId(technique))
+                        disliked = prefs.dislikedActions
+                    },
+                )
+                if (index < techniques.lastIndex) Hairline(alpha = 0.5f)
+            }
+            val hidden = all.filter { techniqueId(it) in disliked }
+            if (hidden.isNotEmpty()) {
+                Hairline()
+                SectionEyebrow(stringResource(R.string.recovery_techniques_hidden))
+                hidden.forEach { technique ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            stringResource(techniqueTitle(technique.id)),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            onClick = {
+                                prefs.clearDisliked(techniqueId(technique))
+                                disliked = prefs.dislikedActions
+                            },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) {
+                            Text(stringResource(R.string.recovery_show_again))
+                        }
+                    }
+                }
             }
         }
     }
 }
 
+/** The assist action that hosts a practice technique; the disliked set stores action ids. */
+private fun techniqueId(technique: RecoveryTechnique): String =
+    UrgeCatalog.actionForTechnique(technique.id)?.id ?: technique.id
+
+@Composable
+private fun TechniqueRow(
+    technique: RecoveryTechnique,
+    onOpen: () -> Unit,
+    onNotForMe: () -> Unit,
+) {
+    val effort = stringResource(effortLabel(technique.effort.name))
+    val minutes = technique.defaultDurationMinutes
+    val meta = if (minutes != null) {
+        stringResource(R.string.recovery_technique_meta, effort, minutes)
+    } else {
+        effort
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen)
+            .padding(vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                stringResource(techniqueTitle(technique.id)),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                meta,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            stringResource(techniqueDescription(technique.id)),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            TextButton(
+                onClick = onOpen,
+                modifier = Modifier.heightIn(min = 48.dp),
+                contentPadding = PaddingValues(horizontal = 0.dp),
+            ) {
+                Text(stringResource(R.string.recovery_technique_practice))
+            }
+            TextButton(
+                onClick = onNotForMe,
+                modifier = Modifier.heightIn(min = 48.dp),
+                contentPadding = PaddingValues(horizontal = 0.dp),
+            ) {
+                Text(stringResource(R.string.recovery_technique_not_for_me))
+            }
+        }
+    }
+}
+
+/** The plan read state (plan §E2.7): ungated ledger; the editor is the gated next step. */
 @Composable
 private fun PlanView(
     items: List<CoachingStep>,
     activeWindowId: String?,
+    onEdit: () -> Unit,
+    onOpenPrefs: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -651,16 +931,34 @@ private fun PlanView(
     Column(
         modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()),
     ) {
-        BackRow(label = stringResource(R.string.recovery_plan_title), onBack = onBack)
+        BackRow(
+            label = stringResource(R.string.recovery_plan_title),
+            onBack = onBack,
+            trailing = {
+                TextButton(onClick = onEdit, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text(stringResource(R.string.recovery_plan_edit))
+                }
+            },
+        )
         Column(modifier = Modifier.padding(horizontal = sidePadding, vertical = 8.dp)) {
-            PlanItems(items = items, activeWindowId = activeWindowId)
+            PlanItems(items = items, activeWindowId = activeWindowId, onAdd = onEdit)
+            // Plan §E2.7: the preferences live here rather than behind a Settings trip. Their
+            // own screen carries its own gate, so this ledger stays readable.
+            Hairline()
+            TextButton(
+                onClick = onOpenPrefs,
+                modifier = Modifier.heightIn(min = 48.dp),
+                contentPadding = PaddingValues(horizontal = 0.dp),
+            ) {
+                Text(stringResource(R.string.recovery_prefs_title))
+            }
         }
     }
 }
 
 /** The user's coaching plan (W1/W3): steps, if-then plans, and value statements. */
 @Composable
-private fun PlanItems(items: List<CoachingStep>, activeWindowId: String?) {
+internal fun PlanItems(items: List<CoachingStep>, activeWindowId: String?, onAdd: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (items.isEmpty()) {
             Text(
@@ -668,6 +966,13 @@ private fun PlanItems(items: List<CoachingStep>, activeWindowId: String?) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            TextButton(
+                onClick = onAdd,
+                modifier = Modifier.heightIn(min = 48.dp),
+                contentPadding = PaddingValues(horizontal = 0.dp),
+            ) {
+                Text(stringResource(R.string.recovery_plan_add))
+            }
             return@Column
         }
         listOf(
@@ -677,22 +982,18 @@ private fun PlanItems(items: List<CoachingStep>, activeWindowId: String?) {
         ).forEach { (kind, label) ->
             val kindItems = items.filter { it.kind == kind }
             if (kindItems.isEmpty()) return@forEach
-            Text(
-                stringResource(label),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            SectionEyebrow(stringResource(label))
+            Hairline()
             kindItems.forEach { item ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     BulletLine(item.actionText, modifier = Modifier.weight(1f))
                     // OPEN-4 default: every item shows; one tied to the window that is active now
                     // is marked, so the plan can be read in order and still answer "what now?".
                     if (activeWindowId != null && item.associatedTriggerWindow == activeWindowId) {
-                        Text(
-                            stringResource(R.string.recovery_plan_now),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
+                        StatusPill(stringResource(R.string.recovery_plan_now))
                     }
                 }
             }
@@ -704,6 +1005,8 @@ internal fun techniqueTitle(id: String): Int = when (id) {
     RecoveryResourceCatalog.URGE_SURFING -> R.string.recovery_tech_urge_surfing_title
     RecoveryResourceCatalog.DELAY_TIMER -> R.string.recovery_tech_delay_timer_title
     RecoveryResourceCatalog.SOBER -> R.string.recovery_tech_sober_title
+    RecoveryResourceCatalog.GROUNDING -> R.string.recovery_tech_grounding_title
+    RecoveryResourceCatalog.DEFUSION -> R.string.recovery_tech_defusion_title
     else -> R.string.recovery_tech_values_card_title
 }
 
@@ -711,6 +1014,8 @@ internal fun techniqueDescription(id: String): Int = when (id) {
     RecoveryResourceCatalog.URGE_SURFING -> R.string.recovery_tech_urge_surfing_desc
     RecoveryResourceCatalog.DELAY_TIMER -> R.string.recovery_tech_delay_timer_desc
     RecoveryResourceCatalog.SOBER -> R.string.recovery_tech_sober_desc
+    RecoveryResourceCatalog.GROUNDING -> R.string.recovery_tech_grounding_desc
+    RecoveryResourceCatalog.DEFUSION -> R.string.recovery_tech_defusion_desc
     else -> R.string.recovery_tech_values_card_desc
 }
 
@@ -755,16 +1060,23 @@ internal suspend fun unlockRule(
     recoveryStore.clear(ruleId)
 }
 
+/**
+ * The live friction session: the hub's only raised surface (plan §E2.1). Timer, blocked app,
+ * the override, and the two escape links ("Change wait" opens the same editor as Prepare) all
+ * live here, so nothing about a running block reads as a separate card.
+ */
 @Composable
-private fun ActiveTimerCard(
-    blockedTarget: String,
-    remainingSeconds: Long,
-    frozenAtSeconds: Long?,
+private fun ActiveSessionBlock(
+    live: LiveSession,
+    onOverride: () -> Unit,
+    onChangeWait: () -> Unit,
+    onLeaveAlone: () -> Unit,
 ) {
-    val appLabel = rememberAppLabel(blockedTarget)
+    val appLabel = rememberAppLabel(live.rule.blockedPackage)
+    val ink = MaterialTheme.colorScheme.onPrimaryContainer
     Surface(
         color = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        contentColor = ink,
         shape = MaterialTheme.shapes.large,
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -772,156 +1084,102 @@ private fun ActiveTimerCard(
             Text(
                 stringResource(R.string.recovery_timer_label),
                 style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                color = ink.copy(alpha = 0.8f),
             )
             Text(
-                formatCountdown(frozenAtSeconds ?: remainingSeconds),
+                formatCountdown(live.frozenAtSeconds ?: live.remainingSeconds),
                 style = MaterialTheme.typography.displayLarge,
                 fontWeight = FontWeight.Bold,
-                // Gold is the streak/milestone accent only (finding #21); an urge timer is
-                // neither — the card's own on-container ink is the honest neutral.
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                // Gold is the streak/milestone accent only (finding #21); a timer is neither.
+                color = ink,
                 maxLines = 1,
             )
-            Spacer(Modifier.height(4.dp))
             Text(
                 stringResource(R.string.recovery_blocked_target, appLabel),
                 style = MaterialTheme.typography.bodyMedium,
             )
-            if (frozenAtSeconds != null) {
-                Spacer(Modifier.height(8.dp))
+            if (live.frozenAtSeconds != null) {
                 Text(
                     stringResource(R.string.recovery_time_change_frozen),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun LogUrgeCard(hero: Boolean, onClick: () -> Unit) {
-    val container =
-        if (hero) MaterialTheme.colorScheme.primaryContainer
-        else MaterialTheme.colorScheme.surfaceContainerLow
-    val ink =
-        if (hero) MaterialTheme.colorScheme.onPrimaryContainer
-        else MaterialTheme.colorScheme.onSurface
-    Surface(
-        color = container,
-        contentColor = ink,
-        shape = MaterialTheme.shapes.large,
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            // Owner ruling 2026-10-17: the same glyph the widget's log-an-urge control draws,
-            // so one icon means one action on both surfaces.
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .background(
-                        if (hero) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.primaryContainer,
-                        CircleShape,
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_log_urge),
-                    contentDescription = null,
-                    tint =
-                        if (hero) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp),
-                )
+            HorizontalDivider(
+                color = ink.copy(alpha = 0.2f),
+                modifier = Modifier.padding(vertical = 12.dp),
+            )
+            OverrideRow(overrideAvailable = live.overrideAvailable, onOverride = onOverride)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(
+                    onClick = onChangeWait,
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                ) {
+                    // The owner's cited friction point: the wait was reachable only through
+                    // Settings. This is the same editor, one tap from the running block.
+                    Text(stringResource(R.string.recovery_change_wait))
+                }
+                TextButton(
+                    onClick = onLeaveAlone,
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                ) {
+                    Text(stringResource(R.string.recovery_leave_alone))
+                }
             }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    stringResource(R.string.recovery_log_action),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    stringResource(R.string.recovery_log_caption),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ink.copy(alpha = 0.78f),
-                )
-            }
-            Icon(
-                imageVector = Icons.Outlined.ChevronRight,
-                contentDescription = null,
-                tint = ink.copy(alpha = 0.6f),
+            Text(
+                stringResource(R.string.recovery_leave_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = ink.copy(alpha = 0.8f),
             )
         }
     }
 }
 
 @Composable
-private fun OverrideCard(overrideAvailable: Boolean, onOverride: () -> Unit) {
+private fun OverrideRow(overrideAvailable: Boolean, onOverride: () -> Unit) {
     // Finding #17: the override retires the rule for good (Rule-3 expiry) — an irreversible
     // consequence that was not disclosed before it happened.
     var confirming by remember { mutableStateOf(false) }
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.medium,
+    val ink = MaterialTheme.colorScheme.onPrimaryContainer
+    Row(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = 48.dp)
             .clickable(enabled = overrideAvailable) { confirming = true },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .background(
-                        if (overrideAvailable) MaterialTheme.colorScheme.errorContainer
-                        else MaterialTheme.colorScheme.surfaceContainerHighest,
-                        CircleShape,
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.LockOpen,
-                    contentDescription = null,
-                    tint =
-                        if (overrideAvailable) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    stringResource(
-                        if (overrideAvailable) R.string.recovery_override
-                        else R.string.recovery_override_unavailable,
-                    ),
-                    style = MaterialTheme.typography.titleSmall,
-                    color =
-                        if (overrideAvailable) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                )
-                Text(
-                    stringResource(R.string.recovery_overrides_logged),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (overrideAvailable) {
-                Icon(
-                    imageVector = Icons.Outlined.ChevronRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        Icon(
+            imageVector = Icons.Outlined.LockOpen,
+            contentDescription = null,
+            tint =
+                if (overrideAvailable) MaterialTheme.colorScheme.error
+                else ink.copy(alpha = 0.6f),
+            modifier = Modifier.size(20.dp),
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                stringResource(
+                    if (overrideAvailable) R.string.recovery_override
+                    else R.string.recovery_override_unavailable,
+                ),
+                style = MaterialTheme.typography.titleSmall,
+                color = if (overrideAvailable) ink else ink.copy(alpha = 0.7f),
+                maxLines = 2,
+            )
+            Text(
+                stringResource(R.string.recovery_overrides_logged),
+                style = MaterialTheme.typography.bodySmall,
+                color = ink.copy(alpha = 0.8f),
+            )
+        }
+        if (overrideAvailable) {
+            Icon(
+                imageVector = Icons.Outlined.ChevronRight,
+                contentDescription = null,
+                tint = ink.copy(alpha = 0.6f),
+                modifier = Modifier.size(20.dp),
+            )
         }
     }
     if (confirming) {
@@ -950,91 +1208,6 @@ private fun OverrideCard(overrideAvailable: Boolean, onOverride: () -> Unit) {
                 }
             },
         )
-    }
-}
-
-@Composable
-private fun LeaveAloneCard(onClick: () -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .background(MaterialTheme.colorScheme.secondaryContainer, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.DirectionsWalk,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    stringResource(R.string.recovery_leave_alone),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Text(
-                    stringResource(R.string.recovery_leave_alone_caption),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Icon(
-                imageVector = Icons.Outlined.ChevronRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun IdleCard() {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .background(MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.CheckCircle,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    stringResource(R.string.recovery_idle_title),
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    stringResource(R.string.recovery_idle_body),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
     }
 }
 

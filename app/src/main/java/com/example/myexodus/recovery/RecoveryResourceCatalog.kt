@@ -35,12 +35,24 @@ object RecoveryResourceCatalog {
     const val SOBER = "sober"
     const val DELAY_TIMER = "delay_timer"
     const val VALUES_CARD = "values_card"
+    const val GROUNDING = "grounding_5_4_3_2_1"
+    const val DEFUSION = "defusion"
 
     const val SOBER_STOP = "stop"
     const val SOBER_OBSERVE = "observe"
     const val SOBER_BREATHE = "breathe"
     const val SOBER_EXPAND = "expand"
     const val SOBER_RESPOND = "respond"
+
+    const val GROUNDING_SEE = "grounding_see"
+    const val GROUNDING_HEAR = "grounding_hear"
+    const val GROUNDING_FEEL = "grounding_feel"
+    const val GROUNDING_SMELL = "grounding_smell"
+    const val GROUNDING_TASTE = "grounding_taste"
+
+    const val DEFUSION_NOTICE = "defusion_notice"
+    const val DEFUSION_NAME = "defusion_name"
+    const val DEFUSION_RELEASE = "defusion_release"
 
     val all: List<RecoveryTechnique> = listOf(
         RecoveryTechnique(
@@ -68,6 +80,18 @@ object RecoveryResourceCatalog {
             id = VALUES_CARD,
             effort = EffortTier.HIGH,
             showsValues = true,
+        ),
+        RecoveryTechnique(
+            id = GROUNDING,
+            effort = EffortTier.LOW,
+            phases = listOf(
+                GROUNDING_SEE, GROUNDING_HEAR, GROUNDING_FEEL, GROUNDING_SMELL, GROUNDING_TASTE,
+            ),
+        ),
+        RecoveryTechnique(
+            id = DEFUSION,
+            effort = EffortTier.LOW,
+            phases = listOf(DEFUSION_NOTICE, DEFUSION_NAME, DEFUSION_RELEASE),
         ),
     )
 

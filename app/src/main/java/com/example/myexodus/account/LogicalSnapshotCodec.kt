@@ -109,6 +109,10 @@ internal object LogicalSnapshotCodec {
         .put("technique", s.technique)
         // Schema v25; absent in older backups, which restores as an unlinked row.
         .putOpt("habitId", s.habitId)
+        // Schema v26 Urge Assist fields; absent in older backups, which restore as a bare row.
+        .putOpt("category", s.category)
+        .putOpt("actionId", s.actionId)
+        .putOpt("checkIn", s.checkIn)
         .putOpt("intensityStart", s.intensityStart)
         .putOpt("intensityEnd", s.intensityEnd)
         .put("state", s.state)
@@ -123,6 +127,9 @@ internal object LogicalSnapshotCodec {
         id = j.getString("id"),
         technique = j.getString("technique"),
         habitId = j.optNullableString("habitId"),
+        category = j.optNullableString("category"),
+        actionId = j.optNullableString("actionId"),
+        checkIn = j.optNullableString("checkIn"),
         intensityStart = j.optNullableInt("intensityStart"),
         intensityEnd = j.optNullableInt("intensityEnd"),
         state = j.getString("state"),

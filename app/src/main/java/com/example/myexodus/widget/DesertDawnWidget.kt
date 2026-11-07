@@ -20,6 +20,7 @@ import androidx.glance.appwidget.updateAll
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.MainActivity
 import com.example.myexodus.blocking.systemBootCount
+import com.example.myexodus.data.db.entity.RecoverySession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.catch
@@ -122,6 +123,15 @@ class DesertDawnWidget : GlanceAppWidget() {
                     ),
                     reachOut = actionStartActivity(
                         widgetActionIntent(context, WidgetActionActivity.TARGET_SOS),
+                    ),
+                    // Owner add-on 2026-11-07: one tap from the launcher to Urge Assist. It is a
+                    // plain navigation action, not a hold-to-confirm write, so it opens the app
+                    // directly instead of the action surface.
+                    urgeAssist = actionStartActivity(
+                        appLaunchIntent(context)
+                            .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_RECOVERY)
+                            .putExtra(MainActivity.EXTRA_OPEN_ASSIST, true)
+                            .putExtra(MainActivity.EXTRA_RECOVERY_ENTRY, RecoverySession.ENTRY_WIDGET),
                     ),
                 )
             }

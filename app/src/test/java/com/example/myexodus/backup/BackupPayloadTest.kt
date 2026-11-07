@@ -133,6 +133,9 @@ class BackupPayloadTest {
             RecoverySession(
                 id = "j1",
                 technique = "box_breathing",
+                category = "porn",
+                actionId = "move_device",
+                checkIn = RecoverySession.CHECK_IN_BETTER,
                 intensityStart = 6,
                 intensityEnd = 2,
                 state = RecoverySession.STATE_COMPLETED,

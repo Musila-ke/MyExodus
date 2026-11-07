@@ -7,15 +7,32 @@
 -->
 <resources xmlns:tools="http://schemas.android.com/tools">
 
-    <string name="recovery_suggested_title">Try right now</string>
     <string name="recovery_risk_window_note">You\'re inside one of your risk windows. Low-effort options first.</string>
+
+    <!-- Hub (plan §E2.1, Field Ledger): one destination, hairline rows, one raised surface. -->
+    <string name="recovery_now_eyebrow">Right now</string>
+    <string name="recovery_now_title">Get one thing to do</string>
+    <string name="recovery_now_body">A short action chosen for this moment. You can change it.</string>
+    <string name="recovery_now_start">Start</string>
+    <string name="recovery_idle_line">No block is holding right now</string>
+    <string name="recovery_change_wait">Change wait</string>
+    <string name="recovery_prepare_label">Prepare</string>
+    <string name="recovery_prepare_plan_desc">Your own steps, if-then plans, and values</string>
+    <string name="recovery_prepare_techniques_desc">Practice when you are calm</string>
+    <string name="recovery_prepare_windows_desc">The times you are most likely to struggle</string>
+    <string name="recovery_prepare_friction_desc">How long a block holds before it lifts</string>
+    <string name="recovery_history_link">See history in Streaks</string>
 
     <!-- Hub tiles: the Recovery page's subpages, reached by icon + label. -->
     <string name="recovery_tile_techniques">Techniques</string>
+    <string name="recovery_techniques_subtitle">Practice when you are calm. Each takes a few minutes.</string>
+    <string name="recovery_technique_practice">Practice</string>
+    <string name="recovery_technique_meta">%1$s · %2$d min</string>
 
     <!-- Coaching plan (W1 display, W3 editor) -->
     <string name="recovery_plan_title">My plan</string>
-    <string name="recovery_plan_empty">Add your own steps, if-then plans, and values in Settings → Coaching plan.</string>
+    <string name="recovery_plan_edit">Edit</string>
+    <string name="recovery_plan_empty">Nothing here yet. Add one small step you can actually do.</string>
     <string name="recovery_plan_steps">Steps</string>
     <string name="recovery_plan_ifthen">If-then plans</string>
     <string name="recovery_plan_values">Values</string>
@@ -43,13 +60,9 @@
     <string name="recovery_plan_window_label">Show this when</string>
     <string name="recovery_plan_window_any">Any time</string>
 
-    <!-- Settings section (W4 entry point; the coaching plan itself lives on the Recovery tab) -->
-    <string name="settings_recovery_windows_title">Risk windows</string>
-    <string name="settings_recovery_windows_body">The times you\'re most likely to struggle. Inside a window, the lowest-effort techniques show first.</string>
-
     <!-- Friction timer (owner request 2026-11-01): the wait is the user\'s choice, 1 minute to
-         24 hours, instead of the fixed 60 s. Title reuses recovery_timer_label. -->
-    <string name="settings_friction_timer_body">How long a block holds before it lifts on its own. From 1 minute to 24 hours; an override can still end it early.</string>
+         24 hours, instead of the fixed 60 s. Reached from Recovery → Prepare and the live
+         session block; title reuses recovery_timer_label. -->
     <string name="friction_timer_intro">The wait before a block lifts on its own. It applies to new sessions. A countdown already running keeps its length.</string>
     <string name="friction_timer_hours">Hours</string>
     <string name="friction_timer_minutes">Minutes</string>
@@ -89,6 +102,10 @@
     <string name="recovery_tech_sober_desc">Five short phases: stop, observe, breathe, expand, respond.</string>
     <string name="recovery_tech_values_card_title">Read my values</string>
     <string name="recovery_tech_values_card_desc">Your own words, one card at a time.</string>
+    <string name="recovery_tech_grounding_title">Ground yourself</string>
+    <string name="recovery_tech_grounding_desc">Five senses, one at a time: what you see, hear, feel, smell, and taste.</string>
+    <string name="recovery_tech_defusion_title">Step back from the thought</string>
+    <string name="recovery_tech_defusion_desc">Notice the thought, name it, and set it down. Three short phases.</string>
 
     <string name="recovery_effort_low">Low effort</string>
     <string name="recovery_effort_medium">Medium effort</string>
@@ -124,7 +141,7 @@
     <string name="recovery_delay_start">Start the timer</string>
     <string name="recovery_delay_remaining">%1$d:%2$02d</string>
     <string name="recovery_delay_finished">Time\'s up. Decide what you want to do now.</string>
-    <string name="recovery_delay_no_ifthen">No if-then plans yet. Add some in Settings → Coaching plan.</string>
+    <string name="recovery_delay_no_ifthen">No if-then plans yet. Add some in Recovery → My plan.</string>
 
     <!-- Five-phase walkthrough -->
     <string name="recovery_sober_progress">Phase %1$d of %2$d</string>
@@ -141,12 +158,32 @@
     <string name="recovery_sober_back">Back</string>
     <string name="recovery_sober_next">Next</string>
     <string name="recovery_sober_finish">Done</string>
-    <string name="recovery_sober_no_ifthen">No if-then plans yet. Add some in Settings → Coaching plan.</string>
+    <string name="recovery_sober_no_ifthen">No if-then plans yet. Add some in Recovery → My plan.</string>
+
+    <!-- Sensory grounding (5-4-3-2-1) -->
+    <string name="recovery_grounding_see_title">Five things you see</string>
+    <string name="recovery_grounding_see_body">Look around slowly. Name five things you can see, one at a time.</string>
+    <string name="recovery_grounding_hear_title">Four things you hear</string>
+    <string name="recovery_grounding_hear_body">Listen past the room. Name four sounds, near or far.</string>
+    <string name="recovery_grounding_feel_title">Three things you feel</string>
+    <string name="recovery_grounding_feel_body">Your feet on the floor, the chair, the air on your skin. Name three.</string>
+    <string name="recovery_grounding_smell_title">Two things you smell</string>
+    <string name="recovery_grounding_smell_body">Breathe in through your nose. Name two things you notice, even faint ones.</string>
+    <string name="recovery_grounding_taste_title">One thing you taste</string>
+    <string name="recovery_grounding_taste_body">The last sip, your mouth, the air. Notice one taste.</string>
+
+    <!-- Cognitive defusion -->
+    <string name="recovery_defusion_notice_title">Notice the thought</string>
+    <string name="recovery_defusion_notice_body">The thought is there. You are not the thought. Notice it without acting on it.</string>
+    <string name="recovery_defusion_name_title">Name it</string>
+    <string name="recovery_defusion_name_body">Say it plainly: I notice I am having the thought that I need this.</string>
+    <string name="recovery_defusion_release_title">Let it sit</string>
+    <string name="recovery_defusion_release_body">Do not argue with it and do not obey it. Let it sit beside you while you choose your next move.</string>
 
     <!-- Values card -->
     <string name="recovery_values_label">What matters to me</string>
     <string name="recovery_values_next">Next</string>
-    <string name="recovery_values_empty">No values added yet. Add some in Settings → Coaching plan.</string>
+    <string name="recovery_values_empty">No values added yet. Add some in Recovery → My plan.</string>
 
     <!-- Shared run controls -->
     <string name="recovery_done">I\'m done</string>
@@ -159,6 +196,11 @@
     <string name="recovery_history_abandoned">Stopped</string>
     <string name="recovery_history_interrupted">Interrupted</string>
     <string name="recovery_history_logged_only">Logged, no technique</string>
+    <!-- Urge Assist rows (plan §E2.11): the action is the title; these are the check-in detail. -->
+    <string name="recovery_history_check_better">Felt better</string>
+    <string name="recovery_history_check_same">Felt the same</string>
+    <string name="recovery_history_check_worse">Felt worse</string>
+    <string name="recovery_history_check_skipped">No check-in</string>
     <!-- Summary (owner sign-off 2026-09-22, revised same day). Ranges are spelled out: "W"/"M"
          were the reference's initials with no legend anywhere on the page. The eyebrow names
          the figure the way the reference's "Total Income" does. The three buckets are the three
@@ -174,6 +216,8 @@
          other two buckets; it collides with no row outcome pill, which is the only vocabulary
          that has to match exactly. -->
     <string name="recovery_history_bucket_logged_only">Logged only</string>
+    <!-- Shown only once a step episode exists; a technique run counts as Completed / Not finished. -->
+    <string name="recovery_history_bucket_assist">Urge Assist</string>
     <string name="recovery_history_summary_none">No urges logged in this period.</string>
     <string name="recovery_history_range_week">Week</string>
     <string name="recovery_history_range_month">Month</string>
@@ -210,7 +254,172 @@
     <string name="recovery_crisis_intro">If you\'re in immediate danger, call your local emergency number. These services are run by independent organizations. The numbers below were checked by hand.</string>
     <string name="recovery_crisis_not_emergency">These are not emergency services unless stated. If you are in immediate danger, contact emergency services in your country.</string>
     <string name="recovery_crisis_call">Call %1$s</string>
+    <string name="recovery_crisis_sms">Text %1$s</string>
+    <string name="recovery_crisis_whatsapp">WhatsApp %1$s</string>
     <string name="recovery_crisis_open">Open website</string>
     <string name="recovery_crisis_verified">Verified %1$s</string>
+    <string name="recovery_crisis_hours">Hours: %1$s</string>
+    <string name="recovery_crisis_cost">Cost: %1$s</string>
+    <string name="recovery_crisis_eligibility">Who it\'s for: %1$s</string>
+    <string name="recovery_crisis_limitations">Note: %1$s</string>
+    <string name="recovery_crisis_offline">You are offline. This list is on your device; calls and websites need a connection.</string>
+    <string name="recovery_crisis_no_results">No services match this filter.</string>
+    <string name="recovery_crisis_region_kenya">Kenya</string>
+    <string name="recovery_crisis_region_international">International</string>
+    <string name="recovery_crisis_region_us">United States</string>
+
+    <!-- Get Help filters and sections (plan E2.10). Filters are the six named in the plan;
+         sections add Substance use and Professional help, which have no chip of their own. -->
+    <string name="recovery_crisis_filter_all">All</string>
+    <string name="recovery_crisis_filter_urgent">Urgent</string>
+    <string name="recovery_crisis_filter_gambling">Gambling</string>
+    <string name="recovery_crisis_filter_porn">Sex or porn</string>
+    <string name="recovery_crisis_filter_gaming">Gaming</string>
+    <string name="recovery_crisis_filter_mental_health">Mental health</string>
+    <string name="recovery_crisis_section_urgent">Immediate danger</string>
+    <string name="recovery_crisis_section_mental_health">Mental health and crisis</string>
+    <string name="recovery_crisis_section_gambling">Gambling</string>
+    <string name="recovery_crisis_section_porn">Sex or porn</string>
+    <string name="recovery_crisis_section_gaming">Gaming</string>
+    <string name="recovery_crisis_section_substance">Substance use</string>
+    <string name="recovery_crisis_section_professional">Professional help</string>
+    <string name="recovery_crisis_section_more">More</string>
+
+    <!-- Urge Assist: category chips (W8). "Not sure" is no category at all, never an inference. -->
+    <string name="urge_category_porn">Sex or porn</string>
+    <string name="urge_category_gambling">Betting</string>
+    <string name="urge_category_scrolling">Scrolling</string>
+    <string name="urge_category_shopping">Shopping</string>
+    <string name="urge_category_gaming">Gaming</string>
+    <string name="urge_category_other">Something else</string>
+    <string name="urge_category_unsure">Not sure</string>
+
+    <!-- Urge Assist: action catalog (plan §F1). Descriptions are one sentence and make no
+         efficacy claim; the catalogs' ids are stable keys, never shown. -->
+    <string name="urge_action_move_device">Put the phone out of reach</string>
+    <string name="urge_action_move_device_desc">Put it across the room, face down. It can wait there.</string>
+    <string name="urge_action_leave_room">Change rooms</string>
+    <string name="urge_action_leave_room_desc">Move somewhere else for a few minutes.</string>
+    <string name="urge_action_close_cue">Close the tab or app</string>
+    <string name="urge_action_close_cue_desc">Close what you opened. You can return to it later.</string>
+    <string name="urge_action_leave_private_space">Leave the private space</string>
+    <string name="urge_action_leave_private_space_desc">Step out of the room you are in. You do not have to explain why.</string>
+    <string name="urge_action_open_plan">Read your if-then plan</string>
+    <string name="urge_action_open_plan_desc">Your own words, written when things were calmer.</string>
+    <string name="urge_action_read_values">Read your values</string>
+    <string name="urge_action_read_values_desc">The things that matter more to you than this.</string>
+    <string name="urge_action_breathing">Paced breathing</string>
+    <string name="urge_action_breathing_desc">Breathe 4 seconds in, 6 seconds out. Follow the circle.</string>
+    <string name="urge_action_delay_timer">Wait 10 minutes</string>
+    <string name="urge_action_delay_timer_desc">Start a timer. Decide when it ends, not now.</string>
+    <string name="urge_action_walkthrough">Walk through the urge</string>
+    <string name="urge_action_walkthrough_desc">Five short phases: stop, observe, breathe, expand, respond.</string>
+    <string name="urge_action_partner_message">Message your partner</string>
+    <string name="urge_action_partner_message_desc">Send a short message that you choose first.</string>
+    <string name="urge_action_support_message">Send a support message</string>
+    <string name="urge_action_support_message_desc">A prepared message, editable before it is sent.</string>
+    <string name="urge_action_get_help">Get help now</string>
+    <string name="urge_action_get_help_desc">Call or open a support service. The list works offline.</string>
+    <string name="urge_action_small_task">Do one small next task</string>
+    <string name="urge_action_small_task_desc">Pick the next small thing you meant to do.</string>
+    <string name="urge_action_log_only">Just log it</string>
+    <string name="urge_action_log_only_desc">Note the urge without starting a technique.</string>
+    <string name="urge_action_gambling_step_away">Close the betting app and step away</string>
+    <string name="urge_action_gambling_step_away_desc">Close it before the next bet or deposit. Do not try to win it back.</string>
+    <string name="urge_action_gambling_self_exclusion">Start self-exclusion</string>
+    <string name="urge_action_gambling_self_exclusion_desc">The official Gambling Regulatory Authority process. It cannot be ended early.</string>
+    <string name="urge_action_shopping_leave_checkout">Leave checkout without paying</string>
+    <string name="urge_action_shopping_leave_checkout_desc">Close the payment screen. The item can wait. Essentials are not affected.</string>
+    <string name="urge_action_gaming_stop_point">Stop at a safe point</string>
+    <string name="urge_action_gaming_stop_point_desc">Choose a point you can leave from, then stop there.</string>
+    <string name="urge_action_return_to_task">Return to what you meant to do</string>
+    <string name="urge_action_return_to_task_desc">Name the thing you were going to do, then start it.</string>
+    <string name="urge_action_late_night_device">Charge the phone outside the bedroom</string>
+    <string name="urge_action_late_night_device_desc">Plug it in somewhere else. This is not a rule about sleep.</string>
+    <string name="urge_action_safety_check">Get immediate help</string>
+    <string name="urge_action_safety_check_desc">Call emergency services or a crisis line now.</string>
+    <string name="urge_action_disconnect">Turn off Wi-Fi or mobile data</string>
+    <string name="urge_action_disconnect_desc">Close the route for a few minutes. You can turn it back on later.</string>
+    <string name="urge_action_grounding">Ground yourself with your senses</string>
+    <string name="urge_action_grounding_desc">Five things you see, four you hear, three you feel, two you smell, one you taste.</string>
+    <string name="urge_action_defusion">Step back from the thought</string>
+    <string name="urge_action_defusion_desc">Notice the thought, name it, and let it sit without obeying it.</string>
+    <string name="urge_action_gambling_reality_check">Check the real numbers</string>
+    <string name="urge_action_gambling_reality_check_desc">Count what you have put in today, not what you have won. Then decide.</string>
+    <string name="urge_action_shopping_defer_list">Write it on a waiting list</string>
+    <string name="urge_action_shopping_defer_list_desc">Save it to a list and set a time to decide. Nothing is bought now.</string>
+    <string name="urge_action_power_down">Switch the device off</string>
+    <string name="urge_action_power_down_desc">Power it down for ten minutes and put it away. The urge has nowhere to go.</string>
+
+    <!-- Urge Assist: the one-line "Why this" reason. Static keys only, no personal data. -->
+    <string name="urge_reason_safety">Your safety comes first. No technique is offered here.</string>
+    <string name="urge_reason_gambling_transaction">A bet or deposit in progress comes first.</string>
+    <string name="urge_reason_helpful">You marked this helpful before.</string>
+    <string name="urge_reason_late_night">It is late, so this starts with a small physical step.</string>
+    <string name="urge_reason_risk_window">This is inside one of your risk windows, so low effort comes first.</string>
+    <string name="urge_reason_category">Chosen because you picked %1$s.</string>
+    <string name="urge_reason_generic">A small first step that works for most urges.</string>
+
+    <!-- Urge Assist: the screen (plan §E2.2-E2.5). The header states where this runs; the
+         primary block is one action with one reason; escalation is a menu, never an auto-send. -->
+    <string name="recovery_assist_title">Right now</string>
+    <string name="recovery_assist_subtitle">This stays on your device.</string>
+    <string name="recovery_assist_question">What is pulling at you?</string>
+    <string name="recovery_assist_eyebrow">Try this</string>
+    <string name="recovery_assist_cant">I can\'t do that</string>
+    <string name="recovery_assist_breathe_now">Breathe with me</string>
+    <string name="recovery_assist_more_title">More that can help</string>
+    <string name="recovery_assist_show_all">Show all %1$d options</string>
+    <string name="recovery_assist_show_less">Show fewer</string>
+    <string name="recovery_assist_quiet">Quiet</string>
+    <string name="recovery_assist_quiet_desc">No vibration for this run.</string>
+    <string name="recovery_assist_start">Start</string>
+    <string name="recovery_assist_call">Call</string>
+    <string name="recovery_assist_message">Message</string>
+    <string name="recovery_assist_open">Open</string>
+    <string name="recovery_assist_log_it">Log it</string>
+    <string name="recovery_assist_gambling_question">Are you in the middle of a bet or deposit?</string>
+    <string name="recovery_assist_yes">Yes</string>
+    <string name="recovery_assist_no">No</string>
+    <string name="recovery_assist_danger">I\'m in danger right now</string>
+
+    <!-- Check-in (plan §E2.4): the four answers name the state, never the person. -->
+    <string name="recovery_assist_check_title">How is the urge now?</string>
+    <string name="recovery_assist_check_better">A bit better</string>
+    <string name="recovery_assist_check_same">About the same</string>
+    <string name="recovery_assist_check_worse">Worse</string>
+    <string name="recovery_assist_check_skip">Skip</string>
+    <string name="recovery_assist_keep_going">Keep going</string>
+    <string name="recovery_assist_finish">Finish</string>
+    <string name="recovery_assist_extend_title">That is better.</string>
+    <string name="recovery_assist_pair_hint">Pair someone in Settings to send a message.</string>
+
+    <!-- Escalation (plan §E2.5) and the immediate-danger block. One list, nothing gated. -->
+    <string name="recovery_assist_escalation_title">What would help now?</string>
+    <string name="recovery_assist_escalation_line">Call a support line</string>
+    <string name="recovery_assist_escalation_stop">Stop here</string>
+    <string name="recovery_assist_danger_title">Your safety comes first</string>
+    <string name="recovery_assist_danger_body">If someone is in immediate danger, call emergency services now. Calling is free and they can help.</string>
+    <string name="recovery_reach_out_named">Reach out to %1$s</string>
+
+    <!-- Technique preferences (plan §E2.6/E2.7) and the post-lapse sheet (plan §E2.12). -->
+    <string name="recovery_technique_not_for_me">Not for me</string>
+    <string name="recovery_show_again">Show this again</string>
+    <string name="recovery_techniques_hidden">Hidden</string>
+    <string name="recovery_prefs_title">What works for you</string>
+    <string name="recovery_prefs_intro">These change the order actions appear in. Nothing here is a rule.</string>
+    <string name="recovery_prefs_move_label">I can usually get up and move</string>
+    <string name="recovery_prefs_move_desc">Turning this off hides actions that need you to leave the room.</string>
+    <string name="recovery_prefs_quiet_label">Quiet actions first</string>
+    <string name="recovery_prefs_quiet_desc">Prefer actions that do not need sound.</string>
+    <string name="recovery_prefs_hidden_label">Actions you don\'t want to see</string>
+    <string name="recovery_prefs_hidden_empty">None hidden.</string>
+    <string name="recovery_prefs_yes">Yes</string>
+    <string name="recovery_prefs_no">No</string>
+    <string name="recovery_prefs_unsure">Not sure</string>
+    <string name="recovery_gate_title_prefs">Unlock to change what works for you</string>
+    <string name="recovery_lapse_title">The block stays on</string>
+    <string name="recovery_lapse_body">Nothing else was reset. If you want, there is support here.</string>
+    <string name="recovery_lapse_not_now">Not now</string>
 
 </resources>

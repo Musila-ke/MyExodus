@@ -1056,6 +1056,71 @@ class AppRulesStoreMigrationTest {
         context.deleteDatabase("recovery-habit-link-test.db")
     }
 
+    /** v26 adds the Urge Assist fields (2026-11-07): category, action id, and check-in. All
+     *  nullable; upgrade keeps every row and leaves the new fields empty, and the rollback
+     *  rebuild drops only those three columns. */
+    @Test
+    fun migration25to26AndBack_addsAssistFields_andKeepsEveryRow() {
+        val scratchPath = context.getDatabasePath("recovery-assist-test.db").absolutePath
+        AndroidSQLiteDriver().open(scratchPath).use { conn ->
+            conn.prepare("CREATE TABLE sentinel_table (id INTEGER NOT NULL, PRIMARY KEY(id))").use { it.step() }
+            conn.prepare(
+                "CREATE TABLE recovery_session (" +
+                    "id TEXT NOT NULL, technique TEXT NOT NULL, habit_id TEXT, " +
+                    "intensity_start INTEGER, intensity_end INTEGER, state TEXT NOT NULL, " +
+                    "started_at_epoch_ms INTEGER NOT NULL, ended_at_epoch_ms INTEGER, " +
+                    "duration_sec INTEGER, zone_id TEXT NOT NULL, entry TEXT NOT NULL, " +
+                    "false_alarm INTEGER NOT NULL, event_sequence INTEGER, PRIMARY KEY(id))",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO recovery_session (id, technique, habit_id, state, " +
+                    "started_at_epoch_ms, zone_id, entry, false_alarm) " +
+                    "VALUES ('s-1', 'urge_surfing', 'habit-a', 'COMPLETED', 111, 'UTC', 'tab', 0)",
+            ).use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_25_26.migrate(conn) }
+
+            assertTrue("category" in columnNames(conn, "recovery_session"))
+            assertTrue("action_id" in columnNames(conn, "recovery_session"))
+            assertTrue("check_in" in columnNames(conn, "recovery_session"))
+            conn.prepare(
+                "SELECT technique, habit_id, category, action_id, check_in FROM recovery_session " +
+                    "WHERE id = 's-1'",
+            ).use { stmt ->
+                assertTrue("the pre-assist row survives", stmt.step())
+                assertEquals("urge_surfing", stmt.getText(0))
+                assertEquals("habit-a", stmt.getText(1))
+                assertTrue("no category is invented for an old row", stmt.isNull(2))
+                assertTrue(stmt.isNull(3))
+                assertTrue(stmt.isNull(4))
+            }
+            conn.prepare(
+                "UPDATE recovery_session SET category = 'porn', action_id = 'move_device', " +
+                    "check_in = 'better' WHERE id = 's-1'",
+            ).use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_26_25.migrate(conn) }
+
+            val columns = columnNames(conn, "recovery_session")
+            assertFalse("category" in columns)
+            assertFalse("action_id" in columns)
+            assertFalse("check_in" in columns)
+            assertTrue("habit_id is v25 and must survive the rollback", "habit_id" in columns)
+            conn.prepare("SELECT id, technique, habit_id FROM recovery_session").use { stmt ->
+                assertTrue("rollback keeps the row", stmt.step())
+                assertEquals("s-1", stmt.getText(0))
+                assertEquals("urge_surfing", stmt.getText(1))
+                assertEquals("habit-a", stmt.getText(2))
+                assertFalse(stmt.step())
+            }
+            assertTrue(
+                "nothing else is touched on either direction",
+                "id" in columnNames(conn, "sentinel_table"),
+            )
+        }
+        context.deleteDatabase("recovery-assist-test.db")
+    }
+
     private fun columnNames(conn: androidx.sqlite.SQLiteConnection, table: String): List<String> {
         val names = mutableListOf<String>()
         conn.prepare("PRAGMA table_info($table)").use { stmt ->

@@ -122,6 +122,7 @@ import com.example.myexodus.telemetry.StartupTrace
 import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.ui.AppShell
 import com.example.myexodus.ui.NavKeys
+import com.example.myexodus.ui.recovery.RECOVERY_VIEW_ASSIST
 import com.example.myexodus.ui.SecureSurfaces
 import com.example.myexodus.ui.home.NudgeInboxViewModel
 import com.example.myexodus.ui.settings.AccountViewModel
@@ -178,6 +179,9 @@ class MainActivity : FragmentActivity() {
      *  session rows the visit creates (v3 W7 `RecoverySession.entry`). */
     private var requestedRecoveryEntry by mutableStateOf<String?>(null)
 
+    /** Phase 4: the block screen and the widget land directly on Urge Assist, not the hub. */
+    private var requestedRecoveryView by mutableStateOf<String?>(null)
+
     /** §5.20/§12.3 (ADR #112): set when no signing prompt could produce a signature —
      *  biometrics unusable with no screen-lock fallback, or the fallback key refusing.
      *  Drives the explicit-message dialog — a promptless device must never read as a
@@ -215,6 +219,8 @@ class MainActivity : FragmentActivity() {
         requestedPlan = intent.getStringExtra(EXTRA_OPEN_PLAN)
         requestedPartner = intent.getStringExtra(EXTRA_OPEN_PARTNER)
         requestedPartnerView = intent.getStringExtra(EXTRA_OPEN_PARTNER_VIEW)
+        requestedRecoveryView =
+            if (intent.getBooleanExtra(EXTRA_OPEN_ASSIST, false)) RECOVERY_VIEW_ASSIST else null
         handleUpdateIntent(intent)
         handlePartnerNudgeIntent(intent)
     }
@@ -530,6 +536,8 @@ class MainActivity : FragmentActivity() {
         requestedPlan = intent.getStringExtra(EXTRA_OPEN_PLAN)
         requestedPartner = intent.getStringExtra(EXTRA_OPEN_PARTNER)
         requestedPartnerView = intent.getStringExtra(EXTRA_OPEN_PARTNER_VIEW)
+        requestedRecoveryView =
+            if (intent.getBooleanExtra(EXTRA_OPEN_ASSIST, false)) RECOVERY_VIEW_ASSIST else null
         handleUpdateIntent(intent)
         handlePartnerNudgeIntent(intent)
         startPartnerLiveSync()
@@ -835,6 +843,8 @@ class MainActivity : FragmentActivity() {
                         onPartnerConsumed = { requestedPartner = null },
                         requestedPartnerView = requestedPartnerView,
                         onPartnerViewConsumed = { requestedPartnerView = null },
+                        requestedRecoveryView = requestedRecoveryView,
+                        onRecoveryViewConsumed = { requestedRecoveryView = null },
                         planRepository = recoveryPlanRepository,
                         rulesRepository = rulesRepository,
                         habitRepository = habitRepository,
@@ -1333,6 +1343,10 @@ class MainActivity : FragmentActivity() {
 
         /** Which surface opened the Recovery tab — a `RecoverySession.ENTRY_*` constant. */
         const val EXTRA_RECOVERY_ENTRY = "extra_recovery_entry"
+
+        /** Plan §E2.2 / owner add-on 2026-11-07: land directly on Urge Assist instead of the
+         *  hub. Carried by the block screen and the widget's assist action. */
+        const val EXTRA_OPEN_ASSIST = "extra_open_assist"
 
         /** Plan revision 2026-11-06: an update notification asks for the Settings dialog. */
         const val EXTRA_OPEN_UPDATE = "extra_open_update"

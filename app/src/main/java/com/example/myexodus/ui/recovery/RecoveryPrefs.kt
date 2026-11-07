@@ -32,9 +32,59 @@ class RecoveryPrefs @Inject constructor(
         return true
     }
 
+    // Urge Assist preferences (plan §H2). All local, optional, and resettable; none of them is
+    // ever mirrored to a partner.
+
+    /** null = not answered. Unknown is never read as "cannot move". */
+    var canMove: Boolean?
+        get() = when (prefs.getString(KEY_CAN_MOVE, null)) {
+            VALUE_YES -> true
+            VALUE_NO -> false
+            else -> null
+        }
+        set(value) = prefs.edit {
+            when (value) {
+                true -> putString(KEY_CAN_MOVE, VALUE_YES)
+                false -> putString(KEY_CAN_MOVE, VALUE_NO)
+                null -> remove(KEY_CAN_MOVE)
+            }
+        }
+
+    var quietPreferred: Boolean
+        get() = prefs.getBoolean(KEY_QUIET, false)
+        set(value) = prefs.edit { putBoolean(KEY_QUIET, value) }
+
+    /** Actions the user tapped "Not for me" on; hidden until "Show this again". */
+    var dislikedActions: Set<String>
+        get() = prefs.getStringSet(KEY_DISLIKED, null)?.toSet() ?: emptySet()
+        set(value) = prefs.edit { putStringSet(KEY_DISLIKED, value) }
+
+    /** Actions whose check-in came back better; the engine promotes them. */
+    var helpfulActions: Set<String>
+        get() = prefs.getStringSet(KEY_HELPFUL, null)?.toSet() ?: emptySet()
+        set(value) = prefs.edit { putStringSet(KEY_HELPFUL, value) }
+
+    fun markDisliked(actionId: String) {
+        dislikedActions = dislikedActions + actionId
+    }
+
+    fun clearDisliked(actionId: String) {
+        dislikedActions = dislikedActions - actionId
+    }
+
+    fun markHelpful(actionId: String) {
+        helpfulActions = helpfulActions + actionId
+    }
+
     private companion object {
         const val PREFS_NAME = "recovery_prefs"
         const val KEY_HAPTIC = "haptic_pacing"
         const val KEY_BANNER_SHOWN = "gate_banner_shown"
+        const val KEY_CAN_MOVE = "assist_can_move"
+        const val KEY_QUIET = "assist_quiet_preferred"
+        const val KEY_DISLIKED = "assist_disliked_actions"
+        const val KEY_HELPFUL = "assist_helpful_actions"
+        const val VALUE_YES = "yes"
+        const val VALUE_NO = "no"
     }
 }
