@@ -175,11 +175,17 @@
     <string name="home_quick_actions_open">Open quick actions</string>
     <string name="home_quick_actions_close">Close quick actions</string>
     <string name="home_action_log_urge">Log an urge</string>
-    <!-- Owner directive 2026-11-07: "Log a relapse" stays visible with no habit, but it cannot
-         write anything — the action explains what is missing and offers the way to start. -->
+    <!-- Owner directive 2026-11-07: the log shortcuts stay visible with no habit, but neither
+         can write anything — each explains what is missing and offers the way to start. -->
     <string name="home_relapse_no_habit_title">Nothing to track yet</string>
     <string name="home_relapse_no_habit_body">A relapse is only meaningful against a streak. Set up a habit first, then this action records a slip against it.</string>
+    <string name="home_urge_no_habit_body">There is no habit to log an urge against yet. Set up a habit first, then this action saves the note.</string>
     <string name="home_relapse_no_habit_action">Set up a habit</string>
+    <!-- Same rule for Reach out (owner directive 2026-11-07): always in the dial, and with
+         no live pair it names the missing partner instead of sending anything. -->
+    <string name="home_reach_out_no_partner_title">No partner yet</string>
+    <string name="home_reach_out_no_partner_body">Reach out sends your check-in to a paired partner. Set up a partnership first, then this action can reach them.</string>
+    <string name="home_reach_out_no_partner_action">Set up a partnership</string>
     <!-- Home's confirmation makes no claim about a block: the note is habitless and rule-less,
          and a reader with no rule at all must not be told a block is "still in place". -->
     <string name="home_urge_saved">Urge logged. This is only a note.</string>

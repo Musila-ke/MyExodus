@@ -303,10 +303,15 @@ fun AppShell(
     // instead of a row of FABs.
     var actionsOpen by rememberSaveable { mutableStateOf(false) }
     var relapseConfirmOpen by remember { mutableStateOf(false) }
-    // Owner directive 2026-11-07: the shortcut always shows. With no habit the action has
-    // nothing to write against, so it explains that and offers habit setup instead of opening
-    // a confirmation whose write would fail.
-    var relapseNoHabitOpen by remember { mutableStateOf(false) }
+    // Owner directive 2026-11-07: the log shortcuts always show. With no habit neither can
+    // write anything, so each explains what is missing and offers habit setup instead of
+    // opening a confirmation/sheet whose write has nothing to attach to. The urge path was
+    // the one the owner actually hit: it used to open its sheet and save with no habit.
+    var noHabitPrompt by remember { mutableStateOf<NoHabitPrompt?>(null) }
+    // Same principle for the third shortcut (owner directive 2026-11-07): Reach out is
+    // always present; with no live pair it explains that and routes to the Partner tab
+    // instead of silently disappearing from the dial.
+    var reachOutNoPartnerOpen by remember { mutableStateOf(false) }
     var urgeSheetOpen by rememberSaveable { mutableStateOf(false) }
     // The Home shortcut writes the row itself — a quick action that only switched tabs left
     // users believing an urge was logged when the sheet had never been opened (owner report
@@ -365,14 +370,23 @@ fun AppShell(
             if (contentTab == 0) {
                 HomeActionsFab(
                     expanded = actionsOpen,
-                    canReachOut = partnerNames.isNotEmpty(),
                     onToggle = { actionsOpen = !actionsOpen },
-                    onReachOut = { actionsOpen = false; sosConfirmOpen = true },
+                    onReachOut = {
+                        actionsOpen = false
+                        if (partnerNames.isNotEmpty()) {
+                            sosConfirmOpen = true
+                        } else {
+                            reachOutNoPartnerOpen = true
+                        }
+                    },
                     onLogRelapse = {
                         actionsOpen = false
-                        if (habit != null) relapseConfirmOpen = true else relapseNoHabitOpen = true
+                        if (habit != null) relapseConfirmOpen = true else noHabitPrompt = NoHabitPrompt.RELAPSE
                     },
-                    onLogUrge = { actionsOpen = false; urgeSheetOpen = true },
+                    onLogUrge = {
+                        actionsOpen = false
+                        if (habit != null) urgeSheetOpen = true else noHabitPrompt = NoHabitPrompt.URGE
+                    },
                 )
             }
         },
@@ -596,23 +610,56 @@ fun AppShell(
         )
     }
 
-    // Same shortcut, no habit: name what is missing and hand the user the way to start one.
-    if (relapseNoHabitOpen) {
+    // A log shortcut with no habit: name what is missing and hand the user the way to start
+    // one. The body says which write had nowhere to go; the exit is the same for both.
+    noHabitPrompt?.let { prompt ->
         AlertDialog(
-            onDismissRequest = { relapseNoHabitOpen = false },
+            onDismissRequest = { noHabitPrompt = null },
             title = { Text(stringResource(R.string.home_relapse_no_habit_title)) },
-            text = { Text(stringResource(R.string.home_relapse_no_habit_body)) },
+            text = {
+                Text(
+                    stringResource(
+                        when (prompt) {
+                            NoHabitPrompt.RELAPSE -> R.string.home_relapse_no_habit_body
+                            NoHabitPrompt.URGE -> R.string.home_urge_no_habit_body
+                        },
+                    ),
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        relapseNoHabitOpen = false
+                        noHabitPrompt = null
                         streaks.beginAddHabit()
                         tab = 3
                     },
                 ) { Text(stringResource(R.string.home_relapse_no_habit_action)) }
             },
             dismissButton = {
-                TextButton(onClick = { relapseNoHabitOpen = false }) {
+                TextButton(onClick = { noHabitPrompt = null }) {
+                    Text(stringResource(R.string.streaks_cancel))
+                }
+            },
+        )
+    }
+
+    // The third shortcut's prerequisite: no live pair means no recipient. Send the user to
+    // the Partner tab, where an unpaired account shows the pairing entry.
+    if (reachOutNoPartnerOpen) {
+        AlertDialog(
+            onDismissRequest = { reachOutNoPartnerOpen = false },
+            title = { Text(stringResource(R.string.home_reach_out_no_partner_title)) },
+            text = { Text(stringResource(R.string.home_reach_out_no_partner_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        reachOutNoPartnerOpen = false
+                        tab = Tabs.indexOfFirst { it.key == NavKeys.PARTNER }
+                    },
+                ) { Text(stringResource(R.string.home_reach_out_no_partner_action)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { reachOutNoPartnerOpen = false }) {
                     Text(stringResource(R.string.streaks_cancel))
                 }
             },
@@ -828,20 +875,22 @@ private fun RecipientRow(name: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
+/** Which log shortcut needs habit guidance. The body copy differs; the way out is the same. */
+private enum class NoHabitPrompt { RELAPSE, URGE }
+
 /**
  * Owner directive 2026-10-21: one expandable action button replaces a row of FABs. Collapsed
  * it is a single accent control; expanded it reveals the three things a Home visit can
- * legitimately act on — reach out (only with a live pair), log a relapse, and log an urge.
- * Each shortcut opens its own confirmation/flow; nothing sends from here.
+ * legitimately act on — reach out, log a relapse, and log an urge. Each shortcut opens its
+ * own confirmation/flow; nothing sends from here.
  *
- * The relapse shortcut stays visible with no habit (owner directive 2026-11-07): hiding it
- * left the dial missing an action with no explanation. The caller routes it to habit setup
- * guidance when there is no streak to record against.
+ * All three stay visible without their prerequisites (owner directive 2026-11-07): hiding an
+ * action left the dial missing it with no explanation, and the urge shortcut used to write a
+ * note with nothing to track. The caller routes each to the setup its missing prerequisite needs.
  */
 @Composable
 private fun HomeActionsFab(
     expanded: Boolean,
-    canReachOut: Boolean,
     onToggle: () -> Unit,
     onReachOut: () -> Unit,
     onLogRelapse: () -> Unit,
@@ -865,13 +914,11 @@ private fun HomeActionsFab(
                     label = stringResource(R.string.streaks_relapse_action),
                     onClick = onLogRelapse,
                 )
-                if (canReachOut) {
-                    QuickAction(
-                        icon = { Icon(Icons.Filled.WavingHand, contentDescription = null) },
-                        label = stringResource(R.string.sos_reach_out),
-                        onClick = onReachOut,
-                    )
-                }
+                QuickAction(
+                    icon = { Icon(Icons.Filled.WavingHand, contentDescription = null) },
+                    label = stringResource(R.string.sos_reach_out),
+                    onClick = onReachOut,
+                )
                 QuickAction(
                     icon = { Icon(painterResource(R.drawable.ic_log_urge), contentDescription = null) },
                     label = stringResource(R.string.home_action_log_urge),
