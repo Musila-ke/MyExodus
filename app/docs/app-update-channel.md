@@ -47,12 +47,20 @@ carried inside the signed policy.
 **Live status, 2026-11-07:** the channel is live at
 `https://github.com/Musila-ke/MyExodus-Releases`. Release immutability is enabled. Published:
 
-- `artifact-v4` and `artifact-v5` (the current signed universal APK `myexodus-1.1.3-v5.apk`,
-  38,531,001 bytes, SHA-256 `15ffc132bda5b1ec6044e66e82cafc672fcf3a377399b785743950ecef184d86`)
-- `policy-000008`, the latest release: signed `OFFER` of versionCode 5 (`1.1.3`) at 100 percent,
-  cohort salt `ddc36891f1c3bf71c6d8fec43964b01a`
+- `artifact-v4` and `artifact-v5` (`myexodus-1.1.3-v5.apk`, 38,531,001 bytes, SHA-256
+  `15ffc132bda5b1ec6044e66e82cafc672fcf3a377399b785743950ecef184d86`). These predate the
+  updater fixes of 2026-11-07 and stay published only as history; do not rebuild them.
+- `artifact-v6` (`myexodus-1.1.4-v6.apk`, 38,531,977 bytes, SHA-256
+  `18a334a257b605ab3297878c4680fc90d2979bacb9d9707584acd20e2aef2d7b`), signed with the
+  release identity (certificate SHA-256 `8f88188070952dde4c490a01ce8aa0407e9172ee4bbc035693ea795ab598854b`).
+  This is the first artifact carrying the account-deletion local-data fix and the updater
+  reliability fixes.
+- `policy-000009`, the latest release: signed `OFFER` of versionCode 6 (`1.1.4`) at 100 percent,
+  cohort salt `3c552279608ea0cf5fd89640f950112f`. The first live publication targets a
+  two-tester base, so it goes straight to 100 percent; the 5 to 25 to 100 progression has not
+  been rehearsed and is not claimed.
 
-Publisher state: highest policy sequence 8, highest versionCode 5. Tags are immutable, so
+Publisher state: highest policy sequence 9, highest versionCode 6. Tags are immutable, so
 `policy-000005` (an early test publication) stays burned and every new policy needs a higher
 sequence.
 
@@ -631,18 +639,36 @@ immediately before the first commit.
 - The live `/releases/latest/download/update-manifest.json` was re-fetched during this sync and
   served the exact envelope described in §1.
 
+**PASSED (physical X6532, release-signed, live channel, 2026-11-07):**
+
+- Final gate on the shipping tree: 2,466 JVM tests / 0 failures / 0 errors / 0 skipped across
+  266 classes; the standalone lint gate reported "No issues found."
+- `:app:assembleRelease -Pmyexodus.updateRepository=Musila-ke/MyExodus-Releases` produced
+  `myexodus-1.1.4-v6.apk` (versionCode 6, versionName 1.1.4, minSdk 26, targetSdk 36), signed by
+  the release identity, with the pinned repository string present in the packaged dex.
+- Fresh install on the X6532: the debug build was uninstalled with owner authorisation, the
+  release APK installed, `dumpsys package` reports `versionCode=6 versionName=1.1.4` with no
+  DEBUGGABLE flag, and the app launched into first-run onboarding.
+- Live publication: `artifact-v6` is an immutable prerelease, `policy-000009` is the
+  repository's latest, `releases/latest/download/update-manifest.json` redirects to
+  `policy-000009` and matches the locally signed envelope byte for byte, and the version-pinned
+  APK URL downloads anonymously with SHA-256 equal to the signed digest.
+- `accelerometer_rotation=0` verified after the injected input (`scripts/rotation-guard.sh`).
+
 **BLOCKED (owner-gated or hardware):**
 
-- Release-signed N to N+1 install on **physical hardware**: only the emulator run above is
-  release-signed. The X6532 rehearsal was debug-signed.
+- Release-signed N to N+1 install on **physical hardware**: the X6532 now runs a release-signed
+  build, but no in-place update has been performed on physical hardware yet; only the emulator
+  run above is a release-signed replacement.
 - Installer-session `fsync` with a real `openWrite` stream, duplicate and stale status intents,
   fresh pre-commit `HALT`, protection allow-window expiry, and post-replace protection health
-  are proven on the emulator; the physical-device equivalents still need a release-signed run.
+  are proven on the emulator; the physical-device equivalents need a release-signed update run,
+  which is now possible on the X6532 once an N+1 artifact exists.
 - Android 13+ restricted-settings re-enable behavior after a self-update needs a sideloaded,
-  release-signed build on hardware.
-- 5 to 25 to 100 percent cohort progression has not been rehearsed on the live repository; it
-  needs owner publication approval. GitHub immutable-release settings and the public `latest`
-  mapping are configured and verified.
+  release-signed update on hardware; the fresh install above does not exercise it.
+- 5 to 25 to 100 percent cohort progression has not been rehearsed on the live repository.
+  Policy 9 goes straight to 100 percent for the two-tester base; GitHub immutable-release
+  settings and the public `latest` mapping are configured and verified.
 - Developer verification console registration (full-distribution path) is not done.
 
 None of the blocked items is reported as passed.
