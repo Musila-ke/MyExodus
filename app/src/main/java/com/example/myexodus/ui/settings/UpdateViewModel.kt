@@ -93,7 +93,6 @@ class UpdateViewModel @Inject constructor(
     private var busy = false
 
     init {
-        _state.update { it.copy(notice = coordinator.takeUpgradeNotice()) }
         viewModelScope.launch {
             reload()
             // Plan revision 2026-11-06: one prompt per offered version, on app open only.
@@ -216,12 +215,15 @@ class UpdateViewModel @Inject constructor(
     }
 
     fun dismissNotice() {
+        coordinator.dismissUpgradeNotice()
         _state.update { it.copy(notice = null) }
     }
 
     private suspend fun reload() {
-        val snapshot = withContext(Dispatchers.IO) { coordinator.snapshot() }
-        _state.update { snapshot.toUi(it) }
+        val (snapshot, notice) = withContext(Dispatchers.IO) {
+            coordinator.snapshot() to coordinator.pendingUpgradeNotice()
+        }
+        _state.update { snapshot.toUi(it).let { ui -> ui.copy(notice = ui.notice ?: notice) } }
         val state = snapshot.attempt?.state
         if (state == AttemptState.DOWNLOADING || state == AttemptState.DOWNLOAD_STARTING) {
             startPolling()
@@ -259,7 +261,11 @@ class UpdateViewModel @Inject constructor(
             error = attempt?.error?.takeIf {
                 phase == UpdatePhase.FAILED ||
                     phase == UpdatePhase.NEEDS_PERMISSION ||
-                    phase == UpdatePhase.STATUS_UNKNOWN
+                    phase == UpdatePhase.STATUS_UNKNOWN ||
+                    // §8.5 / plan line 258: a refused fresh fetch must stay visible so the
+                    // install action reads as a retry, not as a silent no-op.
+                    (phase == UpdatePhase.READY_TO_INSTALL &&
+                        it == AttemptError.WAITING_FOR_POLICY_CONFIRMATION)
             },
             checkError = checkError,
             lastCheckedAtMs = lastSuccessAtMs,

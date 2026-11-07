@@ -30,7 +30,9 @@ internal fun interface PolicyHttpClient {
 /** Bounded HTTPS metadata fetch (plan §8.2): 10 s connect, 15 s read, 30 s overall. */
 internal class HttpsPolicyClient : PolicyHttpClient {
     override fun fetch(url: String): HttpResult {
-        val deadlineNanos = System.nanoTime() + UpdateConfig.OVERALL_TIMEOUT_MS * 1_000_000
+        // Long math is load-bearing: Int 30_000 * 1_000_000 overflows to -64_771_072 ns, which
+        // puts the deadline in the past and fails every fetch as an instant NETWORK_TIMEOUT.
+        val deadlineNanos = System.nanoTime() + UpdateConfig.OVERALL_TIMEOUT_MS.toLong() * 1_000_000
         var current = runCatching { URL(url) }.getOrNull()
             ?: return HttpResult.Failure(AttemptError.HOST_UNAVAILABLE)
         if (current.protocol != "https") {

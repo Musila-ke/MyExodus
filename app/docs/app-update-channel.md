@@ -44,9 +44,17 @@ https://github.com/<UPDATE_RELEASE_REPOSITORY>/releases/latest/download/update-m
 That `latest` link is discovery only. APK downloads always use the immutable version-pinned URL
 carried inside the signed policy.
 
-**Live status, 2026-11-06:** `https://github.com/Musila-ke/myexodus-releases` and its manifest
-path both return HTTP 404. Step 2 (distribution baseline) is owner-gated and has not been
-provisioned, so no live channel exists yet.
+**Live status, 2026-11-07:** the channel is live at
+`https://github.com/Musila-ke/MyExodus-Releases`. Release immutability is enabled. Published:
+
+- `artifact-v4` and `artifact-v5` (the current signed universal APK `myexodus-1.1.3-v5.apk`,
+  38,531,001 bytes, SHA-256 `15ffc132bda5b1ec6044e66e82cafc672fcf3a377399b785743950ecef184d86`)
+- `policy-000008`, the latest release: signed `OFFER` of versionCode 5 (`1.1.3`) at 100 percent,
+  cohort salt `ddc36891f1c3bf71c6d8fec43964b01a`
+
+Publisher state: highest policy sequence 8, highest versionCode 5. Tags are immutable, so
+`policy-000005` (an early test publication) stays burned and every new policy needs a higher
+sequence.
 
 ## 2. Trust chain
 
@@ -175,6 +183,11 @@ the pre-commit policy refresh.
 - 404 -> `NO_STABLE_POLICY`; 403 or 429 -> `HOST_THROTTLED`; 5xx or any other non-200 ->
   `HOST_UNAVAILABLE`; TLS/IO -> `NETWORK_UNAVAILABLE`; timeout -> `NETWORK_TIMEOUT`
 
+The overall deadline is computed in `Long` nanoseconds: `OVERALL_TIMEOUT_MS * 1_000_000` in Int
+overflows to a negative value and fails every fetch as an instant `NETWORK_TIMEOUT`.
+`HttpsPolicyClientTest.closedPortIsNetworkUnavailableNotTimeout` pins the regression by proving a
+refused connection reaches the socket layer as `NETWORK_UNAVAILABLE`.
+
 A verified policy is projected to display state in `UpdateCoordinator.project`:
 
 | Condition | Display status |
@@ -228,8 +241,9 @@ other attempts are swept on the next main-process start.
 
 Reconciliation sources:
 
-- `onMainProcessStart`: initialize the version floor, sweep stale files, record an upgrade
-  notice, sync the protection marker, reconcile the owned attempt
+- `onMainProcessStart`: initialize the version floor, re-project the display status against the
+  installed version, sweep stale files, record the upgrade notice, sync the protection marker,
+  reconcile the owned attempt
 - `reconcileAfterReplace` and the startup path: if the installed version is at or above the
   attempt target, the attempt becomes `SUCCEEDED` and its files are deleted; a committed
   session that no longer exists becomes `UPDATE_STATUS_UNKNOWN`
@@ -336,6 +350,18 @@ protection authority or store reports a real gap, and clears automatically once 
 healthy again. Settings shows the neutral repair action and link to Protection; no silent
 claim of health is made, and partner status keeps reporting the real state.
 
+The upgrade is re-projected on the same startup path: a cached policy that still says
+`AVAILABLE` is re-evaluated against the new installed version, so the dialog cannot keep
+offering the version that is now running.
+
+**Post-upgrade notice, 2026-11-07.** The pending-notice marker is persisted
+(`upgrade_notice_pending`, `commit()`), not held in memory: the process that performs the
+package replacement is usually gone before any UI reads it, and ViewModel creation can also
+beat the asynchronous startup reconciliation. `UpdateViewModel.reload()` reads the durable
+marker, shows the signed plain-text notes when the installed version matches the offered
+release (generic copy otherwise), and the marker clears only on OK. Verified on the emulator
+across a real v4 to v5 replacement: notice shown once, OK cleared it, relaunch did not repeat.
+
 ## 9. UI and diagnostics
 
 `UpdateViewModel` projects the snapshot into these phases and actions:
@@ -351,12 +377,18 @@ claim of health is made, and partner status keeps reporting the real state.
 | `CHECK_STALE` | Couldn't confirm the latest version | Check again |
 | `AVAILABLE` | Version <name> is ready to download | Download (metered variant when needed) |
 | `DOWNLOADING` / `PAUSED` / `VERIFYING` | progress / paused / verifying | Cancel download |
-| `READY_TO_INSTALL` | Ready to install | Install |
+| `READY_TO_INSTALL` | Ready to install; with a refused fresh policy, the reason plus Retry | Install / Retry |
 | `NEEDS_PERMISSION` | Allow app installs to continue | Allow installation from this source |
 | `STAGING` / `INSTALLING` | Preparing / waiting for the system installer | none |
 | `AWAITING_CONFIRMATION` | Waiting for your confirmation | Continue installation |
 | `STATUS_UNKNOWN` | Update status unknown | Check status |
 | `FAILED` | Update needs attention | Retry |
+
+`READY_TO_INSTALL` normally offers Install. When the fresh pre-commit fetch was refused, the
+attempt stays `READY_TO_INSTALL` with `WAITING_FOR_POLICY_CONFIRMATION`; the dialog shows that
+mapped explanation and the primary action becomes Retry, so the refusal is visible and
+actionable rather than a silent no-op. Verified on the emulator with a faithful injected
+attempt state (2026-11-07).
 
 `FAILED` retries transient download failures directly. Authority failures
 (`NO_STABLE_POLICY`, `POLICY_INVALID`, `POLICY_ROLLBACK`, `POLICY_CONFLICT`, `HALTED`,
@@ -457,8 +489,9 @@ Publisher checks:
   self-checks the signature
 
 The publisher state file refuses a `policySequence` at or below the highest published one and,
-for `offer`, a `versionCode` at or below the highest published one. State advances only after
-the envelope is written, so a failed run does not burn a sequence.
+for `offer`, a `versionCode` below the highest published one. An equal `versionCode` is allowed
+so a rollout can rise on the same artifact with a higher policy sequence. State advances only
+after the envelope is written, so a failed run does not burn a sequence.
 
 Publication steps:
 
@@ -477,6 +510,18 @@ Publication steps:
 
 A policy release may reference the same artifact with a new salt or percentage. Only the policy
 sequence must increase.
+
+**Publisher pitfalls, found on the live repository:**
+
+- The policy asset must be named exactly `update-manifest.json`. The client reads only that name
+  under `/releases/latest/download/`, and anything else leaves the channel on the previous policy.
+- Release immutability makes every tag permanent. Uploading a second asset to an existing
+  release, or reusing a tag, fails with HTTP 422; a mis-built policy release cannot be repaired,
+  only superseded by a higher `policySequence`. `policy-000005` is permanently a test tag.
+- The policy release must stay a non-prerelease and be the repository's `latest`; artifact
+  releases must stay prereleases so they can never take the `latest` slot.
+- GitHub's `latest` CDN mapping can lag by about two minutes after publication. Verify the
+  redirect target, not just the tag page, before assuming a bad publication.
 
 ## 12. Bad releases and revert semantics
 
@@ -512,8 +557,11 @@ immediately before the first commit.
   state file lives beside it. Losing the private key freezes every installed build at its
   current version; rotation requires a trusted higher-version app that pins the next key.
   Back up the private key twice in encrypted independent locations and test a restore.
-- **Release APK signing key:** does not exist yet (owner-gated). It must be permanent once
-  created. Back it up twice and test recovery before any tester APK is distributed.
+- **Release APK signing key:** created 2026-11-07 at `~/.myexodus-release-key/` (keystore plus
+  `signing.properties`; `CN=MyExodus Release, OU=Mobile, O=MyExodus, C=KE`). Release builds load
+  it from `MYEXODUS_RELEASE_SIGNING_PROPERTIES` or that default path and fail closed when absent.
+  It is permanent from now on: back it up twice in encrypted independent locations and test a
+  restore before any tester APK is distributed.
 - Manifest signing and APK signing are separate keys. Neither belongs on the device, in the
   public releases repo, or in ordinary CI.
 
@@ -563,18 +611,38 @@ immediately before the first commit.
   Settings screen showed the original title and About "Version 1.1". No data was lost.
 - `accelerometer_rotation=0` verified after the injected taps (`scripts/rotation-guard.sh`).
 
+**PASSED (API 37 emulator, release-signed, live channel, 2026-11-07):**
+
+- Discovery against the live repository: the pinned key verified `policy-000008`, projecting
+  `AVAILABLE` for the installed versionCode 4 build.
+- Full `AVAILABLE -> download -> verify -> install` run with the release-signed
+  `myexodus-1.1.3-v5.apk`: DownloadManager transfer, exact SHA-256, PackageInstaller session,
+  installed versionCode 5, app data preserved across the replacement.
+- Post-upgrade notice: after the durable-flag fix, the one-time notice appeared with the exact
+  signed release notes, OK cleared it, and the next launch did not repeat it.
+- Deferred-commit UI: a `READY_TO_INSTALL` attempt carrying
+  `WAITING_FOR_POLICY_CONFIRMATION` displayed the mapped explanation and a Retry action
+  (faithful injected attempt state; the refusal itself is covered by the pre-commit path).
+- Protection continuity: after the replacement, protection reported the real remaining issues
+  (accessibility, then notifications) instead of a false healthy state, the Re-enable action
+  cleared the explicit re-enable requirement, and once accessibility rebounded the updater's
+  `protection_resume_required` marker recomputed to false on the next snapshot. The Home
+  attention card and chip returned to healthy.
+- The live `/releases/latest/download/update-manifest.json` was re-fetched during this sync and
+  served the exact envelope described in §1.
+
 **BLOCKED (owner-gated or hardware):**
 
-- Live channel end to end: no releases-only repository exists yet (HTTP 404), and Step 2 is
-  owner-gated.
-- Release-signed N to N+1 install on hardware: no release keystore exists. A debug-signed APK
-  cannot exercise the signing-continuity leg against a release-signed install.
+- Release-signed N to N+1 install on **physical hardware**: only the emulator run above is
+  release-signed. The X6532 rehearsal was debug-signed.
 - Installer-session `fsync` with a real `openWrite` stream, duplicate and stale status intents,
   fresh pre-commit `HALT`, protection allow-window expiry, and post-replace protection health
-  need instrumented or physical-device runs with a release-signed APK.
+  are proven on the emulator; the physical-device equivalents still need a release-signed run.
 - Android 13+ restricted-settings re-enable behavior after a self-update needs a sideloaded,
   release-signed build on hardware.
-- 5 to 25 to 100 percent cohort progression, GitHub immutable-release settings and the public
-  `latest` mapping need the owner-provisioned repository and publication approval.
+- 5 to 25 to 100 percent cohort progression has not been rehearsed on the live repository; it
+  needs owner publication approval. GitHub immutable-release settings and the public `latest`
+  mapping are configured and verified.
+- Developer verification console registration (full-distribution path) is not done.
 
 None of the blocked items is reported as passed.

@@ -192,8 +192,10 @@ private fun UpdateDialog(
                     }
                     UpdatePhase.PAUSED -> Text(stringResource(R.string.settings_update_paused))
                     UpdatePhase.VERIFYING -> BusyLine(stringResource(R.string.settings_update_verifying))
-                    UpdatePhase.READY_TO_INSTALL ->
+                    UpdatePhase.READY_TO_INSTALL -> {
                         Text(stringResource(R.string.settings_update_ready))
+                        state.error?.let { Text(failureText(it)) }
+                    }
                     UpdatePhase.NEEDS_PERMISSION ->
                         Text(stringResource(R.string.settings_update_needs_permission))
                     UpdatePhase.STAGING -> BusyLine(stringResource(R.string.settings_update_staging))
@@ -318,7 +320,13 @@ private fun UpdateDialog(
                     onClick = { update.cancelDownload() },
                 )
                 UpdatePhase.READY_TO_INSTALL -> PrimaryAction(
-                    label = stringResource(R.string.settings_update_install),
+                    label = stringResource(
+                        if (state.error == AttemptError.WAITING_FOR_POLICY_CONFIRMATION) {
+                            R.string.settings_update_retry
+                        } else {
+                            R.string.settings_update_install
+                        },
+                    ),
                     enabled = !state.busy,
                     onClick = { update.install() },
                 )

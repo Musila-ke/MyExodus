@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -21,8 +23,8 @@ android {
         targetSdk = 36
         // Release 0 is the first build that carries a meaningful version: the server's
         // clientCompatibility minimum is compared against this versionCode (plan §8.10).
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 5
+        versionName = "1.1.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -42,6 +44,25 @@ android {
         )
     }
 
+    // Plan §13.1-3: the release identity lives outside the repository. Release builds fail
+    // closed when the owner's signing properties are absent; debug builds are unaffected.
+    signingConfigs {
+        create("release") {
+            val signingProperties = Properties().apply {
+                val path = System.getenv("MYEXODUS_RELEASE_SIGNING_PROPERTIES")
+                    ?: "${System.getProperty("user.home")}/.myexodus-release-key/signing.properties"
+                val propertiesFile = file(path)
+                if (propertiesFile.isFile) propertiesFile.inputStream().use { load(it) }
+            }
+            signingProperties.getProperty("storeFile")?.let {
+                storeFile = file(it)
+                storePassword = signingProperties.getProperty("storePassword")
+                keyAlias = signingProperties.getProperty("keyAlias")
+                keyPassword = signingProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             // Gate 2.5 coverage: AGP's `createDebugUnitTestCoverageReport` then emits the
@@ -52,6 +73,7 @@ android {
             buildConfigField("String", "DOMAIN_USAGE_MODE", "\"ENFORCE\"")
         }
         release {
+            signingConfig = signingConfigs.getByName("release")
             optimization {
                 enable = false
             }

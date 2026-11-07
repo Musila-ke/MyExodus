@@ -228,6 +228,11 @@ internal class UpdateStateStore(context: Context) {
         }
     }
 
+    /** Startup reconciliation: the installed version can change without a new check. */
+    fun setDisplayStatus(display: DisplayStatus) {
+        prefs.edit { putString(KEY_DISPLAY_STATUS, display.name) }
+    }
+
     fun recordCheckSuccess(now: Long, display: DisplayStatus, envelopeJson: String) {
         prefs.edit {
             putString(KEY_CHECK_STATUS, CheckStatus.SUCCESS.name)
@@ -307,6 +312,13 @@ internal class UpdateStateStore(context: Context) {
         prefs.edit { putLong(KEY_PROMPT_SHOWN_VERSION, versionCode) }
     }
 
+    /** Durable so the notice survives the short-lived post-replace process (2026-11-07). */
+    fun upgradeNoticePending(): Boolean = prefs.getBoolean(KEY_UPGRADE_NOTICE_PENDING, false)
+
+    fun setUpgradeNoticePending(pending: Boolean) {
+        prefs.edit(commit = true) { putBoolean(KEY_UPGRADE_NOTICE_PENDING, pending) }
+    }
+
     private companion object {
         const val PREFS = "update_state"
         const val KEY_COHORT_ID = "cohort_id"
@@ -325,6 +337,7 @@ internal class UpdateStateStore(context: Context) {
         const val KEY_AUTO_DOWNLOAD = "auto_download"
         const val KEY_LAST_NOTIFIED_VERSION = "last_notified_version"
         const val KEY_PROMPT_SHOWN_VERSION = "prompt_shown_version"
+        const val KEY_UPGRADE_NOTICE_PENDING = "upgrade_notice_pending"
 
         const val COHORT_ID_BYTES = 16
     }

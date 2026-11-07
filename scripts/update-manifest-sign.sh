@@ -141,8 +141,10 @@ if sequence <= published:
 if os.environ["MODE"] == "offer":
     version = int(os.environ["VERSION_CODE"])
     published_version = int(state.get("highestVersionCode", 0))
-    if version <= published_version:
-        sys.exit("versionCode %d is not above the published %d" % (version, published_version))
+    # §13.4 forbids a downgrade, not an equal version: rollout progression (5 to 25 to 100
+    # percent) re-offers the same artifact with a higher policy sequence (§13.7).
+    if version < published_version:
+        sys.exit("versionCode %d is below the published %d" % (version, published_version))
 PY
 
 WORK="$(mktemp -d)"

@@ -94,7 +94,6 @@ class UpdateCoordinator @Inject constructor(
 
     private var cachedEnvelope: String? = null
     private var cachedPolicy: UpdatePolicy? = null
-    private var pendingNotice: UpgradeNotice? = null
 
     val configured: Boolean get() = UpdateConfig.configured
 
@@ -129,21 +128,31 @@ class UpdateCoordinator @Inject constructor(
     fun onMainProcessStart() {
         val installed = installedVersionCode(appContext)
         store.ensureVersionFloor(installed)
+        // §8.6: a package replacement changes the installed version without a new check, so
+        // re-project the cached policy or the dialog keeps offering the running version.
+        refreshDisplayStatus(installed)
         downloads.sweepOtherAttempts(store.activeAttempt()?.takeIf { it.state.active }?.attemptId)
-        if (store.recordLaunch(installed)) {
-            val notes = verifiedPolicy()
-                ?.release
-                ?.takeIf { it.versionCode == installed }
-                ?.releaseNotes
-                ?.takeIf { it.isNotBlank() }
-            pendingNotice = UpgradeNotice(notes)
-        }
+        // Persisted: the post-replace process often dies before any UI reads an in-memory notice.
+        if (store.recordLaunch(installed)) store.setUpgradeNoticePending(true)
         syncProtectionMarker()
         reconcileOwnedAttempt()
     }
 
-    internal fun takeUpgradeNotice(): UpgradeNotice? =
-        pendingNotice.also { pendingNotice = null }
+    /** Reads the durable post-upgrade notice; the flag clears only when the user dismisses it. */
+    internal fun pendingUpgradeNotice(): UpgradeNotice? {
+        if (!store.upgradeNoticePending()) return null
+        val installed = installedVersionCode(appContext)
+        val notes = verifiedPolicy()
+            ?.release
+            ?.takeIf { it.versionCode == installed }
+            ?.releaseNotes
+            ?.takeIf { it.isNotBlank() }
+        return UpgradeNotice(notes)
+    }
+
+    internal fun dismissUpgradeNotice() {
+        store.setUpgradeNoticePending(false)
+    }
 
     internal suspend fun check(manual: Boolean): CheckOutcome = bus.withLock {
         if (!configured) return CheckOutcome.NOT_CONFIGURED
@@ -622,6 +631,13 @@ class UpdateCoordinator @Inject constructor(
             ),
         )
         downloads.deleteAttemptFiles(attempt.attemptId)
+        // §4: the cached policy still says AVAILABLE; the running version now satisfies it.
+        refreshDisplayStatus(installedVersionCode(appContext))
+    }
+
+    /** §8.6: package replacement changes the installed version without a new check. */
+    private fun refreshDisplayStatus(installed: Long) {
+        verifiedPolicy()?.let { policy -> store.setDisplayStatus(project(policy, installed)) }
     }
 
     private suspend fun verifyDownload(attempt: UpdateAttempt): UpdateAttempt? {

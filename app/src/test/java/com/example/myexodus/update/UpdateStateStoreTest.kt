@@ -130,6 +130,14 @@ class UpdateStateStoreTest {
     }
 
     @Test
+    fun upgradeNoticePendingSurvivesANewStoreInstanceUntilDismissed() {
+        store.setUpgradeNoticePending(true)
+        assertTrue(UpdateStateStore(context).upgradeNoticePending())
+        store.setUpgradeNoticePending(false)
+        assertTrue(!UpdateStateStore(context).upgradeNoticePending())
+    }
+
+    @Test
     fun availabilityNotificationAndPromptAreTrackedPerVersion() {
         assertEquals(0L, store.lastAvailableNotifiedVersionCode())
         assertEquals(0L, store.availablePromptShownVersionCode())
