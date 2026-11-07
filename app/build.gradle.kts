@@ -98,6 +98,10 @@ android {
             isIncludeAndroidResources = true
         }
     }
+    // ADR #208: the standalone lintDebug gate is authoritative; skip the redundant per-release pass.
+    lint {
+        checkReleaseBuilds = false
+    }
     sourceSets {
         getByName("androidTest") {
             // MigrationTestHelper loads the exported schema JSONs from the test APK's assets
