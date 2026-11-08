@@ -82,8 +82,14 @@ sealed interface OverlayContent {
      *  bar-free area; the host evicts the app to the background the moment the window attaches
      *  (§8 Step 4 — covering alone left the app resumed, playing audio, with Digital Wellbeing
      *  still counting it, device-caught 2026-09-27). The wall then stays until the user taps
-     *  its Close action (user ruling 2026-09-27) — never a timer. */
-    data class DailyLimitBlocked(val packageName: String) : OverlayContent
+     *  its Close action (user ruling 2026-09-27) — never a timer. [ruleId] is the limit's app
+     *  rule; it arms the same recovery action the app wall offers (owner 2026-11-08). The
+     *  accessibility-off fallback host passes none and stays action-free — it has no recovery
+     *  wiring, and a dead button would be worse than none. */
+    data class DailyLimitBlocked(
+        val packageName: String,
+        val ruleId: String? = null,
+    ) : OverlayContent
 
     /** Usage warning (plan §8 Step 10 `WarningOverlayContent(level, remainingMs)`) — a
      *  top-banner countdown of the remaining budget. Non-focusable, touches outside the
@@ -340,7 +346,13 @@ internal class BlockOverlayView(
                 )
                 message.setText(R.string.limit_blocked_message)
                 message.visibility = VISIBLE
-                recoveryButton.visibility = GONE
+                val ruleId = content.ruleId
+                if (ruleId != null) {
+                    recoveryButton.visibility = VISIBLE
+                    recoveryButton.setOnClickListener { onOpenRecovery(ruleId) }
+                } else {
+                    recoveryButton.visibility = GONE
+                }
                 differentSiteButton.visibility = GONE
                 val dismiss = onWallDismiss
                 wallDismissButton.visibility = if (dismiss != null) VISIBLE else GONE

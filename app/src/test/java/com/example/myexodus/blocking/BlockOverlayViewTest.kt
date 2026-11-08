@@ -115,6 +115,21 @@ class BlockOverlayViewTest {
     }
 
     @Test
+    fun dailyLimitBlock_withItsRule_offersTheSameRecoveryAction() {
+        // Owner 2026-11-08: the daily wall was the one everyday block surface with no way
+        // into the recovery flow. With the limit's rule id it now carries the same action
+        // the app wall does; the fallback host (no rule) stays action-free.
+        val v = view()
+        v.bind(OverlayContent.DailyLimitBlocked("com.instagram.android", "rule-9"))
+
+        val visible = buttons(v).filter { it.visibility == View.VISIBLE }
+        assertEquals(1, visible.size)
+        assertEquals(context.getString(R.string.overlay_open_recovery), visible[0].text)
+        visible[0].performClick()
+        assertEquals(listOf("rule-9"), recovered)
+    }
+
+    @Test
     fun dailyWall_closeAction_dismissesAndNeverSurvivesIntoAUrlCard() {
         var dismissed = 0
         val wall = BlockOverlayView(

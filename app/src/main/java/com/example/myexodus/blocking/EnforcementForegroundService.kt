@@ -19,6 +19,7 @@ import android.util.Log
 import android.view.Display
 import androidx.core.content.ContextCompat
 import com.example.myexodus.BuildConfig
+import com.example.myexodus.MainActivity
 import com.example.myexodus.registerSystemReceiver
 import com.example.myexodus.accountability.monitoring.MonitoringLiveness
 import com.example.myexodus.accountability.monitoring.MonitoringSnapshotRecorder
@@ -33,7 +34,9 @@ import com.example.myexodus.blocking.usage.UsageMark
 import com.example.myexodus.blocking.usage.UsageSessionMachine
 import com.example.myexodus.blocking.usage.latestResumedPackage
 import com.example.myexodus.blocking.usage.usageEventPackage
+import com.example.myexodus.blocking.recovery.RecoveryStateStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.UsageLedgerSource
 import com.example.myexodus.settings.EnhancedModeSettings
@@ -106,6 +109,7 @@ class EnforcementForegroundService : Service() {
     @Inject lateinit var status: ProtectionStatusStore
     @Inject lateinit var statusMonitor: ProtectionStatusMonitor
     @Inject lateinit var attempts: AttemptRecorder
+    @Inject lateinit var recoveryStore: RecoveryStateStore
     @Inject lateinit var usageEngine: UsageAccountingEngine
     @Inject lateinit var diagnostics: UsageDiagnosticsRecorder
     @Inject lateinit var outageSource: AccountingOutageSource
@@ -191,7 +195,12 @@ class EnforcementForegroundService : Service() {
         // accessibility token type is unavailable to a plain foreground service).
         usageOverlay = OverlayController(
             this, usageStateMachine, profiler,
-            onOpenRecovery = {}, onDifferentSite = {},
+            // Degraded mode is when the user has the least other escape: the wall is
+            // non-evictable here, so without this action Home was the only way out. The
+            // SYSTEM_ALERT_WINDOW appop this wall requires is a documented background
+            // activity start exemption (developer.android.com background-starts).
+            onOpenRecovery = ::openRecovery,
+            onDifferentSite = {},
             applicationOverlayHost = true,
         )
         registerScreenOffReceiver()
@@ -825,6 +834,19 @@ class EnforcementForegroundService : Service() {
         startActivity(intent)
     }
 
+    /** The degraded daily wall's recovery action — the same entry Path A's wall uses:
+     *  arm the friction session, then land on Urge Assist. */
+    private fun openRecovery(ruleId: String) {
+        scope.launch { runCatching { recoveryStore.startRecovery(ruleId) } }
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_START_TAB, MainActivity.TAB_RECOVERY)
+                .putExtra(MainActivity.EXTRA_RECOVERY_ENTRY, RecoverySession.ENTRY_BLOCK_SCREEN)
+                .putExtra(MainActivity.EXTRA_OPEN_ASSIST, true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        )
+    }
+
     // --- Path B: daily-usage sessions + wall (enforcement plan v2 §8 Step 5, §6 steps 2–4) --
 
     /** Decision 2 via §8 Step 6's arbiter: Path B credits usage only while it holds the
@@ -979,17 +1001,18 @@ class EnforcementForegroundService : Service() {
                 // once the user's own Home press backgrounds it and the wall lifts.
                 if (usageSessions.activePackage == packageName) closeUsageSession()
                 if (usageOverlay.currentContent(Display.DEFAULT_DISPLAY) !is OverlayContent.DailyLimitBlocked) {
+                    val ruleId = publisher.snapshot.appRules[packageName]?.ruleId
                     // §6 attempt log (finding 2026-11-02): Path B's wall was the one daily
                     // wall that never recorded — Path A's ticker records the same way, and
                     // the recorder dedupes one wall seen by both paths.
-                    publisher.snapshot.appRules[packageName]?.ruleId?.let { ruleId ->
-                        scope.launch { runCatching { attempts.recordBlocked(ruleId, packageName) } }
+                    ruleId?.let {
+                        scope.launch { runCatching { attempts.recordBlocked(it, packageName) } }
                     }
                     usageOverlay.show(
                         usageStateMachine.currentGeneration,
                         Display.DEFAULT_DISPLAY,
                         usageOverlay.displayBounds(Display.DEFAULT_DISPLAY),
-                        OverlayContent.DailyLimitBlocked(packageName),
+                        OverlayContent.DailyLimitBlocked(packageName, ruleId),
                     )
                 }
             }

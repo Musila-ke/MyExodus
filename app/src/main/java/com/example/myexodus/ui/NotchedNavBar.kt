@@ -196,9 +196,14 @@ internal fun NotchedNavBar(
             animationSpec = spring(dampingRatio = 0.75f, stiffness = 350f),
             label = "nav-bubble-x",
         )
-        val notchCentrePx = centrePx.coerceIn(
-            cornerPx + notchPx + filletPx,
-            (with(density) { maxWidth.toPx() } - cornerPx - notchPx - filletPx),
+        // A recreation-time measure can be zero-width, which puts the upper bound below the
+        // lower one; coerceIn throws on that and takes the whole process down (device
+        // 2026-11-08: the crash killed both blocker services). Clamp to the lower bound.
+        val notchMarginsPx = cornerPx + notchPx + filletPx
+        val notchCentrePx = clampToRange(
+            centrePx,
+            notchMarginsPx,
+            with(density) { maxWidth.toPx() } - notchMarginsPx,
         )
 
         // The bar is the one surface whose role differs per scheme: white slab in light, elevated
@@ -348,6 +353,10 @@ private data class NotchedBarShape(
         Outline.Generic(buildBarPath(size.width, topPx, bottomPx, centrePx, cornerPx, notchPx, filletPx))
 }
 
+/** coerceIn that tolerates a zero-width transient measure (upper bound below the lower). */
+internal fun clampToRange(value: Float, min: Float, max: Float): Float =
+    value.coerceIn(min, maxOf(min, max))
+
 /**
  * Rounded slab with a bite out of the top edge at [centre]. Canvas angles run clockwise with
  * 0° at 3 o'clock, so the bite sweeps through 90° (straight down).
@@ -362,7 +371,7 @@ private fun buildBarPath(
     fillet: Float,
 ): Path {
     val span = sqrt(notchRadius * notchRadius + 2f * notchRadius * fillet)
-    val safeCentre = centre.coerceIn(corner + span, width - corner - span)
+    val safeCentre = clampToRange(centre, corner + span, width - corner - span)
     val touchX = notchRadius * span / (notchRadius + fillet)
     val touchY = top + notchRadius * fillet / (notchRadius + fillet)
     val startAngle = Math.toDegrees(atan2(fillet.toDouble(), -span.toDouble())).toFloat()

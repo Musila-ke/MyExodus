@@ -760,14 +760,17 @@ class BlockerAccessibilityService : AccessibilityService() {
                 if (current !is OverlayContent.DailyLimitBlocked) {
                     // Same §6 record as the app wall (finding 2026-11-02): the daily-limit
                     // ticker showed this wall without ever writing an attempt.
-                    publisher.snapshot.appRules[packageName]?.ruleId?.let { ruleId ->
+                    val dailyRuleId = publisher.snapshot.appRules[packageName]?.ruleId
+                    dailyRuleId?.let { ruleId ->
                         scope.launch { runCatching { attempts.recordBlocked(ruleId, packageName) } }
                     }
                     overlay.show(
                         stateMachine.currentGeneration,
                         displayId,
                         overlay.displayBounds(displayId),
-                        OverlayContent.DailyLimitBlocked(packageName),
+                        // The same rule id arms the wall's recovery action (owner 2026-11-08);
+                        // the accessibility-off fallback host passes none and stays action-free.
+                        OverlayContent.DailyLimitBlocked(packageName, dailyRuleId),
                     ) {
                         // §8 Step 4 eviction, attach-confirmed: covering is not stopping. Left
                         // resumed under the wall, the app kept playing audio and Digital
