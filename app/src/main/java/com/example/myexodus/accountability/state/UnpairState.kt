@@ -77,7 +77,9 @@ data class UnpairState(
      *  earlier would strand the retry that only this row drives. Responder side, the owed ack
      *  is the gate. Single source for the UI read model and the dismissal guard. */
     fun isDismissible(nowEpochMillis: Long): Boolean = when {
-        role == ROLE_RESPONDER -> ackSent
+        // An empty message id is a server-originated termination (OPD #43): no mailbox
+        // message arrived, so no ack is owed.
+        role == ROLE_RESPONDER -> ackSent || messageId.isEmpty()
         else -> when (phaseAt(nowEpochMillis)) {
             UnpairPhase.TERMINAL, UnpairPhase.LOCAL_ONLY_TERMINATED -> true
             UnpairPhase.AWAITING_CONFIRMATION, UnpairPhase.AWAITING_REVOCATION -> false

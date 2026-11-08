@@ -55,7 +55,7 @@ merge into this phone only, or decide later — with a hard stop on rollback/equ
 | Names | **Self-chosen labels only.** My own name = `user_profile.name` (default "You"), sent as my pairing label; the partner's name = a label **I typed**, stored on-device in `EnrollmentRecord.partnerLabel` (renamable via `updatePartnerLabel`). **The server stores no names.** | `RulesRepository.updateProfileName`, `PairingFlow.initiate/join(myLabel)`, `PartnerNotifications.displayNameOf` |
 | Local profile | Fixed row `user_profile` id `"local"`, name `"You"`, email `""` — a placeholder, never linked to the uid; also carries the permission flags | `blocking/RulesRepository.kt:148-177`, `data/db/entity/UserProfile.kt` |
 | Behavioral data | Rules, usage, streaks, enrollments are **device-local** (Room/SQLCipher). Only consented partner events travel (signed relay + DMS snapshots) | `AppRulesStoreFactory.kt`, partner sync |
-| Deletion | Pair-level **bilateral deletion** exists; there is **no account-level deletion** | `BilateralDeletion.kt` |
+| Deletion | Account-level deletion exists (ADR #244) and now reaches the partner's copy: the server's `terminationReason` on the pair document drives the partner device to shred and show Ended (ADR #280, OPD #43). Pair-level bilateral deletion remains the in-app unpair path | `DeletionCoordinator`, `BilateralDeletion.kt`, `PartnerSyncCoordinator` |
 
 Consequences that follow directly: identity is device-bound, not person-bound; a reinstall is an
 identity loss; the partner cannot verify who the uid belongs to beyond the pairing transcript.
@@ -295,9 +295,13 @@ with a reason. "Where" names the primary surfaces, not every call site.
   atomically by a fresh QUEUED job, and a `PENDING_DELETION` profile with no job gets the missing
   job — both alert through `auth_profile_mismatches`. Device-proven on the disposable API-37 AVD (three COMPLETED jobs,
   client Working → sign-out → relaunch → purge); every identity-destructive leg stays off the
-  X6532 by owner ruling. Honest limits: the 30-day tombstone is retained metadata by design, a
-  callable cold start can outlive the client's 60 s window (the job, not the client, is
-  authoritative), and no two-phone partner deletion leg exists because the emulator cannot pair.
+  X6532 by owner ruling. The two-phone partner leg now exists: a terminated pair carrying the
+  account-deletion worker's `terminationReason` drives the partner device to shred locally and
+  show Ended on its next sync pass (ADR #280, OPD #43), device-proven 2026-11-08 on the X6532C
+  against a live `ACCOUNT_DELETED` pair. Honest limits: the 30-day tombstone is retained
+  metadata by design, a callable cold start can outlive the client's 60 s window (the job, not
+  the client, is authoritative), and the partner purge covers the pair's cached content, not a
+  partner that never syncs again.
 - **E3. Firestore rules.** New profile doc; keep member-gating; keep App Check enforcement on
   Firestore (identitytoolkit stays unenforced by design).
 - **E4. Server-held names (only if DMS copy must name the person).** Minimal profile fields fetched

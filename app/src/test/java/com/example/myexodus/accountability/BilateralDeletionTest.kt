@@ -645,6 +645,45 @@ class BilateralDeletionTest {
         assertNull(db.unpairStateDao().get(pairId))
     }
 
+    // --- OPD #43: the partner's account was deleted (server wrote terminationReason) ---
+
+    @Test
+    fun accountDeleted_shredsWithoutAck_andIsDismissible() = runTest {
+        assertTrue(deletion.handleAccountDeleted(pairId))
+
+        assertTrue("last enrollment gone — device key destroyed", destroyedDeviceKey)
+        assertNull(db.enrollmentDao().getByPairId(pairId))
+        assertTrue(store.chainFor(pairId).isEmpty())
+        val row = db.unpairStateDao().get(pairId)!!
+        assertEquals(UnpairState.ROLE_RESPONDER, row.role)
+        assertEquals("no mailbox message exists to ack", "", row.messageId)
+        assertTrue(row.localShredded)
+        assertFalse(row.ackSent)
+        assertEquals(UnpairPhase.TERMINAL, row.phaseAt(clock))
+        assertTrue("nothing is owed, so the card can be dismissed", row.isDismissible(clock))
+        assertTrue("no ack was sent for a message that does not exist", acked.isEmpty())
+        assertTrue("the pair is already terminated server-side", terminated.isEmpty())
+
+        assertFalse("resume finds nothing left to do", deletion.resumePending())
+        assertTrue(acked.isEmpty())
+        assertTrue(terminated.isEmpty())
+
+        deletion.dismiss(pairId)
+        assertNull(db.unpairStateDao().get(pairId))
+    }
+
+    @Test
+    fun accountDeleted_shredsOnlyThatPair() = runTest {
+        seedSecondPair()
+
+        assertTrue(deletion.handleAccountDeleted(pairId))
+
+        assertNotNull("the sibling pair keeps working", db.enrollmentDao().getByPairId(otherPairId))
+        assertFalse("the shared device key survives while a pair remains", destroyedDeviceKey)
+        assertTrue(store.chainFor(otherPairId).isNotEmpty())
+        assertNull(db.unpairStateDao().get(otherPairId))
+    }
+
     // --- resumePending's change report (drives the UI repaint tick, owner UX ruling 2026-10-01) ---
 
     @Test

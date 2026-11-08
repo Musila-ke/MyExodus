@@ -121,6 +121,13 @@ class PartnerSyncCoordinatorTest {
      *  absent from the map models an unresolvable one (its slice is skipped, the rest run). */
     private val uids = mutableMapOf<String, Pair<String, String>>()
 
+    /** OPD #43: the pair document reports the partner's account deleted. */
+    private var partnerAccountDeleted = false
+
+    /** OPD #43: pairs whose account-deleted purge ran, and whether the shred succeeded. */
+    private val purgedPairs = mutableListOf<String>()
+    private var purgeSucceeds = true
+
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
@@ -156,6 +163,59 @@ class PartnerSyncCoordinatorTest {
         assertTrue(drainCalls.isEmpty())
         assertTrue(pullCalls.isEmpty())
         assertEquals(0, repairCalls)
+    }
+
+    /** OPD #43: a partner who deletes their account terminates the pair server-side. The
+     *  deletion request the mailbox cannot carry (the E2EE keys died with the account) is the
+     *  pair document's termination reason — the pass must erase this device's copy and touch
+     *  no remote step the terminated pair would refuse. */
+    @Test
+    fun partnerAccountDeleted_purgesLocallyWithoutRemoteSteps() = runTest {
+        enroll()
+        partnerAccountDeleted = true
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(listOf(pairId), purgedPairs)
+        assertTrue("the ended card must repaint", report.unpairAdvanced)
+        assertTrue(drainCalls.isEmpty())
+        assertTrue(pullCalls.isEmpty())
+        assertEquals(0, repairCalls)
+        assertEquals(0, report.eventsLinked)
+        assertTrue(consentCalls.isEmpty())
+        assertTrue(rejectionChecks.isEmpty())
+    }
+
+    @Test
+    fun partnerAccountDeleted_failedPurge_reportsNoAdvance() = runTest {
+        enroll()
+        partnerAccountDeleted = true
+        purgeSucceeds = false
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(listOf(pairId), purgedPairs)
+        assertFalse("a failed shred must not repaint onto the ended card", report.unpairAdvanced)
+        assertTrue(drainCalls.isEmpty())
+    }
+
+    /** Owner report 2026-11-08: after the purge the Home card still showed the deleted
+     *  partner's pinned message. The pre-loop sweep saw the pair as enrolled; the purge must
+     *  prune the pair's content rows itself, not leave them for the next pass. */
+    @Test
+    fun partnerAccountDeleted_prunesThePairsActivityInTheSamePass() = runTest {
+        enroll()
+        val store = factory.open()!!
+        store.partnerActivityDao().pinMessage(pairId, "Composer leg 2026-11-05.", ENROLLMENT_AT + 1)
+        assertNotNull(store.partnerActivityDao().projection(pairId))
+        partnerAccountDeleted = true
+
+        coordinator.syncOnce()
+
+        assertNull(
+            "the Home pinned card must not outlive the purge",
+            store.partnerActivityDao().projection(pairId),
+        )
     }
 
     /** Owner report 2026-11-02: the attempt event carries the sender-resolved app label, so a
@@ -1473,7 +1533,18 @@ class PartnerSyncCoordinatorTest {
         creator = eventCreator(signer),
         chain = store,
         signer = signer,
-        resolveUids = { pId -> uids[pId] },
+        resolveUids = { pId ->
+            uids[pId]?.let { PairUidResolver.Resolved(it.first, it.second, partnerAccountDeleted) }
+        },
+        purgeAccountDeletedPair = { pId ->
+            purgedPairs += pId
+            // The real seam shreds the pair; deleting the enrollment models the state the
+            // cleanup steps downstream observe.
+            if (purgeSucceeds) {
+                db.enrollmentDao().getByPairId(pId)?.let { db.enrollmentDao().delete(it) }
+            }
+            purgeSucceeds
+        },
         drainOutbox = { pId, authorUid, partnerUid ->
             stepOrder += "drain"
             drainGate?.await()

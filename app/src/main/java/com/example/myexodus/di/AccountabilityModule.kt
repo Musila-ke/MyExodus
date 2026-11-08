@@ -870,6 +870,7 @@ object AccountabilityModule {
         repairPass = repair::repairPass,
         expireApprovals = approval::expireDue,
         resumeUnpairs = deletion::resumePending,
+        purgeAccountDeletedPair = deletion::handleAccountDeleted,
         rotateKeys = { pairId, senderKeyId ->
             sessionKeyManager.rotateIfDue(pairId, senderKeyId, System.currentTimeMillis())
         },

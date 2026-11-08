@@ -956,8 +956,8 @@ class MainActivity : FragmentActivity() {
         return when (
             bilateralDeletion.initiate(
                 pairId,
-                identities?.first,
-                identities?.second,
+                identities?.myUid,
+                identities?.partnerUid,
                 signature,
             )
         ) {

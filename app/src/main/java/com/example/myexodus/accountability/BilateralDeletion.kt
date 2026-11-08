@@ -274,6 +274,37 @@ class BilateralDeletion(
     }
 
     /**
+     * OPD #43: the partner's account was deleted and the server terminated this pair. This
+     * device runs the responder half without a mailbox message — the deletion request is the
+     * pair document's own `terminationReason` (the E2EE keys died with the account, so no
+     * mailbox payload for that event can exist; plan §17's server-originated notices live in
+     * `system_events`). Journal first, then shred; no AD-18b ack is owed because no message
+     * was received ([UnpairState.isDismissible] treats the empty message id as nothing to ack).
+     * Returns false when the shred failed — the enrollment survives, so the next pass retries.
+     */
+    suspend fun handleAccountDeleted(pairId: String): Boolean {
+        if (enrollmentDao.getByPairId(pairId) == null) return true
+        journal.upsert(
+            UnpairState(
+                pairId = pairId,
+                role = UnpairState.ROLE_RESPONDER,
+                partnerUid = null,
+                messageId = "",
+                delivered = true,
+                ackSent = false,
+                requestedAtEpochMillis = now(),
+            ),
+        )
+        return try {
+            shredPair(pairId)
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "account-deleted shred failed pairId=$pairId — retried next pass", e)
+            false
+        }
+    }
+
+    /**
      * The per-pass continuation of every in-flight unpair, run by the sync coordinator BEFORE
      * its enrollment early-return (a post-shred device has no enrollment, yet its unpair is
      * exactly what still needs network work: re-delivery, the owed ack, the ack poll, the
@@ -362,6 +393,9 @@ class BilateralDeletion(
     private suspend fun resumeResponder(pairId: String) {
         val row = journal.get(pairId) ?: return
         if (row.ackSent) return
+        // OPD #43: a server-originated termination delivers no mailbox message, so there is
+        // nothing to acknowledge — the row is already terminal.
+        if (row.messageId.isEmpty()) return
         if (runCatching { ackReceived(row.messageId) }.getOrDefault(false)) {
             journal.markAckSent(pairId)
             terminate(pairId)

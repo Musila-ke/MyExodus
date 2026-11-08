@@ -73,7 +73,7 @@ class PartnerSyncCoordinator(
      *  already been delivered to this pair once the chain holds its event id. */
     private val chain: ChainStateStore,
     private val signer: AccountabilitySigner,
-    private val resolveUids: suspend (pairId: String) -> Pair<String, String>?,
+    private val resolveUids: suspend (pairId: String) -> PairUidResolver.Resolved?,
     private val drainOutbox: suspend (pairId: String, authorUid: String, partnerUid: String) -> MailboxOutboxDrainer.DrainResult,
     private val pullMailbox: suspend (pairId: String, myUid: String, messageId: String?) -> FirestoreMailboxReceiver.PullResult,
     private val repairPass: suspend (pairId: String) -> Int,
@@ -116,6 +116,9 @@ class PartnerSyncCoordinator(
      *  the identity upgrade need it — v2 rows carry their label, and a rule that no longer
      *  exists keeps the contract's neutral fallback. */
     private val resolveRuleLabel: (targetType: String, target: String) -> String = { _, target -> target },
+    /** OPD #43: the partner's account was deleted — erase this device's copy of the pair
+     *  (journal a terminal responder row + shred). True = the pair is gone. */
+    private val purgeAccountDeletedPair: suspend (pairId: String) -> Boolean = { false },
 ) {
 
     data class SyncReport(
@@ -246,8 +249,28 @@ class PartnerSyncCoordinator(
         wakeMessageId: String?,
         fingerprint: SessionFingerprint,
     ): SyncReport? {
-        val uids = resolveUids(enrollment.pairId) ?: return null
-        val (myUid, partnerUid) = uids
+        val resolved = resolveUids(enrollment.pairId) ?: return null
+        val myUid = resolved.myUid
+        val partnerUid = resolved.partnerUid
+
+        // OPD #43: the partner deleting their account is the server's own termination event
+        // (`terminationReason`), read from the document this pass already fetched. The mailbox
+        // cannot carry it — the E2EE keys died with the account — so this is the deletion
+        // request's delivery. Erase this device's copy and stop: every remote step below is
+        // exactly what a terminated pair refuses.
+        if (resolved.partnerAccountDeleted) {
+            val purged = runCatching { purgeAccountDeletedPair(enrollment.pairId) }
+                .onFailure { Log.w(TAG, "account-deleted purge failed", it) }
+                .getOrDefault(false)
+            // The pre-loop orphan sweep still saw this pair as enrolled. Its projections carry
+            // the partner's content (the Home pinned card reads them), so they must fall with
+            // the shred, not on the next pass (owner report 2026-11-08: the message stayed).
+            if (purged) {
+                runCatching { pruneActivityFor(listOf(enrollment.pairId)) }
+                    .onFailure { Log.w(TAG, "purged-pair activity prune failed pairId=${enrollment.pairId}", it) }
+            }
+            return SyncReport(enrolled = true, uidsResolved = true, unpairAdvanced = purged)
+        }
 
         // Step 8 (§8.10): the local availability switch is the user's intent; the server's pairing
         // document is what DMS dispatch actually checks at send time, so it converges on every
@@ -645,14 +668,22 @@ class PartnerSyncCoordinator(
             .filterNot { it in enrolledPairIds }
         if (orphans.isNotEmpty()) {
             Log.i(TAG, "pruning activity state for ${orphans.size} unpaired pair(s)")
-            dao.deleteLinksFor(orphans)
-            dao.deleteProjectionsFor(orphans)
-            sharingDao.deleteStreakFor(orphans)
-            sharingDao.deleteProfileFor(orphans)
-            store.partnerPlanDao().deleteForPairs(orphans)
-            store.partnerMonitoringSnapshotDao().deleteFor(orphans)
-            store.partnerRuleChangeDao().deleteFor(orphans)
+            pruneActivityFor(orphans)
         }
+    }
+
+    /** Every pair-scoped content row outside the chain tables: the partner's snapshots, plans,
+     *  rule changes, sharing consent, and the Home pinned message. Shared by the orphan sweep
+     *  and the account-deletion purge (which must not wait for the next pass's sweep). */
+    private suspend fun pruneActivityFor(pairIds: List<String>) {
+        val store = storeFactory.open() ?: return
+        store.partnerActivityDao().deleteLinksFor(pairIds)
+        store.partnerActivityDao().deleteProjectionsFor(pairIds)
+        store.pairSharingDao().deleteStreakFor(pairIds)
+        store.pairSharingDao().deleteProfileFor(pairIds)
+        store.partnerPlanDao().deleteForPairs(pairIds)
+        store.partnerMonitoringSnapshotDao().deleteFor(pairIds)
+        store.partnerRuleChangeDao().deleteFor(pairIds)
     }
 
     /**
@@ -853,6 +884,13 @@ class PartnerSyncCoordinator(
     }
 }
 
+/** OPD #43: the server terminated this pair because the other member's account was deleted
+ *  (the account-deletion worker's `terminationReason`). A normal unpair leaves it unset. */
+internal fun isAccountDeletionTermination(status: String?, terminationReason: String?): Boolean =
+    status == "terminated" && terminationReason in ACCOUNT_DELETION_REASONS
+
+private val ACCOUNT_DELETION_REASONS = setOf("ACCOUNT_DELETED", "GUEST_ACCOUNT_DELETION")
+
 /**
  * Resolves (myUid, partnerUid) for a pair: anonymous sign-in if needed, then the v2
  * `/pairings/{pairId}` document's `members` **array** (Step 1 rules shape — an array, unlike
@@ -878,6 +916,14 @@ class PairUidResolver(
      */
     private val fence: SessionFence = SessionFence.Unfenced,
 ) {
+    /** A resolved pairing: its two uids, plus whether the server ended it because the other
+     *  member deleted their account (OPD #43). */
+    data class Resolved(
+        val myUid: String,
+        val partnerUid: String,
+        val partnerAccountDeleted: Boolean,
+    )
+
     /** Uid whose profile this process has already ensured; rotation/reset re-runs it. */
     private var profileReadyFor: String? = null
 
@@ -934,7 +980,7 @@ class PairUidResolver(
     private suspend fun identityRejected(user: FirebaseUser): Boolean =
         isDeadIdentity(runCatching { user.getIdToken(false).await() }.exceptionOrNull())
 
-    suspend fun resolve(pairId: String): Pair<String, String>? {
+    suspend fun resolve(pairId: String): Resolved? {
         val uid = ensureUid() ?: return null
         val read = runCatching {
             FirestoreSchema.pairingDocument(firestore, pairId).get().await()
@@ -968,7 +1014,14 @@ class PairUidResolver(
         if (snapshot.metadata.isFromCache.not()) {
             reachability.markContact(pairId, System.currentTimeMillis())
         }
-        return uid to partner
+        return Resolved(
+            myUid = uid,
+            partnerUid = partner,
+            partnerAccountDeleted = isAccountDeletionTermination(
+                snapshot.getString("status"),
+                snapshot.getString("terminationReason"),
+            ),
+        )
     }
 
     private companion object {
