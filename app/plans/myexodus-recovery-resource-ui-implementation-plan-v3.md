@@ -74,10 +74,10 @@ The surface exists (`RecoveryScreen` tab; entry = block-screen button `overlay_o
 - Unpaired / paused / kill-switch-off → row stays unlinked; no error. Dashboard copy stays non-shaming.
 - **No rules change, no deploy gate** — the mailbox already carries arbitrary payloads ≤4096 B.
 
-### W6 — Privacy gate + screen protection (on the new screens)
+### W6 — Screen protection (credential gate removed 2026-11-08, ADR #275)
 - `FLAG_SECURE` + `setRecentsScreenshotEnabled(false)` (API 33+) on recovery surfaces (tab host additions; block overlay already sets it).
-- `PrivacyGate`: BiometricPrompt `BIOMETRIC_WEAK or DEVICE_CREDENTIAL`, **no CryptoObject**, 60 s unlock window (memory-only), bypass + one-time banner when no secure lock screen. Applies to: Coaching Plan editor, session/urge history, (already-gated partner screens unchanged). **Not** applied to the intervention flow, crisis screen.
-- Extract the shared gate helper from the `MainActivity.signWithBiometric` shape (same prompt plumbing, no signing).
+- ~~`PrivacyGate`: BiometricPrompt ... 60 s unlock window ...~~ **Superseded by owner ruling 2026-11-08 (ADR #275): "Let it be direct."** The prompt was removed from every recovery surface; direct access, screenshot protection unchanged. Partner pairing/deletion signing prompts are unaffected.
+- ~~Extract the shared gate helper from the `MainActivity.signWithBiometric` shape~~ — withdrawn with the gate above.
 
 ### W7 — Data rail: AppRulesStore v8 → v9
 New tables (SQLCipher, so Req "urge logs encrypted at rest" is satisfied by construction):

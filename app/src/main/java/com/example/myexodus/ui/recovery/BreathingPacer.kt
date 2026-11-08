@@ -24,6 +24,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,6 +73,10 @@ fun BreathingPacer(
     val context = LocalContext.current
     val animationsRemoved = remember(context) { animationsRemoved(context) }
     val haptics = LocalHapticFeedback.current
+    // The switch is only reachable while the session runs, so the tick loop must see a toggle
+    // made mid-session (owner report 2026-11-08): the Boolean parameter is captured when the
+    // effect launches, rememberUpdatedState keeps the live value visible inside it.
+    val hapticOn = rememberUpdatedState(hapticEnabled)
     val resources = LocalResources.current
     val prompts = remember(resources) { resources.getStringArray(R.array.recovery_pacer_prompts) }
 
@@ -86,7 +91,7 @@ fun BreathingPacer(
     LaunchedEffect(running, durationSeconds, cycleSeconds) {
         if (!running) return@LaunchedEffect
         val startedAt = SystemClock.elapsedRealtime() - elapsedMs
-        var lastPhase = -1
+        var lastInhale: Boolean? = null
         while (isActive) {
             elapsedMs = SystemClock.elapsedRealtime() - startedAt
             // Finding #14 (2026-10-16): [remainingSeconds] is a composition-time val, and this
@@ -98,13 +103,14 @@ fun BreathingPacer(
                 onFinished()
                 return@LaunchedEffect
             }
-            val phase = (elapsedMs / 1000L % cycleSeconds).toInt()
-            if (phase != lastPhase) {
-                if (lastPhase >= 0 && hapticEnabled) {
-                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                }
-                lastPhase = phase
+            // The haptic marks the in/out change only. Keying it on the cycle second buzzed
+            // once a second (owner report 2026-11-08) — the countdown changes each second,
+            // the breath does not.
+            val inhaling = (elapsedMs / 1000L % cycleSeconds) < breathInSeconds
+            if (lastInhale != null && lastInhale != inhaling && hapticOn.value) {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
             }
+            lastInhale = inhaling
             delay(TICK_MS)
         }
     }

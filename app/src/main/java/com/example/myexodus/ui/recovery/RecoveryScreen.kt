@@ -21,13 +21,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ChevronRight
-import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SelfImprovement
 import androidx.compose.material.icons.outlined.SupportAgent
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.WavingHand
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -60,7 +58,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.myexodus.R
-import com.example.myexodus.blocking.AttemptRecorder
 import com.example.myexodus.blocking.BlockDecisionEngine
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.recovery.RecoveryCountdown
@@ -105,8 +102,8 @@ internal const val RECOVERY_VIEW_ASSIST = "assist"
 /**
  * Recovery tab — the app-side surface of the shipped friction session (V1 Req 13) plus the
  * recovery-resource content (v3 W1/W2: suggested techniques, the user's coaching plan, the
- * pacer, the urge log, crisis contacts). The in-the-moment friction flow (start, countdown,
- * override) still lives in BlockerActivity; this screen shows the same persisted session
+ * pacer, the urge log, crisis contacts). The in-the-moment friction flow (start, countdown)
+ * still lives in BlockerActivity; this screen shows the same persisted session
  * wherever the user is and resumes the countdown from the stored deadlines (RecoveryTimer /
  * RecoveryCountdownTracker — same engine, no UI-side math).
  *
@@ -121,7 +118,6 @@ internal const val RECOVERY_VIEW_ASSIST = "assist"
 fun RecoveryScreen(
     repository: RulesRepository,
     recoveryStore: RecoveryStateStore,
-    attempts: AttemptRecorder,
     planRepository: RecoveryPlanRepository,
     sessions: RecoverySessionRepository,
     prefs: RecoveryPrefs,
@@ -148,8 +144,7 @@ fun RecoveryScreen(
     // session, whose dispose path records the abandonment. At the hub the shell takes over.
     BackHandler(enabled = view != null) { view = null }
     // One row per rule (owner acceptance test 2026-11-02): every started session keeps its
-    // own countdown, override eligibility, and unlock — starting another rule's session never
-    // replaces it.
+    // own countdown and unlock — starting another rule's session never replaces it.
     var liveSessions by remember { mutableStateOf<List<LiveSession>>(emptyList()) }
     var planItems by remember { mutableStateOf<List<CoachingStep>>(emptyList()) }
     var activeWindowId by remember { mutableStateOf<String?>(null) }
@@ -188,7 +183,6 @@ fun RecoveryScreen(
                     rule = enforced,
                     remainingSeconds = 0L,
                     frozenAtSeconds = null,
-                    overrideAvailable = recoveryStore.overrideEligible(session.ruleId),
                 )
             }
             .sortedBy { it.state.deadlineWallClockUtcMillis }
@@ -232,7 +226,7 @@ fun RecoveryScreen(
             val nowWall = System.currentTimeMillis()
             val nowElapsed = SystemClock.elapsedRealtime()
             val expired = mutableListOf<String>()
-            // Re-read each tick: a concurrent reload (override, resume) may have removed a
+            // Re-read each tick: a concurrent reload (resume, rule change) may have removed a
             // session, and a stale captured list would resurrect its row every second.
             liveSessions = liveSessions.map { live ->
                 val result = trackers.getValue(live.state.ruleId).tick(
@@ -308,24 +302,21 @@ fun RecoveryScreen(
         view == VIEW_PLAN_EDIT -> CoachingPlanScreen(
             planRepository = planRepository,
             rulesRepository = repository,
-            prefs = prefs,
             onBack = { view = VIEW_PLAN },
             modifier = modifier,
         )
         view == VIEW_RISK_WINDOWS -> RiskWindowsScreen(
             planRepository = planRepository,
-            prefs = prefs,
             onBack = { view = null },
             modifier = modifier,
         )
         view == VIEW_FRICTION_TIMER -> FrictionTimerScreen(
             recoveryStore = recoveryStore,
-            prefs = prefs,
             onBack = { view = null },
             modifier = modifier,
         )
         technique != null -> {
-            // The intervention flow itself is never gated or timed (v2 INV-1; W6 exceptions).
+            // The intervention flow itself is never timed (v2 INV-1).
             TechniqueSession(
                 technique = technique,
                 planItems = planItems,
@@ -341,19 +332,6 @@ fun RecoveryScreen(
         }
         else -> HomeView(
             liveSessions = liveSessions,
-            onOverride = { ruleId ->
-                val live = liveSessions.firstOrNull { it.state.ruleId == ruleId }
-                if (live != null) {
-                    scope.launch(Dispatchers.IO) {
-                        // Same override path as BlockerActivity: always allowed, cooldown-bounded
-                        // (recorded only when eligible) and logged to the attempt trail.
-                        if (recoveryStore.overrideEligible(ruleId)) recoveryStore.recordOverride(ruleId)
-                        attempts.recordOverride(ruleId, live.rule.blockedPackage)
-                        unlockRule(repository, recoveryStore, ruleId)
-                        reload()
-                    }
-                }
-            },
             onLeaveAlone = onRouteHome,
             onOpenAssist = { view = RECOVERY_VIEW_ASSIST },
             partnerName = partnerName,
@@ -490,7 +468,6 @@ private data class LiveSession(
     val rule: RestrictionRule,
     val remainingSeconds: Long,
     val frozenAtSeconds: Long?,
-    val overrideAvailable: Boolean,
 )
 
 /**
@@ -501,7 +478,6 @@ private data class LiveSession(
 @Composable
 private fun HomeView(
     liveSessions: List<LiveSession>,
-    onOverride: (String) -> Unit,
     onLeaveAlone: () -> Unit,
     onOpenAssist: () -> Unit,
     partnerName: String?,
@@ -549,7 +525,6 @@ private fun HomeView(
                 liveSessions.forEach { live ->
                     ActiveSessionBlock(
                         live = live,
-                        onOverride = { onOverride(live.state.ruleId) },
                         onChangeWait = onOpenFrictionTimer,
                         onLeaveAlone = onLeaveAlone,
                     )
@@ -978,7 +953,7 @@ private fun TechniqueRow(
     }
 }
 
-/** The plan read state (plan §E2.7): ungated ledger; the editor is the gated next step. */
+/** The plan read state (plan §E2.7): a ledger; the editor is the next step. */
 @Composable
 private fun PlanView(
     items: List<CoachingStep>,
@@ -1003,8 +978,7 @@ private fun PlanView(
         )
         Column(modifier = Modifier.padding(horizontal = sidePadding, vertical = 8.dp)) {
             PlanItems(items = items, activeWindowId = activeWindowId, onAdd = onEdit)
-            // Plan §E2.7: the preferences live here rather than behind a Settings trip. Their
-            // own screen carries its own gate, so this ledger stays readable.
+            // Plan §E2.7: the preferences live here rather than behind a Settings trip.
             Hairline()
             TextButton(
                 onClick = onOpenPrefs,
@@ -1123,13 +1097,13 @@ internal suspend fun unlockRule(
 
 /**
  * The live friction session: the hub's only raised surface (plan §E2.1). Timer, blocked app,
- * the override, and the two escape links ("Change wait" opens the same editor as Prepare) all
- * live here, so nothing about a running block reads as a separate card.
+ * and the two escape links ("Change wait" opens the same editor as Prepare) all live here,
+ * so nothing about a running block reads as a separate card. The countdown is the only way
+ * the block lifts (owner ruling 2026-11-08: the immediate override removed).
  */
 @Composable
 private fun ActiveSessionBlock(
     live: LiveSession,
-    onOverride: () -> Unit,
     onChangeWait: () -> Unit,
     onLeaveAlone: () -> Unit,
 ) {
@@ -1170,7 +1144,6 @@ private fun ActiveSessionBlock(
                 color = ink.copy(alpha = 0.2f),
                 modifier = Modifier.padding(vertical = 12.dp),
             )
-            OverrideRow(overrideAvailable = live.overrideAvailable, onOverride = onOverride)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(
                     onClick = onChangeWait,
@@ -1193,82 +1166,6 @@ private fun ActiveSessionBlock(
                 color = ink.copy(alpha = 0.8f),
             )
         }
-    }
-}
-
-@Composable
-private fun OverrideRow(overrideAvailable: Boolean, onOverride: () -> Unit) {
-    // Finding #17: the override retires the rule for good (Rule-3 expiry) — an irreversible
-    // consequence that was not disclosed before it happened.
-    var confirming by remember { mutableStateOf(false) }
-    val ink = MaterialTheme.colorScheme.onPrimaryContainer
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .clickable(enabled = overrideAvailable) { confirming = true },
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Icon(
-            imageVector = Icons.Outlined.LockOpen,
-            contentDescription = null,
-            tint =
-                if (overrideAvailable) MaterialTheme.colorScheme.error
-                else ink.copy(alpha = 0.6f),
-            modifier = Modifier.size(20.dp),
-        )
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                stringResource(
-                    if (overrideAvailable) R.string.recovery_override
-                    else R.string.recovery_override_unavailable,
-                ),
-                style = MaterialTheme.typography.titleSmall,
-                color = if (overrideAvailable) ink else ink.copy(alpha = 0.7f),
-                maxLines = 2,
-            )
-            Text(
-                stringResource(R.string.recovery_overrides_logged),
-                style = MaterialTheme.typography.bodySmall,
-                color = ink.copy(alpha = 0.8f),
-            )
-        }
-        if (overrideAvailable) {
-            Icon(
-                imageVector = Icons.Outlined.ChevronRight,
-                contentDescription = null,
-                tint = ink.copy(alpha = 0.6f),
-                modifier = Modifier.size(20.dp),
-            )
-        }
-    }
-    if (confirming) {
-        AlertDialog(
-            onDismissRequest = { confirming = false },
-            title = { Text(stringResource(R.string.recovery_override_confirm_title)) },
-            text = { Text(stringResource(R.string.recovery_override_confirm_text)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        confirming = false
-                        onOverride()
-                    },
-                ) {
-                    // Destructive confirm wears the error role (same rule as finding #18):
-                    // ending the block retires the rule permanently.
-                    Text(
-                        stringResource(R.string.recovery_override_confirm_action),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirming = false }) {
-                    Text(stringResource(R.string.recovery_override_confirm_cancel))
-                }
-            },
-        )
     }
 }
 

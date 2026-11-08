@@ -100,8 +100,8 @@ fun CrisisScreen(
     modifier: Modifier = Modifier,
     initialFilter: String = CrisisResources.FILTER_ALL,
 ) {
-    // W6 exempts this screen from the PrivacyGate, not from screenshot protection: a crisis
-    // must open instantly, but it still shows verified personal directory data and a panic tap.
+    // No gate (owner ruling 2026-11-08), but it still shows verified personal directory data
+    // and a panic tap, so screenshot protection stays.
     SecureSurface()
     val context = LocalContext.current
     val locale = LocalConfiguration.current.locales[0]

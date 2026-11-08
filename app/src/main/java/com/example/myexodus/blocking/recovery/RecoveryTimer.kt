@@ -57,14 +57,6 @@ object RecoveryTimer {
         return abs(expectedRemainingMillis - currentRemainingSeconds * 1000) > toleranceMillis
     }
 
-    /** Escape-hatch override gating (plan §6): overrides are always allowed, but the
-     *  recovery_policy cooldown (seeded 600s) bounds how often one can be forced. */
-    fun overrideEligible(
-        lastOverrideStartWallUtcMillis: Long?,
-        overrideCooldownSeconds: Long,
-        nowWallClockUtcMillis: Long,
-    ): Boolean = lastOverrideStartWallUtcMillis == null ||
-        nowWallClockUtcMillis - lastOverrideStartWallUtcMillis >= overrideCooldownSeconds * 1000
 }
 
 /** Injectable clock pair so reboot and clock-change scenarios are unit-testable (§12). */

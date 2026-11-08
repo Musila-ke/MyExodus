@@ -11,7 +11,7 @@ import javax.inject.Inject
  * deadlines + rule written in one transaction; §8.3 persistence). Friction duration comes
  * from the seeded [com.example.myexodus.data.db.entity.RecoveryPolicy]. One row per rule
  * (owner acceptance test 2026-11-02): starting a second rule's session never touches the
- * first, and each session's override/cooldown is its own.
+ * first, and each session's countdown and unlock are its own.
  */
 class RecoveryStateStore @Inject constructor(private val storeFactory: AppRulesStoreFactory) {
     private fun dao(): RecoveryStateDao =
@@ -54,28 +54,12 @@ class RecoveryStateStore @Inject constructor(private val storeFactory: AppRulesS
         return state
     }
 
-    suspend fun recordOverride(ruleId: String, clock: RecoveryClock = SystemRecoveryClock) {
-        val current = dao().forRule(ruleId) ?: return
-        dao().upsert(current.copy(lastOverrideStartWallUtcMillis = clock.nowWallClockUtcMillis()))
-    }
-
     /** Consumes one rule's session. Every unlock path must call this: a spent session row
      *  left in the DB makes the next blocker launch for the same rule auto-unlock it
      *  (device-caught 2026-09-13 — re-armed rule, blocker flashed, rule expired again with
      *  zero friction). Sibling rules' sessions are untouched. */
     suspend fun clear(ruleId: String) {
         dao().delete(ruleId)
-    }
-
-    suspend fun overrideEligible(ruleId: String, clock: RecoveryClock = SystemRecoveryClock): Boolean {
-        val current = dao().forRule(ruleId) ?: return true
-        val cooldown = storeFactory.open()?.recoveryPolicyDao()?.current()?.overrideCooldownSeconds
-            ?: DEFAULT_OVERRIDE_COOLDOWN_SECONDS
-        return RecoveryTimer.overrideEligible(
-            current.lastOverrideStartWallUtcMillis,
-            cooldown,
-            clock.nowWallClockUtcMillis(),
-        )
     }
 
     companion object {

@@ -216,7 +216,16 @@ class PartnerSyncCoordinatorTest {
     fun overrideAttempt_producesOverridePayload() = runTest {
         enroll()
         seedConsent(shareCheckins = true)
-        recorder.recordOverride("r-1", "com.instagram.android")
+        // Legacy override rows still render and sync (owner ruling 2026-11-08 removed the
+        // in-app override; the outcome remains for data written before the removal).
+        factory.open()!!.attemptLogDao().insert(
+            AttemptLog(
+                occurredAtEpochMillis = System.currentTimeMillis(),
+                ruleId = "r-1",
+                blockedTarget = "com.instagram.android",
+                outcome = AttemptLog.OUTCOME_OVERRIDE,
+            ),
+        )
 
         coordinator.syncOnce()
 

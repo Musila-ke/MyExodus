@@ -58,17 +58,15 @@ class AttemptLogTest {
     }
 
     @Test
-    fun blockAndOverride_areRecordedDurably() = runTest {
+    fun block_isRecordedDurably() = runTest {
         recorder.recordBlocked("r-1", "com.instagram.android")
-        recorder.recordOverride("r-1", "com.instagram.android")
 
         val dao = factory.open()!!.attemptLogDao()
         val rows = dao.recent(10)
-        assertEquals(2, rows.size)
-        assertEquals(AttemptLog.OUTCOME_OVERRIDE, rows[0].outcome) // newest first
+        assertEquals(1, rows.size)
+        assertEquals(AttemptLog.OUTCOME_BLOCKED, rows[0].outcome)
         assertEquals("com.instagram.android", rows[0].blockedTarget)
-        assertEquals(AttemptLog.OUTCOME_BLOCKED, rows[1].outcome)
-        assertNull("fresh attempts have no linked event", rows[1].eventSequence)
+        assertNull("fresh attempts have no linked event", rows[0].eventSequence)
     }
 
     @Test
@@ -162,10 +160,6 @@ class AttemptLogTest {
         recorder.recordBlocked("r-2", "com.a")
         recorder.recordBlocked("r-1", "com.b")
         assertEquals("a different rule or target is a different attempt", 3, dao.count())
-
-        recorder.recordOverride("r-1", "com.a")
-        recorder.recordOverride("r-1", "com.a")
-        assertEquals("overrides are separate user acts and are never deduped", 5, dao.count())
     }
 
     /** Device 2026-11-02: the AVD clock had once been set a month ahead, leaving rows stamped
@@ -198,10 +192,6 @@ class AttemptLogTest {
         recorder.recordBlocked("r-1", "com.a") // 5 s dedupe window
         runCurrent()
         assertEquals("a collapsed duplicate is not a new partner-visible attempt", 1, kicks.size)
-
-        recorder.recordOverride("r-1", "com.a")
-        runCurrent()
-        assertEquals(2, kicks.size)
     }
 
     @Test

@@ -53,26 +53,22 @@ import kotlinx.coroutines.withContext
 /**
  * The Coaching Plan editor (v3 W3, Req 20): the user's own steps, if-then plans, and values —
  * one ordered list per kind, ≤5 items of ≤200 characters each (the entity's own caps). Local
- * DB only and offline by construction; gated because the text is as private as the history
- * (W6/INV-11).
+ * DB only and offline by construction; direct access (owner ruling 2026-11-08).
  */
 @Composable
 fun CoachingPlanScreen(
     planRepository: RecoveryPlanRepository,
     rulesRepository: RulesRepository,
-    prefs: RecoveryPrefs,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     SecureSurface()
-    GatedContent(prefs = prefs, titleRes = R.string.recovery_gate_title_plan) {
-        CoachingPlanBody(
-            planRepository = planRepository,
-            rulesRepository = rulesRepository,
-            onBack = onBack,
-            modifier = modifier,
-        )
-    }
+    CoachingPlanBody(
+        planRepository = planRepository,
+        rulesRepository = rulesRepository,
+        onBack = onBack,
+        modifier = modifier,
+    )
 }
 
 @Composable

@@ -45,7 +45,6 @@ import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.insights.InsightsScreen
 import com.example.myexodus.ui.insights.InsightsViewModel
 import com.example.myexodus.ui.recovery.HistoryView
-import com.example.myexodus.ui.recovery.RecoveryPrefs
 import com.example.myexodus.ui.rememberWindowWidth
 
 private const val VIEW_TIMELINE = "timeline"
@@ -93,7 +92,6 @@ fun StreaksScreen(
     /** The habit-linked log (owner ruling 2026-11-07): reads on open, scoped to the
      *  displayed habit with an All habits option. */
     sessions: RecoverySessionRepository,
-    historyPrefs: RecoveryPrefs,
     habits: List<HabitSummary>,
     onRenameHabit: (habitId: String, label: String) -> Unit,
     onDeleteHabit: (habitId: String) -> Unit,
@@ -143,7 +141,6 @@ fun StreaksScreen(
     if (view == VIEW_HISTORY) {
         HistoryView(
             sessions = sessions,
-            prefs = historyPrefs,
             habits = habits,
             displayedHabitId = state?.habitId,
             onBack = { view = null },

@@ -689,15 +689,8 @@
     <string name="recovery_timer_label">Friction timer</string>
     <string name="recovery_blocked_target">Blocked: %1$s</string>
     <string name="recovery_time_change_frozen">Time change detected: countdown frozen</string>
-    <string name="recovery_override">Use it now (override)</string>
-    <string name="recovery_override_unavailable">Override unavailable. Try again later.</string>
-    <string name="recovery_overrides_logged">Overrides are logged on this device.</string>
     <string name="recovery_leave_alone">Leave the block alone</string>
-    <string name="recovery_leave_note">Leaving MyExodus won’t stop the timer. The block lifts when it ends or when you override.</string>
-    <string name="recovery_override_confirm_title">Override the block?</string>
-    <string name="recovery_override_confirm_text">The block ends for good. It won’t restart on its own. To block it again later you’d create a new rule under Rules. This override is logged on this device.</string>
-    <string name="recovery_override_confirm_action">End the block</string>
-    <string name="recovery_override_confirm_cancel">Keep waiting</string>
+    <string name="recovery_leave_note">Leaving MyExodus won’t stop the timer. The block lifts when it ends.</string>
 
     <!-- App picker -->
     <string name="picker_title">Choose an app</string>
@@ -753,7 +746,7 @@
     <string name="onboarding_account_signed_in_title">You’re all set</string>
     <string name="onboarding_account_signed_in_label">Signed in as</string>
     <string name="onboarding_slide_block_title">Block the apps that pull you under</string>
-    <string name="onboarding_slide_block_body">Choose the apps and sites you want out of reach. When one opens, a block screen stands in its place, with a pause before any override and a way to reach for help.</string>
+    <string name="onboarding_slide_block_body">Choose the apps and sites you want out of reach. When one opens, a block screen stands in its place, with a timed pause before it lifts and a way to reach for help.</string>
     <string name="onboarding_slide_widget_title">Keep your streak in sight</string>
     <string name="onboarding_slide_widget_body">A home-screen widget carries your day count, your next milestone and whether protection is on. Log an urge or reach out without opening the app.</string>
     <string name="onboarding_slide_partner_title">Someone has your back</string>
@@ -857,7 +850,7 @@
     <string name="widget_hold_reset_title">Reset the count?</string>
     <string name="widget_hold_reset_body">The current count ends and a new one starts at Day 1.</string>
     <string name="widget_hold_urge_title">Log an urge?</string>
-    <string name="widget_hold_urge_body">Your block stays in place. This is not an override, and nothing is shared.</string>
+    <string name="widget_hold_urge_body">Your block stays in place. Nothing is shared.</string>
     <string name="widget_hold_urge_title_discreet">Save this moment?</string>
     <string name="widget_hold_urge_body_discreet">It stays on your phone. Nothing is shared.</string>
     <string name="widget_hold_sos_title">Reach out?</string>
@@ -1199,7 +1192,7 @@
     <string name="settings_sharing_milestones_title">Milestones</string>
     <string name="settings_sharing_milestones_body">%1$s: your partner hears which days you reach</string>
     <string name="settings_sharing_checkins_title">Blocked apps</string>
-    <string name="settings_sharing_checkins_body">Your partner hears when you try a blocked app and when you use an override.</string>
+    <string name="settings_sharing_checkins_body">Your partner hears when you try a blocked app.</string>
     <string name="settings_sharing_recovery_title">Recovery &amp; coaching</string>
     <string name="settings_sharing_recovery_body">Your partner hears when you finish a recovery session or update your coaching plan.</string>
     <string name="settings_sharing_availability_title">Device availability</string>
@@ -1754,7 +1747,7 @@
         <item quantity="other">%1$d records break data rules and can’t be imported. Nothing has been changed. You can keep this copy or delete it.</item>
     </plurals>
     <string name="account_import_retention">A copy stays on this device for 7 days (until %1$s) so the import can be replayed. Replaying never restores the guest account or its partners.</string>
-    <string name="account_import_portable">Also import recovery friction and override cooldown</string>
+    <string name="account_import_portable">Also import your recovery friction setting</string>
     <string name="account_import_confirm">Import data</string>
     <string name="account_import_working">Importing your data…</string>
     <string name="account_import_done_title">Guest data imported</string>

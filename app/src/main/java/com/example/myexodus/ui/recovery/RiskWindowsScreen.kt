@@ -63,14 +63,11 @@ import kotlinx.coroutines.withContext
 @Composable
 fun RiskWindowsScreen(
     planRepository: RecoveryPlanRepository,
-    prefs: RecoveryPrefs,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     SecureSurface()
-    GatedContent(prefs = prefs, titleRes = R.string.recovery_gate_title_windows) {
-        RiskWindowsBody(planRepository = planRepository, onBack = onBack, modifier = modifier)
-    }
+    RiskWindowsBody(planRepository = planRepository, onBack = onBack, modifier = modifier)
 }
 
 @Composable

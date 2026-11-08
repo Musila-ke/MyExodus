@@ -18,14 +18,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -41,11 +39,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.fragment.app.FragmentActivity
 import com.example.myexodus.R
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.recovery.RecoverySessionRepository
@@ -68,9 +64,10 @@ import kotlinx.coroutines.withContext
 private const val PAGE_SIZE = 50
 
 /**
- * Session/urge history (v3 W7, FR-9 analog): newest first, paged, behind the privacy gate.
- * Local-only by construction — the rows live in the encrypted store and are never mirrored
- * beyond the coarse `recovery:<technique>:<outcome>` event (INV-13).
+ * Session/urge history (v3 W7, FR-9 analog): newest first, paged, direct (owner ruling
+ * 2026-11-08: no credential prompt on the recovery surfaces). Local-only by construction —
+ * the rows live in the encrypted store and are never mirrored beyond the coarse
+ * `recovery:<technique>:<outcome>` event (INV-13).
  *
  * Lives under the Streaks tab (owner ruling 2026-11-07): it is a retrospective page, and since
  * schema v25 every row carries the habit it was logged under, so the default view is the
@@ -83,22 +80,19 @@ private const val PAGE_SIZE = 50
 @Composable
 fun HistoryView(
     sessions: RecoverySessionRepository,
-    prefs: RecoveryPrefs,
     habits: List<HabitSummary>,
     displayedHabitId: String?,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     SecureSurface()
-    GatedContent(prefs = prefs, titleRes = R.string.recovery_gate_title_history) {
-        HistoryList(
-            sessions = sessions,
-            habits = habits,
-            displayedHabitId = displayedHabitId,
-            onBack = onBack,
-            modifier = modifier,
-        )
-    }
+    HistoryList(
+        sessions = sessions,
+        habits = habits,
+        displayedHabitId = displayedHabitId,
+        onBack = onBack,
+        modifier = modifier,
+    )
 }
 
 @Composable
@@ -425,9 +419,15 @@ private fun HistoryRow(
                 // with no details otherwise would not say which streak it belongs to.
                 if (habitLabel != null) add(habitLabel)
                 if (isAssist) {
-                    // Plan §E2.11: outcome, optional category, check-in. The category is inside
-                    // the History gate, which is the page's whole content.
-                    add(stringResource(outcomeLabel(row.state)))
+                    // Plan §E2.11: outcome, optional category, check-in — only this page
+                    // shows the category. A born-terminal logOnly row (zero duration, no
+                    // check-in) must not claim "Completed": same rule as the bare-log branch
+                    // below (device-caught 2026-11-08 — "Just log it" rows read "Completed").
+                    if (!(row.state == RecoverySession.STATE_COMPLETED &&
+                            row.checkIn == null && row.durationSec == 0)
+                    ) {
+                        add(stringResource(outcomeLabel(row.state)))
+                    }
                     row.category?.let { id ->
                         UrgeCategory.fromId(id)?.let { add(categoryLabel(it)) }
                     }
@@ -552,61 +552,3 @@ internal fun groupHistoryByDay(
     .groupBy { historyDayLabel(it.startedAtEpochMs, nowMs, zone, today, yesterday, locale) }
     .map { (label, dayRows) -> HistoryDayGroup(label, dayRows) }
 
-/** Exposed for the coaching editor too: the same gate wraps every private surface (W6). */
-@Composable
-fun GatedContent(
-    prefs: RecoveryPrefs,
-    titleRes: Int,
-    content: @Composable () -> Unit,
-) {
-    val context = LocalContext.current
-    val activity = context as? FragmentActivity
-    val title = stringResource(titleRes)
-    var attempt by remember { mutableIntStateOf(0) }
-    var state by remember { mutableStateOf(GateUiState.Pending) }
-
-    LaunchedEffect(attempt) {
-        state = if (activity == null) {
-            // Hosted outside a FragmentActivity (previews/tests): nothing to prompt with.
-            GateUiState.Open
-        } else {
-            when (PrivacyGate.ensureUnlocked(activity, title)) {
-                GateResult.Unlocked -> GateUiState.Open
-                GateResult.UnlockedWithoutSecureLock ->
-                    if (prefs.consumeNoLockBanner()) GateUiState.OpenNoLock else GateUiState.Open
-                GateResult.Cancelled -> GateUiState.Locked
-            }
-        }
-    }
-
-    when (state) {
-        GateUiState.Pending -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
-        }
-        GateUiState.Locked -> Column(
-            modifier = Modifier.fillMaxSize().padding(24.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                stringResource(R.string.recovery_gate_locked),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            OutlinedButton(onClick = { state = GateUiState.Pending; attempt++ }) {
-                Text(stringResource(R.string.recovery_gate_unlock))
-            }
-        }
-        GateUiState.Open -> content()
-        GateUiState.OpenNoLock -> Column(Modifier.fillMaxSize()) {
-            Text(
-                stringResource(R.string.recovery_gate_no_lock_banner),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-            content()
-        }
-    }
-}
-
-private enum class GateUiState { Pending, Locked, Open, OpenNoLock }

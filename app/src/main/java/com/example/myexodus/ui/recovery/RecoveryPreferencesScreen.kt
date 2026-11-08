@@ -36,7 +36,7 @@ import com.example.myexodus.ui.rememberWindowWidth
 /**
  * "What works for you" (plan §E2.7, step 8): the three optional local preferences the selection
  * engine reads. Nothing here is a rule and nothing is mirrored to a partner; only ordering and
- * hiding change. The gate is its own, because the plan reads the My plan ledger ungated.
+ * hiding change. Direct access like the rest of the tab.
  */
 @Composable
 fun RecoveryPreferencesScreen(
@@ -44,11 +44,10 @@ fun RecoveryPreferencesScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // A read-time privacy surface like the rest of the tab (W6/INV-11).
+    // A read-time privacy surface like the rest of the tab (INV-11); screenshot-protected,
+    // direct access (owner ruling 2026-11-08).
     SecureSurface()
-    GatedContent(prefs = prefs, titleRes = R.string.recovery_gate_title_prefs) {
-        PreferencesBody(prefs = prefs, onBack = onBack, modifier = modifier)
-    }
+    PreferencesBody(prefs = prefs, onBack = onBack, modifier = modifier)
 }
 
 @Composable

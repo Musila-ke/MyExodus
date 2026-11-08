@@ -46,14 +46,11 @@ import kotlinx.coroutines.withContext
 @Composable
 fun FrictionTimerScreen(
     recoveryStore: RecoveryStateStore,
-    prefs: RecoveryPrefs,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     SecureSurface()
-    GatedContent(prefs = prefs, titleRes = R.string.recovery_gate_title_friction) {
-        FrictionTimerBody(recoveryStore = recoveryStore, onBack = onBack, modifier = modifier)
-    }
+    FrictionTimerBody(recoveryStore = recoveryStore, onBack = onBack, modifier = modifier)
 }
 
 @Composable

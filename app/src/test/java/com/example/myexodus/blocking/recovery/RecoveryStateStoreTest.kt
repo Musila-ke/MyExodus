@@ -79,20 +79,6 @@ class RecoveryStateStoreTest {
     }
 
     @Test
-    fun override_isPerRule() = runTest {
-        store.startRecovery("com.instagram.android", clock)
-        store.startRecovery("com.tiktok.android", clock)
-
-        store.recordOverride("com.instagram.android", clock)
-
-        assertFalse(store.overrideEligible("com.instagram.android", clock))
-        assertTrue(
-            "Another rule's session must stay independently overridable",
-            store.overrideEligible("com.tiktok.android", clock),
-        )
-    }
-
-    @Test
     fun clear_removesOnlyThatRulesSession() = runTest {
         store.startRecovery("com.instagram.android", clock)
         store.startRecovery("com.tiktok.android", clock)
@@ -163,23 +149,6 @@ class RecoveryStateStoreTest {
             nowElapsedRealtimeMillis = freshElapsed,
         )
         assertEquals(30L, remaining)
-    }
-
-    @Test
-    fun recordOverride_thenCooldownGatesEligibility() = runTest {
-        // No recovery session yet: override eligible (nothing to gate).
-        assertTrue(store.overrideEligible("com.instagram.android", clock))
-
-        store.startRecovery("com.instagram.android", clock)
-        store.recordOverride("com.instagram.android", clock)
-
-        clock.wall = WALL + 599_000L
-        assertFalse(
-            "Override must not be eligible inside the 600s cooldown",
-            store.overrideEligible("com.instagram.android", clock),
-        )
-        clock.wall = WALL + 600_000L
-        assertTrue("Override eligible again at cooldown expiry", store.overrideEligible("com.instagram.android", clock))
     }
 
     private class FakeClock(var wall: Long, var elapsed: Long) : RecoveryClock {

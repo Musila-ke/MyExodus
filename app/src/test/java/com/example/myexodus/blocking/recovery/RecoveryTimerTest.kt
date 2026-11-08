@@ -115,16 +115,4 @@ class RecoveryTimerTest {
             ),
         )
     }
-
-    @Test
-    fun overrideEligible_firstOverrideAlwaysEligible() {
-        assertTrue(RecoveryTimer.overrideEligible(null, 600L, 1_800_000_000_000L))
-    }
-
-    @Test
-    fun overrideEligible_cooldownEnforced() {
-        val last = 1_800_000_000_000L
-        assertTrue(RecoveryTimer.overrideEligible(last, 600L, last + 600_000L))
-        assertFalse(RecoveryTimer.overrideEligible(last, 600L, last + 599_000L))
-    }
 }

@@ -239,15 +239,6 @@
     <string name="recovery_history_all_habits">All habits</string>
     <string name="recovery_history_tile_caption">Urges and practice, by habit</string>
 
-    <!-- Privacy gate (W6) -->
-    <string name="recovery_gate_title_history">Unlock to see your history</string>
-    <string name="recovery_gate_title_plan">Unlock to edit your coaching plan</string>
-    <string name="recovery_gate_title_windows">Unlock to edit your risk windows</string>
-    <string name="recovery_gate_title_friction">Unlock to change your friction timer</string>
-    <string name="recovery_gate_locked">Your history is locked.</string>
-    <string name="recovery_gate_unlock">Unlock</string>
-    <string name="recovery_gate_no_lock_banner">No screen lock is set on this device, so this screen isn\'t protected. Set one in system settings for privacy.</string>
-
     <!-- Crisis resources (W6) -->
     <string name="recovery_crisis_link">Need urgent help?</string>
     <string name="recovery_crisis_back">Get help now</string>
@@ -432,7 +423,6 @@
     <string name="recovery_prefs_yes">Yes</string>
     <string name="recovery_prefs_no">No</string>
     <string name="recovery_prefs_unsure">Not sure</string>
-    <string name="recovery_gate_title_prefs">Unlock to change what works for you</string>
     <string name="recovery_lapse_title">The block stays on</string>
     <string name="recovery_lapse_body">Nothing else was reset. If you want, there is support here.</string>
     <string name="recovery_lapse_not_now">Not now</string>

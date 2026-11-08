@@ -522,7 +522,6 @@ fun AppShell(
                     contentTab == 2 -> RecoveryScreen(
                         repository = repository,
                         recoveryStore = recoveryStore,
-                        attempts = attempts,
                         planRepository = planRepository,
                         sessions = sessions,
                         prefs = prefs,
@@ -559,7 +558,6 @@ fun AppShell(
                         insights = insightsState,
                         onRefreshInsights = insights::refresh,
                         sessions = sessions,
-                        historyPrefs = prefs,
                         habits = habits,
                         onRenameHabit = streaks::renameHabit,
                         onDeleteHabit = streaks::deleteHabit,

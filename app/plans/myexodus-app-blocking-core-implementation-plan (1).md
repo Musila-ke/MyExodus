@@ -12,7 +12,7 @@ V1 ships as two build flavors from one codebase: a Play Store flavor and a separ
 ### Functional
 - User can create, edit, delete rules specifying: target app package(s) or domain(s), active time windows (explicit timezone, day-of-week, start/end local time), and friction duration.
 - When a restricted app is foregrounded during an active rule window, the user is shown a blocking screen within a bounded, measured latency (see §11) instead of being able to use the target app.
-- The blocking screen offers: wait out the friction timer, or invoke an "escape hatch" override, which is always eventually reachable and never technically blocked (see §10).
+- The blocking screen offers: wait out the friction timer (the only way the block lifts; owner ruling 2026-11-08 removed the immediate override, which defeated the friction it exists to impose), plus the escape hatch to Recovery resources, which is always reachable and never technically blocked (see §10).
 - Restricted domains fail DNS resolution for traffic routed through the MyExodus VPN. This is explicitly scoped as **DNS-resolution-layer blocking**, not "blocks the website" in an absolute sense (see §10, §16, known bypass list below).
 - An accountability partner can be paired via QR code and receives block-event notifications plus a read-only stats view, delivered with at-least-once, deduplicated delivery.
 - Streak counts and block counts persist across app restarts, device reboots, and app updates without data loss, using an explicit durability and clock model (see §5, §9).
@@ -120,7 +120,7 @@ Recovery starts
    → user requests escape
        → if before deadline (by whichever clock is authoritative for this boot session):
          friction UI stays
-       → if user forces override: allowed always, event logged, partner notified
+       → no immediate override (owner ruling 2026-11-08): the countdown is the only unlock
        → if deadline passed: escape hatch unlocks normally
 ```
 **DNS block:**

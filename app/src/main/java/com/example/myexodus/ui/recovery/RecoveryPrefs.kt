@@ -7,9 +7,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Recovery surfaces' two UI preferences (plan v3 W1/W6). Both are device-local conveniences,
- * not settings the plan promotes to a screen: the pacer's haptic tick (default off, FR-4) and
- * the one-time "no secure lock" banner the privacy gate owes a device that cannot be gated.
+ * Recovery surfaces' UI preferences (plan v3 W1; the W6 gate banner retired with the gate,
+ * owner ruling 2026-11-08). Device-local conveniences, not settings the plan promotes to a
+ * screen: the pacer's haptic tick (default off, FR-4), the assist answers, and the crisis
+ * region override.
  */
 @Singleton
 class RecoveryPrefs @Inject constructor(
@@ -24,13 +25,6 @@ class RecoveryPrefs @Inject constructor(
     var hapticPacing: Boolean
         get() = prefs.getBoolean(KEY_HAPTIC, false)
         set(value) = prefs.edit { putBoolean(KEY_HAPTIC, value) }
-
-    /** True the first call after install/bypass only — the banner explains itself once. */
-    fun consumeNoLockBanner(): Boolean {
-        if (prefs.getBoolean(KEY_BANNER_SHOWN, false)) return false
-        prefs.edit { putBoolean(KEY_BANNER_SHOWN, true) }
-        return true
-    }
 
     // Urge Assist preferences (plan §H2). All local, optional, and resettable; none of them is
     // ever mirrored to a partner.
@@ -54,7 +48,7 @@ class RecoveryPrefs @Inject constructor(
         get() = prefs.getBoolean(KEY_QUIET, false)
         set(value) = prefs.edit { putBoolean(KEY_QUIET, value) }
 
-    /** Crisis-directory region, or null to follow the device locale's country. */
+    /** Crisis-directory region override; null falls back to Kenya (CrisisResources.DEFAULT_REGION). */
     var crisisRegion: String?
         get() = prefs.getString(KEY_CRISIS_REGION, null)
         set(value) = prefs.edit {
@@ -86,7 +80,6 @@ class RecoveryPrefs @Inject constructor(
     private companion object {
         const val PREFS_NAME = "recovery_prefs"
         const val KEY_HAPTIC = "haptic_pacing"
-        const val KEY_BANNER_SHOWN = "gate_banner_shown"
         const val KEY_CAN_MOVE = "assist_can_move"
         const val KEY_QUIET = "assist_quiet_preferred"
         const val KEY_CRISIS_REGION = "crisis_region"

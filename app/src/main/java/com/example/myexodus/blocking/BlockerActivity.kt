@@ -52,10 +52,10 @@ import kotlinx.coroutines.launch
  *
  * The screen is the URL pause card's twin (ADR #31): the blocked app names the block, states
  * why, and offers the same single escape — "Open MyExodus Recovery" — which starts the
- * friction session and lands on the Recovery tab, where the countdown and the cooldown-gated
- * override live for both block types (Req 13, NFR "max 1 tap to recovery resources"). The
- * friction flow is not re-implemented here (user-directed 2026-09-13: one block language
- * across app and URL blocks).
+ * friction session and lands on the Recovery tab, where the countdown lives for both block
+ * types (Req 13, NFR "max 1 tap to recovery resources"). The friction flow is not
+ * re-implemented here (user-directed 2026-09-13: one block language across app and URL
+ * blocks).
  *
  * Since the task #4 consistency audit it also carries the overlay card's Close (owner rulings
  * 2026-09-27 / 2026-10-03: every block wall stays until the user dismisses it): the a11y
@@ -141,8 +141,8 @@ class BlockerActivity : ComponentActivity() {
 
     /** Interception Escape Hatch, same mechanics as the URL card's button (ADR #29): start
      *  the dual-clock friction session, then land on the Recovery tab — where the countdown
-     *  and the cooldown-bounded override surface for both block types. A failed session
-     *  write must not strand the user on the wall: the navigation still happens. */
+     *  surfaces for both block types. A failed session write must not strand the user on the
+     *  wall: the navigation still happens. */
     private suspend fun openRecovery() {
         runCatching { recoveryStore.startRecovery(targetRuleId) }
         startActivity(
