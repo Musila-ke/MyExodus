@@ -361,19 +361,23 @@
     <string name="urge_reason_category">Chosen because you picked %1$s.</string>
     <string name="urge_reason_generic">A small first step that works for most urges.</string>
 
-    <!-- Urge Assist: the screen (plan §E2.2-E2.5). The header states where this runs; the
-         primary block is one action with one reason; escalation is a menu, never an auto-send. -->
+    <!-- Urge Assist: the screen (plan §E2.2-E2.5, revised 2026-11-08). One action on a filled
+         card; the rest of the catalogue is one collapsed, grouped list; escalation is a menu,
+         never an auto-send. -->
     <string name="recovery_assist_title">Right now</string>
-    <string name="recovery_assist_subtitle">This stays on your device.</string>
     <string name="recovery_assist_question">What is pulling at you?</string>
     <string name="recovery_assist_eyebrow">Try this</string>
     <string name="recovery_assist_cant">I can\'t do that</string>
     <string name="recovery_assist_breathe_now">Breathe with me</string>
     <string name="recovery_assist_more_title">More that can help</string>
-    <string name="recovery_assist_show_all">Show all %1$d options</string>
-    <string name="recovery_assist_show_less">Show fewer</string>
-    <string name="recovery_assist_quiet">Quiet</string>
-    <string name="recovery_assist_quiet_desc">No vibration for this run.</string>
+    <plurals name="recovery_assist_options_count">
+        <item quantity="one">%1$d option</item>
+        <item quantity="other">%1$d options</item>
+    </plurals>
+    <string name="recovery_assist_group_here">Right where you are</string>
+    <string name="recovery_assist_group_move">Change your surroundings</string>
+    <string name="recovery_assist_expanded">Expanded</string>
+    <string name="recovery_assist_collapsed">Collapsed</string>
     <string name="recovery_assist_start">Start</string>
     <string name="recovery_assist_call">Call</string>
     <string name="recovery_assist_message">Message</string>

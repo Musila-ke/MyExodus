@@ -41,6 +41,10 @@
     <string name="protection_paused_title">Protection is paused</string>
     <string name="protection_paused_text">MyExodus can’t tell which app is open right now, so blocks won’t start. Open MyExodus to see what’s off and turn protection back on.</string>
     <string name="protection_paused_card_text">MyExodus can’t tell which app is open right now, so blocks won’t start. Tap Fix to turn protection back on.</string>
+    <!-- The Protection pane's own variant: the rows that fix this are on the page below the
+         banner, and Enhanced Mode's switch lives one level up on the Settings list — neither
+         is a "Fix" button, so this copy points instead of promising one. -->
+    <string name="protection_paused_page_text">MyExodus can’t tell which app is open right now, so blocks won’t start. Fix what’s off below, or turn Enhanced Mode back on.</string>
     <string name="protection_paused_action">Fix</string>
     <!-- Home protection chip (finding #13: these were hardcoded Kotlin literals; the chip is the
          one-glance protection state and each value is a distinct claim, so they are resources). -->

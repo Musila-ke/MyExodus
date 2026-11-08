@@ -50,6 +50,7 @@ import com.example.myexodus.BuildConfig
 import com.example.myexodus.R
 import com.example.myexodus.account.AuthState
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
+import com.example.myexodus.blocking.ProtectionDegradation
 import com.example.myexodus.blocking.usage.AccountingOutage
 import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.settings.EnhancedModeSettings
@@ -91,6 +92,10 @@ fun SettingsScreen(
     backupKey: BackupKeyViewModel,
     /** ADR #171: the GitHub Releases check-and-install state machine. */
     update: UpdateViewModel,
+    /** §8 Step 6: the published protection state behind Home's banner, so the Protection pane
+     *  and the index row agree with Home instead of implying all is well. */
+    degradation: ProtectionDegradation?,
+    onReenable: () -> Unit,
     /** SOS §8.19 (Step 11): the recipient's block switch — null hides the row (no partner). */
     modifier: Modifier = Modifier,
     partnerBlock: NudgeSettingsViewModel.UiState? = null,
@@ -147,6 +152,8 @@ fun SettingsScreen(
             ProtectionScreen(
                 checks = loaded,
                 serviceEnabled = serviceEnabled,
+                degradation = degradation,
+                onReenable = onReenable,
                 onRecheck = {
                     monitor.refresh()
                     scope.launch { checks = withContext(Dispatchers.IO) { readProtectionChecks(context) } }
@@ -177,6 +184,7 @@ fun SettingsScreen(
         else -> SettingsIndex(
             modifier = modifier,
             serviceEnabled = serviceEnabled,
+            degradation = degradation,
             checks = loaded,
             account = account,
             update = update,
@@ -203,6 +211,7 @@ private const val PANE_BACKUP_KEY = "backup_key"
 @Composable
 private fun SettingsIndex(
     serviceEnabled: Boolean,
+    degradation: ProtectionDegradation?,
     checks: ProtectionChecks?,
     account: AccountViewModel,
     update: UpdateViewModel,
@@ -227,7 +236,11 @@ private fun SettingsIndex(
     var strictOn by remember { mutableStateOf(strictMode.strictModeEnabled) }
     var themeDialogOpen by remember { mutableStateOf(false) }
     // Null until the checks land: the row shows no status rather than claiming one it hasn't read.
-    val attention = checks?.let { attentionCount(it, serviceEnabled) }
+    // A published degradation counts too: every permission can read granted while an explicit
+    // stop (or Enhanced Mode off) still holds blocks down.
+    val attention = checks?.let {
+        attentionCount(it, serviceEnabled) + if (degradation != null) 1 else 0
+    }
     // §8.3: the identity row states the current mode without implying an account is required.
     val accountState by account.state.collectAsStateWithLifecycle()
     val accountSubtitle = when (val current = accountState) {

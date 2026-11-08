@@ -1,6 +1,8 @@
 package com.example.myexodus.ui.settings
 
+import android.content.Intent
 import android.os.Build
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -22,6 +25,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
+import com.example.myexodus.blocking.ProtectionDegradation
 import com.example.myexodus.blocking.usage.BatteryPromptRoute
 import com.example.myexodus.settings.IntegrityStatus
 import com.example.myexodus.settings.ProtectionChecks
@@ -45,6 +49,11 @@ import com.example.myexodus.ui.BackRow
 internal fun ProtectionScreen(
     checks: ProtectionChecks,
     serviceEnabled: Boolean,
+    /** §8 Step 6: the same published state Home's banner reads. The rows above can all read
+     *  granted while protection is still paused (an explicit stop, Enhanced Mode off, or
+     *  notifications denied), so the page states it instead of implying all is well. */
+    degradation: ProtectionDegradation?,
+    onReenable: () -> Unit,
     onRecheck: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -61,6 +70,33 @@ internal fun ProtectionScreen(
                 .padding(horizontal = 16.dp).padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            when (degradation) {
+                ProtectionDegradation.APP_STOPPED -> PausedBanner(
+                    title = stringResource(R.string.protection_stopped_title),
+                    body = stringResource(R.string.protection_stopped_text),
+                    actionLabel = stringResource(R.string.protection_stopped_action),
+                    onAction = onReenable,
+                )
+                ProtectionDegradation.DEGRADED_NO_DETECTION -> PausedBanner(
+                    title = stringResource(R.string.protection_paused_title),
+                    body = stringResource(R.string.protection_paused_page_text),
+                    actionLabel = null,
+                    onAction = null,
+                )
+                ProtectionDegradation.NOTIFICATIONS_OFF -> PausedBanner(
+                    title = stringResource(R.string.protection_notif_off_banner_title),
+                    body = stringResource(R.string.protection_notif_off_banner_text),
+                    actionLabel = stringResource(R.string.protection_notif_off_banner_action),
+                    onAction = {
+                        context.startActivity(
+                            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName),
+                        )
+                    },
+                )
+                null -> Unit
+            }
+
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
                 shape = MaterialTheme.shapes.medium,
@@ -181,6 +217,46 @@ internal fun ProtectionScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/** Home's paused copy, stated here too: a granted permission list alone never proves blocks can
+ *  run. Tertiary container is the app's existing callout shape (pairing ceremony). */
+@Composable
+private fun PausedBanner(
+    title: String,
+    body: String,
+    actionLabel: String?,
+    onAction: (() -> Unit)?,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 14.dp, bottom = 2.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(
+                body,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(end = 8.dp),
+            )
+            if (actionLabel != null && onAction != null) {
+                TextButton(
+                    onClick = onAction,
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                    ),
+                    modifier = Modifier.semantics { contentDescription = "$actionLabel, $title" },
+                ) {
+                    Text(actionLabel)
+                }
+            }
         }
     }
 }

@@ -288,7 +288,7 @@ History stays in Streaks. The hub carries no history link: owner call 2026-11-08
   - Title: "Get one thing to do"
   - Body: "A short action chosen for this moment. You can change it."
   - Primary button: "Start"
-  - **Revised 2026-11-08 (owner direction, final):** the hub is three zones, and tone — not hairlines — is what separates them. Zone A (header, habit line, "No block is holding right now" / live session) sits on the plain page surface. Zone B is the "right now" section as a **full-bleed tonal band**: edge-to-edge `surfaceContainerHigh`, content inset to the page frame, containing the eyebrow, the statement in `headlineLarge` (Fraunces), body, one full-width 56dp primary button with a trailing arrow, a hairline, then the support rows and "Log an urge" — all one surface. Zone C (Prepare) returns to the plain surface. The block is never wrapped in its own click target; the single button is the one affordance. The band scrolls with content and has no radius or shadow (tone, not a card).
+  - **Revised 2026-11-08 (owner direction, final, approved):** the hub is three zones separated by material, not by hairlines or tone. Zone A (header, habit line, "No block is holding right now" / live session) sits on the plain page surface. Zone B is **one filled teal action card** (`primary`, `shapes.extraLarge`, inset to the page frame, no shadow) holding the eyebrow, the statement in `headlineLarge` (Fraunces) in `onPrimary`, body, one full-width 56dp button inverted to on-primary, a translucent divider, then the support rows and "Log an urge". Zone C (Prepare) returns to the plain surface. A tone-on-tone band was tried first and rejected: the owner saw it as "barely changed". The block is never wrapped in its own click target; the single button is the one affordance.
 - **Support rows:** two hairline rows with inline 20dp icons, no containers:
   - "Reach out to <partner>" -> opens the existing confirmation dialog with a prewritten message.
   - "Get help now" -> directory. Error tint on the label only, not a red card.
@@ -298,10 +298,11 @@ History stays in Streaks. The hub carries no history link: owner call 2026-11-08
 
 #### E2.2 Urge Assist: "Right now"
 
-- **Header:** "Right now" `headlineLarge` (Fraunces allowed here, the only in-flow editorial serif), plus a one-line "This stays on your device."
+- **Header:** "Right now" `headlineLarge` (Fraunces allowed here, the only in-flow editorial serif). **Revised 2026-11-08:** the "This stays on your device." subtitle is removed (owner call: irrelevant on this page).
 - **Category chips:** one horizontally scrollable row, optional, no selection required:
   `Sex or porn`, `Betting`, `Scrolling`, `Shopping`, `Gaming`, `Something else`, `Not sure`.
   Default selection: `Not sure`. Selecting one re-ranks the suggestion immediately. No "Continue" button.
+  **Revised 2026-11-08:** each chip carries its category glyph as a leading icon (`Not sure` = HelpOutline), and the row stays one horizontal scroll so the ranked action stays high on the page.
 - **If category = Betting:** one conditional question appears under the chips, only when it changes the action: "Are you in the middle of a bet or deposit?" with `Yes`, `No`, `Not sure`. If Yes, the primary becomes "Close the betting app and step away," with self-exclusion as the second step. If the user skips, the general gambling action applies.
 - **Primary action block:**
   - Eyebrow: `TRY THIS`
@@ -310,9 +311,9 @@ History stays in Streaks. The hub carries no history link: owner call 2026-11-08
   - "Why this" line in `bodySmall`, muted, e.g. "Because it is late and you asked for something quiet."
   - Primary button: "Start" (or "Call", "Message", "Open" depending on the action type).
   - Text button: "I can't do that" -> replaces the block with a materially different action and a short reason.
-  - Text button: "Something else" -> shows two alternates, not a full catalog.
-    **Revised 2026-11-07 (owner direction, ADR #270):** the two-alternate cap is superseded. Four ranked alternates show inline, then "Show all N options"; a one-tap "Breathe with me" shortcut sits under the primary when paced breathing is not the lead. The owner rejected the capped flow on the first device pass as too thin to help.
-- **Quiet toggle:** a small "Quiet" chip when the action can produce sound or haptics; it disables audio and haptics for that run. It does not change the selected action unless the action is voice-based.
+    **Revised 2026-11-08 (owner direction, final):** the 2026-11-07 four-inline-alternates revision is superseded. The block is one filled `primary` card (`shapes.extraLarge`, no shadow) matching the hub's zone B: eyebrow, title in `headlineSmall` `onPrimary`, one-line body, the reason, then one full-width 56dp inverted button. A one-tap "Breathe with me" text button sits in the card beside "I can't do that" when paced breathing is not the lead.
+- **Alternates (revised 2026-11-08):** collapsed by default behind one "More that can help" row that names the count (plural `option/options`, chevron, `stateDescription` Expanded/Collapsed). Expanded, the alternates group under two `labelMedium` eyebrows by what they ask of the body: "Right where you are" (breathing, cognitive, timer, sensory) and "Change your surroundings" (physical, environment, access). Each row is title-only with a chevron; the runner re-shows the description, so repeating it here was the cognitive overload the owner flagged. Social and escalation actions are excluded from the list because the support strip below already carries them. Order within each group is the engine's ranking.
+- **Quiet toggle: removed 2026-11-08 (owner call).** It duplicated the paced-breathing runner's own "Vibrate at each change" switch; runs simply honor the saved preference (`quietPreferred`).
 - **Support strip below:** "Reach out" and "Get help now", always present. If no partner is paired, "Reach out" opens the existing pairing guidance, not a dead action.
 - **Exit:** the system back arrow returns to the hub. No confirmation, no penalty, no "are you sure."
 

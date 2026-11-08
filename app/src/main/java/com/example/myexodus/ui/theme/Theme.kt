@@ -1,14 +1,18 @@
 package com.example.myexodus.ui.theme
 
+import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import com.example.myexodus.settings.ThemeMode
 import com.example.myexodus.ui.rememberWindowWidth
 import com.example.myexodus.ui.typeScaleFactor
@@ -119,6 +123,18 @@ fun MyExodusTheme(
     val widthClass = rememberWindowWidth()
     val typography = remember(widthClass) {
         scaledTypography(Typography, widthClass.typeScaleFactor)
+    }
+    // enableEdgeToEdge() picks the bar-icon style from the system night mode at startup, but
+    // ThemeMode is chosen separately: system dark + app light left white icons on SandLight.
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as Activity).window
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !darkTheme
+                isAppearanceLightNavigationBars = !darkTheme
+            }
+        }
     }
     // Brand palette is fixed (Desert Dawn) — dynamic color is intentionally off so the
     // chosen identity survives on Android 12+.

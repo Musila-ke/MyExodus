@@ -2,7 +2,9 @@ package com.example.myexodus.ui.recovery
 
 import android.content.Intent
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -16,12 +18,24 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Casino
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.MoreHoriz
+import androidx.compose.material.icons.outlined.ShoppingBag
+import androidx.compose.material.icons.outlined.Smartphone
+import androidx.compose.material.icons.outlined.SportsEsports
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -40,9 +54,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myexodus.R
@@ -58,6 +78,7 @@ import com.example.myexodus.recovery.UrgeCatalog
 import com.example.myexodus.recovery.UrgeCategory
 import com.example.myexodus.recovery.UrgeCheckIn
 import com.example.myexodus.recovery.UrgeEpisode
+import com.example.myexodus.recovery.UrgeModality
 import com.example.myexodus.recovery.UrgeReason
 import com.example.myexodus.recovery.UrgeRecommendation
 import com.example.myexodus.recovery.UrgeRunner
@@ -120,9 +141,8 @@ internal fun UrgeAssistScreen(
     var round by remember { mutableStateOf<UrgeAction?>(null) }
     var answerPending by remember { mutableStateOf(false) }
     var roundToken by remember { mutableIntStateOf(0) }
-    var showAll by remember { mutableStateOf(false) }
+    var moreOpen by remember { mutableStateOf(false) }
     var sessionId by remember { mutableStateOf<String?>(null) }
-    var quiet by rememberSaveable { mutableStateOf(prefs.quietPreferred) }
     var messageRequested by remember { mutableStateOf(false) }
     var logging by remember { mutableStateOf(false) }
     var directoryFilter by remember { mutableStateOf(CrisisResources.FILTER_ALL) }
@@ -136,7 +156,7 @@ internal fun UrgeAssistScreen(
                 lateNight = isLateNight(LocalTime.now().hour),
                 inRiskWindow = inRiskWindow,
                 canMove = prefs.canMove,
-                quietPreferred = quiet,
+                quietPreferred = prefs.quietPreferred,
                 hasPartner = partnerName != null,
                 inTransaction = inTransaction == true,
                 immediateDanger = dangerReported,
@@ -146,12 +166,11 @@ internal fun UrgeAssistScreen(
                 lastModality = episode.lastModality,
             ),
         )
-        showAll = false
+        moreOpen = false
         phase = if (dangerReported) AssistPhase.EMERGENCY else AssistPhase.SUGGEST
     }
 
-    // A category answer is the only thing that re-ranks an open suggestion. The Quiet chip
-    // deliberately does not: it must never swap the action out from under the user.
+    // A category answer is the only thing that re-ranks an open suggestion.
     LaunchedEffect(categoryId, inTransaction) {
         if (phase == AssistPhase.SUGGEST || phase == AssistPhase.EMERGENCY) selectAdvice()
     }
@@ -306,35 +325,26 @@ internal fun UrgeAssistScreen(
                 modifier = Modifier.padding(horizontal = sidePadding, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        stringResource(R.string.recovery_assist_title),
-                        style = MaterialTheme.typography.headlineLarge,
-                    )
-                    Text(
-                        stringResource(R.string.recovery_assist_subtitle),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                Text(
+                    stringResource(R.string.recovery_assist_title),
+                    style = MaterialTheme.typography.headlineLarge,
+                )
 
                 when (phase) {
                     AssistPhase.SUGGEST -> SuggestionPanel(
                         category = category,
                         inTransaction = inTransaction,
                         advice = advice,
-                        showAll = showAll,
-                        quiet = quiet,
+                        moreOpen = moreOpen,
                         partnerName = partnerName,
                         onCategory = { categoryId = it?.id },
                         onTransaction = { inTransaction = it },
-                        onQuiet = { quiet = it },
                         onPrimary = ::choose,
                         onCant = {
                             episode = episode.cantDo(advice?.primary?.id ?: return@SuggestionPanel)
                             selectAdvice()
                         },
-                        onShowAll = { showAll = it },
+                        onMoreToggle = { moreOpen = it },
                         onReachOut = onReachOut,
                         onGetHelp = {
                             directoryFilter = CrisisResources.filterForCategory(category)
@@ -349,7 +359,7 @@ internal fun UrgeAssistScreen(
                     AssistPhase.RUNNING -> RunnerPanel(
                         action = round,
                         planItems = planItems,
-                        quiet = quiet,
+                        quiet = prefs.quietPreferred,
                         hapticEnabled = prefs.hapticPacing,
                         onHapticChange = { prefs.hapticPacing = it },
                         partnerMessageSent = partnerMessageSent,
@@ -443,9 +453,10 @@ internal fun UrgeAssistScreen(
 private enum class AssistPhase { SUGGEST, RUNNING, CHECK_IN, EXTENDED, ESCALATION, DIRECTORY, EMERGENCY }
 
 /**
- * Suggestion (plan §E2.2, revised 2026-11-07): category chips, one leading action with its
- * reason, a one-tap breathing shortcut, and the rest of the ranked catalogue underneath. The
- * first few alternates show inline; the remainder is one tap away rather than hidden entirely.
+ * Suggestion (plan §E2.2, revised 2026-11-08): icon category chips, the leading action on a
+ * filled card, and the rest of the ranked catalogue behind one collapsed header, grouped by
+ * whether an action keeps the user where they are or moves them somewhere else. The ordering
+ * is the engine's; this panel only decides how much of it is on screen at once.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -453,15 +464,13 @@ private fun SuggestionPanel(
     category: UrgeCategory?,
     inTransaction: Boolean?,
     advice: UrgeRecommendation?,
-    showAll: Boolean,
-    quiet: Boolean,
+    moreOpen: Boolean,
     partnerName: String?,
     onCategory: (UrgeCategory?) -> Unit,
     onTransaction: (Boolean?) -> Unit,
-    onQuiet: (Boolean) -> Unit,
     onPrimary: (UrgeAction) -> Unit,
     onCant: () -> Unit,
-    onShowAll: (Boolean) -> Unit,
+    onMoreToggle: (Boolean) -> Unit,
     onReachOut: () -> Unit,
     onGetHelp: () -> Unit,
     onDanger: () -> Unit,
@@ -469,18 +478,22 @@ private fun SuggestionPanel(
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
             stringResource(R.string.recovery_assist_question),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.titleMedium,
         )
-        FlowRow(
+        // One scrolling row rather than wrapped rows: the ranked action below must stay high
+        // on the page, and the chips are an optional refinement of it.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             UrgeCategory.entries.forEach { option ->
                 FilterChip(
                     selected = category == option,
                     onClick = { onCategory(if (category == option) null else option) },
                     label = { Text(categoryLabel(option)) },
+                    leadingIcon = { ChipIcon(categoryIcon(option)) },
                     modifier = Modifier.heightIn(min = 48.dp),
                 )
             }
@@ -488,6 +501,7 @@ private fun SuggestionPanel(
                 selected = category == null,
                 onClick = { onCategory(null) },
                 label = { Text(stringResource(R.string.urge_category_unsure)) },
+                leadingIcon = { ChipIcon(Icons.Outlined.HelpOutline) },
                 modifier = Modifier.heightIn(min = 48.dp),
             )
         }
@@ -496,7 +510,7 @@ private fun SuggestionPanel(
         if (category == UrgeCategory.GAMBLING) {
             Text(
                 stringResource(R.string.recovery_assist_gambling_question),
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.titleSmall,
             )
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -524,79 +538,125 @@ private fun SuggestionPanel(
         }
 
         val primary = advice?.primary ?: return@Column
-        Hairline()
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            SectionEyebrow(stringResource(R.string.recovery_assist_eyebrow))
+        val alternatives = advice.alternatives
+        val breathing = alternatives.firstOrNull { it.id == UrgeCatalog.BREATHING }
+        val ink = MaterialTheme.colorScheme.onPrimary
+        // The one thing to do, on its own material. The button inverts the card so the tap
+        // target is the brightest mark on the screen.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(MaterialTheme.shapes.extraLarge)
+                .background(MaterialTheme.colorScheme.primary)
+                .padding(horizontal = 20.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                stringResource(R.string.recovery_assist_eyebrow).uppercase(),
+                style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.6.sp),
+                color = ink.copy(alpha = 0.9f),
+            )
             Text(
                 stringResource(primary.labelRes),
                 style = MaterialTheme.typography.headlineSmall,
+                color = ink,
             )
             Text(
                 stringResource(primary.descriptionRes),
                 style = MaterialTheme.typography.bodyMedium,
+                color = ink.copy(alpha = 0.9f),
             )
             Text(
                 whyLine(advice.reason, category),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = ink.copy(alpha = 0.9f),
             )
-        }
-        Button(
-            onClick = { onPrimary(primary) },
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-        ) {
-            Text(stringResource(primaryLabel(primary)))
-        }
-        // Paced breathing is the one move that works without thinking, so it stays one tap
-        // away even when the ranking put something else first.
-        val breathing = advice.alternatives.firstOrNull { it.id == UrgeCatalog.BREATHING }
-        if (breathing != null) {
-            OutlinedButton(
-                onClick = { onPrimary(breathing) },
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            Spacer(Modifier.height(4.dp))
+            Button(
+                onClick = { onPrimary(primary) },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.onPrimary,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                ),
             ) {
-                Text(stringResource(R.string.recovery_assist_breathe_now))
+                Text(stringResource(primaryLabel(primary)))
             }
-        }
-        TextButton(onClick = onCant, modifier = Modifier.heightIn(min = 48.dp)) {
-            Text(stringResource(R.string.recovery_assist_cant))
-        }
-        // A chip, not a preference: it changes this run only, and never the chosen action.
-        if (primary.runner == UrgeRunner.TECHNIQUE) {
-            FilterChip(
-                selected = quiet,
-                onClick = { onQuiet(!quiet) },
-                label = { Text(stringResource(R.string.recovery_assist_quiet)) },
-                modifier = Modifier.heightIn(min = 48.dp),
-            )
-            Text(
-                stringResource(R.string.recovery_assist_quiet_desc),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        // The rest of the catalogue, ranked for this category. Four rows inline keep the choice
-        // visible; the remainder sits behind one tap instead of disappearing.
-        val rest = if (breathing != null) advice.alternatives - breathing else advice.alternatives
-        if (rest.isNotEmpty()) {
-            Hairline()
-            SectionEyebrow(stringResource(R.string.recovery_assist_more_title))
-            rest.take(if (showAll) rest.size else INLINE_ALTERNATES).forEach { alternate ->
-                AlternateRow(action = alternate, onClick = { onPrimary(alternate) })
-            }
-            if (rest.size > INLINE_ALTERNATES) {
+            // Paced breathing is the one move that works without thinking, so it stays one tap
+            // away even when the ranking put something else first.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (breathing != null) {
+                    TextButton(
+                        onClick = { onPrimary(breathing) },
+                        colors = ButtonDefaults.textButtonColors(contentColor = ink),
+                    ) {
+                        Text(stringResource(R.string.recovery_assist_breathe_now))
+                    }
+                }
                 TextButton(
-                    onClick = { onShowAll(!showAll) },
-                    modifier = Modifier.heightIn(min = 48.dp),
-                    contentPadding = PaddingValues(horizontal = 0.dp),
+                    onClick = onCant,
+                    colors = ButtonDefaults.textButtonColors(contentColor = ink),
                 ) {
-                    Text(
-                        stringResource(
-                            if (showAll) R.string.recovery_assist_show_less
-                            else R.string.recovery_assist_show_all,
-                            rest.size,
-                        ),
-                    )
+                    Text(stringResource(R.string.recovery_assist_cant))
+                }
+            }
+        }
+
+        // The rest of the catalogue, ranked for this category and collapsed by default: the
+        // card above is the answer, and a flat list of everything is the overload this layout
+        // exists to remove. Social and escalation actions are not repeated here; the strip
+        // below is their one home.
+        val more = alternatives.filter {
+            it.id != UrgeCatalog.BREATHING && actionGroup(it.modality) != null
+        }
+        if (more.isNotEmpty()) {
+            Hairline()
+            val stateText = stringResource(
+                if (moreOpen) R.string.recovery_assist_expanded else R.string.recovery_assist_collapsed,
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp)
+                    .clickable(role = Role.Button) { onMoreToggle(!moreOpen) }
+                    .semantics { stateDescription = stateText },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(R.string.recovery_assist_more_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    pluralStringResource(
+                        R.plurals.recovery_assist_options_count,
+                        more.size,
+                        more.size,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(8.dp))
+                Icon(
+                    imageVector = if (moreOpen) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+            if (moreOpen) {
+                ActionGroup.entries.forEach { group ->
+                    val grouped = more.filter { actionGroup(it.modality) == group }
+                    if (grouped.isNotEmpty()) {
+                        Text(
+                            stringResource(group.labelRes).uppercase(),
+                            style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.2.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        grouped.forEach { alternate ->
+                            AlternateRow(action = alternate, onClick = { onPrimary(alternate) })
+                        }
+                    }
                 }
             }
         }
@@ -635,32 +695,55 @@ private fun SuggestionPanel(
     }
 }
 
-/** One ranked alternate: title plus its one-line explanation, tappable as a whole row. */
+private enum class ActionGroup(val labelRes: Int) {
+    HERE(R.string.recovery_assist_group_here),
+    CHANGE(R.string.recovery_assist_group_move),
+}
+
+/** Which expanded-list section an action belongs to; null keeps it out of that list. */
+private fun actionGroup(modality: UrgeModality): ActionGroup? = when (modality) {
+    UrgeModality.BREATHING, UrgeModality.COGNITIVE, UrgeModality.TIMER, UrgeModality.SENSORY ->
+        ActionGroup.HERE
+    UrgeModality.PHYSICAL, UrgeModality.ENVIRONMENT, UrgeModality.ACCESS -> ActionGroup.CHANGE
+    // Social and escalation actions are already the support strip's rows; repeating them here
+    // would offer two doors to the same place.
+    UrgeModality.SOCIAL, UrgeModality.ESCALATION -> null
+}
+
+private fun categoryIcon(category: UrgeCategory): ImageVector = when (category) {
+    UrgeCategory.PORN -> Icons.Outlined.VisibilityOff
+    UrgeCategory.GAMBLING -> Icons.Outlined.Casino
+    UrgeCategory.SCROLLING -> Icons.Outlined.Smartphone
+    UrgeCategory.SHOPPING -> Icons.Outlined.ShoppingBag
+    UrgeCategory.GAMING -> Icons.Outlined.SportsEsports
+    UrgeCategory.OTHER -> Icons.Outlined.MoreHoriz
+}
+
+@Composable
+private fun ChipIcon(icon: ImageVector) {
+    Icon(
+        imageVector = icon,
+        contentDescription = null,
+        modifier = Modifier.size(FilterChipDefaults.IconSize),
+    )
+}
+
+/** One ranked alternate: the label alone. The runner shows its sentence once it is chosen. */
 @Composable
 private fun AlternateRow(action: UrgeAction, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 56.dp)
-            .clickable(onClick = onClick)
-            .padding(vertical = 8.dp),
+            .heightIn(min = 52.dp)
+            .clickable(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Column(
+        Text(
+            stringResource(action.labelRes),
+            style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                stringResource(action.labelRes),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                stringResource(action.descriptionRes),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        )
         Icon(
             imageVector = Icons.Outlined.ChevronRight,
             contentDescription = null,
@@ -669,8 +752,6 @@ private fun AlternateRow(action: UrgeAction, onClick: () -> Unit) {
         )
     }
 }
-
-private const val INLINE_ALTERNATES = 4
 
 /**
  * The action host (plan §E2.3). One runner at a time: the existing technique runners, a

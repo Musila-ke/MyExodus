@@ -608,6 +608,10 @@ fun AppShell(
                         account = account,
                         backupKey = backupKey,
                         update = update,
+                        // §8 Step 6: the Protection pane and index state the same published
+                        // degradation Home's banner does.
+                        degradation = degradation,
+                        onReenable = onReenable,
                         // SOS §8.19 (Step 11): the block switch's state + refresh/write paths.
                         partnerBlock = partnerBlock,
                         onPartnerBlockRefresh = nudgeSettings::refresh,

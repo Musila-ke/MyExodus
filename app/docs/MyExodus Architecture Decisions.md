@@ -5204,3 +5204,40 @@ The implementation went the other way on the owner's explicit 2026-09-19 ruling:
 **Verified.** JVM: full suite green. `NotchedNavBarGeometryTest` (degenerate and normal measures), `BlockOverlayViewTest.dailyLimitBlock_withItsRule_offersTheSameRecoveryAction` (button visible, carries the rule id, fires `onOpenRecovery`), and the existing no-rule/Close-survival cases still green. Device (X6532): the font-scale change no longer kills the process; launching an over-budget app showed the wall, and tapping the recovery button launched MainActivity with the Recovery tab, its block banner cleared by the session.
 
 **Honest limits.** (1) Path B's wall was not exercised on-device this pass because it renders only while protection authority is `DEGRADED_POLLING_ONLY`; the wiring mirrors Path A's device-proven entry, and the BAL exemption is verified against the official background-starts documentation. (2) The recovery button's position is geometry-driven; the device tap was computed from a Robolectric measure at the phone's exact display configuration, not from a screenshot (the wall is `FLAG_SECURE` by design).
+
+## #272 — Urge Assist's Final Composition: One Filled Card, Glyph Chips, and a Collapsed Grouped Catalogue (owner direction, 2026-11-08)
+
+**Status:** Accepted; implemented. Device pass run 2026-11-08 on the X6532.
+
+**Context.** After #270 shipped, the owner used the screen and rejected the composition verbatim: "the Right Now page ... The design there is just terrible. You know, there's so much cognitive overload, mostly in the More That Can Help section... even the What Is Pulling At You? Try this. The design is just so generic, so ugly... ensure that the user can find what they need to find with ease and interactivity ease... And you wrote these stays on your device. That sentence is irrelevant, so get rid of it." The owner also questioned the Quiet toggle ("no vibration for this run? what feature is that? i dont rememebre asking you to build it") and, offered the choice, removed it.
+
+**Decision.**
+(1) **The subtitle is gone.** "This stays on your device." stated nothing the user acts on; the header is the title alone.
+(2) **Category chips carry their glyph** and stay one horizontal scroll row, so the ranked action stays high on the page instead of being pushed below a wrapped chip block.
+(3) **The primary block is one filled teal card**, the hub's zone-B material (ADR: hub revision 2026-11-08): eyebrow, action title in `headlineSmall` on `onPrimary`, one-line body, the reason, one full-width 56dp inverted button, then "Breathe now" and "I can't do that" as on-primary text buttons. All card text at alpha 0.9 with onPrimary clears 4.5:1 in both palettes; lower alphas failed for `bodySmall`.
+(4) **Alternatives are collapsed by default.** One 56dp row ("More that can help", the ranked count in a plural, chevron) expands a list grouped by what the action asks of the body: "Right where you are" (breathing, cognitive, timer, sensory) and "Change your surroundings" (physical, environment, access). Rows are title-only with a chevron because the runner re-shows the description; repeating it was the overload the owner flagged. Social and escalation actions are excluded from the list: the support strip below already carries "Reach out" and "Get help now", and a third copy of each was noise. The expand header exposes `stateDescription` Expanded/Collapsed.
+(5) **The Quiet toggle is removed.** It duplicated the paced-breathing runner's own "Vibrate at each change" switch; runs honor the saved `quietPreferred` preference directly.
+
+**Alternatives considered.** (a) *The #270 four-inline-alternates layout* — rejected by the owner on sight: it was the cognitive overload. (b) *A bottom sheet for all options* — rejected: another tap and added chrome at exactly the wrong moment, and the collapsed row is one tap cheaper. (c) *Grouping by the nine `UrgeModality` values* — rejected: nine eyebrows is the same overload in a different order; two groups answer "can I do this where I am?"
+
+**Verified (JVM, 2026-11-08).** Full unit suite green; compile clean. (Device pass recorded in the commit that lands this revision.)
+
+**Honest limits.** The alternative ordering inside each group is the engine's ranking, not re-sorted for the group; when a ranking changes the two groups can interleave differently than before.
+
+## #273 — System Bar Icons Follow ThemeMode, and the Protection Pane States the Pause Its Rows Cannot Show (owner reports, 2026-11-08)
+
+**Status:** Accepted; implemented. Status-bar fix device-verified 2026-11-08; the Protection pane's banner is device-verified in the same pass.
+
+**Context.** Two owner reports in one session. (a) "in light mode, I can't see the phone's top status bar? ... the battery, the Wi-Fi ... But in dark mode, I can see it." (b) "on the protection side, they've all been fixed, all been granted. But then I go to my home page and it's telling me protection paused, time limits stay paused until you re-enable. I guess you can add it also to the protection page."
+
+**Root cause.** (a) Every activity calls `enableEdgeToEdge()` with no arguments, which picks the bar-icon appearance from the Activity's night mode at startup; the app's ThemeMode is a separate Compose choice. System dark plus app light left white icons on `SandLight`. (b) The Protection pane renders only the permission checks; the pause is `ProtectionDegradation.APP_STOPPED` stored by `ProtectionStatusStore` and published by `ProtectionStatusMonitor`, which outranks every authority-derived reason in `visibleDegradation`. All grant rows can honestly read granted while blocks are still down until an explicit re-enable.
+
+**Decision.**
+(1) **`MyExodusTheme` owns the bar-icon appearance.** A `SideEffect` sets `isAppearanceLightStatusBars`/`isAppearanceLightNavigationBars = !darkTheme` on every recomposition that changes the theme, so all three activities follow the app's ThemeMode rather than the system's.
+(2) **The Protection pane states the pause.** `ProtectionScreen` takes the same published `degradation` Home's banner reads and renders it first in the scroll as a `tertiaryContainer` callout (the app's existing callout material), reusing Home's copy and actions: `APP_STOPPED` → Re-enable (calls `ProtectionStatusStore.reenable()` then `refresh()`), `NOTIFICATIONS_OFF` → Fix opens notification settings, `DEGRADED_NO_DETECTION` → explanatory copy and no button (its fixes are the rows below, or the Enhanced Mode switch one level up in the Settings index). The Settings index's attention count adds one for any non-null degradation, so the index row's tone and subtitle agree with Home before the pane is even opened.
+
+**Rejected.** (a) *A "paused" row inside the grant list* — rejected: it is not a grant; it would read as a seventh permission row. (b) *Reusing `protection_paused_card_text` in the pane* — rejected: it promises a "Fix" button the pane does not carry; `protection_paused_page_text` points at what actually fixes it. (c) *Any new pause state* — rejected: the store's model is unchanged; this is a visibility fix, not a state change.
+
+**Verified.** Status bar: on the X6532, `dumpsys window windows` for the MyExodus window reports `apr=LIGHT_STATUS_BARS LIGHT_NAVIGATION_BARS` while `cmd uimode night` is `yes` and the app renders light. Protection pane: device pass 2026-11-08.
+
+**Honest limits.** The `DEGRADED_NO_DETECTION` banner cannot tell whether its cause is a missing row or Enhanced Mode switched off; its copy names both, and each is at a different depth (the rows below, the index above).
