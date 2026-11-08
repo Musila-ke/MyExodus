@@ -273,6 +273,24 @@
       "lastVerifiedAt": "2026-11-07"
     },
     {
+      "id": "us-emergency",
+      "region": "US",
+      "name": "Emergency services",
+      "description": "Police, fire, and medical. Call 911 if you are in immediate danger.",
+      "phone": "911",
+      "sms": "",
+      "whatsapp": "",
+      "url": "",
+      "source": "Federal Communications Commission, 911 and E911 Services — https://www.fcc.gov/general/9-1-1-and-e9-1-1",
+      "behaviors": ["emergency"],
+      "kind": "emergency",
+      "hours": "",
+      "cost": "",
+      "eligibility": "Immediate danger",
+      "limitations": "US only; other countries have their own emergency numbers.",
+      "lastVerifiedAt": "2026-11-08"
+    },
+    {
       "id": "us-988",
       "region": "US",
       "name": "988 Suicide & Crisis Lifeline",

@@ -99,6 +99,29 @@ class CrisisResourcesTest {
     }
 
     @Test
+    fun `the all-regions view keeps every entry in asset order`() {
+        val resources = listOf(
+            resource(id = "a", region = "KE"),
+            resource(id = "b", region = "GLOBAL"),
+            resource(id = "c", region = "US"),
+        )
+
+        assertEquals(resources, CrisisResources.forRegion(resources, CrisisResources.REGION_ALL))
+    }
+
+    @Test
+    fun `regions lists only the specific regions the asset covers`() {
+        val resources = listOf(
+            resource(id = "a", region = "US"),
+            resource(id = "b", region = "GLOBAL"),
+            resource(id = "c", region = "KE"),
+            resource(id = "d", region = "KE"),
+        )
+
+        assertEquals(listOf("KE", "US"), CrisisResources.regions(resources))
+    }
+
+    @Test
     fun `the assist category preselects only the matching filter`() {
         assertEquals(
             CrisisResources.FILTER_PORN,

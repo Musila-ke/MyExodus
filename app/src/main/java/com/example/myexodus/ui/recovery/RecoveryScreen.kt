@@ -283,7 +283,7 @@ fun RecoveryScreen(
         )
         view == RECOVERY_VIEW_CRISIS -> Column(modifier) {
             BackRow(label = stringResource(R.string.recovery_crisis_back), onBack = { view = null })
-            CrisisScreen()
+            CrisisScreen(prefs = prefs)
         }
         view == VIEW_TECHNIQUES -> TechniquesView(
             inRiskWindow = inRiskWindow,

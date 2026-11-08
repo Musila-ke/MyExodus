@@ -314,7 +314,7 @@ internal fun UrgeAssistScreen(
         // against an infinite height.
         Column(modifier.fillMaxSize()) {
             BackRow(label = stringResource(R.string.recovery_title), onBack = { assistBack() })
-            CrisisScreen(initialFilter = directoryFilter)
+            CrisisScreen(prefs = prefs, initialFilter = directoryFilter)
         }
     } else {
         val scroll = rememberScrollState()

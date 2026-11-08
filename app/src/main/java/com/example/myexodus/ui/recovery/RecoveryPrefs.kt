@@ -54,6 +54,13 @@ class RecoveryPrefs @Inject constructor(
         get() = prefs.getBoolean(KEY_QUIET, false)
         set(value) = prefs.edit { putBoolean(KEY_QUIET, value) }
 
+    /** Crisis-directory region, or null to follow the device locale's country. */
+    var crisisRegion: String?
+        get() = prefs.getString(KEY_CRISIS_REGION, null)
+        set(value) = prefs.edit {
+            if (value == null) remove(KEY_CRISIS_REGION) else putString(KEY_CRISIS_REGION, value)
+        }
+
     /** Actions the user tapped "Not for me" on; hidden until "Show this again". */
     var dislikedActions: Set<String>
         get() = prefs.getStringSet(KEY_DISLIKED, null)?.toSet() ?: emptySet()
@@ -82,6 +89,7 @@ class RecoveryPrefs @Inject constructor(
         const val KEY_BANNER_SHOWN = "gate_banner_shown"
         const val KEY_CAN_MOVE = "assist_can_move"
         const val KEY_QUIET = "assist_quiet_preferred"
+        const val KEY_CRISIS_REGION = "crisis_region"
         const val KEY_DISLIKED = "assist_disliked_actions"
         const val KEY_HELPFUL = "assist_helpful_actions"
         const val VALUE_YES = "yes"

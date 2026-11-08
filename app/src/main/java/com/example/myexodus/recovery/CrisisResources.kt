@@ -35,6 +35,12 @@ object CrisisResources {
     /** Region used by entries that apply everywhere. */
     const val GLOBAL_REGION = "GLOBAL"
 
+    /** Region-control sentinel: every entry, regardless of region. */
+    const val REGION_ALL = "ALL"
+
+    /** First-run region (owner ruling 2026-11-08): the directory is Kenya-first, always. */
+    const val DEFAULT_REGION = "KE"
+
     const val KIND_HELPLINE = "helpline"
     const val KIND_FELLOWSHIP = "fellowship"
     const val KIND_REGULATOR = "regulator"
@@ -147,15 +153,23 @@ object CrisisResources {
     }
 
     /**
-     * The device region's entries first, then the global ones — a user abroad still sees the
+     * The chosen region's entries first, then the global ones — a user abroad still sees the
      * worldwide directory, and a user in a region we have not verified keeps that directory
-     * rather than an empty screen.
+     * rather than an empty screen. [REGION_ALL] returns everything in asset order.
      */
     fun forRegion(resources: List<CrisisResource>, regionCode: String): List<CrisisResource> {
+        if (regionCode == REGION_ALL) return resources
         val regional = resources.filter { it.region.equals(regionCode, ignoreCase = true) }
         val global = resources.filter { it.region == GLOBAL_REGION }
         return regional + global
     }
+
+    /** The regions the asset actually covers, for the region picker. */
+    fun regions(resources: List<CrisisResource>): List<String> =
+        resources.map { it.region }
+            .filterNot { it == GLOBAL_REGION }
+            .distinct()
+            .sorted()
 
     /**
      * The section an entry belongs to. One section per entry, fixed order. A professional

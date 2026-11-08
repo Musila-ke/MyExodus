@@ -252,8 +252,15 @@
     <string name="recovery_crisis_link">Need urgent help?</string>
     <string name="recovery_crisis_back">Get help now</string>
     <string name="recovery_crisis_title">Get help now</string>
-    <string name="recovery_crisis_intro">If you\'re in immediate danger, call your local emergency number. These services are run by independent organizations. The numbers below were checked by hand.</string>
-    <string name="recovery_crisis_not_emergency">These are not emergency services unless stated. If you are in immediate danger, contact emergency services in your country.</string>
+    <string name="recovery_crisis_hero_title">Talk to someone now</string>
+    <string name="recovery_crisis_emergency_line">In immediate danger? Call %1$s</string>
+    <string name="recovery_crisis_emergency_generic">In immediate danger? Call your local emergency number.</string>
+    <string name="recovery_crisis_details">Details</string>
+    <plurals name="recovery_crisis_show_more">
+        <item quantity="one">Show %1$d more service</item>
+        <item quantity="other">Show %1$d more services</item>
+    </plurals>
+    <string name="recovery_crisis_not_emergency">These services are run by independent organizations. They are not emergency services unless stated. If you are in immediate danger, contact emergency services in your country.</string>
     <string name="recovery_crisis_call">Call %1$s</string>
     <string name="recovery_crisis_sms">Text %1$s</string>
     <string name="recovery_crisis_whatsapp">WhatsApp %1$s</string>
@@ -268,6 +275,9 @@
     <string name="recovery_crisis_region_kenya">Kenya</string>
     <string name="recovery_crisis_region_international">International</string>
     <string name="recovery_crisis_region_us">United States</string>
+    <string name="recovery_crisis_region_all">All regions</string>
+    <string name="recovery_crisis_region_title">Region</string>
+    <string name="recovery_crisis_region_row">Region: %1$s</string>
 
     <!-- Get Help filters and sections (plan E2.10). Filters are the six named in the plan;
          sections add Substance use and Professional help, which have no chip of their own. -->
