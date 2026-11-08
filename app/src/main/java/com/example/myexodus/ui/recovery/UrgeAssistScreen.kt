@@ -92,6 +92,7 @@ internal fun UrgeAssistScreen(
     planItems: List<CoachingStep>,
     entry: String,
     habitId: String?,
+    habitLabel: String?,
     inRiskWindow: Boolean,
     partnerName: String?,
     onReachOut: () -> Unit,
@@ -414,6 +415,7 @@ internal fun UrgeAssistScreen(
     if (logging) {
         UrgeLogSheet(
             onDismiss = { logging = false },
+            habitLabel = habitLabel,
             onSubmit = { intensity ->
                 // Close first: a sheet still on screen during the write takes a second tap
                 // and writes a second row.

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.LockOpen
@@ -49,6 +50,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -125,9 +127,9 @@ fun RecoveryScreen(
     modifier: Modifier = Modifier,
     /** The habit whose streak this surface displays; urge rows logged here carry its id. */
     habitId: String? = null,
+    /** Its user-entered label, so a log names the streak it lands in. */
+    habitLabel: String? = null,
     onEntryConsumed: () -> Unit = {},
-    /** History lives on the Streaks tab (owner ruling 2026-11-07); the hub links there. */
-    onOpenHistory: () -> Unit = {},
     /** Urge Assist support strip + hub reach-out row: the pair's name and the SOS sender. */
     partnerName: String? = null,
     onReachOut: () -> Unit = {},
@@ -266,6 +268,7 @@ fun RecoveryScreen(
             planItems = planItems,
             entry = visitEntry,
             habitId = habitId,
+            habitLabel = habitLabel,
             inRiskWindow = inRiskWindow,
             partnerName = partnerName,
             onReachOut = onReachOut,
@@ -326,6 +329,7 @@ fun RecoveryScreen(
                 prefs = prefs,
                 entry = visitEntry,
                 habitId = habitId,
+                habitLabel = habitLabel,
                 sessions = sessions,
                 onRouteHome = onRouteHome,
                 onBack = { view = null },
@@ -356,7 +360,7 @@ fun RecoveryScreen(
             onOpenRiskWindows = { view = VIEW_RISK_WINDOWS },
             onOpenFrictionTimer = { view = VIEW_FRICTION_TIMER },
             onOpenCrisis = { view = RECOVERY_VIEW_CRISIS },
-            onOpenHistory = onOpenHistory,
+            habitLabel = habitLabel,
             logOnly = { intensity ->
                 scope.launch(Dispatchers.IO) {
                     sessions.logOnly(
@@ -382,6 +386,7 @@ private fun TechniqueSession(
     prefs: RecoveryPrefs,
     entry: String,
     habitId: String?,
+    habitLabel: String?,
     sessions: RecoverySessionRepository,
     onRouteHome: () -> Unit,
     onBack: () -> Unit,
@@ -455,6 +460,7 @@ private fun TechniqueSession(
     if (logging) {
         UrgeLogSheet(
             onDismiss = { logging = false },
+            habitLabel = habitLabel,
             onSubmit = { intensity ->
                 // Closed first: a sheet still on screen during the write takes a second tap
                 // and fires the navigation below twice.
@@ -502,7 +508,7 @@ private fun HomeView(
     onOpenRiskWindows: () -> Unit,
     onOpenFrictionTimer: () -> Unit,
     onOpenCrisis: () -> Unit,
-    onOpenHistory: () -> Unit,
+    habitLabel: String?,
     logOnly: (Int?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -511,53 +517,62 @@ private fun HomeView(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = sidePadding, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(24.dp),
+            .verticalScroll(rememberScrollState()),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(stringResource(R.string.recovery_title), style = MaterialTheme.typography.headlineSmall)
-            Text(
-                stringResource(R.string.recovery_subtitle),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        // The live block is the only raised surface on the page.
-        if (liveSessions.isEmpty()) {
-            IdleLine()
-        } else {
-            liveSessions.forEach { live ->
-                ActiveSessionBlock(
-                    live = live,
-                    onOverride = { onOverride(live.state.ruleId) },
-                    onChangeWait = onOpenFrictionTimer,
-                    onLeaveAlone = onLeaveAlone,
+        // Zone A — where things stand: identity and the current block state, on plain ground.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = sidePadding)
+                .padding(top = 20.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(stringResource(R.string.recovery_title), style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    if (habitLabel != null) {
+                        stringResource(R.string.recovery_habit_context, habitLabel)
+                    } else {
+                        stringResource(R.string.recovery_subtitle)
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            // The live block is the only raised surface on the page.
+            if (liveSessions.isEmpty()) {
+                IdleLine()
+            } else {
+                liveSessions.forEach { live ->
+                    ActiveSessionBlock(
+                        live = live,
+                        onOverride = { onOverride(live.state.ruleId) },
+                        onChangeWait = onOpenFrictionTimer,
+                        onLeaveAlone = onLeaveAlone,
+                    )
+                }
             }
         }
 
-        RightNowBlock(onStart = onOpenAssist)
+        // Zone B — act now: a full-bleed tonal band groups the suggested action with every
+        // in-the-moment door, so this section reads as its own surface rather than loose rows.
+        RightNowBand(
+            onStart = onOpenAssist,
+            partnerName = partnerName,
+            onReachOut = onReachOut,
+            onOpenCrisis = onOpenCrisis,
+            onLogUrge = { logging = true },
+            sidePadding = sidePadding,
+        )
 
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (partnerName != null) {
-                SupportRow(
-                    icon = Icons.Outlined.WavingHand,
-                    title = stringResource(R.string.recovery_reach_out_named, partnerName),
-                    onClick = onReachOut,
-                )
-            }
-            SupportRow(
-                icon = Icons.Outlined.SupportAgent,
-                title = stringResource(R.string.recovery_crisis_link),
-                onClick = onOpenCrisis,
-                alert = true,
-            )
-            LogUrgeRow(onClick = { logging = true })
-        }
-
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Zone C — prepare: quiet practice and settings, back on plain ground.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = sidePadding)
+                .padding(top = 24.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             SectionEyebrow(stringResource(R.string.recovery_prepare_label))
             Hairline()
             // Techniques lead: practice is the door a person in an urge is most likely to want.
@@ -589,22 +604,12 @@ private fun HomeView(
                 onClick = onOpenFrictionTimer,
             )
         }
-
-        TextButton(
-            onClick = onOpenHistory,
-            modifier = Modifier.heightIn(min = 48.dp),
-            contentPadding = PaddingValues(horizontal = 0.dp),
-        ) {
-            Text(
-                stringResource(R.string.recovery_history_link),
-                style = MaterialTheme.typography.labelLarge,
-            )
-        }
     }
 
     if (logging) {
         UrgeLogSheet(
             onDismiss = { logging = false },
+            habitLabel = habitLabel,
             onSubmit = { intensity ->
                 logging = false
                 logOnly(intensity)
@@ -613,34 +618,76 @@ private fun HomeView(
     }
 }
 
-/** Signature move (plan §E3): the one block on the hub that reads as a destination. */
+/**
+ * Signature move (plan §E3, revised by owner call 2026-11-08): the "right now" zone is a
+ * full-bleed tonal band, edge to edge, with its content inset to the page frame. Tone is the
+ * grouping cue — this section is one surface, distinct from the status above and Prepare
+ * below — and inside it a hairline splits the suggested action from the other doors.
+ */
 @Composable
-private fun RightNowBlock(onStart: () -> Unit) {
-    Column(Modifier.fillMaxWidth()) {
-        Hairline()
-        Column(
+private fun RightNowBand(
+    onStart: () -> Unit,
+    partnerName: String?,
+    onReachOut: () -> Unit,
+    onOpenCrisis: () -> Unit,
+    onLogUrge: () -> Unit,
+    sidePadding: Dp,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(horizontal = sidePadding)
+            .padding(vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        SectionEyebrow(stringResource(R.string.recovery_now_eyebrow))
+        Text(
+            stringResource(R.string.recovery_now_title),
+            style = MaterialTheme.typography.headlineLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            stringResource(R.string.recovery_now_body),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Button(
+            onClick = onStart,
             modifier = Modifier
                 .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                .clickable(onClick = onStart)
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .heightIn(min = 56.dp),
+            contentPadding = PaddingValues(horizontal = 20.dp),
         ) {
-            SectionEyebrow(stringResource(R.string.recovery_now_eyebrow))
-            Text(
-                stringResource(R.string.recovery_now_title),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                stringResource(R.string.recovery_now_body),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Button(onClick = onStart, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text(stringResource(R.string.recovery_now_start))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.recovery_now_start),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Spacer(Modifier.weight(1f))
+                Icon(
+                    imageVector = Icons.AutoMirrored.Outlined.ArrowForward,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
             }
         }
+        Spacer(Modifier.height(4.dp))
+        Hairline()
+        if (partnerName != null) {
+            SupportRow(
+                icon = Icons.Outlined.WavingHand,
+                title = stringResource(R.string.recovery_reach_out_named, partnerName),
+                onClick = onReachOut,
+            )
+        }
+        SupportRow(
+            icon = Icons.Outlined.SupportAgent,
+            title = stringResource(R.string.recovery_crisis_link),
+            onClick = onOpenCrisis,
+            alert = true,
+        )
+        LogUrgeRow(onClick = onLogUrge)
     }
 }
 

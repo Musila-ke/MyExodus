@@ -38,6 +38,8 @@ import com.example.myexodus.R
 @Composable
 fun UrgeLogSheet(
     onDismiss: () -> Unit,
+    /** Names the streak this row lands in; null when no habit has been set up yet. */
+    habitLabel: String? = null,
     onSubmit: (intensity: Int?) -> Unit,
 ) {
     var intensity by remember { mutableStateOf<Int?>(null) }
@@ -58,6 +60,15 @@ fun UrgeLogSheet(
                 stringResource(R.string.recovery_log_title),
                 style = MaterialTheme.typography.headlineSmall,
             )
+            // The row is written against one habit; naming it here is the only place the user
+            // can see which streak a log lands in before saving.
+            if (habitLabel != null) {
+                Text(
+                    stringResource(R.string.recovery_log_streak, habitLabel),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(
                 stringResource(R.string.recovery_log_intensity),
                 style = MaterialTheme.typography.bodyMedium,

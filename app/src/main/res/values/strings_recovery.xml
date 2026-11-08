@@ -15,13 +15,13 @@
     <string name="recovery_now_body">A short action chosen for this moment. You can change it.</string>
     <string name="recovery_now_start">Start</string>
     <string name="recovery_idle_line">No block is holding right now</string>
+    <string name="recovery_habit_context">Staying free from %1$s</string>
     <string name="recovery_change_wait">Change wait</string>
     <string name="recovery_prepare_label">Prepare</string>
     <string name="recovery_prepare_plan_desc">Your own steps, if-then plans, and values</string>
     <string name="recovery_prepare_techniques_desc">Practice when you are calm</string>
     <string name="recovery_prepare_windows_desc">The times you are most likely to struggle</string>
     <string name="recovery_prepare_friction_desc">How long a block holds before it lifts</string>
-    <string name="recovery_history_link">See history in Streaks</string>
 
     <!-- Hub tiles: the Recovery page's subpages, reached by icon + label. -->
     <string name="recovery_tile_techniques">Techniques</string>
@@ -85,6 +85,7 @@
     <string name="recovery_log_action">Log an urge</string>
     <string name="recovery_log_caption">Note it without lifting the block.</string>
     <string name="recovery_log_title">Log this urge</string>
+    <string name="recovery_log_streak">Adds to your %1$s streak.</string>
     <string name="recovery_log_intensity">How strong is it right now?</string>
     <!-- The chip label stays a bare numeral; this names the control for screen readers, where
          "7" alone is unlabelled. -->

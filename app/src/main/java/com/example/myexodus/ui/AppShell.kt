@@ -534,7 +534,7 @@ fun AppShell(
                         onRouteHome = onRouteHome,
                         modifier = contentModifier,
                         habitId = habit?.habitId,
-                        onOpenHistory = { tab = Tabs.indexOfFirst { it.key == NavKeys.STREAKS } },
+                        habitLabel = habit?.targetLabel,
                         partnerName = partnerNames.values.firstOrNull(),
                         // The same confirmation the Home FAB and the widget use: one recipient,
                         // one editable message, nothing sends without that dialog.
@@ -774,8 +774,8 @@ fun AppShell(
     )
 
     // Home's urge quick action: the Recovery tab's sheet, saved through the same repository
-    // path (terminal-born `none` row, never mirrored) and confirmed by a snackbar. The note is
-    // habitless and rule-less, so the confirmation claims neither a streak nor a block.
+    // path (terminal-born `none` row, never mirrored) and confirmed by a snackbar. It is
+    // rule-less but habit-scoped, so the sheet names the streak it writes to.
     // Resolved in composition (stringResource), not through the context in the callback:
     // a context read is not configuration-aware and would keep a stale string across a
     // locale change (lint LocalContextGetResourceValueCall, ADR #208 gate).
@@ -783,6 +783,7 @@ fun AppShell(
     if (urgeSheetOpen) {
         UrgeLogSheet(
             onDismiss = { urgeSheetOpen = false },
+            habitLabel = habit?.targetLabel,
             onSubmit = { intensity ->
                 urgeSheetOpen = false
                 homeScope.launch(Dispatchers.IO) {

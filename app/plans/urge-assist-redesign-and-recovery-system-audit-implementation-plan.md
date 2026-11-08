@@ -275,7 +275,7 @@ Recovery tab
 └── Get help now (directory)
 ```
 
-History stays in Streaks. The hub carries a small "See history in Streaks" text link.
+History stays in Streaks. The hub carries no history link: owner call 2026-11-08 removed it as redundant (the Streaks tab is one tap away).
 
 ### E2. Screen specifications
 
@@ -288,14 +288,13 @@ History stays in Streaks. The hub carries a small "See history in Streaks" text 
   - Title: "Get one thing to do"
   - Body: "A short action chosen for this moment. You can change it."
   - Primary button: "Start"
-  - The whole block is tappable; the button is the affordance.
-  - Background: `surfaceContainerLow` with a 1dp `outlineVariant` top rule, no shadow. Teal fill only on the button.
+  - **Revised 2026-11-08 (owner direction, final):** the hub is three zones, and tone — not hairlines — is what separates them. Zone A (header, habit line, "No block is holding right now" / live session) sits on the plain page surface. Zone B is the "right now" section as a **full-bleed tonal band**: edge-to-edge `surfaceContainerHigh`, content inset to the page frame, containing the eyebrow, the statement in `headlineLarge` (Fraunces), body, one full-width 56dp primary button with a trailing arrow, a hairline, then the support rows and "Log an urge" — all one surface. Zone C (Prepare) returns to the plain surface. The block is never wrapped in its own click target; the single button is the one affordance. The band scrolls with content and has no radius or shadow (tone, not a card).
 - **Support rows:** two hairline rows with inline 20dp icons, no containers:
   - "Reach out to <partner>" -> opens the existing confirmation dialog with a prewritten message.
   - "Get help now" -> directory. Error tint on the label only, not a red card.
-- **Log an urge:** a single text row with the existing `ic_log_urge`, "Log an urge", "Note it without lifting the block." It stays visible but is not the hero.
+- **Log an urge:** a single text row with the existing `ic_log_urge`, "Log an urge", "Note it without lifting the block." It stays visible but is not the hero. Its sheet names the streak the row lands in ("Adds to your <habit> streak.") when a habit exists (owner direction 2026-11-08).
 - **Prepare:** section label `PREPARE`, then rows: My plan, Techniques, Risk windows, Friction timer. Each has a one-line description. No icon discs; a 20dp inline icon and a chevron.
-- **History link:** "See history in Streaks" at the bottom, `labelLarge`, primary color.
+- **History link:** removed (owner call 2026-11-08); the Streaks tab is the history and is one tap away.
 
 #### E2.2 Urge Assist: "Right now"
 
@@ -918,7 +917,7 @@ Steps:
 5. Host `RiskWindowsScreen` and `FrictionTimerScreen` from Prepare behind the gate.
 6. Remove the three Settings index rows and panes.
 7. Add the inline "Change wait" link in the live session block.
-8. Add the "See history in Streaks" link.
+8. ~~Add the "See history in Streaks" link.~~ Superseded 2026-11-08: the link was removed as redundant.
 9. Block screen: land on Urge Assist when it exists (Phase 4), otherwise the hub.
 
 **Dependencies:** Phase 1 (for the assist route placeholder).
