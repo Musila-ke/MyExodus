@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.WavingHand
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -46,6 +47,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -554,9 +557,9 @@ private fun HomeView(
             }
         }
 
-        // Zone B — act now: a full-bleed tonal band groups the suggested action with every
-        // in-the-moment door, so this section reads as its own surface rather than loose rows.
-        RightNowBand(
+        // Zone B — act now: one filled action card in the app's teal, unmistakable against the
+        // plain ground above and below, holding every in-the-moment door on one surface.
+        RightNowCard(
             onStart = onOpenAssist,
             partnerName = partnerName,
             onReachOut = onReachOut,
@@ -620,12 +623,12 @@ private fun HomeView(
 
 /**
  * Signature move (plan §E3, revised by owner call 2026-11-08): the "right now" zone is a
- * full-bleed tonal band, edge to edge, with its content inset to the page frame. Tone is the
- * grouping cue — this section is one surface, distinct from the status above and Prepare
- * below — and inside it a hairline splits the suggested action from the other doors.
+ * filled teal action card — the one saturated surface on the page, deliberately loud against
+ * the plain ground above and below. Everything in the moment lives inside it, so the section
+ * is unmistakable at a glance; the inner button inverts to on-primary for contrast.
  */
 @Composable
-private fun RightNowBand(
+private fun RightNowCard(
     onStart: () -> Unit,
     partnerName: String?,
     onReachOut: () -> Unit,
@@ -633,30 +636,40 @@ private fun RightNowBand(
     onLogUrge: () -> Unit,
     sidePadding: Dp,
 ) {
+    val ink = MaterialTheme.colorScheme.onPrimary
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .padding(horizontal = sidePadding)
-            .padding(vertical = 24.dp),
+            .clip(MaterialTheme.shapes.extraLarge)
+            .background(MaterialTheme.colorScheme.primary)
+            .padding(horizontal = 20.dp, vertical = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        SectionEyebrow(stringResource(R.string.recovery_now_eyebrow))
+        Text(
+            stringResource(R.string.recovery_now_eyebrow).uppercase(),
+            style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.6.sp),
+            color = ink.copy(alpha = 0.72f),
+        )
         Text(
             stringResource(R.string.recovery_now_title),
             style = MaterialTheme.typography.headlineLarge,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = ink,
         )
         Text(
             stringResource(R.string.recovery_now_body),
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = ink.copy(alpha = 0.85f),
         )
         Button(
             onClick = onStart,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 56.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.onPrimary,
+                contentColor = MaterialTheme.colorScheme.primary,
+            ),
             contentPadding = PaddingValues(horizontal = 20.dp),
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -673,21 +686,24 @@ private fun RightNowBand(
             }
         }
         Spacer(Modifier.height(4.dp))
-        Hairline()
+        HorizontalDivider(color = ink.copy(alpha = 0.2f))
+        // The error tint does not hold contrast on teal; this row's label ("Need urgent
+        // help?") carries the urgency instead.
         if (partnerName != null) {
             SupportRow(
                 icon = Icons.Outlined.WavingHand,
                 title = stringResource(R.string.recovery_reach_out_named, partnerName),
                 onClick = onReachOut,
+                ink = ink,
             )
         }
         SupportRow(
             icon = Icons.Outlined.SupportAgent,
             title = stringResource(R.string.recovery_crisis_link),
             onClick = onOpenCrisis,
-            alert = true,
+            ink = ink,
         )
-        LogUrgeRow(onClick = onLogUrge)
+        LogUrgeRow(onClick = onLogUrge, ink = ink)
     }
 }
 
@@ -708,7 +724,7 @@ private fun SupportRow(
     icon: ImageVector,
     title: String,
     onClick: () -> Unit,
-    alert: Boolean = false,
+    ink: Color,
 ) {
     Row(
         modifier = Modifier
@@ -721,28 +737,26 @@ private fun SupportRow(
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = ink.copy(alpha = 0.75f),
             modifier = Modifier.size(20.dp),
         )
         Text(
             title,
             style = MaterialTheme.typography.titleMedium,
-            color =
-                if (alert) MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.onSurface,
+            color = ink,
             modifier = Modifier.weight(1f),
         )
         Icon(
             imageVector = Icons.Outlined.ChevronRight,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = ink.copy(alpha = 0.6f),
             modifier = Modifier.size(20.dp),
         )
     }
 }
 
 @Composable
-private fun LogUrgeRow(onClick: () -> Unit) {
+private fun LogUrgeRow(onClick: () -> Unit, ink: Color) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -755,21 +769,21 @@ private fun LogUrgeRow(onClick: () -> Unit) {
         Icon(
             painter = painterResource(R.drawable.ic_log_urge),
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
+            tint = ink,
             modifier = Modifier.size(20.dp),
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(stringResource(R.string.recovery_log_action), style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.recovery_log_action), style = MaterialTheme.typography.titleMedium, color = ink)
             Text(
                 stringResource(R.string.recovery_log_caption),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = ink.copy(alpha = 0.8f),
             )
         }
         Icon(
             imageVector = Icons.Outlined.ChevronRight,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = ink.copy(alpha = 0.6f),
             modifier = Modifier.size(20.dp),
         )
     }
