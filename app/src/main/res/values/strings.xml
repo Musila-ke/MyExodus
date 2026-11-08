@@ -118,6 +118,8 @@
     <string name="vpn_revoked_channel_name">MyExodus VPN</string>
     <string name="vpn_revoked_title">MyExodus protection revoked</string>
     <string name="vpn_revoked_text">The VPN connection was taken back. Re-enable protection from the app.</string>
+    <string name="vpn_restored_title">MyExodus protection is back on</string>
+    <string name="vpn_restored_text">Blocking resumed after another VPN took the connection.</string>
 
     <!-- Home dashboard cards (reference-driven redesign, ADR #75). -->
     <!-- Header eyebrow is the real date (formatted, not a string) and the greeting is its

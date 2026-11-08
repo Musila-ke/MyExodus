@@ -79,7 +79,8 @@ import kotlinx.coroutines.launch
  *    protect()-ed sockets (transparent TCP relay with per-flow workers) so the device's
  *    general connectivity is preserved — the plan's hard requirement, §8.4.
  *  - Private DNS (DoT) detected via Settings.Global at start; reported, not intercepted.
- *  - onRevoke: state REVOKED + persistent notification, no auto-rebind (plan §8.4).
+ *  - onRevoke: state REVOKED + notification that is replaced in place once the tunnel is back,
+ *    no auto-rebind (plan §8.4).
  *
  * Engine scope (Slice 4, plan §8.4): STOPPED/STARTING/ACTIVE/DEGRADED/FAILED/REVOKED health
  * machine classified by [EngineHealth] — "VPN interface up" and "filtering functioning" are
@@ -131,6 +132,10 @@ class DnsSinkholeVpnService : VpnService() {
         /** SOS §8.13: GMS is disallowed from the TUN so FCM push delivery is never
          *  sinkholed (no runtime permission needed for a disallow entry). */
         const val GMS_PACKAGE = "com.google.android.gms"
+
+        /** Shared by the revoke spike and its recovery replacement so recovery updates in place. */
+        private const val VPN_SPIKE_NOTIFICATION_ID = 1
+        private const val VPN_SPIKE_CHANNEL = "vpn_spike"
 
         @Volatile var state: VpnEngineState = VpnEngineState.STOPPED; private set
         @Volatile var reason: String = ""; private set
@@ -261,6 +266,7 @@ class DnsSinkholeVpnService : VpnService() {
                 s6.closeQuietly()
                 return
             }
+            replaceRevokeNotificationIfShowing()
             thread(name = "vpn-tun") { pump(fd) }
             thread(name = "vpn-dns4") { dnsReceiveLoop(s4, isV6 = false) }
             thread(name = "vpn-dns6") { dnsReceiveLoop(s6, isV6 = true) }
@@ -903,22 +909,45 @@ class DnsSinkholeVpnService : VpnService() {
     }
 
     /** Plan §8.4: REVOKED surfaces as a persistent notification. Suppressed without POST_NOTIFICATIONS — in-app surfacing is the Slice 4 engine's job (§9). */
-    private fun postRevokeNotification() {
+    private fun postRevokeNotification() = postVpnSpikeNotification(
+        getString(R.string.vpn_revoked_title),
+        getString(R.string.vpn_revoked_text),
+    )
+
+    /**
+     * Replaces the revoke spike once the tunnel is genuinely back, so the shade stops claiming
+     * protection is off. Only when that notification is still showing: one the user dismissed is
+     * not re-raised.
+     */
+    private fun replaceRevokeNotificationIfShowing() {
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            if (nm.activeNotifications.none { it.id == VPN_SPIKE_NOTIFICATION_ID }) return
+            postVpnSpikeNotification(
+                getString(R.string.vpn_restored_title),
+                getString(R.string.vpn_restored_text),
+            )
+        } catch (e: Exception) {
+            Log.d(TAG, "revoke notification refresh skipped: ${e.javaClass.simpleName}")
+        }
+    }
+
+    private fun postVpnSpikeNotification(title: String, text: String) {
         try {
             val nm = getSystemService(NotificationManager::class.java)
             nm.createNotificationChannel(
                 NotificationChannel(
-                    "vpn_spike",
+                    VPN_SPIKE_CHANNEL,
                     getString(R.string.vpn_revoked_channel_name),
                     NotificationManager.IMPORTANCE_HIGH,
                 ),
             )
             nm.notify(
-                1,
-                NotificationCompat.Builder(this, "vpn_spike")
+                VPN_SPIKE_NOTIFICATION_ID,
+                NotificationCompat.Builder(this, VPN_SPIKE_CHANNEL)
                     .setSmallIcon(android.R.drawable.stat_sys_warning)
-                    .setContentTitle(getString(R.string.vpn_revoked_title))
-                    .setContentText(getString(R.string.vpn_revoked_text))
+                    .setContentTitle(title)
+                    .setContentText(text)
                     // #26: the copy says "re-open the app to turn it back on" — the tap must
                     // land on Rules, where the activation row and consent dialog live.
                     .setContentIntent(
@@ -940,7 +969,7 @@ class DnsSinkholeVpnService : VpnService() {
                     .build(),
             )
         } catch (e: Exception) {
-            Log.d(TAG, "revoke notification suppressed: ${e.javaClass.simpleName}")
+            Log.d(TAG, "vpn notification suppressed: ${e.javaClass.simpleName}")
         }
     }
 

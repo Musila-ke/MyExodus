@@ -102,6 +102,17 @@ Block wins; all mechanisms are OR-ed, none can cancel another.
     was already proven before the flap. Also noted for future testers: a helper route
     outside the interface's address subnet made `establish()` return null on API 34; an
     in-subnet route established.
+  - **Follow-up the same evening: the stale revoke signal is fixed and device-proven.**
+    `DnsSinkholeVpnService` now replaces the revoke notification in place once the tunnel
+    is genuinely back (`replaceRevokeNotificationIfShowing`: same id 1 / `vpn_spike`
+    channel, only when that notification is still showing, so a dismissed one is not
+    re-raised). Copy: "MyExodus protection is back on / Blocking resumed after another
+    VPN took the connection." Re-run with the helper: `MARKER: vpn-state REVOKED` at
+    19:43:51 and `dumpsys notification` read "MyExodus protection revoked"; opening
+    MyExodus reconnected the tunnel (`VPN CONNECTED`) and the same id=1 record read
+    "MyExodus protection is back on". The helper was then uninstalled, its project and
+    APK deleted, and the JVM suite re-run (2,541 tests / 0 failures / 0 errors /
+    0 skipped, 274 classes).
   - Known product risk remains: Android runs one VPN at a time, so MyExodus silently
     re-takes the slot (and displaces the other VPN) the next time the app is opened.
     Blocking pauses for as long as another VPN holds the slot and MyExodus is not
