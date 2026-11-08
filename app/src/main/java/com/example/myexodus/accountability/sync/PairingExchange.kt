@@ -2,6 +2,7 @@ package com.example.myexodus.accountability.sync
 
 import android.content.Context
 import com.example.myexodus.accountability.enrollment.EnrollmentPayload
+import com.example.myexodus.accountability.enrollment.EnrollmentTranscript
 import com.example.myexodus.accountability.enrollment.PairingToken
 import com.example.myexodus.accountability.enrollment.decodeEnrollmentPayload
 import com.example.myexodus.accountability.enrollment.encodeEnrollmentPayload
@@ -256,6 +257,24 @@ open class PairingExchange(
             if (System.currentTimeMillis() >= deadline) return PairingStatus.Pending
             delay(POLL_INTERVAL_MILLIS)
         }
+    }
+
+    /**
+     * True when the server already holds an ACTIVE pairing between these two uids. The id is
+     * derived exactly as registerPairing derives it, so this is the same record that would
+     * reject the ceremony at submit time with PAIRING_ACTIVE — the read makes the refusal
+     * arrive before the two people compare a safety code. Any read failure returns false:
+     * the submit-time check stays the authority.
+     */
+    open suspend fun existingActivePair(uidA: String, uidB: String): Boolean {
+        val pairId = EnrollmentTranscript.durablePairIdOf(uidA, uidB)
+        return runCatching {
+            val doc = firestore.collection(FirestoreSchema.PAIRINGS_COLLECTION)
+                .document(pairId)
+                .get()
+                .await()
+            doc.exists() && doc.getString("status") == "active"
+        }.getOrDefault(false)
     }
 
     /** Deletes the token document (initiator abort cleanup / post-registration hygiene). */

@@ -1375,7 +1375,8 @@
     <string name="partner_ceremony_waiting">Waiting for your partner to enter the code…</string>
     <string name="partner_ceremony_cancel">Cancel invitation</string>
     <string name="partner_ceremony_sas_overline">Safety code</string>
-    <string name="partner_ceremony_sas_body_joiner">Your phone shows the safety code first. Read the digits aloud to your partner, then tap Confirm. Their phone will show the same code so they can check it.</string>
+    <string name="partner_ceremony_sas_body_joiner">Your phone shows the safety code first. Read the digits aloud to your partner. Their phone will show the same code so they can check it.</string>
+    <string name="partner_ceremony_use_pin">Use PIN/pattern instead</string>
     <string name="partner_ceremony_sas_body_initiator">Your partner read these digits aloud from their phone. If they match what you heard, tap “They match”. If anything is different, stop. Don’t continue.</string>
     <string name="partner_ceremony_sas_match">They match</string>
     <string name="partner_ceremony_sas_no_match">They don’t match</string>

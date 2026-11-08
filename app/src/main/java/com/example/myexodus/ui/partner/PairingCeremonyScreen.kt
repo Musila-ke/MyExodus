@@ -106,6 +106,12 @@ data class PairingCeremonyDeps(
     /** Persists the raw field text; the wiring site owns sanitizing and blank handling. */
     val saveName: suspend (String) -> Unit,
     val sign: suspend (title: String) -> Signature?,
+    /** The screen-lock route, raised directly. The platform sheet's own credential button
+     *  label is painted by SystemUI and can be invisible in light mode, so the ceremony
+     *  carries an app-drawn alternative (owner report 2026-11-08). */
+    val signWithCredential: suspend (title: String) -> Signature?,
+    /** Whether a secure screen lock exists to raise from [signWithCredential]. */
+    val credentialAvailable: () -> Boolean,
     /** §14 bullet 1: one outcome event per terminal, on the Crashlytics rail. */
     val telemetry: PairingCeremonyTelemetry,
     /** §19.5: the pair just went live — persist it as the active selection so the hub comes
@@ -155,6 +161,8 @@ fun PairingCeremonyScreen(
     var copied by remember { mutableStateOf(false) }
     // Resolved in composition (configuration-aware) and captured by the local funs below.
     val signTitle = stringResource(R.string.partner_ceremony_sign_title)
+    // The lock state does not change inside one ceremony; one read is enough.
+    val credentialAvailable = remember { deps.credentialAvailable() }
 
     LaunchedEffect(Unit) {
         val stored = runCatching { deps.loadName() }.getOrNull()
@@ -174,8 +182,8 @@ fun PairingCeremonyScreen(
         step = CeremonyStep.Failed(title, body)
     }
 
-    /** Signed-pairing finish, shared by both roles: one biometric prompt, then the flow call. */
-    fun signAndFinish() {
+    /** Signed-pairing finish, shared by both roles: one auth prompt, then the flow call. */
+    fun signAndFinish(useCredential: Boolean = false) {
         if (working) return
         val current = pending ?: return
         // Finding #55 (the finding #17 class, RuleEditor): the flag is written on Main before
@@ -190,7 +198,9 @@ fun PairingCeremonyScreen(
                 fail(R.string.partner_ceremony_offline_title, R.string.partner_ceremony_offline_body)
                 return@launch
             }
-            val signature = runCatching { deps.sign(signTitle) }.getOrNull()
+            val signature = runCatching {
+                if (useCredential) deps.signWithCredential(signTitle) else deps.sign(signTitle)
+            }.getOrNull()
             if (signature == null) {
                 // Cancelled prompt: nothing happened, the SAS check still stands — stay put.
                 working = false
@@ -446,7 +456,9 @@ fun PairingCeremonyScreen(
                 sas = current.sas,
                 mode = mode,
                 working = working,
-                onMatch = ::signAndFinish,
+                showCredential = credentialAvailable,
+                onMatch = { signAndFinish() },
+                onUseCredential = { signAndFinish(useCredential = true) },
                 onMismatch = ::rejectMismatch,
             )
 
@@ -494,6 +506,15 @@ fun PairingCeremonyScreen(
                 step = CeremonyStep.Compare(await.sas)
             }
         }
+    }
+
+    // Owner ruling 2026-11-08 (replaces ADR #99's joiner Confirm tap): the joiner's proof is
+    // released as soon as their SAS appears, so the inviter's waiting screen transitions
+    // automatically. The biometric prompt is still the joiner's active authorization; a
+    // cancelled prompt leaves the button on screen as the retry.
+    val comparing = step
+    if (mode == CeremonyMode.JOIN && comparing is CeremonyStep.Compare && pending is Pending.Partner) {
+        LaunchedEffect(comparing, pending) { signAndFinish() }
     }
 }
 
@@ -650,7 +671,6 @@ private fun CodeBoxes(code: String, onCode: (String) -> Unit, isError: Boolean) 
                 .clearAndSetSemantics {},
         ) {
             for (i in 0 until PairingCode.CODE_CHARS) {
-                if (i == PairingCode.CODE_CHARS - 1) Spacer(Modifier.width(8.dp))
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
@@ -788,16 +808,25 @@ private fun ShowingCode(
  * hero (reference: overline + display number). The copy follows the real ceremony order, which
  * is asymmetric: the joiner's phone shows the digits first — prepareJoin derives them from the
  * verified initiator material with no write, so the initiator's digits only appear once the
- * joiner's Confirm has released the biometric signature (the token write the initiator polls
- * for). The joiner reads their digits aloud (Confirm / Stop); the initiator's tap is the actual
- * out-of-band comparison against what they heard ("They match" / "They don't match").
+ * joiner's signed material is written (the token write the initiator polls for). Since the
+ * owner ruling of 2026-11-08 the joiner's submit runs automatically on entering this step: the
+ * biometric prompt is their authorization and the inviter's screen follows with no extra tap.
+ * The joiner reads their digits aloud; the initiator's tap is the actual out-of-band
+ * comparison against what they heard ("They match" / "They don't match").
+ *
+ * The screen-lock button is drawn here, not on the platform sheet (owner report 2026-11-08):
+ * on API 28+ androidx.biometric hands the prompt to the system dialog, whose negative-button
+ * text is SystemUI's to paint and renders invisible in light mode on some OEM skins. An
+ * app-drawn route is the only one whose color is under the app's control.
  */
 @Composable
 private fun CompareSas(
     sas: String,
     mode: CeremonyMode,
     working: Boolean,
+    showCredential: Boolean,
     onMatch: () -> Unit,
+    onUseCredential: () -> Unit,
     onMismatch: () -> Unit,
 ) {
     val joiner = mode == CeremonyMode.JOIN
@@ -842,6 +871,15 @@ private fun CompareSas(
                     else R.string.partner_ceremony_sas_match,
                 ),
             )
+        }
+        if (showCredential) {
+            OutlinedButton(
+                onClick = onUseCredential,
+                enabled = !working,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.partner_ceremony_use_pin))
+            }
         }
         // The ceremony is asymmetric: after this tap one phone is waiting on a human action on
         // the other. A bare spinner reads as a hang (owner report 2026-10-23).

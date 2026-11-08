@@ -157,6 +157,9 @@ internal class FakeExchange(
         return foundOf(doc)
     }
 
+    override suspend fun existingActivePair(uidA: String, uidB: String): Boolean =
+        cloud.pairings[EnrollmentTranscript.durablePairIdOf(uidA, uidB)]?.status == "active"
+
     override suspend fun readTokenByValue(tokenBytes: ByteArray): TokenReadResult {
         val doc = cloud.tokenDocs[FirestoreSchema.pairingTokenDocumentId(tokenBytes)]
             ?: return TokenReadResult.NotFound

@@ -374,7 +374,7 @@ class PairingFlow(
                     // response write would be denied anyway — fail before signing.
                     return JoinPreparationResult.Failed(Outcome.TokenAlreadyUsed(token.sessionId))
                 }
-                verifyInitiatorMaterial(token, read.creatorUid, read.initiatorPayload)
+                verifyInitiatorMaterial(myUid, token, read.creatorUid, read.initiatorPayload)
             }
             PairingExchange.TokenReadResult.NotFound ->
                 JoinPreparationResult.Failed(Outcome.TokenAlreadyUsed(token.sessionId))
@@ -406,7 +406,7 @@ class PairingFlow(
                 if (token.isExpired(nowEpochMillis())) {
                     return JoinPreparationResult.Failed(Outcome.TokenExpired(token.sessionId))
                 }
-                verifyInitiatorMaterial(token, read.creatorUid, read.initiatorPayload)
+                verifyInitiatorMaterial(myUid, token, read.creatorUid, read.initiatorPayload)
             }
             PairingExchange.TokenReadResult.NotFound ->
                 JoinPreparationResult.Failed(Outcome.TokenAlreadyUsed(null))
@@ -418,10 +418,19 @@ class PairingFlow(
     }
 
     private suspend fun verifyInitiatorMaterial(
+        myUid: String,
         token: PairingToken,
         initiatorUid: String,
         initiatorPayload: EnrollmentPayload,
     ): JoinPreparationResult {
+        // Owner report 2026-11-09: nothing stopped a second ceremony between two people who
+        // are already actively paired — the refusal only arrived at registerPairing, after
+        // the safety code. The pair record is deterministic from the two uids, and the joiner
+        // is a member of it, so the state is readable here. The token is deliberately NOT
+        // deleted: the inviter may have meant it for someone else.
+        if (exchange.existingActivePair(myUid, initiatorUid)) {
+            return JoinPreparationResult.Failed(Outcome.Rejected("PAIRING_ACTIVE"))
+        }
         // The initiator's enrollment payload returns from the token document — the QR
         // cannot carry it (attestation chains overflow QR capacity, 2953 B ceiling).
         val initiatorSigningPublicKey = when (val identity = enrollmentFlow.verifyHardwareIdentity(initiatorPayload)) {

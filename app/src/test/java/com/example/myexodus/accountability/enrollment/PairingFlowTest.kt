@@ -371,6 +371,56 @@ class PairingFlowTest {
         assertTrue("conflicting token response untouched", cloud.pairings.isEmpty())
     }
 
+    /**
+     * Owner report 2026-11-09: a second ceremony between two people who are already paired
+     * must die at preparation, not after the safety code. The joiner's prepare reads the
+     * pair record (deterministic id, joiner is a member) and refuses before any SAS exists;
+     * the initiator's token is left alone because it may be meant for someone else.
+     */
+    @Test
+    fun typedCode_existingActivePair_isRejectedBeforeTheSas() = runTest {
+        var nowEpochMillis = 1_700_000_000_000L
+        val cloud = FakeCloud()
+        val initiator = DeviceKeys()
+        val partner = DeviceKeys()
+        cloud.pairings[EnrollmentTranscript.durablePairIdOf("uid-a", "uid-b")] =
+            FakeCloud.PairingState().apply { status = "active" }
+        val initiation = flow(initiator, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets()) { nowEpochMillis }
+            .initiate("uid-a")
+
+        val prepared = flow(partner, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets()) { nowEpochMillis }
+            .prepareJoinWithCode(PairingCode.encode(initiation.token), "uid-b")
+
+        assertEquals(
+            PairingFlow.JoinPreparationResult.Failed(PairingFlow.Outcome.Rejected("PAIRING_ACTIVE")),
+            prepared,
+        )
+        assertTrue("token left joinable for its intended partner", cloud.tokenDocs.isNotEmpty())
+        assertNull(
+            "no response written onto the token",
+            cloud.tokenDocs.getValue(FirestoreSchema.pairingTokenDocumentId(initiation.token)).partnerResponse,
+        )
+    }
+
+    /** A terminated record is a re-pair target (registerPairing increments the epoch) — it
+     *  must not be read as an existing active partnership. */
+    @Test
+    fun typedCode_terminatedPair_doesNotBlockRepairing() = runTest {
+        var nowEpochMillis = 1_700_000_000_000L
+        val cloud = FakeCloud()
+        val initiator = DeviceKeys()
+        val partner = DeviceKeys()
+        cloud.pairings[EnrollmentTranscript.durablePairIdOf("uid-a", "uid-b")] =
+            FakeCloud.PairingState().apply { status = "terminated" }
+        val initiation = flow(initiator, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets()) { nowEpochMillis }
+            .initiate("uid-a")
+
+        val prepared = flow(partner, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets()) { nowEpochMillis }
+            .prepareJoinWithCode(PairingCode.encode(initiation.token), "uid-b")
+
+        assertTrue("re-pair preparation proceeds", prepared is PairingFlow.JoinPreparationResult.Ready)
+    }
+
     @Test
     fun expiredToken_neverTouchesTheRelay() = runTest {
         var nowEpochMillis = 1_700_000_000_000L

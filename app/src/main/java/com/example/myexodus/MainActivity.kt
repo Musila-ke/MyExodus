@@ -685,6 +685,10 @@ class MainActivity : FragmentActivity() {
                             )
                         },
                         sign = { title -> signWithAuthPrompt(title) },
+                        signWithCredential = { title -> signWithDeviceCredential(title) },
+                        credentialAvailable = {
+                            getSystemService(KeyguardManager::class.java)?.isDeviceSecure() == true
+                        },
                         // §14 bullet 1 (task #37): one outcome event per ceremony terminal,
                         // on the same Crashlytics rail as every other §14 client metric.
                         telemetry = PairingCeremonyTelemetry { event -> crashReporting.nonFatal(event) },
@@ -976,6 +980,12 @@ class MainActivity : FragmentActivity() {
      * own "Use Numeric Password" link is SystemUI-painted and can be invisible in light
      * mode, so the sheet now carries an app-labeled negative button for the screen-lock
      * route. An extra app dialog in front of the sheet was tried and rejected the same day.
+     *
+     * Owner report 2026-11-08: that app label is still SystemUI-painted — androidx.biometric
+     * on API 28+ hands the whole prompt to android.hardware.biometrics.BiometricPrompt, so
+     * the button stays invisible in light mode on the same skins. The negative button is
+     * kept (it works where SystemUI paints correctly), but no screen may rely on it for
+     * discovery: the ceremony draws its own screen-lock button (PairingCeremonyScreen).
      */
     private suspend fun signWithAuthPrompt(title: String): Signature? {
         val status = BiometricManager.from(this)
