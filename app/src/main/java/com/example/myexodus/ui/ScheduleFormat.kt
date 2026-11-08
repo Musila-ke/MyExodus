@@ -24,11 +24,17 @@ private const val FAR_FUTURE_EPOCH_MILLIS = 253_402_300_799_999L
 data class RuleRowState(val label: String?, val active: Boolean)
 
 /**
- * Definite live state only: a usage-based rule with no live usage feed gets no label rather
- * than a claim the engine hasn't made (Rule 2 depends on today's usage, which has no Flow).
+ * Definite live state only: a usage-based rule whose usage is not known yet gets no label
+ * rather than a claim the engine hasn't made (Rule 2 needs today's usage). Callers with a
+ * live ledger pass [usageTodayMs]; those without get the same no-claim behavior as before.
  * Paused and expired are decided before the engine — those rules aren't enforced at all.
  */
-fun ruleRowState(rule: RestrictionRule, nowEpochMillis: Long, res: Resources): RuleRowState {
+fun ruleRowState(
+    rule: RestrictionRule,
+    nowEpochMillis: Long,
+    res: Resources,
+    usageTodayMs: Long? = null,
+): RuleRowState {
     // Expired wins over paused: a rule the #18 sweep flipped off is off *because its duration
     // lapsed*, and "Paused" would blame the user for a switch they never touched.
     if (rule.isExpiredAt(nowEpochMillis)) return RuleRowState(res.getString(R.string.state_expired), active = false)
@@ -42,6 +48,7 @@ fun ruleRowState(rule: RestrictionRule, nowEpochMillis: Long, res: Resources): R
         timezone = rule.timezone,
         blockExpiresAt = rule.blockExpiresAt,
         nowEpochMillis = nowEpochMillis,
+        usageTodayMs = usageTodayMs,
     )
     return when {
         blocking -> RuleRowState(res.getString(R.string.state_blocked_now), active = true)

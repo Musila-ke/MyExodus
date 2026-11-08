@@ -458,6 +458,7 @@
     <string name="editor_mode_missing">Choose at least one way to block.</string>
     <string name="editor_always_on">Block all day</string>
     <string name="editor_always_on_hint">Every time it opens. Overrides the other options.</string>
+    <string name="editor_always_on_note">Block all day covers every hour. The schedule and daily limit stay off while it is on, and save no values of their own.</string>
     <string name="editor_window_title">On a schedule</string>
     <string name="editor_window_hint">Blocked between the times you set.</string>
     <string name="editor_daily_limit_title">Limit daily use</string>
@@ -491,6 +492,7 @@
     <string name="editor_same_time_error">Start and end time can’t be the same. Pick a different end time.</string>
     <string name="editor_ends">Ends</string>
     <string name="editor_ends_note">The rule switches off by itself once this date has passed.</string>
+    <string name="editor_ends_too_soon">This block ends before it can take effect, so it would never block anything. Move the end date later, or change the days or schedule.</string>
     <string name="editor_partner_title">Accountability partner</string>
     <string name="editor_partner_hint">They see changes to this rule and any attempts it blocks.</string>
     <string name="editor_partner_none">No partner</string>

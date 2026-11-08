@@ -67,8 +67,21 @@ data class RulesSnapshot(
                     else -> Log.w(TAG, "Snapshot build: unknown target_type ${rule.targetType} for ${rule.ruleId}")
                 }
             }
-            return RulesSnapshot(apps, urls, version)
+            return RulesSnapshot(apps, urls.bySpecificity(), version)
         }
+
+        /**
+         * Most specific pattern first: longest host (the documented suffix-walk rule, domain
+         * usage §4.5), then longest path prefix within that host. The engine resolves a URL to
+         * ONE rule with `firstOrNull`, so the stored order used to decide which overlapping
+         * rule answered: insertion order, not intent. Sorting is stable, so exact ties keep
+         * the DB order.
+         */
+        private fun List<UrlPattern>.bySpecificity(): List<UrlPattern> =
+            sortedWith(
+                compareByDescending<UrlPattern> { it.hostUnicode.length }
+                    .thenByDescending { it.pathPrefix?.length ?: 0 },
+            )
 
         private const val TAG = "MyExodusRules"
 
@@ -145,7 +158,9 @@ data class RulesSnapshot(
                     severityLevel = o.getString("severity"),
                 )
             }
-            return RulesSnapshot(apps, urls, json.getLong("version"))
+            // A cache written before the ordering fix holds DB order; normalize on read so
+            // the fast path never answers with the old first-match-wins behavior.
+            return RulesSnapshot(apps, urls.bySpecificity(), json.getLong("version"))
         }
     }
 

@@ -69,6 +69,7 @@ import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.isExpiredAt
+import com.example.myexodus.data.db.entity.isStaleFor
 import com.example.myexodus.domainusage.DomainUsageEngine
 import com.example.myexodus.domainusage.EngineMode
 import com.example.myexodus.domainusage.EngineStatus
@@ -90,6 +91,7 @@ import com.example.myexodus.ui.visibleRules
 import com.example.myexodus.vpn.DnsSinkholeVpnService
 import com.example.myexodus.vpn.VpnEngineState
 import com.example.myexodus.vpn.VpnLifecycle
+import java.time.LocalDate
 import java.time.ZoneId
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
@@ -195,6 +197,19 @@ fun RulesScreen(
             delay(5_000)
             nowMillis = System.currentTimeMillis()
         }
+    }
+
+    // Owner report 2026-11-08: a spent daily limit must read "Blocked now", and a limited app
+    // row must show today's usage. The accounting ledger is what the engine blocks on. Rows
+    // anchored to another day or zone are skipped, never shown as this morning's zero.
+    val usageRows by remember(profileId) {
+        profileId?.let { store.dailyUsageTrackerDao().observeForProfile(it) } ?: flowOf(emptyList())
+    }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val usageByPackage = remember(usageRows, nowMillis) {
+        val today = LocalDate.now().toString()
+        val zone = ZoneId.systemDefault().id
+        usageRows.filterNot { it.isStaleFor(today, zone) }
+            .associate { it.packageName to it.msUsedToday }
     }
 
     // #18 (owner ruling 2026-10-04): a rule whose duration lapsed flips its own toggle off in
@@ -438,6 +453,7 @@ fun RulesScreen(
                     nowMillis = nowMillis,
                     partners = partners,
                     domainUsageEngine = domainUsageEngine,
+                    usageByPackage = usageByPackage,
                     engineBannerMessage = engineBannerMessage.takeIf { hasLimitedSite },
                     engineOffMessage = engineOffMessage,
                     onEnableEngine = enableWebsiteEngine,
@@ -739,6 +755,8 @@ private fun RulesList(
     nowMillis: Long,
     partners: List<ReachOutTarget>,
     domainUsageEngine: DomainUsageEngine,
+    /** Today's accounted usage per package, stale anchors already dropped. */
+    usageByPackage: Map<String, Long>,
     engineBannerMessage: String?,
     /** #26: non-null when live website rules exist but the tunnel can't serve them (consent
      *  missing, or the last establish failed) — the row that walks back to the system
@@ -868,6 +886,7 @@ private fun RulesList(
                     enabled = enabled,
                     awaitingWrite = pendingBatchPause.containsKey(batch.batchId),
                     nowMillis = nowMillis,
+                    usageByPackage = usageByPackage,
                     onToggle = { onToggleBatch(batch.batchId, it) },
                     onRemovePartner = { onRemoveBatchPartner(batch.batchId) },
                     onDelete = { onDeleteBatch(batch) },
@@ -892,6 +911,7 @@ private fun RulesList(
                     nowMillis = nowMillis,
                     partners = partners,
                     domainUsageEngine = domainUsageEngine,
+                    usageByPackage = usageByPackage,
                     onEdit = onEdit,
                     onTogglePause = onTogglePause,
                 )
@@ -937,6 +957,7 @@ private fun RulesList(
                     nowMillis = nowMillis,
                     partners = partners,
                     domainUsageEngine = domainUsageEngine,
+                    usageByPackage = usageByPackage,
                     onEdit = onEdit,
                     onTogglePause = onTogglePause,
                 )
@@ -953,6 +974,7 @@ private fun RulesList(
             nowMillis = nowMillis,
             partners = partners,
             domainUsageEngine = domainUsageEngine,
+            usageByPackage = usageByPackage,
             onEdit = onEdit,
             onTogglePause = onTogglePause,
             footer = {
@@ -1007,6 +1029,7 @@ private fun BatchCard(
     enabled: Boolean,
     awaitingWrite: Boolean,
     nowMillis: Long,
+    usageByPackage: Map<String, Long>,
     onToggle: (Boolean) -> Unit,
     onRemovePartner: () -> Unit,
     onDelete: () -> Unit,
@@ -1082,7 +1105,11 @@ private fun BatchCard(
                             color = MaterialTheme.colorScheme.outlineVariant,
                         )
                     }
-                    BatchMemberRow(rule = member, nowMillis = nowMillis)
+                    BatchMemberRow(
+                        rule = member,
+                        nowMillis = nowMillis,
+                        usageTodayMs = usageByPackage[member.blockedPackage],
+                    )
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1103,10 +1130,12 @@ private fun BatchCard(
 }
 
 @Composable
-private fun BatchMemberRow(rule: RestrictionRule, nowMillis: Long) {
+private fun BatchMemberRow(rule: RestrictionRule, nowMillis: Long, usageTodayMs: Long?) {
     val label = rememberAppLabel(rule.blockedPackage)
     val res = LocalResources.current
-    val state = remember(rule, nowMillis, res) { ruleRowState(rule, nowMillis, res) }
+    val state = remember(rule, nowMillis, res, usageTodayMs) {
+        ruleRowState(rule, nowMillis, res, usageTodayMs)
+    }
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1148,6 +1177,7 @@ private fun RuleRowsCard(
     nowMillis: Long,
     partners: List<ReachOutTarget>,
     domainUsageEngine: DomainUsageEngine,
+    usageByPackage: Map<String, Long>,
     onEdit: (RestrictionRule) -> Unit,
     onTogglePause: (RestrictionRule, Boolean) -> Unit,
 ) {
@@ -1172,6 +1202,7 @@ private fun RuleRowsCard(
                     nowMillis = nowMillis,
                     partners = partners,
                     domainUsageEngine = domainUsageEngine,
+                    usageTodayMs = usageByPackage[rule.blockedPackage],
                     onEdit = { onEdit(rule) },
                     onTogglePause = { enable -> onTogglePause(rule, enable) },
                 )
@@ -1438,6 +1469,7 @@ private fun LazyListScope.ruleSection(
     nowMillis: Long,
     partners: List<ReachOutTarget>,
     domainUsageEngine: DomainUsageEngine,
+    usageByPackage: Map<String, Long>,
     onEdit: (RestrictionRule) -> Unit,
     onTogglePause: (RestrictionRule, Boolean) -> Unit,
     caption: String? = null,
@@ -1467,6 +1499,7 @@ private fun LazyListScope.ruleSection(
             nowMillis = nowMillis,
             partners = partners,
             domainUsageEngine = domainUsageEngine,
+            usageByPackage = usageByPackage,
             onEdit = onEdit,
             onTogglePause = onTogglePause,
         )
@@ -1485,12 +1518,23 @@ private fun RuleRow(
     nowMillis: Long,
     partners: List<ReachOutTarget>,
     domainUsageEngine: DomainUsageEngine,
+    /** Today's accounted usage for an app rule; website rules read their own ledger below. */
+    usageTodayMs: Long?,
     onEdit: () -> Unit,
     onTogglePause: (Boolean) -> Unit,
 ) {
     val label = rememberAppLabel(rule.blockedPackage)
     val res = LocalResources.current
-    val state = remember(rule, enabled, nowMillis, res) { ruleRowState(rule, nowMillis, res) }
+    // One usage source per row: the website meter attributes per rule, the app ledger per
+    // package — the same figure the engine consults before it blocks.
+    val usedTodayMs = if (rule.targetType == "WEBSITE") {
+        domainUsageEngine.usageTodayMs(rule.ruleId)
+    } else {
+        usageTodayMs
+    }
+    val state = remember(rule, enabled, nowMillis, res, usedTodayMs) {
+        ruleRowState(rule, nowMillis, res, usedTodayMs)
+    }
     // §2.1 req 1/23: an assignment whose pair is gone reads UNSUPERVISED — the rule stays
     // enforced and visible; the row says who used to watch it is no longer paired.
     val supervisor = partners.firstOrNull { it.pairId == rule.assignedPairId }
@@ -1547,10 +1591,11 @@ private fun RuleRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            // S9.3: the row's own progress against its limit. Null until the engine's startup
-            // load attaches the ledger — hiding the line beats claiming a false zero.
-            if (rule.targetType == "WEBSITE" && rule.dailyLimitMs > 0L && enabled) {
-                domainUsageEngine.usageTodayMs(rule.ruleId)?.let { usedMs ->
+            // S9.3 / owner report 2026-11-08: the row's own progress against its limit, for
+            // apps and websites alike. Null until the ledger attaches — hiding the line beats
+            // claiming a false zero.
+            if (rule.dailyLimitMs > 0L && !rule.isAlwaysOn && enabled) {
+                usedTodayMs?.let { usedMs ->
                     Text(
                         stringResource(
                             R.string.rules_used_today,

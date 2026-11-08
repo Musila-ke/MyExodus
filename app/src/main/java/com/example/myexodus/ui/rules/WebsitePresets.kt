@@ -29,13 +29,20 @@ internal object WebsitePresets {
                 "reddit.com", "pinterest.com", "linkedin.com", "tumblr.com", "threads.net",
             ),
         ),
+        // Ranked by Similarweb's adult top-50 (September 2026), mirrors and ad networks
+        // excluded; creator platforms (onlyfans/fansly/manyvids) and studio brands included
+        // because they are where a user's habit actually goes.
         WebsiteCategory(
             id = "adult",
             titleRes = R.string.rules_preset_adult,
             sites = listOf(
                 "pornhub.com", "xvideos.com", "xnxx.com", "xhamster.com", "redtube.com",
                 "youporn.com", "onlyfans.com", "chaturbate.com", "stripchat.com",
-                "bongacams.com",
+                "bongacams.com", "eporner.com", "erome.com", "faphouse.com", "dmm.co.jp",
+                "livejasmin.com", "noodlemagazine.com", "cityheaven.net", "ixxx.com",
+                "tnaflix.com", "missav.ws", "spankbang.com", "rule34.xxx", "xgroovy.com",
+                "beeg.com", "dlsite.com", "redgifs.com", "fansly.com", "manyvids.com",
+                "brazzers.com", "bangbros.com", "realitykings.com", "naughtyamerica.com",
             ),
         ),
         WebsiteCategory(

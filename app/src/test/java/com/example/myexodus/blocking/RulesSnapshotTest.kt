@@ -78,6 +78,32 @@ class RulesSnapshotTest {
     }
 
     @Test
+    fun build_ordersUrlRulesBySpecificity_longestHostThenLongestPath() {
+        val broad = urlRule.copy(ruleId = "broad", blockedPackage = "example.com")
+        val narrowHost = urlRule.copy(ruleId = "narrow-host", blockedPackage = "news.example.com")
+        val narrowPath = urlRule.copy(ruleId = "narrow-path", blockedPackage = "example.com/news")
+        // Deliberately inserted broad-first: the old first-match-wins order picked it.
+        val snapshot = RulesSnapshot.build(listOf(broad, narrowHost, narrowPath), 1L, now)
+
+        assertEquals(listOf("narrow-host", "narrow-path", "broad"), snapshot.urlRules.map { it.ruleId })
+
+        val engine = BlockDecisionEngine { snapshot }
+        val canonical = UrlPattern.canonicalizeCandidate("https://news.example.com/news/today")!!
+        assertEquals("narrow-host", engine.matchingUrlRule(canonical)?.ruleId)
+    }
+
+    @Test
+    fun build_sameHost_longerPathWins() {
+        val site = urlRule.copy(ruleId = "site", blockedPackage = "example.com")
+        val section = urlRule.copy(ruleId = "section", blockedPackage = "example.com/news")
+        val snapshot = RulesSnapshot.build(listOf(site, section), 1L, now)
+
+        val engine = BlockDecisionEngine { snapshot }
+        val canonical = UrlPattern.canonicalizeCandidate("https://example.com/news/today")!!
+        assertEquals("section", engine.matchingUrlRule(canonical)?.ruleId)
+    }
+
+    @Test
     fun build_excludesPausedRules_fromBothEnforcementLists() {
         val pausedApp = rule.copy(ruleId = "r-paused", isEnabled = false)
         val pausedUrl = urlRule.copy(ruleId = "r-url-paused", isEnabled = false)

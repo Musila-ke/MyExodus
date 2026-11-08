@@ -154,6 +154,17 @@ class ScheduleSummaryTest {
     }
 
     @Test
+    fun rowState_quotaRuleWithTheUsageFeed_claimsBlockedOnlyOnceTheQuotaIsSpent() {
+        val saturday = utc(2026, 9, 19, 12, 0)
+        val spent = ruleRowState(rule(limitMs = 2 * HOUR), saturday, res, usageTodayMs = 2 * HOUR)
+        assertEquals(RuleRowState(res.getString(R.string.state_blocked_now), true), spent)
+
+        val remaining = ruleRowState(rule(limitMs = 2 * HOUR), saturday, res, usageTodayMs = HOUR)
+        assertNull("under the limit the row makes no claim", remaining.label)
+        assertFalse(remaining.active)
+    }
+
+    @Test
     fun rowState_lapsedDurationOutranksPause_becauseTheUserNeverPausedIt() {
         // #18: the sweep flips a lapsed rule's toggle off — the pill must own that ("Expired")
         // rather than blame a pause the user never made.

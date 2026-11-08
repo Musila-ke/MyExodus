@@ -210,6 +210,7 @@ fun RuleEditorScreen(
     val missingTargetMessage = stringResource(R.string.editor_target_missing)
     val invalidTargetMessage = stringResource(R.string.editor_target_invalid)
     val sameTimeMessage = stringResource(R.string.editor_same_time_error)
+    val endsTooSoonMessage = stringResource(R.string.editor_ends_too_soon)
     val duplicateMessage = stringResource(R.string.editor_target_duplicate)
     val limitInvalidMessage = stringResource(R.string.editor_daily_limit_invalid)
     val limitTooLargeMessage = stringResource(R.string.editor_daily_limit_too_large)
@@ -264,6 +265,20 @@ fun RuleEditorScreen(
             endMinutes = endMinutes,
             limitTotalMinutes = limitTotalMinutes,
         )
+        val fields = composeRuleFields(
+            alwaysOn = alwaysOn,
+            windowEnabled = windowEnabled,
+            limitEnabled = limitEnabled,
+            startMinutes = startMinutes,
+            endMinutes = endMinutes,
+            days = days,
+            limitTotalMinutes = limitTotalMinutes,
+        )
+        // Owner report 2026-11-08: a block whose end date lands before its first possible
+        // active day or window would never block anything; refuse it instead of saving an
+        // inert promise. Only reachable once the mechanism form itself is valid.
+        val endsTooSoon = modeError == null &&
+            expiresBeforeFirstBlock(fields, timezone, expiresAt, System.currentTimeMillis())
         val invalid = when {
             isApp && value.isEmpty() -> missingTargetMessage
             !isApp && !isValidWebsiteTarget(value) -> invalidTargetMessage
@@ -271,6 +286,7 @@ fun RuleEditorScreen(
             modeError == ModeError.SameTime -> sameTimeMessage
             modeError == ModeError.LimitInvalid -> limitInvalidMessage
             modeError == ModeError.LimitTooLarge -> limitTooLargeMessage
+            endsTooSoon -> endsTooSoonMessage
             else -> null
         }
         if (invalid != null) {
@@ -293,15 +309,6 @@ fun RuleEditorScreen(
             confirmEngineOff = true
             return
         }
-        val fields = composeRuleFields(
-            alwaysOn = alwaysOn,
-            windowEnabled = windowEnabled,
-            limitEnabled = limitEnabled,
-            startMinutes = startMinutes,
-            endMinutes = endMinutes,
-            days = days,
-            limitTotalMinutes = limitTotalMinutes,
-        )
         // Finding #17 (2026-10-16): set on Main before the launch. `saving` gates the Save
         // button, and setting it inside the IO coroutine left the dispatcher's queue time as a
         // window where a second tap passed the duplicate check again (existingRules can't see a
@@ -489,6 +496,16 @@ fun RuleEditorScreen(
                 enabled = true,
                 onCheckedChange = { alwaysOn = it },
             )
+            // Owner report 2026-11-08: with "Block all day" on, the two rows below go dead to
+            // the touch with no visible reason ("has it hung?"). Say why they are off, here,
+            // where the switch that turned them off lives.
+            if (alwaysOn) {
+                Text(
+                    stringResource(R.string.editor_always_on_note),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
 
             ModeRow(
                 title = stringResource(R.string.editor_window_title),

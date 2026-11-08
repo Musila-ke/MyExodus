@@ -59,6 +59,16 @@ class WebsitePresetsTest {
     }
 
     @Test
+    fun adultCategory_keepsTheMajorVerifiedBrands() {
+        val adult = WebsitePresets.category("adult")!!.sites.toSet()
+        listOf(
+            "pornhub.com", "xvideos.com", "xnxx.com", "xhamster.com", "stripchat.com",
+            "onlyfans.com", "chaturbate.com", "spankbang.com", "eporner.com",
+            "fansly.com", "rule34.xxx", "noodlemagazine.com",
+        ).forEach { assertTrue(it, it in adult) }
+    }
+
+    @Test
     fun unblockedSites_skipsEveryStoredWebsiteRule_regardlessOfItsState() {
         val social = WebsitePresets.category("social")!!
         val existing = listOf(

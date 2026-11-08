@@ -7,6 +7,7 @@ import androidx.room3.OnConflictStrategy
 import androidx.room3.Query
 import androidx.room3.Update
 import com.example.myexodus.data.db.entity.DailyUsageTracker
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface DailyUsageTrackerDao {
@@ -36,6 +37,10 @@ interface DailyUsageTrackerDao {
     /** All tracker rows for the profile — the daily-maintenance sweep's read (§8 Step 8). */
     @Query("SELECT * FROM daily_usage_tracker WHERE profile_id = :profileId")
     suspend fun getForProfile(profileId: String): List<DailyUsageTracker>
+
+    /** Live ledger for the Rules list's usage lines and "Blocked now" quota claims. */
+    @Query("SELECT * FROM daily_usage_tracker WHERE profile_id = :profileId")
+    fun observeForProfile(profileId: String): Flow<List<DailyUsageTracker>>
 
     /** ADR #240: the retained scope's counters, read from its recovery copy under its profile. */
     @Query("SELECT * FROM daily_usage_tracker")

@@ -10,7 +10,7 @@
     <string name="recovery_risk_window_note">You\'re inside one of your risk windows. Low-effort options first.</string>
 
     <!-- Hub (plan §E2.1, Field Ledger): one destination, hairline rows, one raised surface. -->
-    <string name="recovery_now_eyebrow">Right now</string>
+    <string name="recovery_now_eyebrow">When an urge hits</string>
     <string name="recovery_now_title">Get one thing to do</string>
     <string name="recovery_now_body">A short action chosen for this moment. You can change it.</string>
     <string name="recovery_now_start">Start</string>
