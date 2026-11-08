@@ -23,8 +23,10 @@ import android.util.Log
  * Consent is the platform's own dialog ([VpnService.prepare]): never launched
  * automatically — the user reaches it through the explicit "turn on" row in Rules. A
  * `prepare()` that returns non-null means no consent on file; [ensure] then starts nothing
- * (the row is the only way in). Revocation (`onRevoke`) clears the platform's consent, so
- * the same row naturally resurfaces after a revoke.
+ * (the row is the only way in). Consent clearance on `onRevoke` is NOT guaranteed across
+ * OEMs: the X6532/XOS displacement run (2026-11-08) kept MyExodus's consent, so [ensure]
+ * silently re-established the tunnel on the next foreground instead of surfacing the row;
+ * the row appears when `prepare()` does report no consent.
  */
 object VpnLifecycle {
 

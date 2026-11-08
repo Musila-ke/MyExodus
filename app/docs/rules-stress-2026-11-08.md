@@ -75,12 +75,37 @@ Block wins; all mechanisms are OR-ed, none can cancel another.
 - Website rule pause/unpause: toggling example.com off moved it to Deactivated as
   "Paused" and vacated the Websites section (empty-state card with category chips);
   toggling back restored `Always on / Blocked now` under Websites.
-- **BLOCKED — real third-party VPN leg.** No VPN client is installed on the device and
-  one cannot be installed without the owner's action. Recorded as BLOCKED, not PASSED.
-  Substitute evidence: the block survives a changed resolver (above), which is the
-  property a VPN changes. Known product risk: Android runs one VPN at a time, so enabling
-  a third-party VPN displaces the MyExodus tunnel (and turning MyExodus on displaces the
-  other), pausing website blocking while it does.
+- **Real third-party VPN leg — PASSED (owner-approved run, same session).** Vehicle: a
+  throwaway `VpnService` helper APK built outside the repo (`/tmp`, debug-signed),
+  installed with the owner's go-ahead, then uninstalled and deleted. Sequence:
+  - Helper's consent dialog accepted -> the system revoked MyExodus on the tap:
+    `logcat -s MyExodusVpn` printed `MARKER: vpn-state REVOKED` at 19:17:52, the tunnel
+    and `tun0` disappeared, and MyExodus posted "MyExodus protection revoked / The VPN
+    connection was taken back. Re-enable protection from the app." on `vpn_spike`.
+  - **Blocking is genuinely off while displaced:** with the helper holding contest of the
+    slot, Chrome loaded `https://example.com` (the page's own example-domain text
+    rendered) — the same host returned `DNS_PROBE_FINISHED_NXDOMAIN` under the tunnel
+    earlier in this pass.
+  - **Opening MyExodus re-establishes protection:** `MainActivity.onResume` ->
+    `VpnLifecycle.ensure` restarted the tunnel with no consent dialog (network created
+    19:22:10, `tun0` back, OwnerUid = MyExodus), the Rules rows returned to
+    `Always on / Blocked now`, and `example.com` was blocked again by the accessibility
+    wall ("Blocked by your MyExodus rules").
+  - **OEM behavior recorded:** on this XOS API 34 build the displacement did *not* clear
+    MyExodus's platform consent, so the "connection is off" row (which requires
+    `NEEDS_CONSENT`) never surfaced and the engine self-healed silently instead. The
+    `VpnLifecycle` comment's "revocation clears the platform's consent" held for the
+    stale-claim correction but is not guaranteed across OEMs; the notification is the
+    only signal at displacement time. The helper itself flapped (system logged
+    `VPN CONNECTED`/`DISCONNECTED` pairs; XOS `Hiber/networkDetectorService` reacts to a
+    new VPN app) because it is a debug app with no foreground service; the displacement
+    was already proven before the flap. Also noted for future testers: a helper route
+    outside the interface's address subnet made `establish()` return null on API 34; an
+    in-subnet route established.
+  - Known product risk remains: Android runs one VPN at a time, so MyExodus silently
+    re-takes the slot (and displaces the other VPN) the next time the app is opened.
+    Blocking pauses for as long as another VPN holds the slot and MyExodus is not
+    foregrounded.
 
 ## 5. Known limitations recorded (product decisions, not defects)
 
