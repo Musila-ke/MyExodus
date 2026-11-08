@@ -6,8 +6,16 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
-/** One local day's attempt counts for the Insights strip. */
-data class DayAttempts(val blocked: Int, val overrides: Int)
+/** One target's attempts inside a day, most-hit first. */
+data class TargetAttempts(val target: String, val count: Int)
+
+/** One local day's attempt counts and per-target detail for the Insights strip. */
+data class DayAttempts(
+    val blocked: Int,
+    val overrides: Int,
+    val blockedTargets: List<TargetAttempts> = emptyList(),
+    val overrideTargets: List<TargetAttempts> = emptyList(),
+)
 
 /**
  * The Insights report window: today plus the six preceding local days. Attempts and sessions
@@ -40,23 +48,32 @@ object InsightsWindow {
         zone: ZoneId,
     ): Map<LocalDate, DayAttempts> {
         val wanted = days.toSet()
-        val counts = HashMap<LocalDate, DayAttempts>(days.size)
+        val blocked = HashMap<LocalDate, MutableMap<String, Int>>()
+        val overrides = HashMap<LocalDate, MutableMap<String, Int>>()
         for (stamp in stamps) {
             val day = Instant.ofEpochMilli(stamp.occurredAtEpochMillis).atZone(zone).toLocalDate()
             if (day !in wanted) continue
-            if (
-                stamp.outcome != AttemptLog.OUTCOME_BLOCKED &&
-                stamp.outcome != AttemptLog.OUTCOME_OVERRIDE
-            ) {
-                continue
+            val perTarget = when (stamp.outcome) {
+                AttemptLog.OUTCOME_BLOCKED -> blocked
+                AttemptLog.OUTCOME_OVERRIDE -> overrides
+                else -> continue
             }
-            val current = counts[day] ?: DayAttempts(blocked = 0, overrides = 0)
-            counts[day] = when (stamp.outcome) {
-                AttemptLog.OUTCOME_OVERRIDE -> current.copy(overrides = current.overrides + 1)
-                AttemptLog.OUTCOME_BLOCKED -> current.copy(blocked = current.blocked + 1)
-                else -> current
-            }
+            val dayTargets = perTarget.getOrPut(day) { HashMap() }
+            dayTargets[stamp.target] = (dayTargets[stamp.target] ?: 0) + 1
         }
-        return counts
+        return (blocked.keys + overrides.keys).associateWith { day ->
+            val blockedDay = blocked[day].orEmpty()
+            val overrideDay = overrides[day].orEmpty()
+            DayAttempts(
+                blocked = blockedDay.values.sum(),
+                overrides = overrideDay.values.sum(),
+                blockedTargets = ranked(blockedDay),
+                overrideTargets = ranked(overrideDay),
+            )
+        }
     }
+
+    private fun ranked(counts: Map<String, Int>): List<TargetAttempts> = counts.entries
+        .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+        .map { TargetAttempts(it.key, it.value) }
 }

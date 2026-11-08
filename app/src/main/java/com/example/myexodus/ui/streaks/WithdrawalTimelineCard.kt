@@ -1,16 +1,21 @@
 package com.example.myexodus.ui.streaks
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
@@ -44,6 +49,13 @@ internal fun WithdrawalTimelineCard(state: HabitState) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // Bar length is the forecast's own intensity, not how far through the curve the
+            // streak is (owner audit 2026-11-08: the progress-indicator read misled).
+            Text(
+                stringResource(R.string.streaks_timeline_bar_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             weeks.forEach { week ->
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(
@@ -60,10 +72,21 @@ internal fun WithdrawalTimelineCard(state: HabitState) {
                             )
                         }
                     }
-                    LinearProgressIndicator(
-                        progress = { weekFill(week, weeks) },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth(weekFill(week, weeks))
+                                .fillMaxHeight()
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primary),
+                        )
+                    }
                     Text(
                         weekExpectation(week.weekNumber),
                         style = MaterialTheme.typography.bodySmall,

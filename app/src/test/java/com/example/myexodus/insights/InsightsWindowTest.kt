@@ -25,8 +25,12 @@ class InsightsWindowTest {
             .toInstant()
             .toEpochMilli()
 
-    private fun stamp(date: LocalDate, hour: Int, outcome: String) =
-        AttemptStamp(occurredAtEpochMillis = millis(date, hour), outcome = outcome)
+    private fun stamp(date: LocalDate, hour: Int, outcome: String, target: String = "instagram.com") =
+        AttemptStamp(
+            occurredAtEpochMillis = millis(date, hour),
+            outcome = outcome,
+            target = target,
+        )
 
     @Test
     fun days_isSevenAscendingDaysEndingToday() {
@@ -72,9 +76,41 @@ class InsightsWindowTest {
 
         val counts = InsightsWindow.bucketAttempts(stamps, days, zone)
 
-        assertEquals(DayAttempts(blocked = 2, overrides = 1), counts[LocalDate.of(2026, 10, 20)])
-        assertEquals(DayAttempts(blocked = 1, overrides = 0), counts[LocalDate.of(2026, 10, 22)])
+        val busy = counts.getValue(LocalDate.of(2026, 10, 20))
+        assertEquals(2, busy.blocked)
+        assertEquals(1, busy.overrides)
+        assertEquals(listOf(TargetAttempts("instagram.com", 2)), busy.blockedTargets)
+        assertEquals(listOf(TargetAttempts("instagram.com", 1)), busy.overrideTargets)
+        val quiet = counts.getValue(LocalDate.of(2026, 10, 22))
+        assertEquals(1, quiet.blocked)
+        assertEquals(0, quiet.overrides)
         assertFalse("a day with no attempts has no entry", counts.containsKey(LocalDate.of(2026, 10, 21)))
+    }
+
+    @Test
+    fun bucketAttempts_ranksEachDaysTargetsPerOutcome() {
+        val now = millis(LocalDate.of(2026, 10, 22), 12)
+        val days = InsightsWindow.days(now, zone)
+        val stamps = listOf(
+            stamp(LocalDate.of(2026, 10, 21), 9, AttemptLog.OUTCOME_BLOCKED, "com.youtube"),
+            stamp(LocalDate.of(2026, 10, 21), 10, AttemptLog.OUTCOME_BLOCKED, "instagram.com"),
+            stamp(LocalDate.of(2026, 10, 21), 11, AttemptLog.OUTCOME_BLOCKED, "instagram.com"),
+            stamp(LocalDate.of(2026, 10, 21), 12, AttemptLog.OUTCOME_OVERRIDE, "com.youtube"),
+            stamp(LocalDate.of(2026, 10, 21), 13, AttemptLog.OUTCOME_OVERRIDE, "instagram.com"),
+        )
+
+        val day = InsightsWindow.bucketAttempts(stamps, days, zone)
+            .getValue(LocalDate.of(2026, 10, 21))
+
+        assertEquals(
+            listOf(TargetAttempts("instagram.com", 2), TargetAttempts("com.youtube", 1)),
+            day.blockedTargets,
+        )
+        // Equal counts tie-break alphabetically, same rule as the top-targets ranking.
+        assertEquals(
+            listOf(TargetAttempts("com.youtube", 1), TargetAttempts("instagram.com", 1)),
+            day.overrideTargets,
+        )
     }
 
     @Test
@@ -89,7 +125,14 @@ class InsightsWindowTest {
         val counts = InsightsWindow.bucketAttempts(stamps, days, zone)
 
         assertFalse(counts.containsKey(LocalDate.of(2026, 10, 15)))
-        assertEquals(DayAttempts(blocked = 0, overrides = 1), counts[LocalDate.of(2026, 10, 16)])
+        assertEquals(
+            DayAttempts(
+                blocked = 0,
+                overrides = 1,
+                overrideTargets = listOf(TargetAttempts("instagram.com", 1)),
+            ),
+            counts[LocalDate.of(2026, 10, 16)],
+        )
         assertEquals(1, counts.values.sumOf { it.blocked + it.overrides })
     }
 

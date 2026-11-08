@@ -1,6 +1,7 @@
 package com.example.myexodus.insights
 
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.dao.LedgerDayTotal
 import com.example.myexodus.data.db.dao.SessionCount
 import com.example.myexodus.data.db.dao.TargetOutcomeCount
 import com.example.myexodus.data.db.entity.AttemptLog
@@ -12,12 +13,16 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /** One day's row in both strips: attempts from `attempt_log`, usage from the ledger's own
- *  frozen `day_key` totals. */
+ *  frozen `day_key` totals. The per-target and per-package lists are the same day's detail,
+ *  so a tapped bar can name what it counted instead of leaving a bare number. */
 data class InsightDay(
     val date: LocalDate,
     val blocked: Int,
     val overrides: Int,
     val creditedMs: Long,
+    val blockedTargets: List<InsightTarget> = emptyList(),
+    val overrideTargets: List<InsightTarget> = emptyList(),
+    val packages: List<InsightPackage> = emptyList(),
 )
 
 /** One blocked target in the window, most-blocked first. */
@@ -97,6 +102,11 @@ class InsightsRepository @Inject constructor(
             .dayTotalsSince(UsageLedgerKind.CREDITING, days.first().toString())
             .filter { it.dayKey in dayKeys }
         val usageByDay = ledger.groupBy { it.dayKey }.mapValues { (_, rows) -> rows.sumOf { it.totalMs } }
+        val packagesByDay = ledger.groupBy { it.dayKey }.mapValues { (_, rows) ->
+            rows.filter { it.totalMs > 0 }
+                .sortedWith(compareByDescending<LedgerDayTotal> { it.totalMs }.thenBy { it.packageName })
+                .map { InsightPackage(it.packageName, it.totalMs) }
+        }
         val usageByPackage = ledger.groupBy { it.packageName }
             .mapValues { (_, rows) -> rows.sumOf { it.totalMs } }
             .filterValues { it > 0 }
@@ -114,6 +124,9 @@ class InsightsRepository @Inject constructor(
                 blocked = attempts.blocked,
                 overrides = attempts.overrides,
                 creditedMs = usageByDay[day.toString()] ?: 0L,
+                blockedTargets = attempts.blockedTargets.map { InsightTarget(it.target, it.count) },
+                overrideTargets = attempts.overrideTargets.map { InsightTarget(it.target, it.count) },
+                packages = packagesByDay[day.toString()].orEmpty(),
             )
         }
 

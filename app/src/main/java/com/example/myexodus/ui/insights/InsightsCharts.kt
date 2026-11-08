@@ -1,6 +1,7 @@
 package com.example.myexodus.ui.insights
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -34,10 +36,15 @@ private val BAR_SHAPE = RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp, botto
 /**
  * Blocked/override bars for the window. One shared scale (the tallest day), value printed
  * above each bar, stacked segments plus a text legend — colour is never the only encoding,
- * and each column merges its own sentence for TalkBack.
+ * and each column merges its own sentence for TalkBack. A column is tappable when
+ * [onDayClick] is wired: the day's own targets are the answer to "blocked where?".
  */
 @Composable
-internal fun AttemptBarStrip(days: List<InsightDay>, modifier: Modifier = Modifier) {
+internal fun AttemptBarStrip(
+    days: List<InsightDay>,
+    modifier: Modifier = Modifier,
+    onDayClick: ((InsightDay) -> Unit)? = null,
+) {
     val max = maxAttempts(days)
     val blockedColor = MaterialTheme.colorScheme.primary
     val overrideColor = MaterialTheme.colorScheme.tertiary
@@ -61,6 +68,13 @@ internal fun AttemptBarStrip(days: List<InsightDay>, modifier: Modifier = Modifi
             Column(
                 modifier = Modifier
                     .weight(1f)
+                    .then(
+                        if (onDayClick == null) {
+                            Modifier
+                        } else {
+                            Modifier.clickable(role = Role.Button) { onDayClick(day) }
+                        },
+                    )
                     .semantics(mergeDescendants = true) { contentDescription = description },
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
@@ -81,18 +95,19 @@ internal fun AttemptBarStrip(days: List<InsightDay>, modifier: Modifier = Modifi
                                 .fillMaxHeight(shareOf(total.toLong(), max.toLong()))
                                 .clip(BAR_SHAPE),
                         ) {
-                            if (day.overrides > 0) {
-                                Box(
-                                    Modifier.fillMaxWidth()
-                                        .weight(day.overrides.toFloat())
-                                        .background(overrideColor),
-                                )
-                            }
+                            // Draw order matches the caption: blocked on top, overrides below.
                             if (day.blocked > 0) {
                                 Box(
                                     Modifier.fillMaxWidth()
                                         .weight(day.blocked.toFloat())
                                         .background(blockedColor),
+                                )
+                            }
+                            if (day.overrides > 0) {
+                                Box(
+                                    Modifier.fillMaxWidth()
+                                        .weight(day.overrides.toFloat())
+                                        .background(overrideColor),
                                 )
                             }
                         }
@@ -115,11 +130,19 @@ internal fun AttemptBarStrip(days: List<InsightDay>, modifier: Modifier = Modifi
     }
 }
 
-/** Credited screen time for the window, one bar per day on a shared scale. */
+/**
+ * Credited screen time for the window, one bar per day on a shared scale. Taupe, never the
+ * blocks strip's gold: the two charts sit one under the other, so sharing a colour made them
+ * read as the same measure (owner audit 2026-11-08). A column opens its day when wired.
+ */
 @Composable
-internal fun UsageBarStrip(days: List<InsightDay>, modifier: Modifier = Modifier) {
+internal fun UsageBarStrip(
+    days: List<InsightDay>,
+    modifier: Modifier = Modifier,
+    onDayClick: ((InsightDay) -> Unit)? = null,
+) {
     val max = maxCreditedMs(days)
-    val barColor = MaterialTheme.colorScheme.tertiary
+    val barColor = MaterialTheme.colorScheme.secondary
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -134,6 +157,13 @@ internal fun UsageBarStrip(days: List<InsightDay>, modifier: Modifier = Modifier
             Column(
                 modifier = Modifier
                     .weight(1f)
+                    .then(
+                        if (onDayClick == null) {
+                            Modifier
+                        } else {
+                            Modifier.clickable(role = Role.Button) { onDayClick(day) }
+                        },
+                    )
                     .semantics(mergeDescendants = true) { contentDescription = description },
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
@@ -190,10 +220,25 @@ internal fun ChartLegend(vararg entries: Pair<String, Color>) {
     }
 }
 
-/** One ranked row: name, value, and a proportional share bar (not interactive). */
+/** One ranked row: name, value, and a proportional share bar. Tappable when wired. */
 @Composable
-internal fun RankedBarRow(label: String, value: String, fraction: Float) {
-    Column(Modifier.fillMaxWidth()) {
+internal fun RankedBarRow(
+    label: String,
+    value: String,
+    fraction: Float,
+    onClick: (() -> Unit)? = null,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .then(
+                if (onClick == null) {
+                    Modifier
+                } else {
+                    Modifier.clickable(role = Role.Button, onClick = onClick)
+                },
+            ),
+    ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
                 label,

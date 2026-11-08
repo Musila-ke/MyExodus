@@ -13,6 +13,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
@@ -46,6 +50,8 @@ fun InsightsScreen(
     habit: HabitState?,
     onRetry: () -> Unit,
 ) {
+    // One tap-through at a time; the sheet owns its own window above this tab's scroller.
+    var detail by remember { mutableStateOf<InsightDetail?>(null) }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Column {
             Text(
@@ -65,8 +71,15 @@ fun InsightsScreen(
 
             InsightsViewModel.State.Unavailable -> UnavailableCard(onRetry)
 
-            is InsightsViewModel.State.Ready -> ReadyContent(state.snapshot, habit)
+            is InsightsViewModel.State.Ready -> ReadyContent(
+                snapshot = state.snapshot,
+                habit = habit,
+                onShowDetail = { detail = it },
+            )
         }
+    }
+    detail?.let {
+        InsightsDetailSheet(detail = it, onDismiss = { detail = null })
     }
 }
 
@@ -117,7 +130,11 @@ private fun UnavailableCard(onRetry: () -> Unit) {
 }
 
 @Composable
-private fun ReadyContent(snapshot: InsightsSnapshot, habit: HabitState?) {
+private fun ReadyContent(
+    snapshot: InsightsSnapshot,
+    habit: HabitState?,
+    onShowDetail: (InsightDetail) -> Unit,
+) {
     if (snapshot.isEmpty) {
         SectionCard(title = stringResource(R.string.insights_empty_title)) {
             Text(
@@ -149,7 +166,10 @@ private fun ReadyContent(snapshot: InsightsSnapshot, habit: HabitState?) {
         if (snapshot.blockedTotal == 0 && snapshot.overridesTotal == 0) {
             EmptyLine(stringResource(R.string.insights_blocks_empty))
         } else {
-            AttemptBarStrip(snapshot.days)
+            AttemptBarStrip(
+                days = snapshot.days,
+                onDayClick = { onShowDetail(InsightDetail.Day(it)) },
+            )
             ChartLegend(
                 stringResource(R.string.insights_legend_blocked) to MaterialTheme.colorScheme.primary,
                 stringResource(R.string.insights_legend_overrides) to MaterialTheme.colorScheme.tertiary,
@@ -168,7 +188,13 @@ private fun ReadyContent(snapshot: InsightsSnapshot, habit: HabitState?) {
         if (snapshot.screenTimeTotalMs == 0L) {
             EmptyLine(stringResource(R.string.insights_usage_empty))
         } else {
-            UsageBarStrip(snapshot.days)
+            UsageBarStrip(
+                days = snapshot.days,
+                onDayClick = { onShowDetail(InsightDetail.Day(it)) },
+            )
+            ChartLegend(
+                stringResource(R.string.insights_usage_title) to MaterialTheme.colorScheme.secondary,
+            )
         }
     }
 
@@ -179,21 +205,39 @@ private fun ReadyContent(snapshot: InsightsSnapshot, habit: HabitState?) {
         ) {
             val max = snapshot.topPackages.first().creditedMs
             for (pkg in snapshot.topPackages) {
-                PackageRow(pkg, max)
+                PackageRow(
+                    pkg = pkg,
+                    max = max,
+                    onClick = {
+                        onShowDetail(InsightDetail.Package(pkg, snapshot.days))
+                    },
+                )
             }
         }
     }
 
     if (snapshot.topTargets.isNotEmpty()) {
-        SectionCard(title = stringResource(R.string.insights_most_blocked_title)) {
+        SectionCard(
+            title = stringResource(R.string.insights_most_blocked_title),
+            caption = stringResource(R.string.insights_most_blocked_caption),
+        ) {
             val max = snapshot.topTargets.first().count.toLong()
             for (target in snapshot.topTargets) {
-                TargetRow(target, max)
+                TargetRow(
+                    target = target,
+                    max = max,
+                    onClick = {
+                        onShowDetail(InsightDetail.Target(target, snapshot.days))
+                    },
+                )
             }
         }
     }
 
-    SectionCard(title = stringResource(R.string.insights_recovery_title)) {
+    SectionCard(
+        title = stringResource(R.string.insights_recovery_title),
+        caption = stringResource(R.string.insights_recovery_caption),
+    ) {
         RecoveryRows(snapshot.recovery)
         if (snapshot.recovery.allTime > 0) {
             Text(
@@ -208,7 +252,10 @@ private fun ReadyContent(snapshot: InsightsSnapshot, habit: HabitState?) {
         }
     }
 
-    SectionCard(title = stringResource(R.string.insights_habits_title)) {
+    SectionCard(
+        title = stringResource(R.string.insights_habits_title),
+        caption = stringResource(R.string.insights_habits_caption),
+    ) {
         if (snapshot.habits.isEmpty()) {
             EmptyLine(stringResource(R.string.insights_habits_empty))
         } else {
@@ -220,20 +267,22 @@ private fun ReadyContent(snapshot: InsightsSnapshot, habit: HabitState?) {
 }
 
 @Composable
-private fun PackageRow(pkg: InsightPackage, max: Long) {
+private fun PackageRow(pkg: InsightPackage, max: Long, onClick: () -> Unit) {
     RankedBarRow(
         label = rememberAppLabel(pkg.packageName),
         value = formatDuration(pkg.creditedMs),
         fraction = shareOf(pkg.creditedMs, max),
+        onClick = onClick,
     )
 }
 
 @Composable
-private fun TargetRow(target: InsightTarget, max: Long) {
+private fun TargetRow(target: InsightTarget, max: Long, onClick: () -> Unit) {
     RankedBarRow(
         label = rememberAppLabel(target.target),
         value = target.count.toString(),
         fraction = shareOf(target.count.toLong(), max),
+        onClick = onClick,
     )
 }
 

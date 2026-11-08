@@ -9,6 +9,10 @@ import java.util.Locale
 fun shortDayLabel(date: LocalDate, locale: Locale = Locale.getDefault()): String =
     date.format(DateTimeFormatter.ofPattern("EEE", locale))
 
+/** Heading for a tapped day in the detail sheet ("Mon, Oct 20"), locale-driven. */
+fun detailDayLabel(date: LocalDate, locale: Locale = Locale.getDefault()): String =
+    date.format(DateTimeFormatter.ofPattern("EEE, MMM d", locale))
+
 /**
  * Compact duration for a bar label, where seven columns share the width: "2h05", "45m", "0m".
  * The long form (`formatDuration`) stays on totals and rows. Minutes are floored — a bar never

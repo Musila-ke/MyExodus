@@ -1463,7 +1463,6 @@
     <!-- Rungs are amounts ("7 days"), not ordinal days: the day the threshold is crossed renders
          one higher under the never-0 display (ADR #128). Owner-flagged 2026-10-17. -->
     <string name="streaks_rung_day" tools:ignore="PluralsCandidate">%1$d days</string>
-    <string name="streaks_relapse_title">Had a slip?</string>
     <string name="streaks_relapse_body">Ending this count starts a new one at Day 1. Your best run stays with you.</string>
     <string name="streaks_relapse_action">Log a relapse</string>
     <string name="streaks_relapse_in_flight">Logging…</string>
@@ -1497,6 +1496,7 @@
     <string name="streaks_timeline_here">You are here</string>
     <string name="streaks_timeline_subtitle_past">Your first month, week by week. You\'re past the four-week curve now.</string>
     <string name="streaks_timeline_subtitle">Your four-week curve, week by week.</string>
+    <string name="streaks_timeline_bar_hint">A longer bar marks a week when the pull tends to feel stronger. It describes the curve, not your progress.</string>
     <!-- Habit setup (REQ-18) -->
     <string name="streaks_setup_title">Set up your habit</string>
     <string name="streaks_setup_title_add">Add another habit</string>
@@ -1538,28 +1538,40 @@
     <string name="insights_overrides_label">Overrides</string>
     <string name="insights_stat_caption">Last 7 days, ending today</string>
     <string name="insights_blocks_title">Blocked and overridden</string>
-    <string name="insights_blocks_caption">One bar per day: blocked attempts on top, overrides below.</string>
+    <string name="insights_blocks_caption">One bar per day: blocked attempts on top, overrides below. Tap a day to see what was blocked.</string>
     <string name="insights_blocks_empty">No blocked attempts or overrides in the last 7 days.</string>
     <string name="insights_legend_blocked">Blocked</string>
     <string name="insights_legend_overrides">Overrides</string>
     <string name="insights_usage_title">Time in limited apps</string>
-    <string name="insights_usage_caption">Total for today and the 6 days before it. Today: %1$s.</string>
+    <string name="insights_usage_caption">Total for today and the 6 days before it. Today: %1$s. Tap a day to see the apps.</string>
     <string name="insights_usage_empty">No counted time in limited apps in the last 7 days.</string>
     <string name="insights_time_where_title">Where the time went</string>
-    <string name="insights_time_where_caption">Apps with a daily limit, today and the 6 days before it.</string>
+    <string name="insights_time_where_caption">Apps with a daily limit, today and the 6 days before it. Tap an app to see its days.</string>
     <string name="insights_most_blocked_title">What you tried most</string>
+    <string name="insights_most_blocked_caption">Sites and apps MyExodus blocked most often in the last 7 days. The number is blocked attempts. Tap a name to see its days.</string>
     <string name="insights_recovery_title">Urge practice</string>
+    <string name="insights_recovery_caption">Urges you opened in the last 7 days, by how each ended. The total below is every urge session ever recorded on this phone.</string>
+    <string name="insights_habits_title">Every streak</string>
+    <string name="insights_habits_caption">Best run and relapse count for every streak on this phone. The current run shows for the streak you have open.</string>
     <string name="insights_recovery_completed">Techniques completed</string>
     <string name="insights_recovery_logged">Urges logged only</string>
     <string name="insights_recovery_abandoned">Sessions abandoned</string>
     <string name="insights_recovery_interrupted">Sessions interrupted</string>
     <string name="insights_recovery_empty">No urge sessions in the last 7 days.</string>
-    <string name="insights_habits_title">Every streak</string>
     <string name="insights_habits_empty">No streaks yet.</string>
     <string name="insights_habit_no_best">No best run yet</string>
     <string name="insights_attempt_bar_description">%1$s. Blocked: %2$d, overrides: %3$d</string>
     <string name="insights_attempt_bar_none">%1$s. Nothing counted.</string>
     <string name="insights_usage_bar_description">%1$s: %2$s in limited apps</string>
+    <!-- Tap-through detail sheet (owner audit 2026-11-08): every number names its contents. -->
+    <string name="insights_detail_head_blocked">Blocked</string>
+    <string name="insights_detail_head_overrides">Overrides</string>
+    <string name="insights_detail_head_apps">Limited apps</string>
+    <string name="insights_detail_head_days">Day by day</string>
+    <string name="insights_detail_none">None</string>
+    <string name="insights_detail_day_caption">Everything MyExodus recorded on this day, on this phone.</string>
+    <string name="insights_detail_target_caption">Blocked attempts on each day of the last 7 days.</string>
+    <string name="insights_detail_package_caption">Time in this limited app on each day of the last 7 days.</string>
     <plurals name="insights_recovery_all_time">
         <item quantity="one">%d urge session recorded in total</item>
         <item quantity="other">%d urge sessions recorded in total</item>
@@ -1569,8 +1581,8 @@
         <item quantity="other">Best: %d days</item>
     </plurals>
     <plurals name="insights_habit_current">
-        <item quantity="one">Now: %d day</item>
-        <item quantity="other">Now: %d days</item>
+        <item quantity="one">Current run: %d day</item>
+        <item quantity="other">Current run: %d days</item>
     </plurals>
     <plurals name="insights_habit_relapses">
         <item quantity="one">%d relapse</item>

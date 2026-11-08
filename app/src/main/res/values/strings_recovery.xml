@@ -83,7 +83,6 @@
 
     <!-- Urge log (W2) -->
     <string name="recovery_log_action">Log an urge</string>
-    <string name="recovery_log_caption">Note it without lifting the block.</string>
     <string name="recovery_log_title">Log this urge</string>
     <string name="recovery_log_streak">Adds to your %1$s streak.</string>
     <string name="recovery_log_intensity">How strong is it right now?</string>
@@ -241,6 +240,7 @@
 
     <!-- Crisis resources (W6) -->
     <string name="recovery_crisis_link">Need urgent help?</string>
+    <string name="recovery_lifeline_urgent">Urgent help</string>
     <string name="recovery_crisis_back">Get help now</string>
     <string name="recovery_crisis_title">Get help now</string>
     <string name="recovery_crisis_hero_title">Talk to someone now</string>
@@ -256,6 +256,13 @@
     <string name="recovery_crisis_sms">Text %1$s</string>
     <string name="recovery_crisis_whatsapp">WhatsApp %1$s</string>
     <string name="recovery_crisis_open">Open website</string>
+    <!-- Short verbs for the hero's call dial; the full label stays the spoken description. -->
+    <string name="recovery_crisis_verb_call">Call</string>
+    <string name="recovery_crisis_verb_text">Text</string>
+    <!-- "Chat", not "WhatsApp": the dial is 94dp wide, and the full app name clips at 2x
+         font scale. The spoken description still names WhatsApp with the number. -->
+    <string name="recovery_crisis_verb_whatsapp">Chat</string>
+    <string name="recovery_crisis_verb_open">Open</string>
     <string name="recovery_crisis_verified">Verified %1$s</string>
     <string name="recovery_crisis_hours">Hours: %1$s</string>
     <string name="recovery_crisis_cost">Cost: %1$s</string>

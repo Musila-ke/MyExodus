@@ -88,6 +88,8 @@ class InsightsRepositoryTest {
             insert(ledger("ig-heartbeat", UsageLedgerKind.HEARTBEAT, "com.instagram.android", "2026-10-20", 999_999))
             insert(ledger("yt-1", UsageLedgerKind.ACCOUNTING, "com.youtube", "2026-10-21", 1_200_000))
             insert(ledger("old-1", UsageLedgerKind.ACCOUNTING, "com.old", "2026-10-01", 500_000))
+            // A zero-total package is not time spent; the day sheet must not list it.
+            insert(ledger("zero-1", UsageLedgerKind.ACCOUNTING, "com.zero", "2026-10-20", 0))
         }
         store.recoverySessionDao().apply {
             insert(session("s-1", "box", RecoverySession.STATE_COMPLETED, LocalDate.of(2026, 10, 21)))
@@ -104,8 +106,17 @@ class InsightsRepositoryTest {
         assertEquals(LocalDate.of(2026, 10, 22), snapshot.days.last().date)
         assertEquals(3, snapshot.blockedTotal)
         assertEquals(1, snapshot.overridesTotal)
-        assertEquals(2, snapshot.days.first { it.date == LocalDate.of(2026, 10, 20) }.blocked)
-        assertEquals(1, snapshot.days.first { it.date == LocalDate.of(2026, 10, 20) }.overrides)
+        val day20 = snapshot.days.first { it.date == LocalDate.of(2026, 10, 20) }
+        assertEquals(2, day20.blocked)
+        assertEquals(1, day20.overrides)
+        // The tap-through detail is the same day's rows, not a second aggregation.
+        assertEquals(listOf(InsightTarget("com.instagram.android", 2)), day20.blockedTargets)
+        assertEquals(listOf(InsightTarget("com.instagram.android", 1)), day20.overrideTargets)
+        assertEquals(listOf(InsightPackage("com.instagram.android", 900_000)), day20.packages)
+        assertEquals(
+            listOf(InsightTarget("com.youtube", 1)),
+            snapshot.days.first { it.date == LocalDate.of(2026, 10, 22) }.blockedTargets,
+        )
 
         assertEquals(listOf("com.instagram.android", "com.youtube"), snapshot.topTargets.map { it.target })
         assertEquals(listOf(2, 1), snapshot.topTargets.map { it.count })

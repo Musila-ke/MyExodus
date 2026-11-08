@@ -20,10 +20,11 @@ data class TargetOutcomeCount(
     val count: Int,
 )
 
-/** The timestamp + outcome pair the Insights day strip buckets; no other columns read. */
+/** The timestamp, outcome and target the Insights day strip buckets. */
 data class AttemptStamp(
     @ColumnInfo(name = "occurred_at_epoch_millis") val occurredAtEpochMillis: Long,
     val outcome: String,
+    @ColumnInfo(name = "blocked_target") val target: String,
 )
 
 @Dao
@@ -114,11 +115,12 @@ interface AttemptLogDao {
     )
     suspend fun countsSince(sinceMs: Long): List<TargetOutcomeCount>
 
-    /** Timestamps + outcomes for the day strip. Two small columns per row; the strip needs
-     *  every attempt to bucket days in the device's own zone, which SQL cannot spell without
-     *  freezing a zone into the query. */
+    /** Timestamps, outcomes and targets for the day strip. The strip needs every attempt to
+     *  bucket days in the device's own zone, which SQL cannot spell without freezing a zone
+     *  into the query; the target rides along so a tapped day can name what was blocked. */
     @Query(
-        "SELECT occurred_at_epoch_millis AS occurred_at_epoch_millis, outcome AS outcome " +
+        "SELECT occurred_at_epoch_millis AS occurred_at_epoch_millis, outcome AS outcome, " +
+            "blocked_target AS blocked_target " +
             "FROM attempt_log WHERE occurred_at_epoch_millis >= :sinceMs",
     )
     suspend fun stampsSince(sinceMs: Long): List<AttemptStamp>

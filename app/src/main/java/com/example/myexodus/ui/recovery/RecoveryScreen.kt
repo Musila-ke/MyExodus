@@ -3,9 +3,12 @@ package com.example.myexodus.ui.recovery
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,10 +18,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowForward
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Schedule
@@ -26,8 +31,6 @@ import androidx.compose.material.icons.outlined.SelfImprovement
 import androidx.compose.material.icons.outlined.SupportAgent
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.WavingHand
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -47,10 +50,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -532,8 +540,8 @@ private fun HomeView(
             }
         }
 
-        // Zone B — act now: one filled action card in the app's teal, unmistakable against the
-        // plain ground above and below, holding every in-the-moment door on one surface.
+        // Zone B — act now: the start dial and its doors on the ledger ground; teal is spent
+        // on the one dial, and every support door is the size of its own label.
         RightNowCard(
             onStart = onOpenAssist,
             partnerName = partnerName,
@@ -597,11 +605,13 @@ private fun HomeView(
 }
 
 /**
- * Signature move (plan §E3, revised by owner call 2026-11-08): the "right now" zone is a
- * filled teal action card — the one saturated surface on the page, deliberately loud against
- * the plain ground above and below. Everything in the moment lives inside it, so the section
- * is unmistakable at a glance; the inner button inverts to on-primary for contrast.
+ * The moment-of-need block (owner recut 2026-11-08, second pass): the filled card is gone.
+ * The section speaks the same Field Ledger grammar as the rest of the page — eyebrow, rule,
+ * plain ground — and earns its weight from one object instead of a wash: a teal start dial
+ * beside a Fraunces statement. The support doors sit below as compact pills, so every control
+ * is the size of its own meaning and the primary action is no longer a full-width bar.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RightNowCard(
     onStart: () -> Unit,
@@ -611,74 +621,116 @@ private fun RightNowCard(
     onLogUrge: () -> Unit,
     sidePadding: Dp,
 ) {
-    val ink = MaterialTheme.colorScheme.onPrimary
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = sidePadding)
-            .clip(MaterialTheme.shapes.extraLarge)
-            .background(MaterialTheme.colorScheme.primary)
-            .padding(horizontal = 20.dp, vertical = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = sidePadding),
     ) {
-        Text(
-            stringResource(R.string.recovery_now_eyebrow).uppercase(),
-            style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.6.sp),
-            color = ink.copy(alpha = 0.72f),
-        )
-        Text(
-            stringResource(R.string.recovery_now_title),
-            style = MaterialTheme.typography.headlineLarge,
-            color = ink,
-        )
-        Text(
-            stringResource(R.string.recovery_now_body),
-            style = MaterialTheme.typography.bodyMedium,
-            color = ink.copy(alpha = 0.85f),
-        )
-        Button(
-            onClick = onStart,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 56.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.onPrimary,
-                contentColor = MaterialTheme.colorScheme.primary,
-            ),
-            contentPadding = PaddingValues(horizontal = 20.dp),
-        ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        SectionEyebrow(stringResource(R.string.recovery_now_eyebrow))
+        Spacer(Modifier.height(4.dp))
+        Hairline()
+        Spacer(Modifier.height(16.dp))
+        Row(verticalAlignment = Alignment.Top) {
+            SignalDial(
+                icon = Icons.Filled.PlayArrow,
+                label = stringResource(R.string.recovery_now_start),
+                contentDescription = stringResource(R.string.recovery_now_start),
+                onClick = onStart,
+            )
+            Spacer(Modifier.width(18.dp))
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 Text(
-                    stringResource(R.string.recovery_now_start),
-                    style = MaterialTheme.typography.titleMedium,
+                    stringResource(R.string.recovery_now_title),
+                    // Fraunces at statement size: the page's one editorial beat, on the
+                    // adaptive scale (NoLiteralTypeSizeTest guards the window-size step).
+                    style = MaterialTheme.typography.headlineLarge,
                 )
-                Spacer(Modifier.weight(1f))
-                Icon(
-                    imageVector = Icons.AutoMirrored.Outlined.ArrowForward,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
+                Text(
+                    stringResource(R.string.recovery_now_body),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
-        Spacer(Modifier.height(4.dp))
-        HorizontalDivider(color = ink.copy(alpha = 0.2f))
-        // The error tint does not hold contrast on teal; this row's label ("Need urgent
-        // help?") carries the urgency instead.
-        if (partnerName != null) {
-            SupportRow(
-                icon = Icons.Outlined.WavingHand,
-                title = stringResource(R.string.recovery_reach_out_named, partnerName),
-                onClick = onReachOut,
-                ink = ink,
+        Spacer(Modifier.height(14.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (partnerName != null) {
+                LifelinePill(
+                    icon = Icons.Outlined.WavingHand,
+                    label = partnerName,
+                    contentDescription = stringResource(
+                        R.string.recovery_reach_out_named,
+                        partnerName,
+                    ),
+                    onClick = onReachOut,
+                )
+            }
+            LifelinePill(
+                icon = Icons.Outlined.SupportAgent,
+                label = stringResource(R.string.recovery_lifeline_urgent),
+                contentDescription = stringResource(R.string.recovery_crisis_link),
+                onClick = onOpenCrisis,
+            )
+            LifelinePill(
+                painter = painterResource(R.drawable.ic_log_urge),
+                label = stringResource(R.string.recovery_log_action),
+                contentDescription = stringResource(R.string.recovery_log_action),
+                onClick = onLogUrge,
             )
         }
-        SupportRow(
-            icon = Icons.Outlined.SupportAgent,
-            title = stringResource(R.string.recovery_crisis_link),
-            onClick = onOpenCrisis,
-            ink = ink,
+    }
+}
+
+/** A support door the size of its own label: pill outline, icon, one line. */
+@Composable
+private fun LifelinePill(
+    label: String,
+    contentDescription: String,
+    onClick: () -> Unit,
+    icon: ImageVector? = null,
+    painter: Painter? = null,
+) {
+    val outline = MaterialTheme.colorScheme.outlineVariant
+    Row(
+        modifier = Modifier
+            .heightIn(min = 48.dp)
+            .clip(CircleShape)
+            .border(1.dp, outline, CircleShape)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics(mergeDescendants = true) { this.contentDescription = contentDescription }
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (icon != null) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        if (painter != null) {
+            Icon(
+                painter = painter,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
-        LogUrgeRow(onClick = onLogUrge, ink = ink)
     }
 }
 
@@ -690,76 +742,6 @@ private fun IdleLine() {
             stringResource(R.string.recovery_idle_line),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun SupportRow(
-    icon: ImageVector,
-    title: String,
-    onClick: () -> Unit,
-    ink: Color,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 56.dp)
-            .clickable(onClick = onClick),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = ink.copy(alpha = 0.75f),
-            modifier = Modifier.size(20.dp),
-        )
-        Text(
-            title,
-            style = MaterialTheme.typography.titleMedium,
-            color = ink,
-            modifier = Modifier.weight(1f),
-        )
-        Icon(
-            imageVector = Icons.Outlined.ChevronRight,
-            contentDescription = null,
-            tint = ink.copy(alpha = 0.6f),
-            modifier = Modifier.size(20.dp),
-        )
-    }
-}
-
-@Composable
-private fun LogUrgeRow(onClick: () -> Unit, ink: Color) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 56.dp)
-            .clickable(onClick = onClick),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        // The widget's own glyph, so one icon means one action on both surfaces.
-        Icon(
-            painter = painterResource(R.drawable.ic_log_urge),
-            contentDescription = null,
-            tint = ink,
-            modifier = Modifier.size(20.dp),
-        )
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(stringResource(R.string.recovery_log_action), style = MaterialTheme.typography.titleMedium, color = ink)
-            Text(
-                stringResource(R.string.recovery_log_caption),
-                style = MaterialTheme.typography.bodySmall,
-                color = ink.copy(alpha = 0.8f),
-            )
-        }
-        Icon(
-            imageVector = Icons.Outlined.ChevronRight,
-            contentDescription = null,
-            tint = ink.copy(alpha = 0.6f),
-            modifier = Modifier.size(20.dp),
         )
     }
 }

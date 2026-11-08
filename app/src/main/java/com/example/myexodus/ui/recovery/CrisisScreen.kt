@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -25,19 +24,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.Apps
+import androidx.compose.material.icons.outlined.Call
 import androidx.compose.material.icons.outlined.Casino
+import androidx.compose.material.icons.outlined.Chat
 import androidx.compose.material.icons.outlined.Emergency
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Sms
 import androidx.compose.material.icons.outlined.SportsEsports
 import androidx.compose.material.icons.outlined.SupportAgent
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -54,7 +54,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -82,8 +81,8 @@ import java.util.Locale
  * the device region first. Deliberately not privacy-gated and never behind a timer — this is
  * the one screen that must open instantly and read calmly.
  *
- * Composition (owner sign-off 2026-11-08): the single most useful call sits in the filled
- * "right now" card at the top, so the screen answers before it lists. The directory below is
+ * Composition (owner recut 2026-11-08): the single most useful call sits in the masthead at
+ * the top, so the screen answers before it lists. The directory below is
  * scannable: one action per entry, everything else behind a Details disclosure, two entries
  * per section until asked for more.
  *
@@ -302,68 +301,64 @@ fun CrisisScreen(
 private const val COLLAPSED_PREVIEW = 2
 
 /**
- * The screen's one loud surface, porting the hub's "right now" card: the first verified
- * regional helpline with a number, and the emergency number where the directory has one.
- * Both come from the asset, so nothing is hard-coded to a country.
+ * The page answers before it lists (owner recut 2026-11-08, second pass): the verified
+ * contact is stated as an editorial masthead — Fraunces title, the call dial, the service
+ * name and its number — on the same plain ground as the directory rather than in a filled
+ * card. The dial is the hub's start-control shape, so the two urgent surfaces read as one
+ * family, and the emergency line keeps the only error tint. Both entries come from the
+ * asset, so nothing is hard-coded to a country.
  */
 @Composable
 private fun HeroCard(hero: CrisisResource?, emergency: CrisisResource?) {
     val context = LocalContext.current
-    val ink = MaterialTheme.colorScheme.onPrimary
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(MaterialTheme.shapes.extraLarge)
-            .background(MaterialTheme.colorScheme.primary)
-            .padding(horizontal = 20.dp, vertical = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(
-            stringResource(R.string.recovery_now_eyebrow).uppercase(),
-            style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.6.sp),
-            color = ink.copy(alpha = 0.72f),
-        )
+    Column(modifier = Modifier.fillMaxWidth()) {
         Text(
             stringResource(R.string.recovery_crisis_hero_title),
             style = MaterialTheme.typography.headlineLarge,
-            color = ink,
         )
         if (hero != null) {
-            Text(hero.name, style = MaterialTheme.typography.titleSmall, color = ink)
-            if (hero.description.isNotBlank()) {
-                Text(
-                    hero.description,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = ink.copy(alpha = 0.85f),
-                )
-            }
+            Spacer(Modifier.height(14.dp))
             val primary = channelsOf(hero).firstOrNull()
-            if (primary != null) {
-                Button(
-                    onClick = { openUri(context, primary.action, primary.uri) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 56.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.onPrimary,
-                        contentColor = MaterialTheme.colorScheme.primary,
-                    ),
-                    contentPadding = PaddingValues(horizontal = 20.dp),
+            Row(verticalAlignment = Alignment.Top) {
+                if (primary != null) {
+                    SignalDial(
+                        icon = channelIcon(primary),
+                        label = stringResource(channelVerbRes(primary)),
+                        contentDescription = channelLabel(primary),
+                        onClick = { openUri(context, primary.action, primary.uri) },
+                    )
+                    Spacer(Modifier.width(18.dp))
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(channelLabel(primary), style = MaterialTheme.typography.titleMedium)
-                        Spacer(Modifier.weight(1f))
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.ArrowForward,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
+                    Text(
+                        hero.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    if (primary != null && primary.value.isNotBlank()) {
+                        Text(
+                            primary.value,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.primary,
                         )
                     }
                 }
             }
+            if (hero.description.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    hero.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
+        Spacer(Modifier.height(12.dp))
+        Hairline()
         Spacer(Modifier.height(4.dp))
-        HorizontalDivider(color = ink.copy(alpha = 0.2f))
         if (emergency != null && emergency.phone.isNotBlank()) {
             Row(
                 modifier = Modifier
@@ -378,20 +373,19 @@ private fun HeroCard(hero: CrisisResource?, emergency: CrisisResource?) {
                 Icon(
                     imageVector = Icons.Outlined.Emergency,
                     contentDescription = null,
-                    tint = ink.copy(alpha = 0.85f),
+                    tint = MaterialTheme.colorScheme.error,
                     modifier = Modifier.size(20.dp),
                 )
                 Text(
                     stringResource(R.string.recovery_crisis_emergency_line, emergency.phone),
                     style = MaterialTheme.typography.titleSmall,
-                    color = ink,
                 )
             }
         } else {
             Text(
                 stringResource(R.string.recovery_crisis_emergency_generic),
                 style = MaterialTheme.typography.bodySmall,
-                color = ink.copy(alpha = 0.9f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -518,6 +512,21 @@ private fun channelsOf(resource: CrisisResource): List<CrisisChannel> = buildLis
     if (resource.url.isNotBlank()) {
         add(CrisisChannel(R.string.recovery_crisis_open, "", Intent.ACTION_VIEW, resource.url))
     }
+}
+
+/** The dial's glyph and verb: the shortest honest form of the channel, never its full label. */
+private fun channelIcon(channel: CrisisChannel): ImageVector = when (channel.labelRes) {
+    R.string.recovery_crisis_call -> Icons.Outlined.Call
+    R.string.recovery_crisis_sms -> Icons.Outlined.Sms
+    R.string.recovery_crisis_whatsapp -> Icons.Outlined.Chat
+    else -> Icons.Outlined.Language
+}
+
+private fun channelVerbRes(channel: CrisisChannel): Int = when (channel.labelRes) {
+    R.string.recovery_crisis_call -> R.string.recovery_crisis_verb_call
+    R.string.recovery_crisis_sms -> R.string.recovery_crisis_verb_text
+    R.string.recovery_crisis_whatsapp -> R.string.recovery_crisis_verb_whatsapp
+    else -> R.string.recovery_crisis_verb_open
 }
 
 /**

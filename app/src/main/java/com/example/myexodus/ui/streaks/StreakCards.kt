@@ -1,15 +1,11 @@
 package com.example.myexodus.ui.streaks
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -22,6 +18,7 @@ import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -109,11 +106,20 @@ internal fun FreeSinceLine(recoveryStartAtEpochMillis: Long) {
  * Owner ruling 2026-09-23 (ADR #85): the rungs replaced a 293px `MilestoneLadderCard` whose
  * first row restated this card's own caption verbatim ("Next milestone: Day 7 — 4 days to go").
  * Transposing the ladder into the hero deletes the duplicate statement and the page's weight
- * with it: at 360dp the whole tab now fits one screen, which is what puts the relapse action
- * back above the fold (finding #27).
+ * with it.
+ *
+ * Relapse logging is the hero's footer (owner call 2026-11-08): the action ends the count it
+ * sits under, and as its own card below the toolkit it was the last thing on the page. The
+ * dialog still guards it, and the support note still lands where the action is.
  */
 @Composable
-internal fun StreakSummaryCard(state: HabitState, onSwitch: (() -> Unit)? = null) {
+internal fun StreakSummaryCard(
+    state: HabitState,
+    onSwitch: (() -> Unit)? = null,
+    relapseInFlight: Boolean = false,
+    relapseNote: String? = null,
+    onRelapse: (() -> Unit)? = null,
+) {
     val days = daysFree(state.currentStreakElapsedMs)
     val best = daysFree(state.allTimeMaxElapsedMs)
     Surface(
@@ -154,6 +160,15 @@ internal fun StreakSummaryCard(state: HabitState, onSwitch: (() -> Unit)? = null
                     pluralStringResource(R.plurals.streaks_best_run, best, best),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                )
+            }
+            if (onRelapse != null) {
+                RelapseFooter(
+                    habitLabel = state.targetLabel,
+                    currentDays = days,
+                    inFlight = relapseInFlight,
+                    note = relapseNote,
+                    onRelapse = onRelapse,
                 )
             }
         }
@@ -215,13 +230,17 @@ private fun MilestoneRungStrip(state: HabitState) {
 }
 
 /**
- * Relapse logging: confirmation dialog first (the button ends the current streak — a
- * deliberate extra step, not the plan's debounce, which is the in-flight flag), then a
- * supportive non-punitive note (design research: "you lost your streak" framing drives
- * churn; the record surviving the reset is the honest counterweight).
+ * The hero's destructive footer. Confirmation dialog first (the tap ends the current streak — a
+ * deliberate extra step, not the plan's debounce, which is the in-flight flag), then a supportive
+ * non-punitive note (design research: "you lost your streak" framing drives churn; the record
+ * surviving the reset is the honest counterweight).
+ *
+ * Owner ruling 2026-11-08: the action must read as important at a glance. As a quiet text row it
+ * looked like a footnote; it is now a full-width filled error button — the same "a filled object
+ * is the action" grammar as the recovery hub's SignalDial.
  */
 @Composable
-internal fun RelapseCard(
+private fun RelapseFooter(
     habitLabel: String,
     currentDays: Int,
     inFlight: Boolean,
@@ -264,71 +283,50 @@ internal fun RelapseCard(
         )
     }
 
-    // Owner directive 2026-10-21: the relapse action used to blend into the page as one more
-    // outlined button. It now owns a distinct, error-signposted card — the one place on the tab
-    // that looks destructive, because it is — while the hero keeps its gold celebration tone.
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = MaterialTheme.shapes.medium,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f)),
-        modifier = Modifier.fillMaxWidth(),
+    HorizontalDivider(
+        modifier = Modifier.padding(top = 14.dp, bottom = 12.dp),
+        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.18f),
+    )
+    // Owner ruling 2026-10-17: the streak card's relapse action carries the same glyph as the
+    // widget's relapse control, so the two surfaces cannot read as two different actions.
+    Button(
+        onClick = { confirming = true },
+        enabled = !inFlight,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp),
+        shape = CircleShape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.error,
+            contentColor = MaterialTheme.colorScheme.onError,
+        ),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .background(MaterialTheme.colorScheme.errorContainer, CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    // Owner ruling 2026-10-17: the streak card's relapse action carries the same
-                    // glyph as the widget's relapse control, so the two surfaces cannot read as
-                    // two different actions.
-                    Icon(
-                        painter = painterResource(R.drawable.ic_log_relapse),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onErrorContainer,
-                        modifier = Modifier.size(22.dp),
-                    )
-                }
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        stringResource(R.string.streaks_relapse_title),
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        stringResource(R.string.streaks_relapse_body),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            note?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            Button(
-                onClick = { confirming = true },
-                enabled = !inFlight,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                ),
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-            ) {
-                Text(
-                    stringResource(
-                        if (inFlight) R.string.streaks_relapse_in_flight
-                        else R.string.streaks_relapse_action,
-                    ),
-                )
-            }
-        }
+        Icon(
+            painter = painterResource(R.drawable.ic_log_relapse),
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            stringResource(
+                if (inFlight) R.string.streaks_relapse_in_flight
+                else R.string.streaks_relapse_action,
+            ),
+            style = MaterialTheme.typography.labelLarge,
+        )
+    }
+    Text(
+        stringResource(R.string.streaks_relapse_body),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+        modifier = Modifier.padding(top = 8.dp),
+    )
+    note?.let {
+        Text(
+            it,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier.padding(top = 6.dp),
+        )
     }
 }

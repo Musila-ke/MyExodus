@@ -1,4 +1,5 @@
 import java.util.Properties
+import org.gradle.api.tasks.testing.Test
 
 plugins {
     alias(libs.plugins.android.application)
@@ -97,6 +98,12 @@ android {
         unitTests {
             isIncludeAndroidResources = true
         }
+    }
+    // 2026-11-08 build-speed pass: the JVM suite is ~2,500 Robolectric tests and ran one fork
+    // for 5+ minutes on this 4-core machine. Two forks halve wall time; each is a separate
+    // JVM, so Robolectric sandboxes and statics stay isolated. Do not raise past 2 on 8 GB.
+    tasks.withType<Test>().configureEach {
+        maxParallelForks = 2
     }
     // ADR #208: the standalone lintDebug gate is authoritative; skip the redundant per-release pass.
     lint {

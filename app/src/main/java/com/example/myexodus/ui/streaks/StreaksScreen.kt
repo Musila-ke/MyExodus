@@ -1,15 +1,19 @@
 package com.example.myexodus.ui.streaks
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Timeline
@@ -17,6 +21,8 @@ import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -30,8 +36,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
 import com.example.myexodus.recovery.RecoverySessionRepository
@@ -205,43 +214,26 @@ fun StreaksScreen(
                 // Owner ruling 2026-09-23 (ADR #85): the milestone ladder lives in the hero as a
                 // rung strip — as its own card it restated the hero's caption and pushed this
                 // screen's one action past the fold.
-                StreakSummaryCard(state, onSwitch = onOpenHabitPicker)
-                // Reference grammar (owner directive 2026-10-21): reference material and
-                // management are icon+label subpages, never inline card blocks. The timeline's
-                // Decision 12 disclaimer still ships on the destination.
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    NavTile(
-                        icon = Icons.Outlined.Timeline,
-                        label = stringResource(R.string.streaks_what_to_expect),
-                        onClick = { view = VIEW_TIMELINE },
-                        modifier = Modifier.weight(1f),
-                    )
-                    NavTile(
-                        icon = Icons.Outlined.Tune,
-                        label = stringResource(R.string.streaks_manage_title),
-                        onClick = {
-                            onClearManageFeedback()
-                            view = VIEW_MANAGE
-                        },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                // Owner task #22: the one tile that opens the full record, with its window
-                // stated on the face so the page's scope is known before the tap.
-                NavTile(
-                    icon = Icons.Outlined.Insights,
-                    label = stringResource(R.string.insights_title),
-                    status = stringResource(R.string.insights_stat_caption),
-                    onClick = { view = VIEW_INSIGHTS },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                HistoryTile(onClick = { view = VIEW_HISTORY })
-                RelapseCard(
-                    habitLabel = state.targetLabel,
-                    currentDays = daysFree(state.currentStreakElapsedMs),
-                    inFlight = relapseInFlight,
-                    note = relapseFeedback?.let { relapseNoteText(it) },
+                // The relapse action rides in the hero (owner call 2026-11-08): it ends the
+                // count it sits under, so it no longer sits below the toolkit at page bottom.
+                StreakSummaryCard(
+                    state = state,
+                    onSwitch = onOpenHabitPicker,
+                    relapseInFlight = relapseInFlight,
+                    relapseNote = relapseFeedback?.let { relapseNoteText(it) },
                     onRelapse = onRelapse,
+                )
+                // Owner call 2026-11-08: one grouped toolkit instead of four centered tiles.
+                // Reference material, management and the record read as a single list, each
+                // row stating its scope before the tap (owner task #22).
+                StreaksToolkitCard(
+                    onOpenTimeline = { view = VIEW_TIMELINE },
+                    onOpenManage = {
+                        onClearManageFeedback()
+                        view = VIEW_MANAGE
+                    },
+                    onOpenInsights = { view = VIEW_INSIGHTS },
+                    onOpenHistory = { view = VIEW_HISTORY },
                 )
             }
         }
@@ -258,6 +250,106 @@ private fun HistoryTile(onClick: () -> Unit) {
         status = stringResource(R.string.recovery_history_tile_caption),
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+/**
+ * The streak's four destinations as one grouped list (owner call 2026-11-08). Rows carry the
+ * scope captions the tiles used to, so each door is legible before the tap, and the whole
+ * block fits on the hub without the dead space centered tiles cost.
+ */
+@Composable
+private fun StreaksToolkitCard(
+    onOpenTimeline: () -> Unit,
+    onOpenManage: () -> Unit,
+    onOpenInsights: () -> Unit,
+    onOpenHistory: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column {
+            ToolkitRow(
+                icon = Icons.Outlined.Timeline,
+                label = stringResource(R.string.streaks_what_to_expect),
+                caption = null,
+                onClick = onOpenTimeline,
+            )
+            ToolkitDivider()
+            ToolkitRow(
+                icon = Icons.Outlined.Tune,
+                label = stringResource(R.string.streaks_manage_title),
+                caption = null,
+                onClick = onOpenManage,
+            )
+            ToolkitDivider()
+            ToolkitRow(
+                icon = Icons.Outlined.Insights,
+                label = stringResource(R.string.insights_title),
+                caption = stringResource(R.string.insights_stat_caption),
+                onClick = onOpenInsights,
+            )
+            ToolkitDivider()
+            ToolkitRow(
+                icon = Icons.Outlined.History,
+                label = stringResource(R.string.recovery_history_title),
+                caption = stringResource(R.string.recovery_history_tile_caption),
+                onClick = onOpenHistory,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ToolkitRow(
+    icon: ImageVector,
+    label: String,
+    caption: String?,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 64.dp)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(label, style = MaterialTheme.typography.titleMedium)
+            if (caption != null) {
+                Text(
+                    caption,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Icon(
+            imageVector = Icons.Outlined.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+/** Inset to the text column, so the group reads as one card, not four stacked rows. */
+@Composable
+private fun ToolkitDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(start = 50.dp),
+        thickness = 0.5.dp,
+        color = MaterialTheme.colorScheme.outlineVariant,
     )
 }
 
