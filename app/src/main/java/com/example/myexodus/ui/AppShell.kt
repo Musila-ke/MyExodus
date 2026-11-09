@@ -214,6 +214,9 @@ fun AppShell(
     partnerAlertHealth: PartnerAlertHealth.State,
     onFixNotifications: () -> Unit,
     onPartnerCheckNow: suspend () -> Boolean,
+    /** ADR #294: a share change kicks the silent delivery pass — warm sends in seconds,
+     *  cold defers; this path never raises the device-key sheet. */
+    onPartnerDeliverSilently: suspend () -> Unit = {},
     onRespondToApproval: suspend (requestEventId: String, approve: Boolean) -> Boolean = { _, _ -> false },
     onUnpair: suspend (pairId: String) -> UnpairOutcome = { UnpairOutcome.FAILED },
     onDismissUnpair: suspend (pairId: String) -> Unit = {},
@@ -364,11 +367,10 @@ fun AppShell(
             snackbarHostState.showSnackbar(standbyNotice)
         }
     }
-    // Owner-approved B (2026-11-09): a share change on the Streaks page asks for the delivery
-    // pass immediately, so a cold signing window raises the device-key prompt at the moment of
-    // the change instead of waiting for a later automatic attempt.
+    // ADR #294 (reverses #292 item 2): a share change asks for the delivery pass but never
+    // for authentication — the share is the action, delivery is its silent side effect.
     LaunchedEffect(Unit) {
-        streaks.sharingDeliveryRequested.collect { onPartnerCheckNow() }
+        streaks.sharingDeliveryRequested.collect { onPartnerDeliverSilently() }
     }
 
     // SOS §8.16 (Step 9): "attach the listener during Home lifecycle" — the §6.9 query runs

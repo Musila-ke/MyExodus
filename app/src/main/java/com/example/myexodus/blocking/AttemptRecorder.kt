@@ -24,9 +24,12 @@ class AttemptRecorder @Inject constructor(
             return
         }
         try {
-            // The a11y decision and the FGS poll observe the same blocked launch within a
-            // poll interval (1.5 s). Five seconds absorbs that skew without merging two
-            // deliberate re-opens; a clock-skewed future row does not count (DAO note).
+            // The a11y decision and the FGS poll can observe the SAME blocked launch far
+            // apart: the wall-launch grace retries a cold-start eviction for up to 10 s
+            // (EnforcementForegroundService.BLOCK_LAUNCH_GRACE_MS) and the a11y cover
+            // re-samples for a few more, so one wall episode produced two attempt rows and
+            // two partner notifications (owner report 2026-11-10). Thirty seconds covers
+            // the whole episode while a deliberate re-open a minute later still counts.
             val now = System.currentTimeMillis()
             if (store.attemptLogDao().countRecentBlocked(
                     ruleId,
@@ -56,6 +59,6 @@ class AttemptRecorder @Inject constructor(
 
     private companion object {
         const val TAG = "MyExodusAttempts"
-        const val BLOCK_DEDUPE_WINDOW_MS = 5_000L
+        const val BLOCK_DEDUPE_WINDOW_MS = 30_000L
     }
 }

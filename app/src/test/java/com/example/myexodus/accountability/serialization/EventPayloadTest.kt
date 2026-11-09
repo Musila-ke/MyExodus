@@ -365,6 +365,19 @@ class EventPayloadTest {
         assertEquals(ActivityEvent.Valid(p), classifyActivity(p))
     }
 
+    /** Owner ruling 2026-11-10: the check-ins revoke is a consent announcement, not state —
+     *  the ADR #285 snapshot-less shape again, so it classifies Valid without a body. */
+    @Test
+    fun classify_checkinsSharingStoppedWithoutStateAfter_isValid() {
+        val p = EventPayload(
+            type = EventPayload.TYPE_CHECKINS_SHARING_STOPPED,
+            text = "",
+            protocolVersion = 1,
+            schemaVersion = 1,
+        )
+        assertEquals(ActivityEvent.Valid(p), classifyActivity(p))
+    }
+
     /** ADR #285: the snapshot-less message's send time rides its own optional key, and unset
      *  payloads (every existing snapshot-carrying message) keep their exact prior encoding. */
     @Test

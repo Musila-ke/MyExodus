@@ -572,6 +572,17 @@ class PartnerSyncCoordinator(
         profileConsent: PairProfileSharing?,
         visibleHabits: List<HabitProgress>,
     ): EventPayload? {
+        // Owner ruling 2026-11-10: the check-ins revoke is a consent announcement, never
+        // state — shipping it snapshot-less keeps a check-ins-only pair's day counts, which
+        // they never consented to share, off the wire entirely.
+        if (row.kind == EventPayload.TYPE_CHECKINS_SHARING_STOPPED) {
+            return EventPayload(
+                type = row.kind,
+                text = row.text,
+                protocolVersion = row.protocolVersion,
+                schemaVersion = row.schemaVersion,
+            )
+        }
         val isHabitRow = row.kind in EventPayload.HABIT_ANCHORED_ACTIVITY_TYPES
         val anchor: HabitProgress?
         val base: Aggregate

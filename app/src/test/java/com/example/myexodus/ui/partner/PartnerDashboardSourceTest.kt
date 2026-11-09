@@ -179,6 +179,31 @@ class PartnerDashboardSourceTest {
         assertEquals(PartnerAlert.RuleChanged(RuleChange.DISABLED, insideWeek.occurredAtMinute * 60_000L), summary.recent.single())
     }
 
+    /** Owner report 2026-11-10: the violation alert must also be listed on Rules & blocks,
+     *  next to the lifecycle rows — the notification alone left the page looking empty. */
+    @Test
+    fun ruleHistory_listsBlockAttemptsAlongsideRuleChanges_newestFirst() = runTest {
+        val change = PartnerRuleChange(
+            pairId = "pair-1", eventId = "evt-1", ruleId = "uuid",
+            ruleChange = "DISABLED", occurredAtMinute = (now - 60_000L) / 60_000L,
+            receivedAtMs = now, expiresAtMs = now + 1,
+        )
+        val attemptAt = now - 120_000L
+        val paired = source(
+            ruleChangeRows = listOf(change),
+            rows = listOf(row(attemptAt)),
+            decode = { EventPayload(type = EventPayload.TYPE_ACTIVITY, text = "blocked:com.x") },
+        ).source.load(now) as PartnerDashboardUi.Paired
+
+        assertEquals(
+            listOf(
+                PartnerAlert.RuleChanged(RuleChange.DISABLED, change.occurredAtMinute * 60_000L),
+                PartnerAlert.AppActivity("com.x", false, attemptAt),
+            ),
+            paired.ruleHistory,
+        )
+    }
+
     private fun journalRow(pairId: String = "pair-1", requestedAt: Long = 500L) = UnpairState(
         pairId = pairId,
         role = UnpairState.ROLE_REQUESTER,

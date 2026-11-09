@@ -122,13 +122,14 @@ class PartnerDashboardSource(
         // the screen on Loading — it degrades to "no decodable rows", the honest reading.
         val decode = runCatching { decoderFor(enrollment) }.getOrElse { { _: ByteArray -> null } }
         val ruleRows = runCatching { ruleChanges(enrollment.pairId) }.getOrElse { emptyList() }
-        val alerts = rows.mapNotNull { row ->
+        val receivedAlerts = rows.mapNotNull { row ->
             runCatching { decode(row.envelope) }
                 .getOrNull()
                 ?.let { alertOf(it, row.createdAtEpochMillis) }
-        } + ruleRows
-            .filter { it.occurredAtMinute * 60_000L >= nowMillis - WEEK_MILLIS }
-            .mapNotNull(::ruleChangeAlert)
+        }
+        val ruleAlerts = ruleRows.mapNotNull(::ruleChangeAlert)
+        val alerts = receivedAlerts + ruleAlerts
+            .filter { it.atEpochMillis >= nowMillis - WEEK_MILLIS }
         val chainHead = head(enrollment.pairId, enrollment.partnerSigningKeyId)
         val approvalRows = runCatching { approvals(enrollment.pairId) }.getOrElse { emptyList() }
             .map {
@@ -176,8 +177,12 @@ class PartnerDashboardSource(
             alerts = summarizeAlerts(alerts, startOfLocalDay(nowMillis, zone), zone),
             // The dedicated rules page (owner mandate 2026-10-31: "an organized page listing
             // rules/batches") shows the full 30-day retention, not the feed's week preview.
-            ruleHistory = ruleRows.mapNotNull(::ruleChangeAlert)
-                .filterIsInstance<PartnerAlert.RuleChanged>(),
+            // Owner report 2026-11-10: a block or override is listed here too, not only in
+            // the tray — "Rules & blocks" is where the owner looks after the alert. Attempts
+            // come from the received activity rows (the mailbox window), so they cover the
+            // same week the feed previews.
+            ruleHistory = (ruleAlerts + receivedAlerts.filterIsInstance<PartnerAlert.AppActivity>())
+                .sortedByDescending { it.atEpochMillis },
             sentMessageText = runCatching { latestSentMessage(enrollment.pairId) }.getOrNull(),
             approvals = approvalRows,
             activity = runCatching { partnerActivity(enrollment.pairId) }.getOrNull(),
@@ -292,9 +297,9 @@ sealed interface PartnerDashboardUi {
         val freshness: SyncFreshness,
         val chainStatus: PartnerChainStatus,
         val alerts: AlertSummary,
-        /** Received rule/batch lifecycle rows, newest first, full retention — the Rules
-         *  subpage's list. The feed itself only previews the week ([alerts]). */
-        val ruleHistory: List<PartnerAlert.RuleChanged> = emptyList(),
+        /** Received rule/batch lifecycle rows and block/override attempts, newest first —
+         *  the Rules subpage's list. The feed itself only previews the week ([alerts]). */
+        val ruleHistory: List<PartnerAlert> = emptyList(),
         /** Owner ask 2026-10-01: the last message this user wrote to this partner (journal
          *  read-back); null = nothing sent yet. */
         val sentMessageText: String? = null,

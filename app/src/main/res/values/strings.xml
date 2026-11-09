@@ -310,6 +310,10 @@
     <string name="partner_sharing_stopped_title_named">%1$s stopped sharing a streak</string>
     <string name="partner_sharing_stopped_body_labeled">You no longer see %1$s.</string>
     <string name="partner_sharing_stopped_body">A streak was removed from what you can see.</string>
+    <!-- Owner ruling 2026-11-10: switching blocked-app check-ins off tells the partner the
+         alerts stop. Unlocked copy only (FR-13). -->
+    <string name="partner_checkins_stopped_title_named">%1$s turned off blocked-app check-ins</string>
+    <string name="partner_checkins_stopped_body">You will not hear about blocked or overridden apps unless this is turned back on.</string>
     <!-- Owner directive 2026-11-09: the streak-management acts. Unlocked copy only; the
          lockscreen keeps the plain partner_event_* forms (FR-13). -->
     <string name="partner_streak_shared_title_named">%1$s shared a streak with you</string>
@@ -969,13 +973,13 @@
     <string name="partner_tile_rules">Rules &amp; blocks</string>
     <string name="partner_tile_rules_none">None shared with you yet</string>
     <string name="partner_rules_empty_title">No rule updates yet</string>
-    <string name="partner_rules_empty_body">When a rule or batch you watch is created, changed, turned off, or ends, it shows up here.</string>
-    <string name="partner_rules_intro">Newest first. Each row names the rule or batch and what changed.</string>
+    <string name="partner_rules_empty_body">When a rule or batch you watch changes, or a blocked app is opened, it shows up here.</string>
+    <string name="partner_rules_intro">Newest first. Each row names what changed, including blocked-app attempts.</string>
     <string name="partner_day_today">Today</string>
     <string name="partner_day_yesterday">Yesterday</string>
     <plurals name="partner_rules_count">
-        <item quantity="one">%1$d rule update</item>
-        <item quantity="other">%1$d rule updates</item>
+        <item quantity="one">%1$d update</item>
+        <item quantity="other">%1$d updates</item>
     </plurals>
     <string name="partner_plans_title">Plans</string>
     <string name="partner_plans_intro">A plan is a short checklist. A partner can write one for you, and you can write your own.</string>

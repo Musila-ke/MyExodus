@@ -771,6 +771,31 @@ class HabitRepositoryTest {
         assertNull("a habit with no consent row shows as not shared for every pair", item.perPair["pair-1"])
     }
 
+    /** Owner ruling 2026-11-10: switching blocked-app check-ins off tells the partner the
+     *  alerts stop. The revoke is targeted at the pair that switched off, survives the consent
+     *  flip in the delivery gate (it is the flip's own announcement), and off-to-off is a
+     *  no-op rather than a repeat notification. */
+    @Test
+    fun setPairProfileSharing_checkinsFall_journalsTheRevoke_forThatPairOnly() = runBlocking {
+        seedProfile()
+        onboard()
+        repository.setPairProfileSharing("pair-1", shareCheckIns = true, shareRecovery = false)
+
+        now = now.copy(tWallMillis = now.tWallMillis + 60_000)
+        assertTrue(repository.setPairProfileSharing("pair-1", shareCheckIns = false, shareRecovery = false))
+
+        val revoke = journalRows().single()
+        assertEquals(EventPayload.TYPE_CHECKINS_SHARING_STOPPED, revoke.kind)
+        assertEquals("the pair that switched off is the only recipient", "pair-1", revoke.targetPairId)
+        assertTrue(
+            "no consent row of its own is needed — the revoke still delivers after the flip",
+            store.partnerActivityDao().pendingForPair("pair-2", sinceMs = 0L, limit = 100).isEmpty(),
+        )
+
+        repository.setPairProfileSharing("pair-1", shareCheckIns = false, shareRecovery = false)
+        assertEquals("off to off is not a transition", 1, journalRows().size)
+    }
+
     /** Step 10: availability is a server-converged consent — every transition (revocation
      *  included) marks the row pending and kicks a sync pass; only the server's acknowledgement
      *  of the SAME value clears it. A write that leaves availability alone changes neither. */

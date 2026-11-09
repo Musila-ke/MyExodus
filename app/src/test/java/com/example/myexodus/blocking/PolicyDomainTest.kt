@@ -11,6 +11,7 @@ import com.example.myexodus.data.db.DatabaseKeyManager
 import com.example.myexodus.data.db.KeyFailure
 import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.data.db.RulesStoreKeyManager
+import com.example.myexodus.data.db.entity.PairProfileSharing
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.UserProfile
 import kotlinx.coroutines.runBlocking
@@ -107,18 +108,15 @@ class PolicyDomainTest {
         )
     }
 
-    /** Owner mandate 2026-11-09: the act that queued a partner-visible row requests the
-     *  delivery pass (may prompt for the device key); the automatic expiry sweep must not —
-     *  it would raise a sheet with nobody mid-act (owner ruling 2026-11-05). */
+    /** ADR #294: a partner-visible row requests one silent delivery pass at the act — warm
+     *  delivers, cold defers; nothing in this path may raise a device-key sheet. */
     @Test
-    fun userActWrites_requestDeliveryOnlyWhenARowWasJournaled() = runTest {
+    fun partnerRoutedWrites_requestAPass_onlyWhenARowWasJournaled() = runTest {
         val clock = 1_700_000_000_000L
         var journaled = 0
-        var userAct = 0
         val repo = RulesRepository(
             factory, publisher,
             onJournaled = { journaled++ },
-            onUserActJournaled = { userAct++ },
             now = { clock },
         )
 
@@ -126,16 +124,51 @@ class PolicyDomainTest {
             appRule("com.a", "0b7c1a9e-3f1e-4c1e-9c1e-0123456789ab")
                 .copy(assignedPairId = "pair-1", blockExpiresAt = clock - 1_000L),
         )
-        assertEquals("an assigned save journals", 1, journaled)
-        assertEquals("and requests the delivery pass at the act", 1, userAct)
+        assertEquals("an assigned save journals and requests the pass", 1, journaled)
 
         repo.sweepExpired(clock)
-        assertEquals("the sweep still journals its lapsed rule", 2, journaled)
-        assertEquals("but never requests a prompting pass", 1, userAct)
+        assertEquals("the sweep journals its lapsed rule and requests the same pass", 2, journaled)
 
         repo.insertRule(appRule("com.b", "0b7c1a9e-3f1e-4c1e-9c1e-0123456789ac"))
-        assertEquals("an unassigned rule tells no partner — no row", 2, journaled)
-        assertEquals("and no delivery request", 1, userAct)
+        assertEquals("an unassigned rule tells no partner — no row, no pass", 2, journaled)
+    }
+
+    /** Owner ruling 2026-11-10: assigning a rule or batch switches that pair's blocked-app
+     *  check-ins on, so the partner watching the rules hears violations without a second
+     *  setup step. An unassigned write touches no consent row, and a pair that had the
+     *  switch off gets it back on with a fresh watermark (no while-off backlog leaks). */
+    @Test
+    fun assignment_turnsCheckInsOn_forThatPairOnly() = runTest {
+        val clock = 1_700_000_000_000L
+        val repo = RulesRepository(factory, publisher, now = { clock })
+        val dao = factory.open()!!.pairSharingDao()
+        dao.upsertProfile(
+            PairProfileSharing(pairId = "pair-1", shareCheckins = false, checkinsEnabledSinceMs = 5L),
+        )
+
+        repo.insertRule(appRule("com.a", "r-1").copy(assignedPairId = "pair-1"))
+
+        val share = dao.profileFor("pair-1")!!
+        assertTrue("the assignment turns check-ins on", share.shareCheckins)
+        assertEquals(
+            "a re-enable pins a fresh watermark",
+            clock,
+            share.checkinsEnabledSinceMs,
+        )
+
+        repo.insertBatch(
+            listOf(
+                appRule("com.b", "r-2").copy(assignedPairId = "pair-2", batchId = "b-1"),
+                appRule("com.c", "r-3").copy(assignedPairId = "pair-2", batchId = "b-1"),
+            ),
+        )
+        assertTrue(
+            "a batch turns on every assigned pair, once",
+            dao.profileFor("pair-2")!!.shareCheckins,
+        )
+
+        repo.insertRule(appRule("com.d", "r-4"))
+        assertEquals("an unassigned rule writes no consent row", 2, dao.profileAll().size)
     }
 
     @Test

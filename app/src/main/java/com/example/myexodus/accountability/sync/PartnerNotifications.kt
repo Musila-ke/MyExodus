@@ -213,6 +213,10 @@ object PartnerNotifications {
                     (payload.stateAfter?.habitLabel?.takeIf { it.isNotBlank() }
                         ?.let { context.getString(R.string.partner_sharing_stopped_body_labeled, it) }
                         ?: context.getString(R.string.partner_sharing_stopped_body))
+            // Owner ruling 2026-11-10: the check-ins revoke names the silence that follows.
+            EventPayload.TYPE_CHECKINS_SHARING_STOPPED ->
+                context.getString(R.string.partner_checkins_stopped_title_named, partnerName) to
+                    context.getString(R.string.partner_checkins_stopped_body)
             // Owner directive 2026-11-09: the streak-management acts name themselves, so the
             // partner hears "shared / renamed / deleted a streak", not "new activity". Always
             // rich — a pre-v3 sender's label-less body is still the honest signal.

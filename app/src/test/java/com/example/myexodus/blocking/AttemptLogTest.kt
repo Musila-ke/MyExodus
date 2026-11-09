@@ -189,17 +189,20 @@ class AttemptLogTest {
         runCurrent()
         assertEquals(1, kicks.size)
 
-        recorder.recordBlocked("r-1", "com.a") // 5 s dedupe window
+        recorder.recordBlocked("r-1", "com.a") // 30 s dedupe window
         runCurrent()
         assertEquals("a collapsed duplicate is not a new partner-visible attempt", 1, kicks.size)
     }
 
+    /** Owner report 2026-11-10 ("partner got another notification... 2 notifications"): the
+     *  FGS retries a cold-start eviction for up to 10 s after the a11y path logged the wall,
+     *  so a second observation about 12 s later must still collapse into one episode. */
     @Test
-    fun recordBlocked_recordsAgainOnceTheDedupeWindowHasPassed() = runTest {
+    fun recordBlocked_collapsesTheGraceRetry_intoOneEpisode() = runTest {
         val dao = factory.open()!!.attemptLogDao()
         dao.insert(
             AttemptLog(
-                occurredAtEpochMillis = System.currentTimeMillis() - 6_000L,
+                occurredAtEpochMillis = System.currentTimeMillis() - 12_000L,
                 ruleId = "r-1",
                 blockedTarget = "com.a",
                 outcome = AttemptLog.OUTCOME_BLOCKED,
@@ -209,7 +212,25 @@ class AttemptLogTest {
 
         recorder.recordBlocked("r-1", "com.a")
 
-        assertEquals("a deliberate re-open minutes later is a new attempt", 2, dao.count())
+        assertEquals("the grace retry is the same wall episode", 1, dao.count())
+    }
+
+    @Test
+    fun recordBlocked_recordsAgainOnceTheDedupeWindowHasPassed() = runTest {
+        val dao = factory.open()!!.attemptLogDao()
+        dao.insert(
+            AttemptLog(
+                occurredAtEpochMillis = System.currentTimeMillis() - 31_000L,
+                ruleId = "r-1",
+                blockedTarget = "com.a",
+                outcome = AttemptLog.OUTCOME_BLOCKED,
+                eventSequence = null,
+            ),
+        )
+
+        recorder.recordBlocked("r-1", "com.a")
+
+        assertEquals("a deliberate re-open past the episode window is a new attempt", 2, dao.count())
     }
 
     private fun attempt(at: Long, target: String) = AttemptLog(

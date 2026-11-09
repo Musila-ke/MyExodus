@@ -50,7 +50,7 @@ Columns: **#**, **scenario**, **expected (source)**, **device result**.
 |---|---|---|---|
 | S1 | Create a single block, assigned to partner | Partner notification "You were added as accountability partner on «label»." (CREATED) + Rules page row | PARTIAL 2026-11-09: receiver tray record `partner:event:P9XV…` id 1949173998, title "Rule update from Kelvin Musila", text "You were added as accountability partner on Adobe Scan." Delivered late on a warm sync pass (finding 5), not at create time. Rules page row not yet re-checked after delivery |
 | S2 | Assign partner to an existing unassigned block (edit) | UNASSIGNED to nobody, ASSIGNED to partner → "You were added as accountability partner on «label»." | |
-| S3 | Modify a watched block (change app/expiry while still assigned) | UPDATED → "«label» was changed." | |
+| S3 | Modify a watched block (change app/expiry while still assigned) | UPDATED → "«label» was changed." | BLOCKED 2026-11-10 (cold window, not a defect): edited Adobe Scan "Active on: Every day → Weekdays" on .106, local save confirmed ("Always on · weekdays · Watched by John Maingi", snapshot v66). Receiver got no notification / no new Rules & blocks row; mailbox newest stayed 22:22:37Z. Sender: `drain: 0 event(s)` at 22:26:42Z/22:27:03Z and `keystore2: matching auth token is expired` + `KEY_USER_NOT_AUTHENTICATED` on every pass — the §8.1 900 s window is cold, the UPDATED row is journaled and deletes only after `Emit.Created` (`PartnerSyncCoordinator.kt:487-497`), so delivery defers to the next device authentication per ADR #294 item 3 / honest limit 2 (phone kept awake through the long device run). Retest after the next owner unlock |
 | S4 | Turn a watched block off (toggle) | DISABLED → "«label» was turned off." (no approval request) | |
 | S5 | Delete a watched block | DELETED → "«label» was deleted." | |
 | S6 | Remove the partner from a watched block | UNASSIGNED → "You were removed from «label»." | |
@@ -149,18 +149,29 @@ S23 (accuracy) after every one:
    S20 message arrived with the receiver pinned and notified; the owner confirmed both. The
    seconds-latency target is met with a warm signing window; a cold window still defers by
    design. Re-measure after the ADR #288 functions deploy and the expedited-work APK land.
-   **Resolution (ADR #292, owner-approved B + A, 2026-11-09):** a share toggle now asks for
-   the delivery pass at the moment of the act, so a cold window raises the device-key prompt
-   right there; if the prompt is cancelled, the Partner page's sync card says the updates are
-   waiting and offers Check now (`PartnerSyncSignals.signingDeferred`). Automatic delivery
-   still never prompts. Device re-measure of the cold-share leg remains.
-   **Generalized (ADR #293, owner mandate 2026-11-09):** the same delivery-at-act now covers
-   every rules write — save, edit, pause/resume, batch create/toggle/delete, disconnect,
-   unlock — because `RulesRepository.journaled()` splits user-act rows from the automatic
-   expiry sweep and emits `PartnerSyncSignals.deliveryRequested` for the former. The backlog
-   batch-flush ("all notifications came at once") no longer happens for user acts; only a
-   cancelled prompt defers, and only the sweep stays silent-by-design.
-6. **Messaging requires sharing, which locks out a pure supervisor.** MOTIVATIONAL_MESSAGE is
+   **Resolution (ADR #292, owner-approved B + A, 2026-11-09; B revised by ADR #294):** a share
+   toggle asks for the delivery pass at the moment of the act, but the request is silent — a
+   cold window never raises the device-key sheet. The Partner page's sync card says the
+   updates are waiting and offers Check now (`PartnerSyncSignals.signingDeferred`). Automatic
+   delivery still never prompts. Device re-measure of the cold-share leg remains.
+   **Generalized (ADR #293, owner mandate 2026-11-09; reversed by ADR #294 the same day):** the
+   first version routed every user-act rules write through the prompting heal; on the live
+   pair that raised the biometric sheet over a rule save and the owner rejected it ("this is
+   supposed to be automatic why the hell do i have to input this"). Now every rules write —
+   save, edit, pause/resume, batch create/toggle/delete, disconnect, unlock — kicks the silent
+   pass at the act: warm delivers in seconds, cold queues the rows and delivers at the first
+   pass after the phone's next unlock (foreground start or the 15-minute worker). No app path
+   asks for authentication except the actions where delivering IS the action: Check now,
+   pairing, unpair, message send.
+6. **Cold-window retry hot loop (found and fixed 2026-11-10).** While S3 sat cold, the
+   foreground ran a full partner sync pass every ~15 s indefinitely: each blocked pass emits
+   `PartnerSyncSignals.signingNeeded`, and `MainActivity`'s collector reran the pass without
+   checking warmth, re-emitting the signal. Evidence: `keystore2: matching auth token is
+   expired` + continuous `drain: 0 event(s) delivered` lines. The collector now retries only
+   when `signingWindowWarm()`; warmth arrives via device authentication, which brings the
+   900 s-warm foreground pass anyway (ADR #216, amended 2026-11-10). No delivery contract
+   changed: a cold backlog still waits for the next unlock (ADR #294).
+7. **Messaging requires sharing, which locks out a pure supervisor.** MOTIVATIONAL_MESSAGE is
    journaled only when at least one streak is shared with the pair
    (`PartnerActivityJournal.kt:183-184`); the UI mirrors it (`PartnerScreen.kt:426` →
    `HabitRepository.kt:444`). The gate exists because the message row carries the sender's

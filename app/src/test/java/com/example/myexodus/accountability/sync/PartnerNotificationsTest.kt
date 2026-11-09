@@ -266,6 +266,32 @@ class PartnerNotificationsTest {
         )
     }
 
+    /** Owner ruling 2026-11-10: switching blocked-app check-ins off alerts the partner, names
+     *  who did it, and says the alerts stop — the lockscreen stays generic (FR-13). */
+    @Test
+    fun checkinsSharingStopped_namesThePartner_andSaysTheAlertsStop() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME,
+            payload(EventPayload.TYPE_CHECKINS_SHARING_STOPPED, text = ""),
+        )
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_checkins_stopped_title_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(R.string.partner_checkins_stopped_body),
+            notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+        assertEquals(
+            "the lockscreen copy stays generic (FR-13)",
+            context.getString(R.string.partner_event_title),
+            notification.publicVersion!!.extras.getString(Notification.EXTRA_TITLE),
+        )
+    }
+
     /** §19.5 multi-partner (owner ruling 2026-09-29): N pairs' items coexist in the tray, each
      *  named for its own partner and keyed by its own id — one partner's entry can never
      *  silently replace another's. */

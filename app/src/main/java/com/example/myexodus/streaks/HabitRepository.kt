@@ -530,6 +530,20 @@ class HabitRepository(
                         },
                     ),
                 )
+                // Owner ruling 2026-11-10: switching blocked-app check-ins off tells the
+                // partner the alerts stop. Written after the consent flip, like the streak
+                // revoke, so the row and the switch can never disagree.
+                if (!shareCheckIns && before?.shareCheckins == true) {
+                    db.userProfileDao().getActive()?.let { profile ->
+                        PartnerActivityJournal.emitForProfile(
+                            db,
+                            profile.userId,
+                            EventPayload.TYPE_CHECKINS_SHARING_STOPPED,
+                            now,
+                            targetPairId = pairId,
+                        )
+                    }
+                }
             }
             true
         }

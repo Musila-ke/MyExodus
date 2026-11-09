@@ -199,6 +199,12 @@ object PartnerActivityJournal {
             EventPayload.TYPE_STREAK_SHARING_STOPPED -> streakRows(dao, targetPairId)
                 .any { it.habitProgressId == habit?.progressId }
 
+            // Owner ruling 2026-11-10: the check-ins revoke must land after share_checkins
+            // was switched off — the consent row's existence is the only condition.
+            EventPayload.TYPE_CHECKINS_SHARING_STOPPED ->
+                if (targetPairId != null) dao.profileFor(targetPairId) != null
+                else dao.profileAll().isNotEmpty()
+
             else -> true
         }
     }

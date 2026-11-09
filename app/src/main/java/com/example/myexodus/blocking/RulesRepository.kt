@@ -1,11 +1,13 @@
 package com.example.myexodus.blocking
 
+import android.util.Log
 import com.example.myexodus.accountability.serialization.AccountabilityEventWire
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleIdentity
 import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.dao.RestrictionRuleDao
+import com.example.myexodus.data.db.entity.PairProfileSharing
 import com.example.myexodus.data.db.entity.PartnerEventJournal
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.UserProfile
@@ -33,13 +35,9 @@ class RulesRepository(
     private val publisher: RulesSnapshotPublisher,
     /** A write journaled at least one partner-routed row — kicks an immediate partner-sync
      *  pass. Without it the change waits for the 15-minute worker, which an owner watching
-     *  the partner's phone reads as "no notification" (owner report 2026-10-31). */
+     *  the partner's phone reads as "no notification" (owner report 2026-10-31). The pass is
+     *  always silent: warm delivers, cold defers (ADR #294). */
     private val onJournaled: () -> Unit = {},
-    /** Same event, but the row came from the subject's own tap (save, toggle, delete,
-     *  disconnect, unlock). Delivery may prompt for the device key at that moment — owner
-     *  mandate 2026-11-09: the acting user cannot leave the partner waiting in a cold §8.1
-     *  window. The automatic expiry sweep excludes itself. */
-    private val onUserActJournaled: () -> Unit = {},
     /** Human name for a target as THIS device sees it (app label, website host). The partner
      *  must be told what changed (owner mandate 2026-10-31); DI wires this to the app-label
      *  resolver, the default keeps tests and any unwired call site honest. */
@@ -48,10 +46,9 @@ class RulesRepository(
 ) {
     private fun store() = storeFactory.open() ?: throw IllegalStateException("Rules store unavailable")
 
-    private fun journaled(rows: List<PartnerEventJournal>, userAct: Boolean = true) {
+    private fun journaled(rows: List<PartnerEventJournal>) {
         if (rows.isEmpty()) return
         runCatching(onJournaled)
-        if (userAct) runCatching(onUserActJournaled)
     }
 
     suspend fun insertRule(rule: RestrictionRule) {
@@ -61,6 +58,7 @@ class RulesRepository(
         val journal = journalRows(null, rule)
         dao.insertAndBump(rule, db.policyVersionDao(), db.partnerEventJournalDao(), journal)
         publisher.loadFromDb()
+        ensureCheckInsShared(rule.assignedPairId)
         journaled(journal)
     }
 
@@ -70,6 +68,7 @@ class RulesRepository(
         val journal = if (old == null) emptyList() else journalRows(old, rule)
         db.restrictionRuleDao().updateAndBump(rule, db.policyVersionDao(), db.partnerEventJournalDao(), journal)
         publisher.loadFromDb()
+        if (old?.assignedPairId != rule.assignedPairId) ensureCheckInsShared(rule.assignedPairId)
         journaled(journal)
     }
 
@@ -129,9 +128,7 @@ class RulesRepository(
             dao.updateAndBump(rule.copy(isEnabled = false), versionDao, journalDao, rows)
         }
         publisher.loadFromDb()
-        // A lapsed schedule flips off with nobody mid-act: deliver on the next automatic
-        // pass, never raise a device-key sheet over it (owner ruling 2026-11-05).
-        journaled(allRows, userAct = false)
+        journaled(allRows)
     }
 
     /** #18 cleanup: delete a whole batch behind one snapshot reload — per-rule [deleteRule]
@@ -170,6 +167,7 @@ class RulesRepository(
         val journal = batchJournalRows(rules, RuleChange.CREATED)
         dao.insertBatchAndBump(rules, db.policyVersionDao(), db.partnerEventJournalDao(), journal)
         publisher.loadFromDb()
+        rules.mapNotNull { it.assignedPairId }.distinct().forEach { ensureCheckInsShared(it) }
         journaled(journal)
     }
 
@@ -342,6 +340,28 @@ class RulesRepository(
     fun observeRules(profileId: String): Flow<List<RestrictionRule>> =
         store().restrictionRuleDao().observeByProfile(profileId)
 
+    /**
+     * Owner ruling 2026-11-10: assigning a rule or batch to a partner switches that pair's
+     * blocked-app check-ins on, so the partner watching the rules hears about violations
+     * without a second setup step. Runs after the rule transaction — a consent write failure
+     * must never undo the rule; the next assignment act retries. An already-on switch keeps
+     * its watermark (no backlog leaks), a re-enable pins a fresh one.
+     */
+    private suspend fun ensureCheckInsShared(pairId: String?) {
+        if (pairId == null) return
+        runCatching {
+            val db = store()
+            val before = db.pairSharingDao().profileFor(pairId)
+            if (before?.shareCheckins == true) return
+            db.pairSharingDao().upsertProfile(
+                (before ?: PairProfileSharing(pairId = pairId)).copy(
+                    shareCheckins = true,
+                    checkinsEnabledSinceMs = now(),
+                ),
+            )
+        }.onFailure { Log.w(TAG, "check-in consent enable failed for $pairId", it) }
+    }
+
     private suspend fun requireCapacity(
         dao: RestrictionRuleDao,
         profileId: String,
@@ -367,6 +387,8 @@ class RulesRepository(
         if (targetType == "APP") "app" else "website"
 
     companion object {
+        private const val TAG = "MyExodusRules"
+
         /** The placeholder for a device whose owner never chose a name — never sent as a
          *  pairing label; the ceremony shows an empty field until the owner types one. */
         const val DEFAULT_PROFILE_NAME = "You"

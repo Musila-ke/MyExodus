@@ -86,6 +86,11 @@ data class EventPayload(
         const val TYPE_STREAK_RENAMED = "streak_renamed"
         const val TYPE_STREAK_DELETED = "streak_deleted"
 
+        /** Blocked-app check-ins were switched off for the pair (owner ruling 2026-11-10):
+         *  the partner must hear the signal go quiet, not just stop receiving alerts. Ships
+         *  snapshot-less (ADR #285 shape) — profile consent, not streak state. */
+        const val TYPE_CHECKINS_SHARING_STOPPED = "checkins_sharing_stopped"
+
         val ACTIVITY_TYPES: Set<String> = setOf(
             TYPE_STREAK_UPDATED,
             TYPE_RELAPSE_RECORDED,
@@ -96,6 +101,7 @@ data class EventPayload(
             TYPE_STREAK_SHARED,
             TYPE_STREAK_RENAMED,
             TYPE_STREAK_DELETED,
+            TYPE_CHECKINS_SHARING_STOPPED,
         )
 
         /** Wire v2 (ADR #134): the kinds that concern one habit — exactly these carry
@@ -151,8 +157,12 @@ fun classifyActivity(payload: EventPayload): ActivityEvent = when {
         ActivityEvent.Unsupported(payload.type, payload.protocolVersion, payload.schemaVersion)
     // ADR #285: a message is the one kind whose value is its text, not a state snapshot —
     // a supervisor who shares nothing still sends one, and older receivers classify it
-    // Malformed while the notification (text-only) still fires.
-    payload.stateAfter == null && payload.type != EventPayload.TYPE_MOTIVATIONAL_MESSAGE ->
+    // Malformed while the notification (text-only) still fires. The check-ins revoke joins
+    // it (owner ruling 2026-11-10): a pair that shares only check-ins has no anchor state,
+    // and the event is the consent change itself.
+    payload.stateAfter == null &&
+        payload.type != EventPayload.TYPE_MOTIVATIONAL_MESSAGE &&
+        payload.type != EventPayload.TYPE_CHECKINS_SHARING_STOPPED ->
         ActivityEvent.Malformed(payload.type)
     else -> ActivityEvent.Valid(payload)
 }

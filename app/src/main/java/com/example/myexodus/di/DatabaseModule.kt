@@ -100,9 +100,6 @@ object DatabaseModule {
             com.example.myexodus.accountability.sync.PartnerSyncSignals.ruleChangesJournaled.tryEmit(Unit)
             enqueuePartnerSyncNow(context)
         },
-        onUserActJournaled = {
-            com.example.myexodus.accountability.sync.PartnerSyncSignals.deliveryRequested.tryEmit(Unit)
-        },
         labelOf = { _, target -> com.example.myexodus.ui.appLabel(context, target) },
     )
 }

@@ -431,27 +431,28 @@ class MainActivity : FragmentActivity() {
      * rows journaled. The periodic worker runs the same pass, so the next unlock delivers the
      * backlog: nothing waits on a tap, and no sheet exists for the subject to dismiss and
      * suppress the partner. Prompts remain only on explicit user-initiated actions (Check now,
-     * pairing, unpair, message send, and — owner mandate 2026-11-09 — the partner-visible act
-     * itself: the deliveryRequested path, so a save/delete/toggle never leaves the partner
-     * waiting for a later unlock).
+     * pairing, unpair, message send); a partner-visible act never raises one (ADR #294).
      */
     private fun startPartnerSigningHeal() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
+                // ADR #294: with no prompt left, the pass that turns a just-warmed §8.1
+                // window (the unlock that brought the app back) into delivery runs on every
+                // foreground start instead of waiting for the 15-minute worker.
+                launch { deliverQueuedPartnerEvents() }
                 launch {
-                    PartnerSyncSignals.signingNeeded.collect { deliverQueuedPartnerEvents() }
+                    // ADR #216 retry, gated on real warmth: a cold pass re-emits this signal,
+                    // so retrying unconditionally looped a full network pass every ~15 s for as
+                    // long as the window stayed cold (device evidence 2026-11-10).
+                    PartnerSyncSignals.signingNeeded.collect {
+                        if (signingWindowWarm()) deliverQueuedPartnerEvents()
+                    }
                 }
                 launch {
                     // Owner ruling 2026-11-05: a rule save, edit, deactivate or delete is
                     // delivered automatically — never gated on a confirmation the subject can
                     // ignore. A cold window only defers the delivery, never drops it.
                     PartnerSyncSignals.ruleChangesJournaled.collect { deliverQueuedPartnerEvents() }
-                }
-                launch {
-                    // Owner mandate 2026-11-09: the act that queued the row is the prompt's
-                    // context — deliver now, and raise the device-key sheet if the window is
-                    // cold, instead of flushing everything on the next unlock.
-                    PartnerSyncSignals.deliveryRequested.collect { healBlockedPartnerSigning() }
                 }
             }
         }
@@ -795,6 +796,9 @@ class MainActivity : FragmentActivity() {
                                 healBlockedPartnerSigning()
                             }.getOrDefault(false)
                         },
+                        // ADR #294: share changes deliver silently — a cold window queues the
+                        // rows instead of raising the sheet over the tap.
+                        onPartnerDeliverSilently = { deliverQueuedPartnerEvents() },
                         onRespondToApproval = { requestEventId, approve ->
                             respondToApproval(requestEventId, approve)
                         },
