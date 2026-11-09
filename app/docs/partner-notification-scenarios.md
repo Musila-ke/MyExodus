@@ -154,6 +154,12 @@ S23 (accuracy) after every one:
    right there; if the prompt is cancelled, the Partner page's sync card says the updates are
    waiting and offers Check now (`PartnerSyncSignals.signingDeferred`). Automatic delivery
    still never prompts. Device re-measure of the cold-share leg remains.
+   **Generalized (ADR #293, owner mandate 2026-11-09):** the same delivery-at-act now covers
+   every rules write — save, edit, pause/resume, batch create/toggle/delete, disconnect,
+   unlock — because `RulesRepository.journaled()` splits user-act rows from the automatic
+   expiry sweep and emits `PartnerSyncSignals.deliveryRequested` for the former. The backlog
+   batch-flush ("all notifications came at once") no longer happens for user acts; only a
+   cancelled prompt defers, and only the sweep stays silent-by-design.
 6. **Messaging requires sharing, which locks out a pure supervisor.** MOTIVATIONAL_MESSAGE is
    journaled only when at least one streak is shared with the pair
    (`PartnerActivityJournal.kt:183-184`); the UI mirrors it (`PartnerScreen.kt:426` →

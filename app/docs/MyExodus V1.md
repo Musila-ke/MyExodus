@@ -1035,7 +1035,9 @@ hub-and-spoke split), **ADR #78** (Partner split + shared `BackRow`/`NavTile` ch
   **Manage**), the grammar Settings uses. The repeated "Viewing <name>" band is gone (one quiet
   person line per subpage, headline name on the identity card); the Check-ins tile/page is renamed
   **Their phone** and leads with the two-signal explanation (protection vs phone check-ins, silence
-  proves neither); the Activity page states an empty share once, not twice; the shared scroll state
+  proves neither; shortened 2026-11-09 to one orientation line — the dedicated silence note keeps
+  the proof caveat, and the not-shared body now names the Device availability setting and where
+  the partner turns it on); the Activity page states an empty share once, not twice; the shared scroll state
   resets to the top on every page change; What you share keeps ADR #135's three-level
   per-(item, partner) consent and adds tone dots to its overview and partner rows; Plans and
   Pairing adopt the grouped-row grammar with honest empty states. Presentation only — transport,

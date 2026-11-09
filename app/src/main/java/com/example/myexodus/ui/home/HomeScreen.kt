@@ -33,6 +33,7 @@ import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.outlined.BatteryAlert
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Handshake
@@ -87,6 +88,8 @@ import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.settings.HomeSettings
 import com.example.myexodus.settings.accessibilitySettingsIntent
+import com.example.myexodus.settings.batteryOptimizationSettingsIntent
+import com.example.myexodus.settings.isBatteryExempt
 import com.example.myexodus.settings.overlaySettingsIntent
 import com.example.myexodus.settings.usageAccessSettingsIntent
 import com.example.myexodus.streaks.HabitState
@@ -235,6 +238,10 @@ fun HomeScreen(
     // Usage access, display-over-apps and the website tunnel are re-read with the 30 s tick,
     // so a grant revoked (or restored) in system settings lands on this screen by itself.
     var readiness by remember { mutableStateOf<BlockingReadiness?>(null) }
+    // Owner report 2026-11-09: Settings read the battery row red while Home still showed
+    // PROTECTING with no row. Battery is a reliability gap, not a blocking prerequisite
+    // (BlockingReadiness), so it never moves the chip — it joins the attention group instead.
+    var batteryExempt by remember { mutableStateOf<Boolean?>(null) }
     // Owner ease-of-use rule 2026-10-23: a grant toggled in system settings must land the
     // moment the user comes back, not on the next 30 s tick — the user has just acted and is
     // looking for the result. ON_RESUME re-runs the same read with fresh captured state.
@@ -244,6 +251,7 @@ fun HomeScreen(
         readiness = withContext(Dispatchers.IO) {
             readBlockingReadiness(labelContext, hasLiveWebsiteRule(rules.orEmpty(), nowMillis))
         }
+        batteryExempt = withContext(Dispatchers.IO) { isBatteryExempt(labelContext) }
     }
 
     // Owner correction 2026-10-21: "Limited" without a cause made the user tap through to
@@ -362,6 +370,7 @@ fun HomeScreen(
                 authority = authority,
                 pollingOnlyPersistent = pollingOnlyPersistent,
                 readiness = readiness,
+                batteryNeedsFix = batteryExempt == false,
                 checkInsAtRisk = checkInsAtRisk,
                 partnerNotificationsRequestable = partnerNotificationsRequestable,
                 outage = outage,
@@ -1181,6 +1190,7 @@ private fun AttentionSection(
     authority: ProtectionAuthority?,
     pollingOnlyPersistent: Boolean,
     readiness: BlockingReadiness?,
+    batteryNeedsFix: Boolean,
     checkInsAtRisk: Boolean,
     partnerNotificationsRequestable: Boolean,
     outage: AccountingOutage?,
@@ -1275,6 +1285,20 @@ private fun AttentionSection(
                     body = stringResource(R.string.protection_website_off_text),
                     actionLabel = stringResource(R.string.protection_limited_action),
                     onAction = onFixWebsite,
+                ),
+            )
+        }
+        // Owner report 2026-11-09: Settings showed this red while Home read PROTECTING. The
+        // action opens the battery-optimization list, where the user still makes the change;
+        // the direct exemption request stays outage-prompt-only (§8.7/D1).
+        if (batteryNeedsFix) {
+            add(
+                AttentionItem(
+                    icon = Icons.Outlined.BatteryAlert,
+                    title = stringResource(R.string.home_battery_title),
+                    body = stringResource(R.string.home_battery_body),
+                    actionLabel = stringResource(R.string.settings_action_fix),
+                    onAction = { context.startActivity(batteryOptimizationSettingsIntent()) },
                 ),
             )
         }

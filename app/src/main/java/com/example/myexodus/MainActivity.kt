@@ -431,7 +431,9 @@ class MainActivity : FragmentActivity() {
      * rows journaled. The periodic worker runs the same pass, so the next unlock delivers the
      * backlog: nothing waits on a tap, and no sheet exists for the subject to dismiss and
      * suppress the partner. Prompts remain only on explicit user-initiated actions (Check now,
-     * pairing, unpair, message send).
+     * pairing, unpair, message send, and — owner mandate 2026-11-09 — the partner-visible act
+     * itself: the deliveryRequested path, so a save/delete/toggle never leaves the partner
+     * waiting for a later unlock).
      */
     private fun startPartnerSigningHeal() {
         lifecycleScope.launch {
@@ -444,6 +446,12 @@ class MainActivity : FragmentActivity() {
                     // delivered automatically — never gated on a confirmation the subject can
                     // ignore. A cold window only defers the delivery, never drops it.
                     PartnerSyncSignals.ruleChangesJournaled.collect { deliverQueuedPartnerEvents() }
+                }
+                launch {
+                    // Owner mandate 2026-11-09: the act that queued the row is the prompt's
+                    // context — deliver now, and raise the device-key sheet if the window is
+                    // cold, instead of flushing everything on the next unlock.
+                    PartnerSyncSignals.deliveryRequested.collect { healBlockedPartnerSigning() }
                 }
             }
         }

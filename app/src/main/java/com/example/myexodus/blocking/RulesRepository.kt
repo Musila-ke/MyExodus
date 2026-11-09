@@ -35,6 +35,11 @@ class RulesRepository(
      *  pass. Without it the change waits for the 15-minute worker, which an owner watching
      *  the partner's phone reads as "no notification" (owner report 2026-10-31). */
     private val onJournaled: () -> Unit = {},
+    /** Same event, but the row came from the subject's own tap (save, toggle, delete,
+     *  disconnect, unlock). Delivery may prompt for the device key at that moment — owner
+     *  mandate 2026-11-09: the acting user cannot leave the partner waiting in a cold §8.1
+     *  window. The automatic expiry sweep excludes itself. */
+    private val onUserActJournaled: () -> Unit = {},
     /** Human name for a target as THIS device sees it (app label, website host). The partner
      *  must be told what changed (owner mandate 2026-10-31); DI wires this to the app-label
      *  resolver, the default keeps tests and any unwired call site honest. */
@@ -43,9 +48,10 @@ class RulesRepository(
 ) {
     private fun store() = storeFactory.open() ?: throw IllegalStateException("Rules store unavailable")
 
-    private fun journaled(rows: List<PartnerEventJournal>) {
+    private fun journaled(rows: List<PartnerEventJournal>, userAct: Boolean = true) {
         if (rows.isEmpty()) return
         runCatching(onJournaled)
+        if (userAct) runCatching(onUserActJournaled)
     }
 
     suspend fun insertRule(rule: RestrictionRule) {
@@ -123,7 +129,9 @@ class RulesRepository(
             dao.updateAndBump(rule.copy(isEnabled = false), versionDao, journalDao, rows)
         }
         publisher.loadFromDb()
-        journaled(allRows)
+        // A lapsed schedule flips off with nobody mid-act: deliver on the next automatic
+        // pass, never raise a device-key sheet over it (owner ruling 2026-11-05).
+        journaled(allRows, userAct = false)
     }
 
     /** #18 cleanup: delete a whole batch behind one snapshot reload — per-rule [deleteRule]

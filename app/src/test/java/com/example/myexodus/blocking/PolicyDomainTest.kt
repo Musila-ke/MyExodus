@@ -107,6 +107,37 @@ class PolicyDomainTest {
         )
     }
 
+    /** Owner mandate 2026-11-09: the act that queued a partner-visible row requests the
+     *  delivery pass (may prompt for the device key); the automatic expiry sweep must not —
+     *  it would raise a sheet with nobody mid-act (owner ruling 2026-11-05). */
+    @Test
+    fun userActWrites_requestDeliveryOnlyWhenARowWasJournaled() = runTest {
+        val clock = 1_700_000_000_000L
+        var journaled = 0
+        var userAct = 0
+        val repo = RulesRepository(
+            factory, publisher,
+            onJournaled = { journaled++ },
+            onUserActJournaled = { userAct++ },
+            now = { clock },
+        )
+
+        repo.insertRule(
+            appRule("com.a", "0b7c1a9e-3f1e-4c1e-9c1e-0123456789ab")
+                .copy(assignedPairId = "pair-1", blockExpiresAt = clock - 1_000L),
+        )
+        assertEquals("an assigned save journals", 1, journaled)
+        assertEquals("and requests the delivery pass at the act", 1, userAct)
+
+        repo.sweepExpired(clock)
+        assertEquals("the sweep still journals its lapsed rule", 2, journaled)
+        assertEquals("but never requests a prompting pass", 1, userAct)
+
+        repo.insertRule(appRule("com.b", "0b7c1a9e-3f1e-4c1e-9c1e-0123456789ac"))
+        assertEquals("an unassigned rule tells no partner — no row", 2, journaled)
+        assertEquals("and no delivery request", 1, userAct)
+    }
+
     @Test
     fun deleteRules_removesTheBatch_andReloadsTheSnapshotOnce() = runTest {
         repository.insertRule(appRule("com.a", "r-1"))

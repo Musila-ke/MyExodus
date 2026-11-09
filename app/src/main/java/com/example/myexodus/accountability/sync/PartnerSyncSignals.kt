@@ -69,4 +69,15 @@ object PartnerSyncSignals {
      *  after the pass still tells the truth; any pass that gets through clears it. Automatic
      *  delivery still never prompts — the surface only explains the wait and offers Check now. */
     val signingDeferred = MutableStateFlow(false)
+
+    /** Owner mandate 2026-11-09 ("a user can't have done an operation then the partner waits"):
+     *  a partner-visible write caused by the subject's own tap requests the delivery pass at
+     *  that moment, and that explicit path may raise the device-key prompt. Emitted from
+     *  [com.example.myexodus.blocking.RulesRepository] only for user-act writes — the automatic
+     *  expiry sweep stays on the never-prompting [ruleChangesJournaled] path (owner ruling
+     *  2026-11-05). The Activity answers with the same heal Check now runs. */
+    val deliveryRequested = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
 }

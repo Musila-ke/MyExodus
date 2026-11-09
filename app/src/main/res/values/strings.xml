@@ -66,6 +66,12 @@
     <string name="protection_usage_off_text">Time limits can’t count usage without it. Turn usage access on so your limits and stats keep working.</string>
     <string name="protection_website_off_title">Website blocks are off</string>
     <string name="protection_website_off_text">Website blocks need the connection you approved with Android. Turn it back on to keep them enforced.</string>
+    <!-- Owner report 2026-11-09: Settings showed battery optimization red while Home still
+         read PROTECTING with no row. Battery is a reliability gap, not a blocking prerequisite
+         (BlockingReadiness), so it surfaces here, not in the chip. The action opens the phone's
+         battery settings list; the direct exemption request stays outage-prompt-only (§8.7/D1). -->
+    <string name="home_battery_title">Android may pause MyExodus</string>
+    <string name="home_battery_body">Battery optimization is on, so Android can pause MyExodus in the background and blocks or partner updates may arrive late. Turn it off for MyExodus in your phone’s battery settings.</string>
 
     <!-- Notification channels and alert copy (ADR #91): channel names are user-visible in
          system notification settings, so they are resources like the content they carry. -->
@@ -923,7 +929,10 @@
     <string name="partner_tile_checkins">Their phone</string>
     <string name="partner_checkins_empty_title">Nothing reported yet</string>
     <string name="partner_checkins_empty_body">Their phone hasn’t sent a monitoring report or a check-in yet. This page fills in once it does.</string>
-    <string name="partner_checkins_intro">Two separate signals. Protection says whether their app is still monitoring. Phone check-ins say whether their phone still reaches the server. A quiet phone is not proof either one changed.</string>
+    <!-- Owner report 2026-11-09: the two-signal paragraph read as noise and left "device
+         availability" unexplained. One line for orientation; each card body carries its own
+         detail, and the not-shared body explains the setting and where to find it. -->
+    <string name="partner_checkins_intro">Protection is what their app last reported. Check-ins show whether the app is still reaching the server.</string>
     <string name="partner_tile_pairing">Pairing</string>
     <string name="partner_group_progress">Their progress</string>
     <string name="partner_group_setup">Rules and plans</string>
@@ -1108,7 +1117,9 @@
     <string name="partner_connection_body_late">No check-in for 45–90 minutes. This can be normal. Android may defer background work.</string>
     <string name="partner_connection_body_not_checking_in">No check-in for over 90 minutes.</string>
     <string name="partner_connection_body_no_data">No check-in has reached the server yet.</string>
-    <string name="partner_connection_body_not_shared">Your partner hasn’t chosen to share device availability.</string>
+    <!-- Owner report 2026-11-09 ("what do you mean not shared?"): say what the setting is
+         and where the partner turns it on, instead of naming a term and stopping. -->
+    <string name="partner_connection_body_not_shared">Your partner hasn’t turned on device availability, so their phone isn’t reporting check-ins to you. With it on, their app tells the server it is still running. Ask them to open their Partner tab, then What you share, then Device availability.</string>
     <!-- §18 Definition of Done: the partner-facing copy must say silence is not proof. Shown
          whenever the connection is anything but Checking in. -->
     <string name="partner_connection_silence_note">Not checking in isn’t proof the app was removed, blocking was turned off, or anything was tampered with.</string>
