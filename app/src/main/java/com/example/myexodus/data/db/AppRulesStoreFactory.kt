@@ -1562,6 +1562,31 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * v26 → v27 (streak partner unit 2026-11-09): the receiver's per-streak view,
+         * one row per (pair, habit). Additive — the aggregate projection is untouched.
+         */
+        val MIGRATION_26_27 = object : Migration(26, 27) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_streak_projection (" +
+                        "pair_id TEXT NOT NULL, habit_id TEXT NOT NULL, " +
+                        "habit_label TEXT NOT NULL, days_free INTEGER NOT NULL, " +
+                        "relapse_count INTEGER NOT NULL, milestones_reached TEXT NOT NULL, " +
+                        "last_event_occurred_at_ms INTEGER NOT NULL, " +
+                        "last_sequence INTEGER NOT NULL, PRIMARY KEY(pair_id, habit_id))",
+                ).use { it.step() }
+            }
+        }
+
+        /** v27 rollback (older build reinstalled): the per-streak view is derived state and
+         *  rebuilds from the chain; dropping it loses nothing the peer ever sent. */
+        val MIGRATION_27_26 = object : Migration(27, 26) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("DROP TABLE IF EXISTS partner_streak_projection").use { it.step() }
+            }
+        }
+
         /** v23 rollback (older build reinstalled): table rebuilds remove the identity and
          *  batch columns while every rule and journal row survives. */
         val MIGRATION_23_22 = object : Migration(23, 22) {
@@ -1876,6 +1901,7 @@ class AppRulesStoreFactory(
             MIGRATION_23_24, MIGRATION_24_23,
             MIGRATION_24_25, MIGRATION_25_24,
             MIGRATION_25_26, MIGRATION_26_25,
+            MIGRATION_26_27, MIGRATION_27_26,
         )
     }
 }

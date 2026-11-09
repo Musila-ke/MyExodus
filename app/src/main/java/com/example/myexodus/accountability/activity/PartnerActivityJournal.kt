@@ -167,7 +167,15 @@ object PartnerActivityJournal {
     ): Boolean {
         val dao = db.pairSharingDao()
         return when (kind) {
-            EventPayload.TYPE_STREAK_UPDATED -> streakRows(dao, targetPairId)
+            // Owner directive 2026-11-09: the add / rename / delete acts ride the streak
+            // master alone, the same consent STREAK_UPDATED needs. A delete's rows are written
+            // before the consent rows disappear (same transaction), so this gate still sees
+            // the sharing that justified telling the pair.
+            EventPayload.TYPE_STREAK_UPDATED,
+            EventPayload.TYPE_STREAK_SHARED,
+            EventPayload.TYPE_STREAK_RENAMED,
+            EventPayload.TYPE_STREAK_DELETED,
+            -> streakRows(dao, targetPairId)
                 .any { it.habitProgressId == habit?.progressId && it.shareStreak }
 
             EventPayload.TYPE_MILESTONE_REACHED -> streakRows(dao, targetPairId)

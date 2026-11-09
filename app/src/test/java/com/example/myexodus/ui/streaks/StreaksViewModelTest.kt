@@ -20,11 +20,15 @@ import com.example.myexodus.streaks.StreakTimer
 import com.example.myexodus.streaks.TimeReadings
 import com.example.myexodus.streaks.WithdrawalSeverity
 import com.example.myexodus.ui.home.MainDispatcherRule
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -106,6 +110,32 @@ class StreaksViewModelTest {
             1,
             habits.size,
         )
+    }
+
+    /** Owner ask 2026-11-09 ("I didn't even know it took effect"): a share change confirms
+     *  itself inline and asks for the delivery pass at the moment of the act. */
+    @Test
+    fun sharingAToggle_confirmsInlineAndRequestsDelivery() = runBlocking {
+        viewModel.onboard("Instagram", 2, WithdrawalSeverity.MODERATE, T0)
+        withTimeout(15_000) {
+            while (viewModel.onboardingInFlight.value || !viewModel.resolved.value) delay(20)
+        }
+        val requested = async(start = CoroutineStart.UNDISPATCHED) {
+            withTimeout(15_000) { viewModel.sharingDeliveryRequested.first() }
+        }
+
+        viewModel.setHabitSharing("pair-1", "John", true)
+        withTimeout(15_000) {
+            while (viewModel.manageInFlight.value || viewModel.manageFeedback.value == null) delay(20)
+        }
+        requested.await()
+
+        val feedback = viewModel.manageFeedback.value
+        assertTrue("the Manage page confirms the share", feedback is StreaksViewModel.ManageFeedback.Shared)
+        feedback as StreaksViewModel.ManageFeedback.Shared
+        assertEquals("John", feedback.partnerName)
+        assertTrue(feedback.enabled)
+        assertEquals(true, viewModel.pairSharing.value["pair-1"])
     }
 
     private class FakeKeyManager : DatabaseKeyManager {

@@ -12,8 +12,12 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
@@ -138,6 +142,63 @@ class StreaksViewModel @Inject constructor(
         _manageFeedback.value = null
     }
 
+    private val _sharingDeliveryRequested = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    /** Owner-approved B (2026-11-09): a share change asks for an immediate delivery pass at the
+     *  moment of the act — a cold signing window prompts right there instead of waiting for a
+     *  later automatic attempt. Same drop-when-nobody-collects contract as the sync signals. */
+    val sharingDeliveryRequested: SharedFlow<Unit> = _sharingDeliveryRequested.asSharedFlow()
+
+    private val _pairSharing = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+
+    /** Manage spoke, owner directive 2026-11-09: which partner pair currently shares the
+     *  displayed streak. Empty until a read completes; the picker treats absent as "not
+     *  shared". */
+    val pairSharing: StateFlow<Map<String, Boolean>> = _pairSharing.asStateFlow()
+
+    /** Re-reads the displayed streak's per-pair sharing flags (Manage opened / habit swapped). */
+    fun refreshPairSharing() {
+        val habitId = state.value?.habitId ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val habit = repository.sharingMatrix()?.habits
+                ?.firstOrNull { it.progressId == habitId } ?: return@launch
+            _pairSharing.value = habit.perPair.mapValues { it.value.shareStreak }
+        }
+    }
+
+    /** Adds or removes [pairId] for the displayed streak — all three switches together, the
+     *  same contract the setup form's pick uses, so the streak lands in What you share with no
+     *  second step. A failed write keeps the old state and says whose sharing failed. */
+    fun setHabitSharing(pairId: String, partnerName: String, enabled: Boolean) {
+        if (_manageInFlight.value) return
+        _manageInFlight.value = true
+        _manageFeedback.value = null
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val habitId = state.value?.habitId ?: return@launch
+                val written = repository.setPairStreakSharing(pairId, habitId, enabled, enabled, enabled)
+                if (!written) {
+                    _manageFeedback.value = ManageFeedback.SharingFailed(partnerName)
+                    return@launch
+                }
+                repository.sharingMatrix()?.habits
+                    ?.firstOrNull { it.progressId == habitId }
+                    ?.let { habit ->
+                        _pairSharing.value = habit.perPair.mapValues { it.value.shareStreak }
+                    }
+                // Owner ask 2026-11-09: "I didn't even know it took effect" — confirm the change
+                // inline and ask for the delivery pass now, not at the next background attempt.
+                _manageFeedback.value = ManageFeedback.Shared(partnerName, enabled)
+                _sharingDeliveryRequested.tryEmit(Unit)
+            } finally {
+                _manageInFlight.value = false
+            }
+        }
+    }
+
     /** Renames the displayed habit. Success refreshes the switcher's read model too. */
     fun renameHabit(habitId: String, label: String) {
         if (_manageInFlight.value) return
@@ -231,10 +292,11 @@ class StreaksViewModel @Inject constructor(
                     is HabitRepository.OnboardingResult.Ready -> {
                         if (partnerPairId != null) {
                             try {
-                                repository.setPairStreakSharing(
+                                val shared = repository.setPairStreakSharing(
                                     partnerPairId, result.state.habitId,
                                     shareStreak = true, shareRelapses = true, shareMilestones = true,
                                 )
+                                if (shared) _sharingDeliveryRequested.tryEmit(Unit)
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Exception) {
@@ -327,6 +389,12 @@ class StreaksViewModel @Inject constructor(
         data object StoreUnavailable : ManageFeedback
 
         data object NotFound : ManageFeedback
+
+        /** The partner picker's write failed; the old sharing state stands (owner 2026-11-09). */
+        data class SharingFailed(val partnerName: String) : ManageFeedback
+
+        /** The share change landed; the Manage page confirms who can see the streak now. */
+        data class Shared(val partnerName: String, val enabled: Boolean) : ManageFeedback
     }
 
     /** The last relapse outcome, resolved to display copy by the screen (finding #20). */

@@ -80,6 +80,7 @@ import com.example.myexodus.accountability.sos.NudgeRepository
 import com.example.myexodus.accountability.sos.NudgeSettingsRepository
 import com.example.myexodus.ui.partner.PartnerActivityUi
 import com.example.myexodus.ui.partner.PartnerDashboardSource
+import com.example.myexodus.ui.partner.PartnerStreakUi
 import com.example.myexodus.ui.partner.PartnerSelection
 import com.example.myexodus.BuildConfig
 import com.google.firebase.auth.FirebaseAuth
@@ -770,17 +771,32 @@ object AccountabilityModule {
             // §7 Step 11: a local Room read of the partner's shared aggregate — the dashboard
             // never waits on Firestore for a number the mailbox already delivered (plan §1).
             partnerActivity = { pairId ->
-                storeFactory.open()?.partnerActivityDao()?.projection(pairId)?.let { row ->
-                    PartnerActivityUi(
-                        daysFree = row.daysFree,
-                        milestonesReached = decodeMilestoneDays(row.milestonesReached),
-                        relapseCount = row.relapseCount,
-                        coachingProgress = row.coachingProgress,
-                        lastEventOccurredAtEpochMillis =
-                            row.lastEventOccurredAtMs.takeIf { row.lastSequence > 0 },
-                        pinnedMessageText = row.pinnedMessageText,
-                        pinnedMessageAtEpochMillis = row.pinnedMessageAtMs,
-                    )
+                storeFactory.open()?.partnerActivityDao()?.let { dao ->
+                    dao.projection(pairId)?.let { row ->
+                        PartnerActivityUi(
+                            daysFree = row.daysFree,
+                            milestonesReached = decodeMilestoneDays(row.milestonesReached),
+                            relapseCount = row.relapseCount,
+                            coachingProgress = row.coachingProgress,
+                            // 0 = no applied state: placeholder rows and the cleared aggregate
+                            // a stop/delete leaves behind once nothing is shared (2026-11-09).
+                            lastEventOccurredAtEpochMillis = row.lastEventOccurredAtMs
+                                .takeIf { row.lastSequence > 0 && row.lastEventOccurredAtMs > 0 },
+                            pinnedMessageText = row.pinnedMessageText,
+                            pinnedMessageAtEpochMillis = row.pinnedMessageAtMs,
+                            // Owner directive 2026-11-09: the per-streak selector's rows.
+                            streaks = dao.streaksFor(pairId).map { streak ->
+                                PartnerStreakUi(
+                                    habitId = streak.habitId,
+                                    label = streak.habitLabel,
+                                    daysFree = streak.daysFree,
+                                    milestonesReached = decodeMilestoneDays(streak.milestonesReached),
+                                    relapseCount = streak.relapseCount,
+                                    lastEventOccurredAtEpochMillis = streak.lastEventOccurredAtMs,
+                                )
+                            },
+                        )
+                    }
                 }
             },
             // Owner ask 2026-10-01: the sender's own latest message, read back from the

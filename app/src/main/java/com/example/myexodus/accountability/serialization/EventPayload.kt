@@ -70,16 +70,21 @@ data class EventPayload(
         const val TYPE_APPROVAL_REQUEST = "approval_request"
         const val TYPE_APPROVAL_RESPONSE = "approval_response"
 
-        /** §2.1 FR-01, Appendix A.2: the five partner-visible activity event types.
+        /** §2.1 FR-01, Appendix A.2: the partner-visible activity event types.
          *  [TYPE_STREAK_SHARING_STOPPED] is the revoke signal (owner ruling 2026-11-09): the
          *  partner is told a streak left their view, even though the consent it used to ride
-         *  is now off. */
+         *  is now off. [TYPE_STREAK_SHARED], [TYPE_STREAK_RENAMED] and [TYPE_STREAK_DELETED]
+         *  name the streak-management acts (owner directive 2026-11-09): add, rename, delete,
+         *  each carrying the streak's stable id so two streaks can never be confused. */
         const val TYPE_STREAK_UPDATED = "streak_updated"
         const val TYPE_RELAPSE_RECORDED = "relapse_recorded"
         const val TYPE_MILESTONE_REACHED = "milestone_reached"
         const val TYPE_COACHING_STEP_UPDATED = "coaching_step_updated"
         const val TYPE_MOTIVATIONAL_MESSAGE = "motivational_message"
         const val TYPE_STREAK_SHARING_STOPPED = "streak_sharing_stopped"
+        const val TYPE_STREAK_SHARED = "streak_shared"
+        const val TYPE_STREAK_RENAMED = "streak_renamed"
+        const val TYPE_STREAK_DELETED = "streak_deleted"
 
         val ACTIVITY_TYPES: Set<String> = setOf(
             TYPE_STREAK_UPDATED,
@@ -88,27 +93,34 @@ data class EventPayload(
             TYPE_COACHING_STEP_UPDATED,
             TYPE_MOTIVATIONAL_MESSAGE,
             TYPE_STREAK_SHARING_STOPPED,
+            TYPE_STREAK_SHARED,
+            TYPE_STREAK_RENAMED,
+            TYPE_STREAK_DELETED,
         )
 
         /** Wire v2 (ADR #134): the kinds that concern one habit — exactly these carry
-         *  [ActivityStateAfter.habitLabel]. */
+         *  [ActivityStateAfter.habitLabel] and, since wire v3, its stable [ActivityStateAfter.habitId]. */
         val HABIT_ANCHORED_ACTIVITY_TYPES: Set<String> = setOf(
             TYPE_STREAK_UPDATED,
             TYPE_RELAPSE_RECORDED,
             TYPE_MILESTONE_REACHED,
             TYPE_STREAK_SHARING_STOPPED,
+            TYPE_STREAK_SHARED,
+            TYPE_STREAK_RENAMED,
+            TYPE_STREAK_DELETED,
         )
 
         const val ACTIVITY_PROTOCOL_VERSION = 1
         /** v2 (ADR #134): `stateAfter` gained optional `habitLabel` / `endedDays` /
-         *  `milestoneDay` — absent-when-null, so a v1-shaped body keeps byte-identical
-         *  encoding ([SUPPORTED_SCHEMA_VERSIONS] keeps v1 events receivable). */
-        const val ACTIVITY_SCHEMA_VERSION = 2
+         *  `milestoneDay`. v3 (owner directive 2026-11-09): optional `habitId`, the stable
+         *  key behind the partner's per-streak view — labels can repeat, ids cannot.
+         *  Absent-when-null, so older-shaped bodies keep byte-identical encoding. */
+        const val ACTIVITY_SCHEMA_VERSION = 3
 
         /** Every body schema this build understands. Emitters write [ACTIVITY_SCHEMA_VERSION];
-         *  receivers accept both — a v1 event (pre-2026-10-04) is complete without a habit
-         *  name, and declining it as UNSUPPORTED would silently hide history on upgrade. */
-        val SUPPORTED_SCHEMA_VERSIONS: Set<Int> = setOf(1, ACTIVITY_SCHEMA_VERSION)
+         *  receivers accept every prior version — a v1 event is complete without a habit name,
+         *  and declining it as UNSUPPORTED would silently hide history on upgrade. */
+        val SUPPORTED_SCHEMA_VERSIONS: Set<Int> = setOf(1, 2, ACTIVITY_SCHEMA_VERSION)
 
         /** Req 15 composer bound (§10.6 bounded strings; the encoder does not enforce it —
          *  compose-time does, and decode-side projection refuses anything over it). */
@@ -118,6 +130,10 @@ data class EventPayload(
          *  longer-than-this label is declined to null at decode; the event itself still
          *  applies — the name is the optional part, never the state. */
         const val MAX_HABIT_LABEL_LENGTH = 80
+
+        /** Wire bound for [ActivityStateAfter.habitId]: overlong ids decline to null (the
+         *  per-streak view then falls back to label-keyed grouping), never the event. */
+        const val MAX_HABIT_ID_LENGTH = 64
 
         /** Wire bound for [appLabel] — same rule: an overlong label is declined, the attempt
          *  itself still renders (falling back to the package id). */
@@ -187,6 +203,10 @@ data class ActivityStateAfter(
     val endedDays: Int? = null,
     /** v2, milestone rows only: the day reached (e.g. 30). */
     val milestoneDay: Int? = null,
+    /** v3 (owner directive 2026-11-09): the streak's stable id — the key behind the partner's
+     *  per-streak view. Labels can repeat, ids cannot. Null on v1/v2 bodies and
+     *  profile-anchored kinds; absent-when-null keeps every prior body byte-identical. */
+    val habitId: String? = null,
 )
 
 private const val K_TYPE = "ty"
@@ -206,6 +226,7 @@ private const val K_MILESTONES = "ms"
 private const val K_COACHING_PROGRESS = "cp"
 private const val K_EVENT_OCCURRED_AT = "eo"
 private const val K_HABIT_LABEL = "hl"
+private const val K_HABIT_ID = "hi"
 private const val K_ENDED_DAYS = "ed"
 private const val K_MILESTONE_DAY = "md"
 private const val K_APP_LABEL = "al"
@@ -269,6 +290,7 @@ private fun encodeStateAfter(s: ActivityStateAfter): CBORObject = CBORObject.New
     m.set(K_COACHING_PROGRESS, CanonicalCbor.int(s.coachingProgress.toLong()))
     m.set(K_EVENT_OCCURRED_AT, CanonicalCbor.int(s.eventOccurredAtMs))
     s.habitLabel?.let { m.set(K_HABIT_LABEL, CanonicalCbor.text(it)) }
+    s.habitId?.let { m.set(K_HABIT_ID, CanonicalCbor.text(it)) }
     s.endedDays?.let { m.set(K_ENDED_DAYS, CanonicalCbor.int(it.toLong())) }
     s.milestoneDay?.let { m.set(K_MILESTONE_DAY, CanonicalCbor.int(it.toLong())) }
 }
@@ -295,6 +317,8 @@ private fun decodeStateAfterOrNull(obj: CBORObject): ActivityStateAfter? = try {
                 ?.takeIf { it >= 0 },
             milestoneDay = obj.get(K_MILESTONE_DAY)?.takeIf { !it.isNull }?.let(::intOrNull)
                 ?.takeIf { it > 0 },
+            habitId = textOrNull(obj.get(K_HABIT_ID))
+                ?.takeIf { it.isNotBlank() && it.length <= EventPayload.MAX_HABIT_ID_LENGTH },
         )
     }
 } catch (e: RuntimeException) {

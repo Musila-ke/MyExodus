@@ -8,6 +8,7 @@ import androidx.room3.Transaction
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.data.db.entity.PartnerActivityOutbox
 import com.example.myexodus.data.db.entity.PartnerActivityProjection
+import com.example.myexodus.data.db.entity.PartnerStreakProjection
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -50,7 +51,19 @@ interface PartnerActivityDao {
             "WHERE l.event_id = o.event_id AND l.pair_id = :pairId) " +
             "AND (o.target_pair_id IS NULL OR o.target_pair_id = :pairId) " +
             "AND CASE o.kind " +
+            // Owner directive 2026-11-09: the add/rename acts ride the streak master and its
+            // watermark exactly like the daily snapshot they replace or annotate. (Simple CASE
+            // compares values, so each kind needs its own branch; an IN here would compare
+            // o.kind to 0/1 and silently fall through to ELSE.)
             "WHEN '${EventPayload.TYPE_STREAK_UPDATED}' THEN EXISTS (" +
+            "SELECT 1 FROM pair_streak_sharing s " +
+            "WHERE s.pair_id = :pairId AND s.habit_progress_id = o.habit_progress_id " +
+            "AND s.share_streak = 1 AND o.created_at_ms >= s.streak_enabled_since_ms) " +
+            "WHEN '${EventPayload.TYPE_STREAK_SHARED}' THEN EXISTS (" +
+            "SELECT 1 FROM pair_streak_sharing s " +
+            "WHERE s.pair_id = :pairId AND s.habit_progress_id = o.habit_progress_id " +
+            "AND s.share_streak = 1 AND o.created_at_ms >= s.streak_enabled_since_ms) " +
+            "WHEN '${EventPayload.TYPE_STREAK_RENAMED}' THEN EXISTS (" +
             "SELECT 1 FROM pair_streak_sharing s " +
             "WHERE s.pair_id = :pairId AND s.habit_progress_id = o.habit_progress_id " +
             "AND s.share_streak = 1 AND o.created_at_ms >= s.streak_enabled_since_ms) " +
@@ -75,6 +88,8 @@ interface PartnerActivityDao {
             "WHEN '${EventPayload.TYPE_STREAK_SHARING_STOPPED}' THEN EXISTS (" +
             "SELECT 1 FROM pair_streak_sharing s " +
             "WHERE s.pair_id = :pairId AND s.habit_progress_id = o.habit_progress_id) " +
+            // STREAK_DELETED lands here: always pair-targeted (the outer clause is its whole
+            // gate) because its consent rows are gone by delivery time.
             "ELSE 1 END " +
             "ORDER BY o.created_at_ms ASC LIMIT :limit",
     )
@@ -223,10 +238,99 @@ interface PartnerActivityDao {
         updatePinnedMessage(pairId, text, atMs)
     }
 
+    // --- Per-streak projection (owner directive 2026-11-09) ---------------------------------
+
+    /** Newest event first: the selector opens on the streak that most recently changed. */
+    @Query(
+        "SELECT * FROM partner_streak_projection WHERE pair_id = :pairId " +
+            "ORDER BY last_event_occurred_at_ms DESC, habit_id ASC",
+    )
+    suspend fun streaksFor(pairId: String): List<PartnerStreakProjection>
+
+    @Query(
+        "INSERT OR IGNORE INTO partner_streak_projection (pair_id, habit_id, habit_label, " +
+            "days_free, relapse_count, milestones_reached, last_event_occurred_at_ms, last_sequence) " +
+            "VALUES (:pairId, :habitId, :label, 0, 0, '', 0, 0)",
+    )
+    suspend fun ensureStreakRow(pairId: String, habitId: String, label: String)
+
+    /** Same monotonic guard as [advanceProjection], scoped to one streak. */
+    @Query(
+        "UPDATE partner_streak_projection SET habit_label = :label, days_free = :daysFree, " +
+            "relapse_count = :relapseCount, milestones_reached = :milestonesReached, " +
+            "last_event_occurred_at_ms = :occurredAtMs, last_sequence = :sequence " +
+            "WHERE pair_id = :pairId AND habit_id = :habitId AND :sequence > last_sequence",
+    )
+    suspend fun advanceStreakProjection(
+        pairId: String,
+        habitId: String,
+        label: String,
+        daysFree: Int,
+        relapseCount: Int,
+        milestonesReached: String,
+        occurredAtMs: Long,
+        sequence: Long,
+    ): Int
+
+    @Transaction
+    suspend fun applyStreakState(
+        pairId: String,
+        habitId: String,
+        label: String,
+        daysFree: Int,
+        relapseCount: Int,
+        milestonesReached: String,
+        occurredAtMs: Long,
+        sequence: Long,
+    ) {
+        ensureStreakRow(pairId, habitId, label)
+        advanceStreakProjection(
+            pairId, habitId, label, daysFree, relapseCount, milestonesReached, occurredAtMs, sequence,
+        )
+    }
+
+    /** The streak left the partner's view (STOPPED or DELETED). */
+    @Query("DELETE FROM partner_streak_projection WHERE pair_id = :pairId AND habit_id = :habitId")
+    suspend fun deleteStreakProjection(pairId: String, habitId: String)
+
+    /** Owner report 2026-11-09: with the last shared streak stopped, the dashboard kept
+     *  showing its days-free forever, because every v3 row also lands in the pair-level
+     *  aggregate. After a stop/delete the aggregate follows the newest survivor, and with
+     *  none left it stops claiming state (`last_event_occurred_at_ms = 0`; the read model
+     *  maps that to null). `last_sequence` is deliberately kept so the monotonic guard still
+     *  rejects replays; the pin and coaching count are the pair's, not the streak's. */
+    @Transaction
+    suspend fun refreshAggregateAfterStreakRemoved(pairId: String) {
+        val newest = streaksFor(pairId).firstOrNull()
+        overwriteAggregateState(
+            pairId,
+            newest?.daysFree ?: 0,
+            newest?.relapseCount ?: 0,
+            newest?.milestonesReached ?: "",
+            newest?.lastEventOccurredAtMs ?: 0L,
+        )
+    }
+
+    @Query(
+        "UPDATE partner_activity_projection SET days_free = :daysFree, " +
+            "relapse_count = :relapseCount, milestones_reached = :milestonesReached, " +
+            "last_event_occurred_at_ms = :occurredAtMs WHERE pair_id = :pairId",
+    )
+    suspend fun overwriteAggregateState(
+        pairId: String,
+        daysFree: Int,
+        relapseCount: Int,
+        milestonesReached: String,
+        occurredAtMs: Long,
+    )
+
     // --- Revocation / unpair prune (§8.17 delta) --------------------------------------------
 
     @Query("SELECT DISTINCT pair_id FROM partner_activity_projection")
     suspend fun projectedPairIds(): List<String>
+
+    @Query("DELETE FROM partner_streak_projection WHERE pair_id IN (:pairIds)")
+    suspend fun deleteStreakProjectionsFor(pairIds: List<String>)
 
     @Query("DELETE FROM partner_activity_link WHERE pair_id IN (:pairIds)")
     suspend fun deleteLinksFor(pairIds: List<String>)

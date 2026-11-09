@@ -42,6 +42,7 @@ import com.example.myexodus.data.db.entity.PartnerMonitoringSnapshot
 import com.example.myexodus.data.db.entity.PartnerPlan
 import com.example.myexodus.data.db.entity.PartnerPlanTask
 import com.example.myexodus.data.db.entity.PartnerRuleChange
+import com.example.myexodus.data.db.entity.PartnerStreakProjection
 import com.example.myexodus.data.db.entity.PolicyVersion
 import com.example.myexodus.data.db.entity.RecoveryMirrorLink
 import com.example.myexodus.data.db.entity.RecoveryPolicy
@@ -86,6 +87,7 @@ import com.example.myexodus.domainusage.RuleUsageDao
         PartnerActivityOutbox::class,
         PartnerActivityLink::class,
         PartnerActivityProjection::class,
+        PartnerStreakProjection::class,
         PairStreakSharing::class,
         PairProfileSharing::class,
         PartnerPlan::class,
@@ -97,7 +99,7 @@ import com.example.myexodus.domainusage.RuleUsageDao
         PartnerRuleChange::class,
         RemoteBackupAnchor::class,
     ],
-    version = 26,
+    version = 27,
     exportSchema = true,
 )
 abstract class AppRulesStore : RoomDatabase() {

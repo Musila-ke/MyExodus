@@ -4,6 +4,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,6 +23,8 @@ import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -118,8 +122,14 @@ fun StreaksScreen(
     onRelapse: () -> Unit,
     modifier: Modifier = Modifier,
     /** Owner ruling 2026-11-09: the setup form offers the live partner roster; a pick shares
-     *  the new streak automatically. */
+     *  the new streak automatically. The Manage spoke reuses the same roster to adjust which
+     *  partners share the displayed streak. */
     partners: List<ReachOutTarget> = emptyList(),
+    /** Manage spoke: which pairs currently share the displayed streak (absent = not shared). */
+    pairSharing: Map<String, Boolean> = emptyMap(),
+    onRefreshSharing: () -> Unit = {},
+    onSetHabitSharing: (pairId: String, partnerName: String, enabled: Boolean) -> Unit =
+        { _, _, _ -> },
 ) {
     val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
     var view by rememberSaveable { mutableStateOf<String?>(null) }
@@ -138,8 +148,12 @@ fun StreaksScreen(
     // while a spoke is open falls back to the hub instead of stranding a BackRow over nothing.
     val timelineState = state?.takeIf { view == VIEW_TIMELINE }
     val manageState = state?.takeIf { view == VIEW_MANAGE }
-    LaunchedEffect(view) {
-        if (view == VIEW_INSIGHTS) onRefreshInsights()
+    LaunchedEffect(view, manageState?.habitId) {
+        when (view) {
+            VIEW_INSIGHTS -> onRefreshInsights()
+            // Re-read per open and per habit swap: the flags belong to the displayed streak.
+            VIEW_MANAGE -> onRefreshSharing()
+        }
     }
     // A successful delete ends the Manage spoke: either another habit took the deleted one's
     // place, or the page itself has fallen back to setup (state == null).
@@ -190,6 +204,9 @@ fun StreaksScreen(
                 onRename = { onRenameHabit(manageState.habitId, it) },
                 onDelete = { onDeleteHabit(manageState.habitId) },
                 onClearFeedback = onClearManageFeedback,
+                partners = partners,
+                sharing = pairSharing,
+                onTogglePartner = onSetHabitSharing,
             )
         } else {
             Column {
@@ -364,6 +381,7 @@ private fun ToolkitDivider() {
  * Rename changes only the label; delete removes the habit's local streaks, milestones and
  * sharing consent (repository contract). Failures stay inline — what happened, and what to do.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ManageStreakView(
     state: HabitState,
@@ -372,9 +390,19 @@ private fun ManageStreakView(
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
     onClearFeedback: () -> Unit,
+    partners: List<ReachOutTarget>,
+    sharing: Map<String, Boolean>,
+    onTogglePartner: (pairId: String, partnerName: String, enabled: Boolean) -> Unit,
 ) {
     var name by rememberSaveable(state.habitId) { mutableStateOf(state.targetLabel) }
     var confirmingDelete by remember { mutableStateOf(false) }
+    // Owner report 2026-11-09: after tapping a share chip the biometric sheet could take
+    // seconds to appear, and the screen looked like nothing had happened. The chip
+    // acknowledges the tap on the same frame; the cue clears when the operation settles.
+    var pendingPartner by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(inFlight, feedback) {
+        if (!inFlight || feedback != null) pendingPartner = null
+    }
     val error = when (feedback) {
         StreaksViewModel.ManageFeedback.InvalidName -> stringResource(R.string.streaks_manage_error_name)
         StreaksViewModel.ManageFeedback.StoreUnavailable -> stringResource(R.string.streaks_manage_error_store)
@@ -421,6 +449,83 @@ private fun ManageStreakView(
                             else R.string.streaks_manage_save,
                         ),
                     )
+                }
+            }
+        }
+
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(R.string.streaks_manage_partner_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                if (partners.isEmpty()) {
+                    Text(
+                        stringResource(R.string.streaks_manage_partner_none),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        partners.forEach { partner ->
+                            val shared = sharing[partner.pairId] == true
+                            FilterChip(
+                                selected = shared,
+                                onClick = {
+                                    pendingPartner = partner.name
+                                    onTogglePartner(partner.pairId, partner.name, !shared)
+                                },
+                                enabled = !inFlight,
+                                label = { Text(partner.name) },
+                                leadingIcon = if (pendingPartner == partner.name) {
+                                    {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(14.dp),
+                                            strokeWidth = 2.dp,
+                                        )
+                                    }
+                                } else null,
+                            )
+                        }
+                    }
+                    if (pendingPartner != null) {
+                        Text(
+                            stringResource(R.string.streaks_manage_sharing_in_progress),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    Text(
+                        stringResource(R.string.streaks_manage_partner_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                when (feedback) {
+                    is StreaksViewModel.ManageFeedback.Shared -> Text(
+                        stringResource(
+                            if (feedback.enabled) R.string.streaks_manage_shared_on
+                            else R.string.streaks_manage_shared_off,
+                            feedback.partnerName,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+
+                    is StreaksViewModel.ManageFeedback.SharingFailed -> Text(
+                        stringResource(
+                            R.string.streaks_manage_sharing_failed,
+                            feedback.partnerName,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+
+                    else -> Unit
                 }
             }
         }

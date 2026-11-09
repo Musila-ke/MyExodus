@@ -304,6 +304,17 @@
     <string name="partner_sharing_stopped_title_named">%1$s stopped sharing a streak</string>
     <string name="partner_sharing_stopped_body_labeled">You no longer see %1$s.</string>
     <string name="partner_sharing_stopped_body">A streak was removed from what you can see.</string>
+    <!-- Owner directive 2026-11-09: the streak-management acts. Unlocked copy only; the
+         lockscreen keeps the plain partner_event_* forms (FR-13). -->
+    <string name="partner_streak_shared_title_named">%1$s shared a streak with you</string>
+    <string name="partner_streak_shared_body_labeled">You were added to %1$s.</string>
+    <string name="partner_streak_shared_body">A streak was added to what you can see.</string>
+    <string name="partner_streak_renamed_title_named">%1$s renamed a streak</string>
+    <string name="partner_streak_renamed_body_labeled">It is now called %1$s.</string>
+    <string name="partner_streak_renamed_body">One of their streaks has a new name.</string>
+    <string name="partner_streak_deleted_title_named">%1$s deleted a streak</string>
+    <string name="partner_streak_deleted_body_labeled">%1$s was deleted.</string>
+    <string name="partner_streak_deleted_body">One of their streaks was deleted.</string>
     <!-- #16: the responder's announcement that the partner ended the partnership. States who,
          when, and the erasure that just ran on this phone; the plain forms stay the
          lockscreen-safe public version (FR-13). The no-time form covers a document with no
@@ -930,6 +941,13 @@
         <item quantity="one">%1$d day free</item>
         <item quantity="other">%1$d days free</item>
     </plurals>
+    <!-- Owner report 2026-11-09: "days free" without naming the streak it counts. The hub
+         row names the most recently changed shared streak; the aggregate form above stays
+         for pre-v3 senders, whose rows carry no streak identity. -->
+    <plurals name="partner_tile_activity_days_named">
+        <item quantity="one">%1$s · %2$d day free</item>
+        <item quantity="other">%1$s · %2$d days free</item>
+    </plurals>
     <string name="partner_tile_activity_none">Nothing shared</string>
     <string name="partner_tile_never_synced">Never synced</string>
     <string name="partner_tile_synced">Synced %1$s</string>
@@ -1014,6 +1032,7 @@
     <string name="partner_last_synced">Last synced %1$s</string>
     <string name="partner_sync_delayed">Sync is taking longer than usual. The phone may be offline or paused by Android.</string>
     <string name="partner_sync_note">Updates arrive as soon as both phones are online.</string>
+    <string name="partner_sync_waiting_unlock">Updates are waiting to send. They go out when this phone is next unlocked.</string>
     <string name="partner_sync_rate_limited">Some recent updates came in faster than the server allows, so they weren’t sent as instant alerts. They’ll arrive with the next sync.</string>
     <string name="partner_check_now">Check now</string>
     <string name="partner_check_now_running">Checking…</string>
@@ -1058,6 +1077,10 @@
     <string name="partner_summary_last_event">Last shared %1$s</string>
     <string name="partner_summary_partial">Some history is missing, so these numbers may be behind.</string>
     <string name="partner_summary_pinned_label">Their message to you</string>
+    <!-- Owner directive 2026-11-09: with more than one shared streak the page names the
+         streak being viewed and lets the viewer switch; a single shared streak is just named. -->
+    <string name="partner_summary_streak_viewing">Viewing %1$s</string>
+    <string name="partner_summary_streak_unnamed">Shared streak</string>
     <!-- §7 Step 7 / §8.13 device monitoring: their app's own encrypted status report. Kept
          apart from sync and chain status — a live mailbox never proves their monitor runs,
          and a stale report reads Unknown rather than keeping an old Active. -->
@@ -1503,6 +1526,17 @@
     <string name="streaks_manage_delete_confirm_title">Delete this streak?</string>
     <string name="streaks_manage_delete_confirm_body">“%1$s” and all of its day history will be removed from this device. Sharing for this streak stops. This can\'t be undone.</string>
     <string name="streaks_manage_delete_confirm_action">Delete</string>
+    <!-- Owner directive 2026-11-09: the partner can be added or removed right from Manage,
+         the same control the setup form offers. -->
+    <string name="streaks_manage_partner_title">Accountability partner</string>
+    <string name="streaks_manage_partner_none">No partner is paired with this phone yet.</string>
+    <string name="streaks_manage_sharing_failed">Couldn\'t update sharing with %1$s. Check your connection and try again.</string>
+    <!-- Owner report 2026-11-09: the biometric sheet can arrive seconds after the share tap,
+         so the tap itself must acknowledge immediately. -->
+    <string name="streaks_manage_sharing_in_progress">Updating sharing…</string>
+    <string name="streaks_manage_shared_on">%1$s can see this streak now.</string>
+    <string name="streaks_manage_shared_off">%1$s no longer sees this streak.</string>
+    <string name="streaks_manage_partner_note">Tap a name to share this streak with them. Tap it again to stop sharing.</string>
     <string name="streaks_cancel">Cancel</string>
     <string name="streaks_milestone_channel_name">MyExodus milestones</string>
     <!-- Amount, not ordinal: on firing the app's own counter reads "Day 8" (never-0 display). -->

@@ -18,6 +18,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -122,6 +123,155 @@ class PartnerActivityReceiverTest {
         assertNull("control events never create a partner card", store.partnerActivityDao().projection(PAIR))
     }
 
+    // --- Per-streak projection (owner directive 2026-11-09) -----------------------------------
+
+    @Test
+    fun habitAnchoredSnapshot_createsItsOwnStreakRow() = runBlocking {
+        receiver.applyAppended(
+            PAIR,
+            snapshot(days = 30, relapses = 1, milestones = listOf(7, 30), habitId = "h-a", label = "Instagram"),
+            sequence = 4L,
+        )
+
+        val row = store.partnerActivityDao().streaksFor(PAIR).single()
+        assertEquals("h-a", row.habitId)
+        assertEquals("Instagram", row.habitLabel)
+        assertEquals(30, row.daysFree)
+        assertEquals(1, row.relapseCount)
+        assertEquals("7,30", row.milestonesReached)
+        assertEquals(NOW, row.lastEventOccurredAtMs)
+        assertEquals(4L, row.lastSequence)
+    }
+
+    /** Each streak's numbers stay its own: an event for B never rewrites A's row. */
+    @Test
+    fun twoSharedStreaks_keepIndependentRows() = runBlocking {
+        receiver.applyAppended(PAIR, snapshot(days = 30, habitId = "h-a", label = "Instagram"), sequence = 1L)
+        receiver.applyAppended(PAIR, snapshot(days = 3, habitId = "h-b", label = "Betting"), sequence = 2L)
+
+        val rows = store.partnerActivityDao().streaksFor(PAIR).associateBy { it.habitId }
+        assertEquals(30, rows.getValue("h-a").daysFree)
+        assertEquals("Instagram", rows.getValue("h-a").habitLabel)
+        assertEquals(3, rows.getValue("h-b").daysFree)
+        assertEquals("Betting", rows.getValue("h-b").habitLabel)
+    }
+
+    /** The row carries its own monotonic guard, same as the aggregate: a replayed older
+     *  snapshot must not roll one streak back. */
+    @Test
+    fun streakRow_hasItsOwnMonotonicGuard() = runBlocking {
+        receiver.applyAppended(PAIR, snapshot(days = 30, habitId = "h-a", label = "Instagram"), sequence = 9L)
+        receiver.applyAppended(PAIR, snapshot(days = 3, habitId = "h-a", label = "Instagram"), sequence = 8L)
+
+        assertEquals(30, store.partnerActivityDao().streaksFor(PAIR).single().daysFree)
+    }
+
+    /** A rename re-labels the same row — labels can repeat, the id is the key. */
+    @Test
+    fun renamedEvent_relabelsTheExistingRow() = runBlocking {
+        receiver.applyAppended(
+            PAIR, snapshot(days = 5, habitId = "h-a", label = "Old name"), sequence = 1L,
+        )
+        receiver.applyAppended(
+            PAIR,
+            snapshot(
+                days = 5, habitId = "h-a", label = "New name",
+                type = EventPayload.TYPE_STREAK_RENAMED,
+            ),
+            sequence = 2L,
+        )
+
+        val row = store.partnerActivityDao().streaksFor(PAIR).single()
+        assertEquals("New name", row.habitLabel)
+    }
+
+    /** The revoke removes that streak from the per-streak view and leaves the others alone. */
+    @Test
+    fun sharingStopped_deletesOnlyThatStreaksRow() = runBlocking {
+        receiver.applyAppended(PAIR, snapshot(days = 30, habitId = "h-a", label = "Instagram"), sequence = 1L)
+        receiver.applyAppended(PAIR, snapshot(days = 3, habitId = "h-b", label = "Betting"), sequence = 2L)
+
+        receiver.applyAppended(
+            PAIR,
+            snapshot(
+                days = 30, habitId = "h-a", label = "Instagram",
+                type = EventPayload.TYPE_STREAK_SHARING_STOPPED,
+            ),
+            sequence = 3L,
+        )
+
+        assertEquals(listOf("h-b"), store.partnerActivityDao().streaksFor(PAIR).map { it.habitId })
+    }
+
+    /** A delete removes the streak from the partner's view the same way a revoke does. */
+    @Test
+    fun deletedEvent_deletesThatStreaksRow() = runBlocking {
+        receiver.applyAppended(PAIR, snapshot(days = 30, habitId = "h-a", label = "Instagram"), sequence = 1L)
+
+        receiver.applyAppended(
+            PAIR,
+            snapshot(
+                days = 30, habitId = "h-a", label = "Instagram",
+                type = EventPayload.TYPE_STREAK_DELETED,
+            ),
+            sequence = 2L,
+        )
+
+        assertTrue(store.partnerActivityDao().streaksFor(PAIR).isEmpty())
+    }
+
+    /** Owner report 2026-11-09: with the only shared streak stopped, the dashboard kept
+     *  showing its days-free forever. The stopped snapshot must stop claiming state; the
+     *  pair's pin is not the streak's and survives. */
+    @Test
+    fun stoppingTheOnlySharedStreak_clearsTheStaleAggregate_butKeepsThePin() = runBlocking {
+        receiver.applyAppended(PAIR, message("Still here."), sequence = 1L)
+        receiver.applyAppended(PAIR, snapshot(days = 30, habitId = "h-a", label = "Instagram"), sequence = 2L)
+
+        receiver.applyAppended(
+            PAIR,
+            snapshot(
+                days = 30, habitId = "h-a", label = "Instagram",
+                type = EventPayload.TYPE_STREAK_SHARING_STOPPED,
+            ),
+            sequence = 3L,
+        )
+
+        val row = projection()
+        assertEquals("a stopped streak must not keep claiming days free", 0, row.daysFree)
+        assertEquals(0L, row.lastEventOccurredAtMs)
+        assertEquals("Still here.", row.pinnedMessageText)
+    }
+
+    /** With another streak still shared, the aggregate follows the survivor instead of the
+     *  stopped streak's snapshot (the hub row reads it). */
+    @Test
+    fun stoppingOneStreak_rebasesTheAggregateOnTheSurvivor() = runBlocking {
+        receiver.applyAppended(PAIR, snapshot(days = 30, habitId = "h-a", label = "Instagram"), sequence = 1L)
+        receiver.applyAppended(PAIR, snapshot(days = 3, habitId = "h-b", label = "Betting"), sequence = 2L)
+
+        receiver.applyAppended(
+            PAIR,
+            snapshot(
+                days = 30, habitId = "h-a", label = "Instagram",
+                type = EventPayload.TYPE_STREAK_SHARING_STOPPED,
+            ),
+            sequence = 3L,
+        )
+
+        assertEquals(3, projection().daysFree)
+    }
+
+    /** Pre-v3 senders carry no habit id: the aggregate still applies (unchanged behavior),
+     *  the per-streak table simply stays empty. */
+    @Test
+    fun preV3Snapshot_neverCreatesStreakRows() = runBlocking {
+        receiver.applyAppended(PAIR, snapshot(days = 12), sequence = 1L)
+
+        assertTrue(store.partnerActivityDao().streaksFor(PAIR).isEmpty())
+        assertEquals(12, projection().daysFree)
+    }
+
     // --- Req 15 motivational message ----------------------------------------------------------
 
     /** ADR #285: a snapshot-less message pins only — the dashboard numbers stay unwritten, so
@@ -217,14 +367,19 @@ class PartnerActivityReceiverTest {
         relapses: Int = 0,
         milestones: List<Int> = emptyList(),
         coaching: Int = 0,
+        habitId: String? = null,
+        label: String? = null,
+        type: String = EventPayload.TYPE_STREAK_UPDATED,
     ) = activity(
-        EventPayload.TYPE_STREAK_UPDATED,
+        type,
         "",
         stateAt(NOW).copy(
             daysFree = days,
             relapseCount = relapses,
             milestonesReached = milestones,
             coachingProgress = coaching,
+            habitLabel = label,
+            habitId = habitId,
         ),
     )
 

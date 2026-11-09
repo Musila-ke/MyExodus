@@ -166,6 +166,39 @@ class PartnerActivityJournalTest {
         assertFalse(PartnerActivityJournal.emitForHabit(store, milestonesOnly, EventPayload.TYPE_RELAPSE_RECORDED, NOW))
     }
 
+    /** Owner directive 2026-11-09: the add / rename / delete acts ride the streak master
+     *  alone (like the daily snapshot), and each row carries the streak's name. */
+    @Test
+    fun streakManagementKinds_rideTheStreakMaster_andCarryTheName() = runBlocking {
+        seedProfile()
+        val habitId = seedHabit()
+        val kinds = listOf(
+            EventPayload.TYPE_STREAK_SHARED,
+            EventPayload.TYPE_STREAK_RENAMED,
+            EventPayload.TYPE_STREAK_DELETED,
+        )
+        seedStreakConsent(shareStreak = false, shareMilestones = true, shareRelapses = true)
+
+        kinds.forEach { kind ->
+            assertFalse(
+                "$kind must not journal while the master is off",
+                PartnerActivityJournal.emitForHabit(store, habitId, kind, NOW),
+            )
+        }
+        assertTrue(journalRows().isEmpty())
+
+        seedStreakConsent(shareStreak = true, shareMilestones = false, shareRelapses = false)
+        kinds.forEach { kind ->
+            assertTrue(
+                "$kind needs the master only, not the category flags",
+                PartnerActivityJournal.emitForHabit(store, habitId, kind, NOW),
+            )
+        }
+
+        assertEquals(kinds, journalRows().map { it.kind })
+        assertTrue("each row names the streak", journalRows().all { it.habitLabel == "Instagram" })
+    }
+
     /** v16: coaching needs the pair's recovery consent AND a visible habit to anchor its
      *  snapshot to — either one missing refuses the row (its aggregate must be truthful). */
     @Test

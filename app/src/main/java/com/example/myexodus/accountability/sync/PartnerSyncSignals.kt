@@ -3,6 +3,7 @@ package com.example.myexodus.accountability.sync
 import com.example.myexodus.accountability.monitoring.StandbyBucket
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
  * Process-wide repaint signal for partner surfaces (owner UX ruling 2026-10-01: pages adjust
@@ -62,4 +63,10 @@ object PartnerSyncSignals {
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
+
+    /** Owner-approved A (2026-11-09): true while the last pass left partner-visible rows queued
+     *  behind a cold §8.1 signing window. State rather than an event, so a partner page opened
+     *  after the pass still tells the truth; any pass that gets through clears it. Automatic
+     *  delivery still never prompts — the surface only explains the wait and offers Check now. */
+    val signingDeferred = MutableStateFlow(false)
 }

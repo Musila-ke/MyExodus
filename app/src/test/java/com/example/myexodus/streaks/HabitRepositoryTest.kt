@@ -688,7 +688,7 @@ class HabitRepositoryTest {
         )
 
         val row = journalRows().single()
-        assertEquals(EventPayload.TYPE_STREAK_UPDATED, row.kind)
+        assertEquals("the rise names itself (owner 2026-11-09), snapshot included", EventPayload.TYPE_STREAK_SHARED, row.kind)
         assertEquals("the pair that just enabled is the only recipient", "pair-1", row.targetPairId)
         assertEquals("the new streak reports Day 1, never 0 (ADR #128)", 1, row.daysFree)
         assertEquals(riseAt, row.occurredAtMs)
@@ -941,6 +941,71 @@ class HabitRepositoryTest {
             repository.deleteHabit("missing-habit"),
         )
         assertEquals(1, repository.habits().size)
+    }
+
+    /** Owner directive 2026-11-09: a delete tells exactly the pairs that were sharing the
+     *  streak, and the row is written before the consent rows disappear (same transaction) —
+     *  pair-targeted because nothing would gate it afterwards. */
+    @Test
+    fun deleteHabit_journalsDeletedForSharingPairsOnly() = runBlocking {
+        seedProfile()
+        val shared = (onboard() as HabitRepository.OnboardingResult.Ready).state.habitId
+        val unshared = (onboard(label = "Betting apps") as HabitRepository.OnboardingResult.Ready).state.habitId
+        seedStreakConsent(shared)
+
+        repository.deleteHabit(shared)
+
+        val forShared = journalRows().filter { it.kind == EventPayload.TYPE_STREAK_DELETED }
+        assertEquals(1, forShared.size)
+        assertEquals("pair-1", forShared.single().targetPairId)
+        assertEquals(shared, forShared.single().habitProgressId)
+
+        repository.deleteHabit(unshared)
+
+        assertEquals(
+            "a streak nobody shares tells nobody",
+            listOf(shared),
+            journalRows().filter { it.kind == EventPayload.TYPE_STREAK_DELETED }
+                .map { it.habitProgressId },
+        )
+    }
+
+    /** The rename names itself: every sharing pair hears the new label, an unshared streak
+     *  journals nothing. */
+    @Test
+    fun renameHabit_journalsRenamedWithTheNewName_forSharingPairsOnly() = runBlocking {
+        seedProfile()
+        val shared = (onboard() as HabitRepository.OnboardingResult.Ready).state.habitId
+        val unshared = (onboard(label = "Betting apps") as HabitRepository.OnboardingResult.Ready).state.habitId
+        seedStreakConsent(shared)
+
+        assertTrue(
+            "the shared streak renames",
+            repository.renameHabit(shared, "No porn") is HabitRepository.RenameResult.Renamed,
+        )
+        repository.renameHabit(unshared, "No betting")
+
+        val row = journalRows().single { it.kind == EventPayload.TYPE_STREAK_RENAMED }
+        assertNull("a rename fans out; the journal gate keeps it to sharing pairs", row.targetPairId)
+        assertEquals("No porn", row.habitLabel)
+    }
+
+    /** The add and the revoke name themselves, each addressed to the pair it concerns. */
+    @Test
+    fun setPairStreakSharing_journalsSharedAndStopped_targetedToThatPair() = runBlocking {
+        seedProfile()
+        val habitId = (onboard() as HabitRepository.OnboardingResult.Ready).state.habitId
+
+        assertTrue(repository.setPairStreakSharing("pair-1", habitId, true, true, true))
+        val shared = journalRows().single { it.kind == EventPayload.TYPE_STREAK_SHARED }
+        assertEquals("pair-1", shared.targetPairId)
+        assertEquals(habitId, shared.habitProgressId)
+        assertEquals("Instagram", shared.habitLabel)
+
+        assertTrue(repository.setPairStreakSharing("pair-1", habitId, false, false, false))
+        val stopped = journalRows().single { it.kind == EventPayload.TYPE_STREAK_SHARING_STOPPED }
+        assertEquals("pair-1", stopped.targetPairId)
+        assertEquals(habitId, stopped.habitProgressId)
     }
 
     private suspend fun journalRows() =

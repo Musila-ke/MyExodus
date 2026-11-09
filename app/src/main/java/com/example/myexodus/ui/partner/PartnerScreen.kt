@@ -43,9 +43,11 @@ import androidx.compose.material.icons.outlined.Timeline
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -59,6 +61,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -359,6 +362,9 @@ fun PartnerScreen(
     var checking by remember { mutableStateOf(false) }
     var checkFailed by remember { mutableStateOf(false) }
     var checkOk by remember { mutableStateOf(false) }
+    // Owner-approved A (2026-11-09): rows queued behind a cold signing window say so here,
+    // instead of the page looking healthy while the partner's phone hears nothing.
+    val signingDeferred by PartnerSyncSignals.signingDeferred.collectAsState()
     var respondingTo by remember { mutableStateOf<String?>(null) }
     var respondFailed by remember { mutableStateOf(false) }
     var confirmingUnpair by remember { mutableStateOf(false) }
@@ -791,6 +797,7 @@ fun PartnerScreen(
                         checking = checking,
                         checkFailed = checkFailed,
                         checkOk = checkOk,
+                        signingDeferred = signingDeferred,
                         onCheckNow = runCheckNow,
                         unpairing = unpairing,
                         unpairFailed = unpairFailed,
@@ -829,6 +836,7 @@ fun PartnerScreen(
                     pending.isNotEmpty() ||
                     sharesNothing == true ||
                     checkFailed ||
+                    signingDeferred ||
                     syncNeedsAttention(current)
                 if (needsYou) {
                     Text(
@@ -859,12 +867,13 @@ fun PartnerScreen(
                     // AD-05 staleness is never hidden: the sync card's full detail lives on the
                     // Pairing page, but it returns to the hub whenever it has something the user
                     // may have to act on. A healthy sync stays quiet here.
-                    if (checkFailed || syncNeedsAttention(current)) {
+                    if (checkFailed || signingDeferred || syncNeedsAttention(current)) {
                         SyncCard(
                             state = current,
                             checking = checking,
                             checkFailed = checkFailed,
                             checkOk = checkOk,
+                            signingDeferred = signingDeferred,
                             onCheckNow = runCheckNow,
                             tone = CardTone.NOTICE,
                             prominentAction = false,
@@ -897,14 +906,29 @@ fun PartnerScreen(
                         // a zero-day streak. The page's own card applies the same rule.
                         subtitle = when (val activity = current.activity) {
                             null -> stringResource(R.string.partner_tile_activity_none)
-                            else -> if (activity.lastEventOccurredAtEpochMillis == null) {
-                                stringResource(R.string.partner_tile_activity_none)
-                            } else {
-                                pluralStringResource(
-                                    R.plurals.partner_tile_activity_days,
-                                    activity.daysFree,
-                                    activity.daysFree,
-                                )
+                            else -> {
+                                // Owner report 2026-11-09: the row said "1 day free" without
+                                // naming the streak it counts. With per-streak rows present,
+                                // name the newest one; pre-v3 senders keep the aggregate form.
+                                val newest = activity.streaks
+                                    .maxByOrNull { it.lastEventOccurredAtEpochMillis }
+                                when {
+                                    newest != null -> pluralStringResource(
+                                        R.plurals.partner_tile_activity_days_named,
+                                        newest.daysFree,
+                                        newest.label.ifBlank {
+                                            stringResource(R.string.partner_summary_streak_unnamed)
+                                        },
+                                        newest.daysFree,
+                                    )
+                                    activity.lastEventOccurredAtEpochMillis == null ->
+                                        stringResource(R.string.partner_tile_activity_none)
+                                    else -> pluralStringResource(
+                                        R.plurals.partner_tile_activity_days,
+                                        activity.daysFree,
+                                        activity.daysFree,
+                                    )
+                                }
                             }
                         },
                         onClick = { view = VIEW_ACTIVITY },
@@ -1445,25 +1469,61 @@ private fun PartnerSummaryCard(activity: PartnerActivityUi, chainStatus: Partner
         // ADR #285: a snapshot-less message writes only the pin. No shared state means no
         // numbers — zeros would be a claim about the partner the absent events do not support.
         val hasSharedState = activity.lastEventOccurredAtEpochMillis != null
+        // Owner directive 2026-11-09: every number below belongs to the streak the selector
+        // names — several shared streaks get a switcher, one gets its name, and pre-v3
+        // senders fall back to the pair-level aggregate exactly as before.
+        val streaks = activity.streaks
+        var selectedHabitId by rememberSaveable { mutableStateOf<String?>(null) }
+        val selected = streaks.firstOrNull { it.habitId == selectedHabitId }
+            ?: streaks.maxByOrNull { it.lastEventOccurredAtEpochMillis }
         if (hasSharedState) {
+            when {
+                streaks.size > 1 -> FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    streaks.forEach { streak ->
+                        FilterChip(
+                            selected = streak.habitId == selected?.habitId,
+                            onClick = { selectedHabitId = streak.habitId },
+                            label = {
+                                Text(
+                                    streak.label.ifBlank {
+                                        stringResource(R.string.partner_summary_streak_unnamed)
+                                    },
+                                )
+                            },
+                        )
+                    }
+                }
+                selected != null -> Text(
+                    stringResource(
+                        R.string.partner_summary_streak_viewing,
+                        selected.label.ifBlank {
+                            stringResource(R.string.partner_summary_streak_unnamed)
+                        },
+                    ),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             // Owner directive 2026-11-09: no card title — the page header already says "How
             // they're doing", and the repeated line pushed the hero number below the fold.
             // Days free is the one number the tab exists to answer, so it takes the reference's
             // hero slot — and its freshness note rides under the label rather than in a third
             // line, which is what made the old card read as a wall of equal-weight text.
+            val daysFree = selected?.daysFree ?: activity.daysFree
             HeroStatRow(
                 label = stringResource(R.string.partner_summary_days),
-                caption = activity.lastEventOccurredAtEpochMillis?.let { at ->
+                caption = (selected?.lastEventOccurredAtEpochMillis
+                    ?: activity.lastEventOccurredAtEpochMillis)?.let { at ->
                     stringResource(
                         R.string.partner_summary_last_event,
                         relativeTimeText(System.currentTimeMillis(), at),
                     )
                 },
-                value = activity.daysFree,
+                value = daysFree,
                 unit = pluralStringResource(
                     R.plurals.partner_summary_days_unit,
-                    activity.daysFree,
-                    activity.daysFree,
+                    daysFree,
+                    daysFree,
                 ),
             )
             // Equal thirds: intrinsic widths squeezed the third label below the width of its
@@ -1471,14 +1531,15 @@ private fun PartnerSummaryCard(activity: PartnerActivityUi, chainStatus: Partner
             Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
                 StatColumn(
                     stringResource(R.string.partner_summary_relapses),
-                    activity.relapseCount.toString(),
+                    (selected?.relapseCount ?: activity.relapseCount).toString(),
                     modifier = Modifier.weight(1f),
                 )
                 StatColumn(
                     stringResource(R.string.partner_summary_milestones_label),
-                    activity.milestonesReached.joinToString(", ").ifEmpty {
-                        stringResource(R.string.partner_summary_milestones_none)
-                    },
+                    (selected?.milestonesReached ?: activity.milestonesReached)
+                        .joinToString(", ").ifEmpty {
+                            stringResource(R.string.partner_summary_milestones_none)
+                        },
                     modifier = Modifier.weight(1f),
                 )
                 StatColumn(
@@ -2077,6 +2138,7 @@ private fun SyncCard(
     checkFailed: Boolean,
     checkOk: Boolean,
     onCheckNow: () -> Unit,
+    signingDeferred: Boolean = false,
     tone: CardTone = CardTone.CALM,
     prominentAction: Boolean = true,
     showIdentity: Boolean = false,
@@ -2133,6 +2195,16 @@ private fun SyncCard(
                 stringResource(R.string.partner_sync_delayed),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
+            )
+        }
+        // Owner-approved A (2026-11-09): a cold §8.1 signing window defers queued partner
+        // events by design (NFR4). The page says the updates exist and what unlocks them, so
+        // "sent but the partner heard nothing" is never a silent surprise.
+        if (signingDeferred) {
+            Text(
+                stringResource(R.string.partner_sync_waiting_unlock),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         // §8 Step 18: the server refused a recent send — deliberately NOT the
@@ -2619,6 +2691,7 @@ private fun PairingView(
     checking: Boolean,
     checkFailed: Boolean,
     checkOk: Boolean,
+    signingDeferred: Boolean,
     onCheckNow: () -> Unit,
     unpairing: Boolean,
     unpairFailed: Boolean,
@@ -2640,11 +2713,12 @@ private fun PairingView(
         checking = checking,
         checkFailed = checkFailed,
         checkOk = checkOk,
+        signingDeferred = signingDeferred,
         onCheckNow = onCheckNow,
         showIdentity = true,
         // #14: the manual check appears only when the state needs it — routine freshness is
         // the automatic pass's job (foreground, worker, push).
-        showCheck = checkFailed || syncNeedsAttention(state),
+        showCheck = checkFailed || signingDeferred || syncNeedsAttention(state),
     )
     if (onAddUser != null) AddUserCard(onAddUser)
     UnpairCard(working = unpairing, failed = unpairFailed, onStart = onStartUnpair)

@@ -60,5 +60,30 @@ class PartnerActivityReceiver(private val storeFactory: AppRulesStoreFactory) {
             pinnedText = pinned,
             pinnedAtMs = pinned?.let { state.eventOccurredAtMs },
         )
+
+        // Owner directive 2026-11-09: the per-streak view. A revoke or delete removes the
+        // streak from the partner's view; every other habit-anchored kind applies its
+        // snapshot wholesale under the row's own monotonic guard. Pre-v3 senders carry no
+        // habit id and simply never populate this table (the aggregate above still applies).
+        val habitId = state.habitId ?: return
+        when (valid.payload.type) {
+            EventPayload.TYPE_STREAK_SHARING_STOPPED, EventPayload.TYPE_STREAK_DELETED -> {
+                dao.deleteStreakProjection(pairId, habitId)
+                // The aggregate above took this row's stopped snapshot; re-read it from what
+                // the partner still shares, or clear it when nothing is left.
+                dao.refreshAggregateAfterStreakRemoved(pairId)
+            }
+
+            else -> dao.applyStreakState(
+                pairId = pairId,
+                habitId = habitId,
+                label = state.habitLabel ?: "",
+                daysFree = state.daysFree,
+                relapseCount = state.relapseCount,
+                milestonesReached = encodeMilestoneDays(state.milestonesReached),
+                occurredAtMs = state.eventOccurredAtMs,
+                sequence = sequence,
+            )
+        }
     }
 }

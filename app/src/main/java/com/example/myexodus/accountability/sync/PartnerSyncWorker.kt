@@ -79,6 +79,7 @@ suspend fun runPartnerSyncPass(
     // ADR #216: surface a cold signing window so the foreground retries the pass once the
     // window is warm. Owner ruling 2026-11-05: automatic delivery never prompts.
     if (report.signingBlocked) PartnerSyncSignals.signingNeeded.tryEmit(Unit)
+    PartnerSyncSignals.signingDeferred.value = report.signingBlocked
     return report
 }
 

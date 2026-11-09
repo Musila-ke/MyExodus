@@ -168,11 +168,13 @@ This is the deepest subsystem. Read it in layers:
 ### 6.2 Event contract
 Two contracts ship side by side:
 
-- `accountability/serialization/EventPayload.kt` — the legacy envelope body (wire **schema v2**
-  with v1 read support): payload types `activity`, `deletion_request`, `sync_request`,
+- `accountability/serialization/EventPayload.kt` — the legacy envelope body (wire **schema v3**
+  with v1/v2 read support): payload types `activity`, `deletion_request`, `sync_request`,
   `approval_request`, `approval_response` (+ plan progress), with activity types
   `streak_updated`, `relapse_recorded`, `milestone_reached`, `coaching_step_updated`,
-  `motivational_message`. Wire v2 adds habit label, ended days and milestone day.
+  `motivational_message`, `streak_sharing_stopped`, `streak_shared`, `streak_renamed`,
+  `streak_deleted`. Wire v2 adds habit label, ended days and milestone day; v3 adds the
+  streak's stable id (`hi`, ADR #291) — the key behind the partner's per-streak view.
 - `accountability/serialization/AccountabilityEventWire.kt` — the closed, versioned
   accountability body (ADR #196): kinds `ACCOUNTABILITY_EVENT`, `MONITORING_STATUS`,
   `GAP_MARKER`, `RULE_CONTROL`; categories `BLOCKED_APP_ATTEMPT`, `BLOCKED_DOMAIN_ATTEMPT`,

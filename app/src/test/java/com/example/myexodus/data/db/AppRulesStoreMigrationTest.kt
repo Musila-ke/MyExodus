@@ -1121,6 +1121,46 @@ class AppRulesStoreMigrationTest {
         context.deleteDatabase("recovery-assist-test.db")
     }
 
+    /** v27 adds the receiver's per-streak projection (owner directive 2026-11-09). Purely
+     *  additive: a v26 database keeps every row, and the rollback drops only the derived
+     *  table — the chain can rebuild it from what the peer sends again. */
+    @Test
+    fun migration26to27AndBack_addsStreakProjection_andKeepsEveryRow() {
+        val scratchPath = context.getDatabasePath("partner-streak-projection-test.db").absolutePath
+        AndroidSQLiteDriver().open(scratchPath).use { conn ->
+            conn.prepare("CREATE TABLE sentinel_table (id INTEGER NOT NULL, PRIMARY KEY(id))").use { it.step() }
+            conn.prepare("INSERT INTO sentinel_table (id) VALUES (1)").use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_26_27.migrate(conn) }
+
+            assertEquals(
+                listOf(
+                    "pair_id", "habit_id", "habit_label", "days_free", "relapse_count",
+                    "milestones_reached", "last_event_occurred_at_ms", "last_sequence",
+                ),
+                columnNames(conn, "partner_streak_projection"),
+            )
+            conn.prepare(
+                "INSERT INTO partner_streak_projection (pair_id, habit_id, habit_label, days_free, " +
+                    "relapse_count, milestones_reached, last_event_occurred_at_ms, last_sequence) " +
+                    "VALUES ('pair-1', 'habit-a', 'Instagram', 3, 1, '7', 42, 9)",
+            ).use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_27_26.migrate(conn) }
+
+            assertTrue(
+                "the derived per-streak table is the rollback's only casualty",
+                columnNames(conn, "partner_streak_projection").isEmpty(),
+            )
+            conn.prepare("SELECT id FROM sentinel_table").use { stmt ->
+                assertTrue("rollback keeps the row", stmt.step())
+                assertEquals(1L, stmt.getLong(0))
+                assertFalse(stmt.step())
+            }
+        }
+        context.deleteDatabase("partner-streak-projection-test.db")
+    }
+
     private fun columnNames(conn: androidx.sqlite.SQLiteConnection, table: String): List<String> {
         val names = mutableListOf<String>()
         conn.prepare("PRAGMA table_info($table)").use { stmt ->

@@ -471,8 +471,10 @@ class HabitRepository(
                     ),
                 )
                 if (shareStreak && before?.shareStreak != true) {
+                    // Owner directive 2026-11-09: the add names itself so the partner hears
+                    // "shared a streak with you", not the generic daily snapshot.
                     PartnerActivityJournal.emitForHabit(
-                        db, habit.progressId, EventPayload.TYPE_STREAK_UPDATED, now,
+                        db, habit.progressId, EventPayload.TYPE_STREAK_SHARED, now,
                         targetPairId = pairId,
                     )
                 }
@@ -578,6 +580,11 @@ class HabitRepository(
             db.habitProgressDao().getById(habitId) ?: return@guardingStore RenameResult.NotFound
             db.withWriteTransaction<Unit> {
                 db.habitProgressDao().rename(habitId, trimmed)
+                // Owner directive 2026-11-09: a rename tells every pair currently sharing
+                // this streak; the journal gate keeps it to sharing pairs alone.
+                PartnerActivityJournal.emitForHabit(
+                    db, habitId, EventPayload.TYPE_STREAK_RENAMED, readings().tWallMillis,
+                )
             }
             val displayed = evaluationMutex.withLock {
                 if (_state.value?.habitId == habitId) loadState(db, habitId)?.also(::publishState) else _state.value
@@ -602,6 +609,19 @@ class HabitRepository(
             val next = evaluationMutex.withLock {
                 scheduler.cancelFor(habitId)
                 db.withWriteTransaction<Unit> {
+                    // Owner directive 2026-11-09: each pair sharing this streak is told it was
+                    // deleted. Targeted, and written before the consent rows disappear so the
+                    // journal gate still sees the sharing; the row also carries the habit id
+                    // the receiver needs to drop its per-streak entry.
+                    val deletedAtMs = readings().tWallMillis
+                    db.pairSharingDao().streakAll()
+                        .filter { it.habitProgressId == habitId && it.shareStreak }
+                        .forEach { sharing ->
+                            PartnerActivityJournal.emitForHabit(
+                                db, habitId, EventPayload.TYPE_STREAK_DELETED, deletedAtMs,
+                                targetPairId = sharing.pairId,
+                            )
+                        }
                     // Milestones key on streak rows (subquery), so they go first.
                     db.milestoneEventDao().deleteForHabit(habitId)
                     db.recoveryStreakDao().deleteForHabit(habitId)

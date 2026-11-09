@@ -149,6 +149,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
@@ -415,8 +417,12 @@ class MainActivity : FragmentActivity() {
     }
 
     /** ADR #216: coalesces the sync heal — a prompt already owns the screen, so a signal
-     *  arriving mid-prompt (or a Check-now+signal race) must not stack a second sheet. */
-    private var signingHealInFlight = false
+     *  arriving mid-prompt (or a Check-now+signal race) must not stack a second sheet. Owner
+     *  fix 2026-11-09: a plain flag made an explicit share-time delivery return false while an
+     *  automatic pass was in flight (passes run every few seconds), so the user saw "queued"
+     *  for a delivery that was not attempted. The automatic path skips; the explicit path
+     *  waits its turn. */
+    private val signingHealMutex = Mutex()
 
     /**
      * ADR #216 + owner ruling 2026-11-05: partner delivery is automatic. The §8.1 key refuses
@@ -449,8 +455,7 @@ class MainActivity : FragmentActivity() {
      * (foreground start or the periodic worker) signs and sends it.
      */
     private suspend fun deliverQueuedPartnerEvents() {
-        if (signingHealInFlight) return
-        signingHealInFlight = true
+        if (!signingHealMutex.tryLock()) return
         try {
             if (!isOnline()) return
             if (!runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked) return
@@ -462,7 +467,7 @@ class MainActivity : FragmentActivity() {
         } catch (e: Exception) {
             Log.w(TAG, "automatic partner delivery failed", e)
         } finally {
-            signingHealInFlight = false
+            signingHealMutex.unlock()
         }
     }
 
@@ -472,26 +477,24 @@ class MainActivity : FragmentActivity() {
      * only when the signer is cold. Automatic delivery never comes through here.
      */
     private suspend fun healBlockedPartnerSigning(): Boolean {
-        if (signingHealInFlight) return false
-        signingHealInFlight = true
         try {
-            if (!isOnline()) return false
-            if (!runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked) {
-                return true
+            return signingHealMutex.withLock {
+                if (!isOnline()) return@withLock false
+                if (!runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked) {
+                    return@withLock true
+                }
+                if (signingWindowWarm()) {
+                    return@withLock !runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked
+                }
+                // Cancelled prompt: rows stay journaled for the next automatic pass.
+                signWithAuthPrompt(getString(R.string.partner_sync_auth_title)) ?: return@withLock false
+                !runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked
             }
-            if (signingWindowWarm()) {
-                return !runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked
-            }
-            // Cancelled prompt: rows stay journaled for the next automatic pass.
-            signWithAuthPrompt(getString(R.string.partner_sync_auth_title)) ?: return false
-            return !runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "partner signing heal failed", e)
             return false
-        } finally {
-            signingHealInFlight = false
         }
     }
 

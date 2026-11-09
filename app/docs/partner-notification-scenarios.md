@@ -65,13 +65,15 @@ Columns: **#**, **scenario**, **expected (source)**, **device result**.
 
 | # | Scenario | Expected from source | Result |
 |---|---|---|---|
-| S13 | Create a new streak | Two cases since ADR #286. No partner picked ("No one"): **no partner notification** (new habit is shared with nobody). Partner picked in the form's "Share with" section: one targeted STREAK_UPDATED snapshot on creation (all three switches on), so the partner gets the ADR #123 pairing-style snapshot and the streak lands in What you share automatically | SENDER PASSED 2026-11-09 (.106, release): created "Device Leg" with John Maingi picked in the setup form's "Share with" chips (section note: "A partner you pick sees this streak automatically. Disconnect it anytime in What you share."). What you share immediately listed "Device Leg — Shared with John Maingi". RECEIVER BLOCKED: the creation snapshot is queued in the cold signing window (see finding 5); no tray record on .107 yet, so the partner-visible leg is not passed |
-| S14 | Turn on streak sharing for a habit with the pair | One STREAK_UPDATED snapshot → currently posts the generic "New activity from X" (feed shows no new row) | PARTIAL 2026-11-09: enabled from the blocked composer (ADR #284), sheet flipped in place, hub card cleared. The snapshot arrived late, not lost: the X6532C dashboard filled on a later warm sync pass. Delay matches the cold signing window deferring queued rows (`PartnerSyncCoordinator.kt:54-65`, `:144-156`); not yet isolated to one observe-and-wait pass |
-| S15 | A clean day passes while sharing is on | STREAK_UPDATED day-crossing → generic "New activity from X" notification; dashboard days-free updates | |
+| S13 | Create a new streak | Two cases since ADR #286. No partner picked ("No one"): **no partner notification** (new habit is shared with nobody). Partner picked in the form's "Share with" section: one targeted STREAK_SHARED snapshot on creation (all three switches on, ADR #291) → "«partner» shared a streak with you / You were added to «streak»." and the streak lands in What you share automatically | SENDER PASSED 2026-11-09 (.106, release): created "Device Leg" with John Maingi picked in the setup form's "Share with" chips (section note: "A partner you pick sees this streak automatically. Disconnect it anytime in What you share."). What you share immediately listed "Device Leg — Shared with John Maingi". RECEIVER BLOCKED: the creation snapshot is queued in the cold signing window (see finding 5); no tray record on .107 yet, so the partner-visible leg is not passed |
+| S14 | Turn on streak sharing for a habit with the pair | One targeted STREAK_SHARED snapshot (ADR #291) → "«partner» shared a streak with you / You were added to «streak»."; the streak appears in the partner's per-streak selector | PARTIAL 2026-11-09: enabled from the blocked composer (ADR #284), sheet flipped in place, hub card cleared. The snapshot arrived late, not lost: the X6532C dashboard filled on a later warm sync pass. Delay matches the cold signing window deferring queued rows (`PartnerSyncCoordinator.kt:54-65`, `:144-156`); not yet isolated to one observe-and-wait pass |
+| S15 | A clean day passes while sharing is on | STREAK_UPDATED day-crossing → generic "New activity from X" notification; dashboard days-free updates for that streak only | |
 | S16 | Log a relapse with Relapses shared | "X logged a relapse / «streak» · ended a N-day streak · «when»" | |
 | S17 | Reach a milestone day with Milestones shared | "X reached a milestone / «streak» · reached N days · «when»" | |
-| S18 | Delete a streak that was shared | **No notification** (source); consent rows removed, partner projection keeps the last snapshot | |
-| S19 | Turn sharing off for a streak | **Notification** since ADR #286: "X stopped sharing a streak / You no longer see «streak»." (generic lockscreen copy). The revoke survives the consent flip by design (row's own snapshot); the partner projection keeps the last snapshot, so "How they're doing" numbers do not change — the notification is the signal | SENDER PASSED 2026-11-09 (.106, release): Device Leg's per-streak sheet had all three switches on; flipping the master to false left What you share showing "Device Leg — Not shared" while Test Habit stayed "Shared with John Maingi". RECEIVER BLOCKED: `MyExodusPartnerSync: drain: 0 event(s) delivered` on the sender — the STOP row is queued in the cold signing window (ADR #259); no tray record on .107, so the notification text is not yet device-proven |
+| S18 | Delete a streak that was shared | **Notification** since ADR #291: "«partner» deleted a streak / «streak» was deleted." Journaled per currently-sharing pair before the consent rows are removed; the receiver drops that streak's projection row and leaves the others alone | |
+| S19 | Turn sharing off for a streak | **Notification** since ADR #286: "X stopped sharing a streak / You no longer see «streak»." (generic lockscreen copy). The revoke survives the consent flip by design (row's own snapshot); the receiver drops that streak's projection row — the others stay | SENDER PASSED 2026-11-09 (.106, release): Device Leg's per-streak sheet had all three switches on; flipping the master to false left What you share showing "Device Leg — Not shared" while Test Habit stayed "Shared with John Maingi". RECEIVER BLOCKED: `MyExodusPartnerSync: drain: 0 event(s) delivered` on the sender — the STOP row is queued in the cold signing window (ADR #259); no tray record on .107, so the notification text is not yet device-proven |
+| S25 | Rename a shared streak | **Notification** since ADR #291: "«partner» renamed a streak / It is now called «new name»." The partner's selector and row label re-read the new name (relabel, same row — the id is the key) | |
+| S26 | Multiple streaks shared: switching and accuracy | The partner's "How they're doing" shows a selector when more than one streak is projected, "Viewing «streak»" when exactly one is; each streak shows its own days free / relapses / milestones, and an event on streak A never moves streak B's numbers | |
 
 ### C. Messages and dashboard
 
@@ -99,9 +101,9 @@ S23 (accuracy) after every one:
    not the individual item** (owner 2026-11-09; also memory `project_rule_identity_batches`).
 5. **Streaks in the partnership:** add/assign the partner to a streak, then relapse (S16),
    milestone (S17), delete the streak (S18), un-share (S19); also confirm a new streak alone
-   notifies nobody (S13) and a clean day while shared (S15). Owner question: on delete, is the
-   partner told? Source answer says no — confirm on device and record it as a finding, not a
-   pass.
+   notifies nobody (S13) and a clean day while shared (S15). Delete and un-share both notify
+   (ADR #291 / #286). Then rename a shared streak (S25) and switch between two shared streaks
+   (S26), checking each streak's numbers against what was actually sent.
 6. **Message:** send one (S20). Send requires the device-key biometric prompt — owner-gated;
    the owner must complete the fingerprint for this leg.
 7. **"How they're doing" accuracy (S22/S23):** after every scenario above, verify every
@@ -118,7 +120,10 @@ S23 (accuracy) after every one:
    from X", but the activity feed intentionally hides daily snapshots. Either the notification
    is noise or the feed is hiding an event it promised. Owner decision needed.
 2. **Streak deletion / un-sharing is silent** — the partner's dashboard can keep showing the
-   last days-free snapshot indefinitely. Honest, but stale; no "sharing stopped" signal exists.
+   last days-free snapshot indefinitely. **Resolved:** un-sharing notifies since ADR #286
+   ("stopped sharing a streak"); deleting notifies since ADR #291 ("deleted a streak"), and
+   both remove that streak's projection row on the receiver. Verified by test, device leg
+   pending (S18/S19/S25).
 3. **Attempts are not scoped to the assigned rule** — Check-ins sharing sends blocked attempts
    for every rule, including unassigned ones (batch name included via attempt text).
 4. **Empty-share copy lacked the "ask them to" nudge** the owner asked for. **Resolved
@@ -144,6 +149,11 @@ S23 (accuracy) after every one:
    S20 message arrived with the receiver pinned and notified; the owner confirmed both. The
    seconds-latency target is met with a warm signing window; a cold window still defers by
    design. Re-measure after the ADR #288 functions deploy and the expedited-work APK land.
+   **Resolution (ADR #292, owner-approved B + A, 2026-11-09):** a share toggle now asks for
+   the delivery pass at the moment of the act, so a cold window raises the device-key prompt
+   right there; if the prompt is cancelled, the Partner page's sync card says the updates are
+   waiting and offers Check now (`PartnerSyncSignals.signingDeferred`). Automatic delivery
+   still never prompts. Device re-measure of the cold-share leg remains.
 6. **Messaging requires sharing, which locks out a pure supervisor.** MOTIVATIONAL_MESSAGE is
    journaled only when at least one streak is shared with the pair
    (`PartnerActivityJournal.kt:183-184`); the UI mirrors it (`PartnerScreen.kt:426` →

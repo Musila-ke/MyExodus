@@ -193,6 +193,20 @@ data class PartnerActivityUi(
     /** Req 15 arrival surface: the newest message this pair has sent us, if any. */
     val pinnedMessageText: String? = null,
     val pinnedMessageAtEpochMillis: Long? = null,
+    /** Owner directive 2026-11-09: one entry per streak the partner shares, newest event
+     *  first — the page's per-streak selector. Empty on pre-v3 senders, where the aggregate
+     *  fields above remain the whole truth. */
+    val streaks: List<PartnerStreakUi> = emptyList(),
+)
+
+/** One received streak as the dashboard's selector renders it (schema v27 projection row). */
+data class PartnerStreakUi(
+    val habitId: String,
+    val label: String,
+    val daysFree: Int,
+    val milestonesReached: List<Int>,
+    val relapseCount: Int,
+    val lastEventOccurredAtEpochMillis: Long,
 )
 
 /** Dashboard summary over the decoded received events. */

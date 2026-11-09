@@ -244,6 +244,64 @@ class EventPayloadTest {
         assertTrue(classifyActivity(decoded) is ActivityEvent.Valid)
     }
 
+    /** Wire v3 (owner directive 2026-11-09): the streak's stable id survives the wire cycle —
+     *  the key the partner's per-streak view groups by when labels repeat. */
+    @Test
+    fun activityStateAfter_v3HabitId_roundTrips() {
+        val state = ActivityStateAfter(
+            daysFree = 7,
+            relapseCount = 0,
+            milestonesReached = listOf(7),
+            coachingProgress = 0,
+            eventOccurredAtMs = 1_787_000_000_000L,
+            habitLabel = "Instagram",
+            habitId = "habit-3f2a",
+        )
+        val decoded = decodePayload(
+            encodePayload(
+                EventPayload(
+                    type = EventPayload.TYPE_STREAK_RENAMED,
+                    text = "",
+                    protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
+                    schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,
+                    stateAfter = state,
+                ),
+            ),
+        )
+        assertEquals(state, decoded.stateAfter)
+        assertEquals(3, decoded.schemaVersion)
+        assertTrue(classifyActivity(decoded) is ActivityEvent.Valid)
+    }
+
+    /** A malformed v3 field declines itself to null while the counts it annotates survive —
+     *  the selector then falls back to grouping by label rather than losing the event. */
+    @Test
+    fun decode_badHabitId_declinesItself_notTheCounts() {
+        listOf(" ", "x".repeat(EventPayload.MAX_HABIT_ID_LENGTH + 1)).forEach { bad ->
+            val good = encodePayload(
+                EventPayload(
+                    type = EventPayload.TYPE_STREAK_SHARED,
+                    text = "",
+                    protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
+                    schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,
+                    stateAfter = ActivityStateAfter(
+                        3, 1, emptyList(), 0, 42L,
+                        habitLabel = "Instagram", habitId = "habit-3f2a",
+                    ),
+                ),
+            )
+            val obj = CanonicalCbor.decodeMap(good)
+            obj["st"].set("hi", CanonicalCbor.text(bad))
+            val decoded = decodePayload(CanonicalCbor.encode(obj))
+
+            val after = decoded.stateAfter!!
+            assertEquals(null, after.habitId)
+            assertEquals(3, after.daysFree)
+            assertEquals("Instagram", after.habitLabel)
+            assertTrue(classifyActivity(decoded) is ActivityEvent.Valid)
+        }
+    }
+
     @Test
     fun activityStateAfter_emptyMilestones_roundTrip() {
         val state = ActivityStateAfter(

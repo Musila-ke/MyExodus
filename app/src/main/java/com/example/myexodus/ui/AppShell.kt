@@ -286,6 +286,7 @@ fun AppShell(
     val relapseFeedback by streaks.relapseFeedback.collectAsStateWithLifecycle()
     val manageFeedback by streaks.manageFeedback.collectAsStateWithLifecycle()
     val manageInFlight by streaks.manageInFlight.collectAsStateWithLifecycle()
+    val pairSharing by streaks.pairSharing.collectAsStateWithLifecycle()
     val insightsState by insights.state.collectAsStateWithLifecycle()
 
     // SOS §8.15 (Step 8): the Reach out control's sender state.
@@ -362,6 +363,12 @@ fun AppShell(
         PartnerSyncSignals.standbyNotice.collect {
             snackbarHostState.showSnackbar(standbyNotice)
         }
+    }
+    // Owner-approved B (2026-11-09): a share change on the Streaks page asks for the delivery
+    // pass immediately, so a cold signing window raises the device-key prompt at the moment of
+    // the change instead of waiting for a later automatic attempt.
+    LaunchedEffect(Unit) {
+        streaks.sharingDeliveryRequested.collect { onPartnerCheckNow() }
     }
 
     // SOS §8.16 (Step 9): "attach the listener during Home lifecycle" — the §6.9 query runs
@@ -567,6 +574,9 @@ fun AppShell(
                         onClearManageFeedback = streaks::clearManageFeedback,
                         onOnboard = streaks::onboard,
                         partners = sosTargets,
+                        pairSharing = pairSharing,
+                        onRefreshSharing = streaks::refreshPairSharing,
+                        onSetHabitSharing = streaks::setHabitSharing,
                         onOpenHabitPicker = { pickerOpen = true },
                         onCancelAddHabit = streaks::cancelAddHabit,
                         onRelapse = streaks::logRelapse,

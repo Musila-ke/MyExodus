@@ -213,6 +213,24 @@ object PartnerNotifications {
                     (payload.stateAfter?.habitLabel?.takeIf { it.isNotBlank() }
                         ?.let { context.getString(R.string.partner_sharing_stopped_body_labeled, it) }
                         ?: context.getString(R.string.partner_sharing_stopped_body))
+            // Owner directive 2026-11-09: the streak-management acts name themselves, so the
+            // partner hears "shared / renamed / deleted a streak", not "new activity". Always
+            // rich — a pre-v3 sender's label-less body is still the honest signal.
+            EventPayload.TYPE_STREAK_SHARED ->
+                context.getString(R.string.partner_streak_shared_title_named, partnerName) to
+                    (payload.stateAfter?.habitLabel?.takeIf { it.isNotBlank() }
+                        ?.let { context.getString(R.string.partner_streak_shared_body_labeled, it) }
+                        ?: context.getString(R.string.partner_streak_shared_body))
+            EventPayload.TYPE_STREAK_RENAMED ->
+                context.getString(R.string.partner_streak_renamed_title_named, partnerName) to
+                    (payload.stateAfter?.habitLabel?.takeIf { it.isNotBlank() }
+                        ?.let { context.getString(R.string.partner_streak_renamed_body_labeled, it) }
+                        ?: context.getString(R.string.partner_streak_renamed_body))
+            EventPayload.TYPE_STREAK_DELETED ->
+                context.getString(R.string.partner_streak_deleted_title_named, partnerName) to
+                    (payload.stateAfter?.habitLabel?.takeIf { it.isNotBlank() }
+                        ?.let { context.getString(R.string.partner_streak_deleted_body_labeled, it) }
+                        ?: context.getString(R.string.partner_streak_deleted_body))
             // ADR #193: a new or edited plan is the one plan event worth an alert — progress
             // is filtered out before this call.
             PlanWire.TYPE_PLAN_PUBLISHED ->

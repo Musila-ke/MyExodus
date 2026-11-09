@@ -628,6 +628,9 @@ class PartnerSyncCoordinator(
                 coachingProgress = if (profileConsent?.shareRecovery == true) base.coachingProgress else 0,
                 eventOccurredAtMs = row.occurredAtMs,
                 habitLabel = base.habitLabel,
+                // Wire v3 (owner directive 2026-11-09): the stable per-streak key behind the
+                // receiver's selector. Habit-anchored kinds only; profile rows stay keyless.
+                habitId = if (isHabitRow) row.habitProgressId else null,
                 endedDays = row.endedDays,
                 milestoneDay = row.milestoneDay,
             ),
@@ -695,6 +698,7 @@ class PartnerSyncCoordinator(
         val store = storeFactory.open() ?: return
         store.partnerActivityDao().deleteLinksFor(pairIds)
         store.partnerActivityDao().deleteProjectionsFor(pairIds)
+        store.partnerActivityDao().deleteStreakProjectionsFor(pairIds)
         store.pairSharingDao().deleteStreakFor(pairIds)
         store.pairSharingDao().deleteProfileFor(pairIds)
         store.partnerPlanDao().deleteForPairs(pairIds)
