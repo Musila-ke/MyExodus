@@ -8,7 +8,9 @@ import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -105,20 +107,29 @@ internal const val PARTNER_SYNC_WORK_NAME = "partner-sync"
  * One immediate pass after a local rule mutation (owner report 2026-10-31): the rule journal
  * row exists the moment the write commits, but only a sync pass turns it into a partner
  * event — the periodic cadence would otherwise delay the partner's alert by up to 15 minutes.
- * KEEP, so a pass already running is never duplicated (the row is still picked up by it).
+ * EXPEDITED since owner ruling 2026-11-09 (partner alerts land within seconds): without it a
+ * backgrounded app's pass waits for a scheduler slot and is deferred outright in Doze, so
+ * even a fully signed row could sit unsent. KEEP, so a pass already running is never
+ * duplicated (the row is still picked up by it). The network constraint still applies --
+ * expedited work is prioritized, not constraint-free.
  */
 fun enqueuePartnerSyncNow(context: Context) {
-    val request = OneTimeWorkRequestBuilder<PartnerSyncWorker>()
-        .setConstraints(
-            Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
-        )
-        .build()
     WorkManager.getInstance(context).enqueueUniqueWork(
         PARTNER_SYNC_NOW_WORK_NAME,
         ExistingWorkPolicy.KEEP,
-        request,
+        partnerSyncNowRequest(),
     )
 }
+
+/** Top-level internal so a JVM test can pin the expedited flag that the seconds-level
+ *  delivery contract depends on. */
+internal fun partnerSyncNowRequest(): OneTimeWorkRequest =
+    OneTimeWorkRequestBuilder<PartnerSyncWorker>()
+        .setConstraints(
+            Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
+        )
+        .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        .build()
 
 internal const val PARTNER_SYNC_NOW_WORK_NAME = "partner-sync-now"
 

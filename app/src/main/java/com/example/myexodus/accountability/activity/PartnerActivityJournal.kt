@@ -27,10 +27,11 @@ import java.util.UUID
  * plus the enable-time watermarks) is enforced at reconcile, where the delivering pair is
  * known. Kinds: STREAK_UPDATED rides the streak master alone (sub-content is scrubbed per
  * pair at reconcile), MILESTONE_REACHED needs master + milestones, RELAPSE_RECORDED master +
- * relapses, COACHING_STEP_UPDATED needs some pair's recovery consent (and a visible habit to
- * anchor its snapshot to), and the Req 15 motivational message needs the addressed pair to
- * have at least one visible habit — its snapshot must anchor truthfully or not deliver at
- * all. Only the coaching item *count* travels; the text never does (INV-13).
+ * relapses, and COACHING_STEP_UPDATED needs some pair's recovery consent (and a visible habit
+ * to anchor its snapshot to). The Req 15 motivational message is unconditional (ADR #285):
+ * its value is the text, so a pure supervisor who shares nothing still sends one — reconcile
+ * ships it snapshot-less when the pair has no visible habit to anchor truthfully. Only the
+ * coaching item *count* travels; the text never does (INV-13).
  *
  * Rows are written unconditionally beyond that gate — no cross-database pair check inside
  * the domain transaction. Fan-out is a transport concern: the reconcile loop emits only for
@@ -180,8 +181,15 @@ object PartnerActivityJournal {
             EventPayload.TYPE_COACHING_STEP_UPDATED -> dao.profileAll().any { it.shareRecovery } &&
                 dao.streakAll().any { it.shareStreak }
 
-            EventPayload.TYPE_MOTIVATIONAL_MESSAGE -> streakRows(dao, targetPairId)
-                .any { it.shareStreak }
+            // ADR #285: messaging never depends on sharing. The addressee is a partner of
+            // record; text is the whole payload and it carries no state anyone consented to.
+            EventPayload.TYPE_MOTIVATIONAL_MESSAGE -> true
+
+            // Owner ruling 2026-11-09: the revoke tells the partner a streak left their view,
+            // so it must survive the very consent flip that stops every other streak row. A
+            // (pair, habit) consent row still existing means there was sharing to revoke.
+            EventPayload.TYPE_STREAK_SHARING_STOPPED -> streakRows(dao, targetPairId)
+                .any { it.habitProgressId == habit?.progressId }
 
             else -> true
         }

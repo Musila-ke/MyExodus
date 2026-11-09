@@ -707,6 +707,44 @@ class HabitRepositoryTest {
         assertEquals("re-enabling an already-on master adds no second snapshot", 1, journalRows().size)
     }
 
+    /** Owner ruling 2026-11-09: dropping the master journals the revoke for that pair, and
+     *  the row still delivers after the consent flip — the reconcile gate accepts it on the
+     *  consent row's existence. A repeat "off" write adds nothing. */
+    @Test
+    fun setPairStreakSharing_masterFall_journalsTheRevoke_forThatPairOnly() = runBlocking {
+        seedProfile()
+        onboard()
+        val habitId = habitIdOf()
+        repository.setPairStreakSharing(
+            "pair-1", habitId, shareStreak = true, shareRelapses = true, shareMilestones = true,
+        )
+
+        now = now.copy(tWallMillis = now.tWallMillis + 60_000)
+        assertTrue(
+            repository.setPairStreakSharing(
+                "pair-1", habitId, shareStreak = false, shareRelapses = false, shareMilestones = false,
+            ),
+        )
+
+        val revoke = journalRows().last()
+        assertEquals(EventPayload.TYPE_STREAK_SHARING_STOPPED, revoke.kind)
+        assertEquals("the pair that un-shared is the only recipient", "pair-1", revoke.targetPairId)
+        assertEquals("the partner is told which streak left their view", "Instagram", revoke.habitLabel)
+        assertTrue(
+            "no other pair receives the revoke",
+            store.partnerActivityDao().pendingForPair("pair-2", sinceMs = 0L, limit = 100).isEmpty(),
+        )
+
+        repository.setPairStreakSharing(
+            "pair-1", habitId, shareStreak = false, shareRelapses = false, shareMilestones = false,
+        )
+        assertEquals(
+            "off to off is not a transition; the earlier snapshot is hidden by the consent flip",
+            1,
+            journalRows().size,
+        )
+    }
+
     @Test
     fun setPairProfileSharing_roundTripsThroughTheMatrix_andPinsEachWatermarkAtItsRise() = runBlocking {
         seedProfile()
@@ -807,33 +845,6 @@ class HabitRepositoryTest {
             repository.setPairStreakSharing("pair-2", habitId, shareStreak = true, shareRelapses = false, shareMilestones = false),
         )
         assertEquals("a streak master on counts as sharing", false, repository.sharesNothingWith("pair-2"))
-    }
-
-    /** ADR #135: the composer gate reads the streak master alone — profile categories
-     *  (check-ins, coaching) must not unlock a message, because the message's required
-     *  snapshot is the sender's streak and the journal's write gate refuses without one. */
-    @Test
-    fun sharesStreakWith_tracksTheStreakMasterOnly_perPair() = runBlocking {
-        seedProfile()
-        onboard()
-        val habitId = habitIdOf()
-
-        assertEquals("a fresh pair shares no streak", false, repository.sharesStreakWith("pair-1"))
-
-        assertTrue(repository.setPairProfileSharing("pair-1", shareCheckIns = true, shareRecovery = true))
-        assertEquals(
-            "profile categories alone do not unlock the composer",
-            false,
-            repository.sharesStreakWith("pair-1"),
-        )
-
-        assertTrue(
-            repository.setPairStreakSharing(
-                "pair-1", habitId, shareStreak = true, shareRelapses = false, shareMilestones = false,
-            ),
-        )
-        assertEquals(true, repository.sharesStreakWith("pair-1"))
-        assertEquals("and only for that pair", false, repository.sharesStreakWith("pair-2"))
     }
 
     @Test

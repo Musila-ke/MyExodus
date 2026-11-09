@@ -50,14 +50,14 @@ test('relay wake data is the generic schema and nothing else', async () => {
   assertNoIdentity(wake, ['watcher-uid', 'monitored-uid', 'monitored-uid_watcher-uid', 'install-1']);
 });
 
-test('relay wake is normal priority, TTL 30m, collapsed, package-restricted, no visible copy', async () => {
+test('relay wake is high priority (owner ruling 2026-11-09), TTL 30m, collapsed, package-restricted, no visible copy', async () => {
   const wake = await relayWakeData();
   const message = buildWakeMessage({ id: 'install-1', token: 'tok-1' }, wake);
 
   assert.strictEqual(message.notification, undefined, 'wakes never render OS copy');
   assert.strictEqual(message.token, 'tok-1');
   assert.deepStrictEqual(message.android, {
-    priority: 'normal',
+    priority: 'high',
     ttl: 30 * 60 * 1000,
     collapseKey: 'sync',
     restrictedPackageName: 'com.example.myexodus',

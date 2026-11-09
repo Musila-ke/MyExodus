@@ -225,6 +225,47 @@ class PartnerNotificationsTest {
         )
     }
 
+    /** Owner ruling 2026-11-09: un-sharing a streak alerts the partner and names the streak
+     *  that left their view. A nameless body is still the honest signal, never the generic
+     *  "new activity" copy. */
+    @Test
+    fun streakSharingStopped_namesThePartner_andTheStreakThatLeftTheirView() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val state = ActivityStateAfter(
+            daysFree = 7, relapseCount = 0, milestonesReached = emptyList(), coachingProgress = 0,
+            eventOccurredAtMs = OCCURRED_AT, habitLabel = "Instagram",
+        )
+
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME,
+            payload(EventPayload.TYPE_STREAK_SHARING_STOPPED, stateAfter = state),
+        )
+        val labeled = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_sharing_stopped_title_named, PARTNER_NAME),
+            labeled.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(R.string.partner_sharing_stopped_body_labeled, "Instagram"),
+            labeled.extras.getString(Notification.EXTRA_TEXT),
+        )
+        assertEquals(
+            "the lockscreen copy stays generic (FR-13)",
+            context.getString(R.string.partner_event_title),
+            labeled.publicVersion!!.extras.getString(Notification.EXTRA_TITLE),
+        )
+
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME,
+            payload(EventPayload.TYPE_STREAK_SHARING_STOPPED, stateAfter = null),
+        )
+        val unlabeled = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_sharing_stopped_body),
+            unlabeled.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
     /** §19.5 multi-partner (owner ruling 2026-09-29): N pairs' items coexist in the tray, each
      *  named for its own partner and keyed by its own id — one partner's entry can never
      *  silently replace another's. */

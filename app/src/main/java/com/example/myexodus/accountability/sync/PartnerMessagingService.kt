@@ -2,7 +2,9 @@ package com.example.myexodus.accountability.sync
 
 import android.util.Log
 import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
@@ -29,9 +31,13 @@ import kotlinx.coroutines.withTimeoutOrNull
  * still comes from Firestore via Home's listener.
  *
  * All other callbacks enqueue the same one-time partner-sync work rather than doing work
- * inline: the service's execution window is short and the FCM wake is only a latency
- * optimization on top of the 15-minute cadence — a Doze-deferred run is late, not lost.
- * `onDeletedMessages` enqueues the same watermark-reconciling pass (plan §8 Step 9's
+ * inline: the service's execution window is short. The work is EXPEDITED (owner ruling
+ * 2026-11-09: a partner alert must land within seconds of being sent): a normal-priority
+ * request waits for a scheduler slot and is deferred outright in Doze, which is exactly how
+ * the receiver's pull became "15 minutes to hours late". If the expedited quota is spent,
+ * [OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST] degrades to the old behavior — a late
+ * run, never a lost one (the mailbox stays the source of truth). `onDeletedMessages`
+ * enqueues the same watermark-reconciling pass (plan §8 Step 9's
  * `triggerFullMailboxReconciliation` — the pass IS the reconciliation, so no separate
  * sync-required flag is persisted), and a wake's messageId rides into the work as input
  * data so the pull can handle that exact message first.
@@ -112,21 +118,18 @@ class PartnerMessagingService : FirebaseMessagingService() {
     }
 
     private fun enqueueSync(messageId: String?) {
-        val data = messageId?.let { workDataOf(PARTNER_WAKE_MESSAGE_ID to it) }
-        val request = OneTimeWorkRequestBuilder<PartnerSyncWorker>()
-            .apply { if (data != null) setInputData(data) }
-            .build()
-        WorkManager.getInstance(this).enqueueUniqueWork(WAKE_WORK_NAME, ExistingWorkPolicy.KEEP, request)
+        WorkManager.getInstance(this).enqueueUniqueWork(
+            WAKE_WORK_NAME,
+            ExistingWorkPolicy.KEEP,
+            partnerWakeRequest(messageId),
+        )
     }
 
     /** A separate unique name so a queued generic wake (KEEP, no force flag) cannot swallow
      *  the probe's forced heartbeat; the pass body is the same and dedup-safe. */
     private fun enqueueHeartbeatProbe() {
-        val request = OneTimeWorkRequestBuilder<PartnerSyncWorker>()
-            .setInputData(workDataOf(PARTNER_FORCE_HEARTBEAT to true))
-            .build()
         WorkManager.getInstance(this)
-            .enqueueUniqueWork(PROBE_WORK_NAME, ExistingWorkPolicy.KEEP, request)
+            .enqueueUniqueWork(PROBE_WORK_NAME, ExistingWorkPolicy.KEEP, partnerProbeRequest())
     }
 
     private companion object {
@@ -138,3 +141,19 @@ class PartnerMessagingService : FirebaseMessagingService() {
         const val LABEL_LOOKUP_TIMEOUT_MS = 1_000L
     }
 }
+
+/** The wake request — top-level internal so a JVM test can pin the expedited flag that the
+ *  seconds-level delivery contract depends on. */
+internal fun partnerWakeRequest(messageId: String?): OneTimeWorkRequest =
+    OneTimeWorkRequestBuilder<PartnerSyncWorker>()
+        .apply { if (messageId != null) setInputData(workDataOf(PARTNER_WAKE_MESSAGE_ID to messageId)) }
+        .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        .build()
+
+/** The liveness-probe request (forced heartbeat) — expedited for the same reason: the server
+ *  has already waited 45 minutes for a beat. */
+internal fun partnerProbeRequest(): OneTimeWorkRequest =
+    OneTimeWorkRequestBuilder<PartnerSyncWorker>()
+        .setInputData(workDataOf(PARTNER_FORCE_HEARTBEAT to true))
+        .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        .build()

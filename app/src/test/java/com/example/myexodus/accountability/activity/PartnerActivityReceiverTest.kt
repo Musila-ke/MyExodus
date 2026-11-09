@@ -124,6 +124,26 @@ class PartnerActivityReceiverTest {
 
     // --- Req 15 motivational message ----------------------------------------------------------
 
+    /** ADR #285: a snapshot-less message pins only — the dashboard numbers stay unwritten, so
+     *  the card can never claim a state the sender never shared. */
+    @Test
+    fun snapshotlessMessage_pinsOnly_andLeavesTheDashboardUnwritten() = runBlocking {
+        receiver.applyAppended(PAIR, messageWithoutState("Still here for you.", atMs = NOW), sequence = 3L)
+
+        val projection = projection()
+        assertEquals("Still here for you.", projection.pinnedMessageText)
+        assertEquals("the sender's own send time", NOW, projection.pinnedMessageAtMs)
+        assertEquals("no state was claimed", 0L, projection.lastSequence)
+    }
+
+    /** A refused body with no snapshot writes nothing at all — not even a phantom row. */
+    @Test
+    fun snapshotlessMessage_withABadBody_isDeclinedWithoutARow() = runBlocking {
+        receiver.applyAppended(PAIR, messageWithoutState("   "), sequence = 1L)
+
+        assertNull(store.partnerActivityDao().projection(PAIR))
+    }
+
     @Test
     fun motivationalMessage_pinsTheTextAlongsideItsSnapshot_inOneApply() = runBlocking {
         receiver.applyAppended(PAIR, message("Proud of you."), sequence = 3L)
@@ -153,6 +173,25 @@ class PartnerActivityReceiverTest {
         receiver.applyAppended(PAIR, message("  Keep going  "), sequence = 1L)
 
         assertEquals("Keep going", projection().pinnedMessageText)
+    }
+
+    /** Same discipline as [lowerSequence_isIgnored], on the pin: the mailbox may deliver an
+     *  older message after a newer one, and the card must keep the newer text. */
+    @Test
+    fun olderMessageDeliveredLate_doesNotRollThePinBack() = runBlocking {
+        receiver.applyAppended(PAIR, message("newer", atMs = NOW), sequence = 2L)
+        receiver.applyAppended(PAIR, message("older", atMs = NOW - 60_000), sequence = 1L)
+
+        assertEquals("newer", projection().pinnedMessageText)
+        assertEquals(NOW, projection().pinnedMessageAtMs)
+    }
+
+    @Test
+    fun snapshotlessOlderMessageDeliveredLate_doesNotRollThePinBack() = runBlocking {
+        receiver.applyAppended(PAIR, messageWithoutState("newer", atMs = NOW), sequence = 2L)
+        receiver.applyAppended(PAIR, messageWithoutState("older", atMs = NOW - 60_000), sequence = 1L)
+
+        assertEquals("newer", projection().pinnedMessageText)
     }
 
     /** Req 15 home card: newest pinned message first across pairs (#12 — the card pages). */
@@ -191,6 +230,14 @@ class PartnerActivityReceiverTest {
 
     private fun message(text: String, atMs: Long = NOW) =
         activity(EventPayload.TYPE_MOTIVATIONAL_MESSAGE, text, stateAt(atMs))
+
+    private fun messageWithoutState(text: String, atMs: Long = NOW) = EventPayload(
+        type = EventPayload.TYPE_MOTIVATIONAL_MESSAGE,
+        text = text,
+        protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
+        schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,
+        messageAtMs = atMs,
+    )
 
     private fun activity(type: String, text: String, state: ActivityStateAfter) = EventPayload(
         type = type,

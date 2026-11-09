@@ -48,6 +48,7 @@ import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.streaks.HabitState
 import com.example.myexodus.streaks.HabitSummary
 import com.example.myexodus.streaks.WithdrawalSeverity
+import com.example.myexodus.ui.partner.ReachOutTarget
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.NavTile
 import com.example.myexodus.ui.WindowWidth
@@ -110,11 +111,15 @@ fun StreaksScreen(
         durationYears: Int,
         severity: WithdrawalSeverity,
         recoveryStartAt: Long,
+        partnerPairId: String?,
     ) -> Unit,
     onOpenHabitPicker: () -> Unit,
     onCancelAddHabit: () -> Unit,
     onRelapse: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Owner ruling 2026-11-09: the setup form offers the live partner roster; a pick shares
+     *  the new streak automatically. */
+    partners: List<ReachOutTarget> = emptyList(),
 ) {
     val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
     var view by rememberSaveable { mutableStateOf<String?>(null) }
@@ -206,6 +211,7 @@ fun StreaksScreen(
                     onOnboard = onOnboard,
                     onCancel = if (addingHabit) onCancelAddHabit else null,
                     firstHabit = state == null,
+                    partners = partners,
                 )
                 // Rows from before a habit existed (techniques run from Recovery) still need a
                 // way in; with no habit the page opens on All habits.

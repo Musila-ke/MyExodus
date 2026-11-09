@@ -188,6 +188,13 @@ class RulesRepository(
         journaled(journal)
     }
 
+    /** Revokes one rule's partner (What you share → Disconnect). The update journals
+     *  UNASSIGNED, so the partner is told it left their view. */
+    suspend fun unassignRule(ruleId: String) {
+        val rule = store().restrictionRuleDao().getById(ruleId) ?: return
+        if (rule.assignedPairId != null) updateRule(rule.copy(assignedPairId = null))
+    }
+
     /** Removes the batch's assigned partner from every member in one write plus one
      *  batch-level UNASSIGNED row (owner mandate 2026-10-31: removing the partner from the
      *  block notifies them). Identity comes from the pre-write members — the route needs the

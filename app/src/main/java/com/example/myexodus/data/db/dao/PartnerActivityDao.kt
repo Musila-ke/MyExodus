@@ -36,11 +36,13 @@ interface PartnerActivityDao {
      *  - habit kinds need the pair's streak master for the row's own habit, plus the kind's
      *    own switch, plus the row's write time at/after the switch's enable watermark —
      *    events journaled while the switch was off are never delivered retroactively;
-     *  - rows with a null habit anchor (pre-v16 journal) match no branch and are skipped;
+     *  - habit-kind rows with a null habit anchor (pre-v16 journal) match no branch and are
+     *    skipped;
      *  - coaching needs the pair's recovery switch (watermarked) and a visible habit — its
      *    snapshot must anchor somewhere truthful;
-     *  - the motivational message needs only a visible habit (the user pressed send for
-     *    THIS pair; the composer is the message's own consent).
+     *  - the motivational message needs nothing (ADR #285): the user pressed send for THIS
+     *    pair, and the text carries no state anyone could have withheld. With no visible
+     *    habit it ships snapshot-less; the dashboard never changes.
      */
     @Query(
         "SELECT * FROM partner_activity_outbox o WHERE o.created_at_ms >= :sinceMs " +
@@ -67,9 +69,12 @@ interface PartnerActivityDao {
             "AND p.share_recovery = 1 AND o.created_at_ms >= p.recovery_enabled_since_ms) " +
             "AND EXISTS (SELECT 1 FROM pair_streak_sharing s " +
             "WHERE s.pair_id = :pairId AND s.share_streak = 1) " +
-            "WHEN '${EventPayload.TYPE_MOTIVATIONAL_MESSAGE}' THEN EXISTS (" +
+            "WHEN '${EventPayload.TYPE_MOTIVATIONAL_MESSAGE}' THEN 1 " +
+            // Owner ruling 2026-11-09: a streak revoke must land after share_streak was
+            // switched off — existence of the consent row is the only condition.
+            "WHEN '${EventPayload.TYPE_STREAK_SHARING_STOPPED}' THEN EXISTS (" +
             "SELECT 1 FROM pair_streak_sharing s " +
-            "WHERE s.pair_id = :pairId AND s.share_streak = 1) " +
+            "WHERE s.pair_id = :pairId AND s.habit_progress_id = o.habit_progress_id) " +
             "ELSE 1 END " +
             "ORDER BY o.created_at_ms ASC LIMIT :limit",
     )
@@ -201,9 +206,13 @@ interface PartnerActivityDao {
         }
     }
 
+    /** The pin's own monotonic guard, matching [advanceProjection]'s: a message redelivered
+     *  late cannot roll the card back to older text. Equal times re-apply (a duplicate
+     *  delivery of the same message is idempotent, §4.6). */
     @Query(
         "UPDATE partner_activity_projection SET pinned_message_text = :text, " +
-            "pinned_message_at_ms = :atMs WHERE pair_id = :pairId",
+            "pinned_message_at_ms = :atMs WHERE pair_id = :pairId " +
+            "AND (pinned_message_at_ms IS NULL OR :atMs >= pinned_message_at_ms)",
     )
     suspend fun updatePinnedMessage(pairId: String, text: String, atMs: Long): Int
 

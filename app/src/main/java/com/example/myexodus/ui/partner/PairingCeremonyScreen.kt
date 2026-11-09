@@ -106,12 +106,6 @@ data class PairingCeremonyDeps(
     /** Persists the raw field text; the wiring site owns sanitizing and blank handling. */
     val saveName: suspend (String) -> Unit,
     val sign: suspend (title: String) -> Signature?,
-    /** The screen-lock route, raised directly. The platform sheet's own credential button
-     *  label is painted by SystemUI and can be invisible in light mode, so the ceremony
-     *  carries an app-drawn alternative (owner report 2026-11-08). */
-    val signWithCredential: suspend (title: String) -> Signature?,
-    /** Whether a secure screen lock exists to raise from [signWithCredential]. */
-    val credentialAvailable: () -> Boolean,
     /** §14 bullet 1: one outcome event per terminal, on the Crashlytics rail. */
     val telemetry: PairingCeremonyTelemetry,
     /** §19.5: the pair just went live — persist it as the active selection so the hub comes
@@ -161,8 +155,6 @@ fun PairingCeremonyScreen(
     var copied by remember { mutableStateOf(false) }
     // Resolved in composition (configuration-aware) and captured by the local funs below.
     val signTitle = stringResource(R.string.partner_ceremony_sign_title)
-    // The lock state does not change inside one ceremony; one read is enough.
-    val credentialAvailable = remember { deps.credentialAvailable() }
 
     LaunchedEffect(Unit) {
         val stored = runCatching { deps.loadName() }.getOrNull()
@@ -182,8 +174,10 @@ fun PairingCeremonyScreen(
         step = CeremonyStep.Failed(title, body)
     }
 
-    /** Signed-pairing finish, shared by both roles: one auth prompt, then the flow call. */
-    fun signAndFinish(useCredential: Boolean = false) {
+    /** Signed-pairing finish, shared by both roles: one auth prompt, then the flow call.
+     *  The prompt's own negative button raises the device-credential route (MainActivity),
+     *  so the ceremony needs no separate screen-lock action. */
+    fun signAndFinish() {
         if (working) return
         val current = pending ?: return
         // Finding #55 (the finding #17 class, RuleEditor): the flag is written on Main before
@@ -198,9 +192,7 @@ fun PairingCeremonyScreen(
                 fail(R.string.partner_ceremony_offline_title, R.string.partner_ceremony_offline_body)
                 return@launch
             }
-            val signature = runCatching {
-                if (useCredential) deps.signWithCredential(signTitle) else deps.sign(signTitle)
-            }.getOrNull()
+            val signature = runCatching { deps.sign(signTitle) }.getOrNull()
             if (signature == null) {
                 // Cancelled prompt: nothing happened, the SAS check still stands — stay put.
                 working = false
@@ -456,9 +448,7 @@ fun PairingCeremonyScreen(
                 sas = current.sas,
                 mode = mode,
                 working = working,
-                showCredential = credentialAvailable,
                 onMatch = { signAndFinish() },
-                onUseCredential = { signAndFinish(useCredential = true) },
                 onMismatch = ::rejectMismatch,
             )
 
@@ -824,9 +814,7 @@ private fun CompareSas(
     sas: String,
     mode: CeremonyMode,
     working: Boolean,
-    showCredential: Boolean,
     onMatch: () -> Unit,
-    onUseCredential: () -> Unit,
     onMismatch: () -> Unit,
 ) {
     val joiner = mode == CeremonyMode.JOIN
@@ -871,15 +859,6 @@ private fun CompareSas(
                     else R.string.partner_ceremony_sas_match,
                 ),
             )
-        }
-        if (showCredential) {
-            OutlinedButton(
-                onClick = onUseCredential,
-                enabled = !working,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.partner_ceremony_use_pin))
-            }
         }
         // The ceremony is asymmetric: after this tap one phone is waiting on a human action on
         // the other. A bare spinner reads as a hang (owner report 2026-10-23).

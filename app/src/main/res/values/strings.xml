@@ -299,6 +299,11 @@
         <item quantity="other">reached %1$d days</item>
     </plurals>
     <string name="partner_event_time_suffix">%1$s · %2$s</string>
+    <!-- Owner ruling 2026-11-09: un-sharing a streak tells the partner it left their view.
+         Unlocked copy only; the lockscreen keeps the plain partner_event_* forms (FR-13). -->
+    <string name="partner_sharing_stopped_title_named">%1$s stopped sharing a streak</string>
+    <string name="partner_sharing_stopped_body_labeled">You no longer see %1$s.</string>
+    <string name="partner_sharing_stopped_body">A streak was removed from what you can see.</string>
     <!-- #16: the responder's announcement that the partner ended the partnership. States who,
          when, and the erasure that just ran on this phone; the plain forms stay the
          lockscreen-safe public version (FR-13). The no-time form covers a document with no
@@ -1028,7 +1033,7 @@
     <string name="partner_activity_empty">No shared activity in the last 7 days.</string>
     <!-- Owner report 2026-10-31: an all-zero page read as broken. Name the two causes apart —
          nothing has ever been shared, or sharing is on and this week was simply quiet. -->
-    <string name="partner_activity_none_shared">Nothing has been shared with you yet. This page fills in when your partner turns on sharing.</string>
+    <string name="partner_activity_none_shared">Nothing has been shared with you yet. This page fills in when your partner turns on sharing. You can ask them to.</string>
     <!-- Owner directive 2026-11-01: the activity page shows the week as a picture. Each bar is
          a local day, today on the right; the plural merges a column into one spoken sentence. -->
     <string name="partner_activity_chart_title">Shared events per day</string>
@@ -1093,15 +1098,8 @@
     <!-- Req 15 composer: suggestions are deliberately short and non-clinical — the user can
          always write their own, and the same 280-char bound the wire enforces applies here. -->
     <string name="partner_compose_title">Send encouragement</string>
-    <!-- ADR #135: the send path journals the sender's own snapshot, so with no shared streak
-         the write is refused by design. Said up front instead of a send that cannot land. -->
-    <string name="partner_compose_needs_sharing_title">Share a streak first</string>
-    <string name="partner_compose_needs_sharing_body">Encouragement to %1$s carries your latest progress summary, so it can only send while at least one streak is shared with them.</string>
     <string name="partner_compose_body">They\'ll see this on their home screen. Keep it short and kind.</string>
     <string name="partner_compose_action">Write a message</string>
-    <!-- Owner ruling 2026-10-31: the viewer's sharing decisions are their own page's business;
-         from the partner's activity page the route appears only when a send is attempted. -->
-    <string name="partner_compose_open_sharing">Change what you share</string>
     <string name="partner_compose_hint">Your message</string>
     <string name="partner_compose_send">Send</string>
     <string name="partner_compose_cancel">Cancel</string>
@@ -1210,6 +1208,20 @@
     <string name="settings_sharing_empty">No streaks yet. Set one up under Streaks, then choose here what your partner can see.</string>
     <string name="settings_sharing_failed">Couldn’t save that change. MyExodus can’t reach its local database right now. Your data is safe. Try again in a moment.</string>
     <string name="settings_sharing_unavailable">Couldn’t read your sharing settings. MyExodus can’t reach its local database right now. Your data is safe. Try again in a moment.</string>
+    <!-- Owner directive 2026-11-09: rule assignment is reflected here, the one place that
+         answers "what does this partner see". Read-only: the choice is made in the block editor. -->
+    <string name="settings_sharing_rules_header">Rules and blocks</string>
+    <string name="settings_sharing_rules_note">You choose the partner inside each block’s editor. This is who watches what now.</string>
+    <string name="settings_sharing_rules_watching">Watching %1$s</string>
+    <string name="settings_sharing_rules_disconnect">Disconnect</string>
+    <plurals name="settings_sharing_rules_count">
+        <item quantity="one">%d rule</item>
+        <item quantity="other">%d rules</item>
+    </plurals>
+    <plurals name="settings_sharing_batches_count">
+        <item quantity="one">%d batch</item>
+        <item quantity="other">%d batches</item>
+    </plurals>
     <!-- The recipient's block switch (plan §8.19 Step 11): names the partner the switch
          configures (§19.5 target), so the N-partner case is never ambiguous. -->
     <string name="settings_partner_block_title">Block check-ins</string>
@@ -1381,7 +1393,6 @@
     <string name="partner_ceremony_cancel">Cancel invitation</string>
     <string name="partner_ceremony_sas_overline">Safety code</string>
     <string name="partner_ceremony_sas_body_joiner">Your phone shows the safety code first. Read the digits aloud to your partner. Their phone will show the same code so they can check it.</string>
-    <string name="partner_ceremony_use_pin">Use PIN/pattern instead</string>
     <string name="partner_ceremony_sas_body_initiator">Your partner read these digits aloud from their phone. If they match what you heard, tap “They match”. If anything is different, stop. Don’t continue.</string>
     <string name="partner_ceremony_sas_match">They match</string>
     <string name="partner_ceremony_sas_no_match">They don’t match</string>
@@ -1519,6 +1530,11 @@
     <string name="streaks_setup_severity_mild">Mild: occasionally</string>
     <string name="streaks_setup_severity_moderate">Moderate: most days</string>
     <string name="streaks_setup_severity_severe">Severe: constantly, hard to control</string>
+    <!-- Owner ruling 2026-11-09: choosing a partner at creation shares the streak with them
+         automatically; What you share reflects it with no second step and can disconnect it. -->
+    <string name="streaks_setup_share_with">Share with</string>
+    <string name="streaks_setup_share_none">No one</string>
+    <string name="streaks_setup_share_note">A partner you pick sees this streak automatically. Disconnect it anytime in What you share.</string>
     <string name="streaks_setup_counting_from">Free since</string>
     <string name="streaks_setup_change">Change</string>
     <string name="streaks_setup_date_note">Your count starts now, on this phone. Only tracked time adds days. The date is remembered as when you stopped; it doesn\'t add days by itself.</string>

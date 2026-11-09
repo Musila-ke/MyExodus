@@ -4,9 +4,11 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -15,12 +17,15 @@ import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.LocalFireDepartment
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.RestartAlt
+import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.SelfImprovement
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -30,6 +35,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
@@ -39,8 +45,10 @@ import com.example.myexodus.streaks.ProfileSharingFlags
 import com.example.myexodus.streaks.SharingMatrix
 import com.example.myexodus.streaks.StreakSharingFlags
 import com.example.myexodus.ui.BackRow
+import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.settings.IndexRow
 import com.example.myexodus.ui.settings.RowDivider
+import com.example.myexodus.ui.settings.StatusDot
 import com.example.myexodus.ui.settings.StatusTone
 import com.example.myexodus.ui.settings.ToggleRow
 import kotlinx.coroutines.Dispatchers
@@ -71,12 +79,20 @@ fun SharingScreen(
     loadPartnerNames: suspend () -> Map<String, String>,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Owner directive 2026-11-09: what each partner watches from Rules and blocks, read from
+     *  the same rules store the Rules tab writes. Assigning a partner in an editor puts the
+     *  item here automatically — there is no second consent step. */
+    loadRuleSharing: suspend () -> Map<String, List<RuleSharingItem>> = { emptyMap() },
+    /** Unassigns the item from that partner. The rule stores journal the change, so the
+     *  partner is notified. False = the write failed and the row must come back. */
+    disconnectRule: suspend (RuleSharingItem) -> Boolean = { true },
 ) {
     val scope = rememberCoroutineScope()
     // null = still loading; null matrix after load = the store refused to open (an honest
     // error, never "nothing shared" — that is a real answer with every switch off).
     var matrix by remember { mutableStateOf<SharingMatrix?>(null) }
     var partnerNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var ruleSharing by remember { mutableStateOf<Map<String, List<RuleSharingItem>>>(emptyMap()) }
     var loaded by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var saveFailed by remember { mutableStateOf(false) }
@@ -87,6 +103,7 @@ fun SharingScreen(
         withContext(Dispatchers.IO) {
             matrix = runCatching { habitRepository.sharingMatrix() }.getOrNull()
             partnerNames = runCatching { loadPartnerNames() }.getOrDefault(emptyMap())
+            ruleSharing = runCatching { loadRuleSharing() }.getOrDefault(emptyMap())
             loaded = true
         }
     }
@@ -135,6 +152,27 @@ fun SharingScreen(
             }
             if (!ok) {
                 matrix = before
+                saveFailed = true
+            }
+            saving = false
+        }
+    }
+
+    /** Optimistic unassign: the row leaves at once; a failed write restores it. */
+    fun disconnectRuleRow(pairId: String, item: RuleSharingItem) {
+        val before = ruleSharing
+        if (saving) return
+        ruleSharing = before.mapValues { (id, items) ->
+            if (id == pairId) items.filterNot { it.id == item.id } else items
+        }
+        saving = true
+        saveFailed = false
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching { disconnectRule(item) }.getOrDefault(false)
+            }
+            if (!ok) {
+                ruleSharing = before
                 saveFailed = true
             }
             saving = false
@@ -342,11 +380,51 @@ fun SharingScreen(
                             },
                         )
                     }
+
+                    // Owner ruling 2026-11-09: assigning a partner in a block's editor IS the
+                    // share — the item lands here automatically, and this is where it is
+                    // disconnected. The unassign journals, so the partner is told.
+                    SectionHeader(stringResource(R.string.settings_sharing_rules_header))
+                    Text(
+                        stringResource(R.string.settings_sharing_rules_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column {
+                            partners.forEachIndexed { index, (pairId, name) ->
+                                if (index > 0) RowDivider()
+                                val items = ruleSharing[pairId].orEmpty()
+                                RuleSharingRow(
+                                    name = name,
+                                    summary = rulesSummary(items),
+                                    shared = items.isNotEmpty(),
+                                    items = items,
+                                    enabled = !saving,
+                                    onDisconnect = { disconnectRuleRow(pairId, it) },
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 }
+
+/** One standalone rule or one batch, as the assigned partner sees it. */
+data class RuleSharingItem(
+    /** Rule id for a standalone rule, batch id for a batch. */
+    val id: String,
+    /** The app/site label, or the batch's own name. */
+    val label: String,
+    val batch: Boolean,
+)
 
 /** The middle level's item: one streak, or the profile-wide bundle. */
 private sealed interface OpenItem {
@@ -484,6 +562,85 @@ private fun overviewSummary(sharingNames: List<String>): String = when {
     sharingNames.isEmpty() -> stringResource(R.string.settings_sharing_summary_off)
     sharingNames.size == 1 -> stringResource(R.string.settings_sharing_shared_with_one, sharingNames[0])
     else -> stringResource(R.string.settings_sharing_shared_with_many, sharingNames.size)
+}
+
+/** One partner's Rules and blocks share: the summary line plus each item with its own
+ *  Disconnect. Items are assigned in the block editors; this is the one place to revoke. */
+@Composable
+private fun RuleSharingRow(
+    name: String,
+    summary: String,
+    shared: Boolean,
+    items: List<RuleSharingItem>,
+    enabled: Boolean,
+    onDisconnect: (RuleSharingItem) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Icon(
+                Icons.Outlined.Security,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp),
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(name, style = MaterialTheme.typography.titleMedium)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    StatusDot(if (shared) StatusTone.GOOD else StatusTone.INFO)
+                    Text(
+                        summary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        items.forEach { item ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 56.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (item.batch) item.label else rememberAppLabel(item.label),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { onDisconnect(item) }, enabled = enabled) {
+                    Text(stringResource(R.string.settings_sharing_rules_disconnect))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun rulesSummary(items: List<RuleSharingItem>): String {
+    val rules = items.count { !it.batch }
+    val batches = items.count { it.batch }
+    val parts = buildList {
+        if (rules > 0) {
+            add(pluralStringResource(R.plurals.settings_sharing_rules_count, rules, rules))
+        }
+        if (batches > 0) {
+            add(pluralStringResource(R.plurals.settings_sharing_batches_count, batches, batches))
+        }
+    }
+    return if (parts.isEmpty()) {
+        stringResource(R.string.settings_sharing_summary_off)
+    } else {
+        stringResource(R.string.settings_sharing_rules_watching, parts.joinToString(", "))
+    }
 }
 
 @Composable

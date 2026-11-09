@@ -30,6 +30,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
 import com.example.myexodus.streaks.WithdrawalSeverity
+import com.example.myexodus.ui.partner.ReachOutTarget
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
@@ -51,17 +52,22 @@ internal fun HabitSetupCard(
         durationYears: Int,
         severity: WithdrawalSeverity,
         recoveryStartAt: Long,
+        partnerPairId: String?,
     ) -> Unit,
     onCancel: (() -> Unit)? = null,
     /** Drives the title only: the Home FAB opens this form with onCancel set even when no
      *  habit exists yet, so "Add another habit" must not be keyed on the Cancel button. */
     firstHabit: Boolean = true,
+    /** Owner ruling 2026-11-09: picking a partner here IS the share — it lands in What you
+     *  share automatically, and Disconnect there revokes it. Empty roster hides the choice. */
+    partners: List<ReachOutTarget> = emptyList(),
 ) {
     var label by rememberSaveable { mutableStateOf("") }
     var durationIndex by rememberSaveable { mutableStateOf<Int?>(null) }
     var severity by rememberSaveable { mutableStateOf<WithdrawalSeverity?>(null) }
     var startAt by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
     var pickingDate by rememberSaveable { mutableStateOf(false) }
+    var partnerPairId by rememberSaveable { mutableStateOf<String?>(null) }
 
     if (pickingDate) {
         StartDatePickerDialog(
@@ -139,6 +145,28 @@ internal fun HabitSetupCard(
                 }
             }
 
+            if (partners.isNotEmpty()) {
+                SetupSection(stringResource(R.string.streaks_setup_share_with)) {
+                    FilterChip(
+                        selected = partnerPairId == null,
+                        onClick = { partnerPairId = null },
+                        label = { Text(stringResource(R.string.streaks_setup_share_none)) },
+                    )
+                    partners.forEach { partner ->
+                        FilterChip(
+                            selected = partnerPairId == partner.pairId,
+                            onClick = { partnerPairId = partner.pairId },
+                            label = { Text(partner.name) },
+                        )
+                    }
+                }
+                Text(
+                    stringResource(R.string.streaks_setup_share_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -175,7 +203,13 @@ internal fun HabitSetupCard(
 
             Button(
                 onClick = {
-                    onOnboard(label.trim(), DURATION_OPTIONS[durationIndex!!].second, severity!!, startAt)
+                    onOnboard(
+                        label.trim(),
+                        DURATION_OPTIONS[durationIndex!!].second,
+                        severity!!,
+                        startAt,
+                        partnerPairId,
+                    )
                 },
                 enabled = !submitting && label.isNotBlank() && durationIndex != null && severity != null,
                 modifier = Modifier.fillMaxWidth(),

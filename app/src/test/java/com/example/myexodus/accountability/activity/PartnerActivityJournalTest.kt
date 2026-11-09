@@ -269,6 +269,41 @@ class PartnerActivityJournalTest {
         assertEquals("the message rides the sender's own snapshot (3 completed days)", 3, row.daysFree)
     }
 
+    /** ADR #285: a pure supervisor messages with nothing at all — no habit of their own, no
+     *  consent rows. The row is journaled and pendable for the addressed pair. */
+    @Test
+    fun motivationalMessage_needsNoSharingAtAll() = runBlocking {
+        seedProfile()
+
+        assertTrue(
+            PartnerActivityJournal.emitForProfile(
+                store, PROFILE_ID, EventPayload.TYPE_MOTIVATIONAL_MESSAGE, NOW,
+                text = "Checking in on you.", targetPairId = PAIR_ID,
+            ),
+        )
+
+        val row = journalRows().single()
+        assertEquals(EventPayload.TYPE_MOTIVATIONAL_MESSAGE, row.kind)
+        assertEquals("Checking in on you.", row.text)
+        assertEquals("no habit to anchor, and none is needed", null, row.habitProgressId)
+    }
+
+    /** The other half of the old gate: a habit exists, but this pair is not consented to it. */
+    @Test
+    fun motivationalMessage_withAHabitButNoConsent_isAccepted() = runBlocking {
+        seedProfile()
+        seedHabit(daysElapsed = 3)
+
+        assertTrue(
+            PartnerActivityJournal.emitForProfile(
+                store, PROFILE_ID, EventPayload.TYPE_MOTIVATIONAL_MESSAGE, NOW,
+                text = "Checking in on you.", targetPairId = PAIR_ID,
+            ),
+        )
+
+        assertEquals(EventPayload.TYPE_MOTIVATIONAL_MESSAGE, journalRows().single().kind)
+    }
+
     /**
      * §10.6 / Req 15 choke point (v16 comment: "a body the partner's phone would refuse to pin
      * must never be sent"): the input domain — blank, whitespace-only, exact bound, over bound,
@@ -374,6 +409,46 @@ class PartnerActivityJournalTest {
             1,
             store.partnerActivityDao().pendingForPair(PAIR_ID, sinceMs = 0L, limit = 100).size,
         )
+    }
+
+    // --- Un-share revoke (owner ruling 2026-11-09) --------------------------------------------
+
+    /** The revoke is written after share_streak flipped off, so both gates must accept it on
+     *  the consent row's existence alone — and it must name the streak that left the view. */
+    @Test
+    fun sharingStopped_survivesTheConsentFlip_andDeliversToThatPair() = runBlocking {
+        seedProfile()
+        val habitId = seedHabit()
+        seedStreakConsent(shareStreak = true)
+        // The repository's write order: consent off first, then the revoke row.
+        seedStreakConsent(shareStreak = false)
+
+        assertTrue(
+            PartnerActivityJournal.emitForHabit(
+                store, habitId, EventPayload.TYPE_STREAK_SHARING_STOPPED, NOW,
+                targetPairId = PAIR_ID,
+            ),
+        )
+
+        val row = store.partnerActivityDao().pendingForPair(PAIR_ID, sinceMs = 0L, limit = 100).single()
+        assertEquals(EventPayload.TYPE_STREAK_SHARING_STOPPED, row.kind)
+        assertEquals("the partner is told which streak left their view", "Instagram", row.habitLabel)
+        assertEquals("it concerns one pair only", PAIR_ID, row.targetPairId)
+    }
+
+    /** No consent row ever existed for this habit: there was no sharing to revoke. */
+    @Test
+    fun sharingStopped_withoutAConsentRow_isRefused() = runBlocking {
+        seedProfile()
+        val habitId = seedHabit()
+
+        assertFalse(
+            PartnerActivityJournal.emitForHabit(
+                store, habitId, EventPayload.TYPE_STREAK_SHARING_STOPPED, NOW,
+                targetPairId = PAIR_ID,
+            ),
+        )
+        assertTrue(store.partnerActivityDao().pendingForPair(PAIR_ID, 0L, 100).isEmpty())
     }
 
     // --- Atomicity (Step 5 validation) --------------------------------------------------------

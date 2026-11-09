@@ -54,6 +54,10 @@ data class EventPayload(
      *  installed names it instead of showing the raw package id. Additive optional key —
      *  older receivers ignore it and fall back to their local resolve (owner report 2026-11-02). */
     val appLabel: String? = null,
+    /** Motivational message only, and only when the pair shares nothing (ADR #285): the
+     *  send time, since a snapshot-less message has no [stateAfter] to carry it. Null on
+     *  every snapshot-carrying message, so their bytes stay unchanged. */
+    val messageAtMs: Long? = null,
 ) {
     companion object {
         const val TYPE_ACTIVITY = "activity"
@@ -66,12 +70,16 @@ data class EventPayload(
         const val TYPE_APPROVAL_REQUEST = "approval_request"
         const val TYPE_APPROVAL_RESPONSE = "approval_response"
 
-        /** §2.1 FR-01, Appendix A.2: the five partner-visible activity event types. */
+        /** §2.1 FR-01, Appendix A.2: the five partner-visible activity event types.
+         *  [TYPE_STREAK_SHARING_STOPPED] is the revoke signal (owner ruling 2026-11-09): the
+         *  partner is told a streak left their view, even though the consent it used to ride
+         *  is now off. */
         const val TYPE_STREAK_UPDATED = "streak_updated"
         const val TYPE_RELAPSE_RECORDED = "relapse_recorded"
         const val TYPE_MILESTONE_REACHED = "milestone_reached"
         const val TYPE_COACHING_STEP_UPDATED = "coaching_step_updated"
         const val TYPE_MOTIVATIONAL_MESSAGE = "motivational_message"
+        const val TYPE_STREAK_SHARING_STOPPED = "streak_sharing_stopped"
 
         val ACTIVITY_TYPES: Set<String> = setOf(
             TYPE_STREAK_UPDATED,
@@ -79,6 +87,7 @@ data class EventPayload(
             TYPE_MILESTONE_REACHED,
             TYPE_COACHING_STEP_UPDATED,
             TYPE_MOTIVATIONAL_MESSAGE,
+            TYPE_STREAK_SHARING_STOPPED,
         )
 
         /** Wire v2 (ADR #134): the kinds that concern one habit — exactly these carry
@@ -87,6 +96,7 @@ data class EventPayload(
             TYPE_STREAK_UPDATED,
             TYPE_RELAPSE_RECORDED,
             TYPE_MILESTONE_REACHED,
+            TYPE_STREAK_SHARING_STOPPED,
         )
 
         const val ACTIVITY_PROTOCOL_VERSION = 1
@@ -123,7 +133,11 @@ fun classifyActivity(payload: EventPayload): ActivityEvent = when {
     payload.protocolVersion != EventPayload.ACTIVITY_PROTOCOL_VERSION ||
         payload.schemaVersion !in EventPayload.SUPPORTED_SCHEMA_VERSIONS ->
         ActivityEvent.Unsupported(payload.type, payload.protocolVersion, payload.schemaVersion)
-    payload.stateAfter == null -> ActivityEvent.Malformed(payload.type)
+    // ADR #285: a message is the one kind whose value is its text, not a state snapshot —
+    // a supervisor who shares nothing still sends one, and older receivers classify it
+    // Malformed while the notification (text-only) still fires.
+    payload.stateAfter == null && payload.type != EventPayload.TYPE_MOTIVATIONAL_MESSAGE ->
+        ActivityEvent.Malformed(payload.type)
     else -> ActivityEvent.Valid(payload)
 }
 
@@ -195,6 +209,7 @@ private const val K_HABIT_LABEL = "hl"
 private const val K_ENDED_DAYS = "ed"
 private const val K_MILESTONE_DAY = "md"
 private const val K_APP_LABEL = "al"
+private const val K_MESSAGE_AT = "ma"
 
 /** Defensive decode bounds (§8.5/§10.6): a malicious peer must not be able to make the
  *  receiver allocate unbounded state through a well-signed envelope. */
@@ -214,6 +229,7 @@ fun encodePayload(p: EventPayload): ByteArray = CanonicalCbor.encodeMap(
         p.stateAfter?.let { add(K_STATE_AFTER to encodeStateAfter(it)) }
         p.plan?.let { add(K_PLAN to encodePlan(it)) }
         p.appLabel?.let { add(K_APP_LABEL to CanonicalCbor.text(it)) }
+        p.messageAtMs?.let { add(K_MESSAGE_AT to CanonicalCbor.int(it)) }
     },
 )
 
@@ -236,6 +252,7 @@ fun decodePayload(bytes: ByteArray): EventPayload {
         plan = obj.get(K_PLAN)?.takeIf { !it.isNull }?.let(::decodePlanOrNull),
         appLabel = textOrNull(obj.get(K_APP_LABEL))
             ?.takeIf { it.isNotBlank() && it.length <= EventPayload.MAX_APP_LABEL_LENGTH },
+        messageAtMs = obj.get(K_MESSAGE_AT)?.takeIf { !it.isNull }?.let(::longOrNull),
     )
 }
 
@@ -288,6 +305,14 @@ private fun decodeStateAfterOrNull(obj: CBORObject): ActivityStateAfter? = try {
  *  fields, whose only meaningful values are small. */
 private fun intOrNull(obj: CBORObject): Int? = try {
     obj.AsInt32()
+} catch (e: RuntimeException) {
+    null
+}
+
+/** `AsInt64` throws on a wrong-typed wire value; an optional numeric key degrades to null
+ *  instead, so a crafted key can never break the decode of the event that carries it. */
+private fun longOrNull(obj: CBORObject): Long? = try {
+    obj.AsInt64()
 } catch (e: RuntimeException) {
     null
 }

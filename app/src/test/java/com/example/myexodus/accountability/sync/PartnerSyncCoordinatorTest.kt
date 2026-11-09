@@ -646,6 +646,31 @@ class PartnerSyncCoordinatorTest {
         assertEquals("Proud of you.", payload.text)
     }
 
+    /** ADR #285: a pure supervisor — nothing shared — still messages their user. With no
+     *  visible habit there is no truthful snapshot, so the message ships text-only with its
+     *  send time on its own key, and the row is delivered, never dropped as undeliverable. */
+    @Test
+    fun motivationalMessage_withNothingShared_shipsSnapshotless() = runTest {
+        enroll()
+        val sentAt = System.currentTimeMillis()
+        insertActivity(
+            eventId = "ev-msg-bare", kind = EventPayload.TYPE_MOTIVATIONAL_MESSAGE,
+            text = "I'm still here.", occurredAtMs = sentAt,
+        )
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(1, report.eventsLinked)
+        assertNotNull(factory.open()!!.partnerActivityDao().linkSequence("ev-msg-bare", pairId))
+        val payload = decodePayload(
+            cipher.decrypt(cek, 1L, decodeSigned(store.chainFor(pairId).single().envelope).unsigned.ciphertext),
+        )
+        assertEquals(EventPayload.TYPE_MOTIVATIONAL_MESSAGE, payload.type)
+        assertEquals("I'm still here.", payload.text)
+        assertNull("nothing was shared, so no snapshot travels", payload.stateAfter)
+        assertEquals(sentAt, payload.messageAtMs)
+    }
+
     /** Mirrors the attempt/session behaviour: a cold window stops the pass, and the row is still
      *  pending for the next warm run (never dropped, never double-delivered). */
     @Test

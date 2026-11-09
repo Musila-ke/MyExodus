@@ -293,6 +293,58 @@ class EventPayloadTest {
         )
     }
 
+    /** ADR #285: a message is the one kind whose value is its text — it is Valid, and thus
+     *  pinned, without any stateAfter body. */
+    @Test
+    fun classify_messageWithoutStateAfter_isValid() {
+        val p = EventPayload(
+            type = EventPayload.TYPE_MOTIVATIONAL_MESSAGE,
+            text = "Still with you.",
+            protocolVersion = 1,
+            schemaVersion = 2,
+            messageAtMs = 1_800_000_000_000L,
+        )
+        assertEquals(ActivityEvent.Valid(p), classifyActivity(p))
+    }
+
+    /** ADR #285: the snapshot-less message's send time rides its own optional key, and unset
+     *  payloads (every existing snapshot-carrying message) keep their exact prior encoding. */
+    @Test
+    fun messageAtMs_roundTrips_andStaysAbsentWhenUnset() {
+        val withTime = EventPayload(
+            type = EventPayload.TYPE_MOTIVATIONAL_MESSAGE,
+            text = "hi",
+            messageAtMs = 1_800_000_000_000L,
+        )
+        assertEquals(withTime, decodePayload(encodePayload(withTime)))
+        assertEquals(
+            null,
+            decodePayload(
+                encodePayload(EventPayload(type = EventPayload.TYPE_MOTIVATIONAL_MESSAGE, text = "hi")),
+            ).messageAtMs,
+        )
+    }
+
+    /** The decode layer never throws on a crafted body: a wrong-typed `ma` declines itself to
+     *  null like every other optional key, so the chain event still commits (FR-17). */
+    @Test
+    fun decode_wrongTypedMessageAt_degradesToNull_notThrow() {
+        val good = encodePayload(
+            EventPayload(
+                type = EventPayload.TYPE_MOTIVATIONAL_MESSAGE,
+                text = "hi",
+                protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
+                schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,
+                messageAtMs = 1_800_000_000_000L,
+            ),
+        )
+        val obj = CanonicalCbor.decodeMap(good)
+        obj["ma"] = CanonicalCbor.text("not-a-time")
+        val decoded = decodePayload(CanonicalCbor.encode(obj))
+        assertEquals(null, decoded.messageAtMs)
+        assertEquals("the message itself still classifies Valid", ActivityEvent.Valid(decoded), classifyActivity(decoded))
+    }
+
     @Test
     fun classify_shippedTypes_areNotActivity() {
         listOf(

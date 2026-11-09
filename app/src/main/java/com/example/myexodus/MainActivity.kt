@@ -685,10 +685,6 @@ class MainActivity : FragmentActivity() {
                             )
                         },
                         sign = { title -> signWithAuthPrompt(title) },
-                        signWithCredential = { title -> signWithDeviceCredential(title) },
-                        credentialAvailable = {
-                            getSystemService(KeyguardManager::class.java)?.isDeviceSecure() == true
-                        },
                         // §14 bullet 1 (task #37): one outcome event per ceremony terminal,
                         // on the same Crashlytics rail as every other §14 client metric.
                         telemetry = PairingCeremonyTelemetry { event -> crashReporting.nonFatal(event) },

@@ -18,7 +18,9 @@ import com.example.myexodus.data.db.entity.encodeMilestoneDays
  * identical snapshot, and the DAO's monotonic guard drops anything at or below the last
  * applied chain sequence, so out-of-order or replayed states can never roll the card backwards.
  * The optional motivational message is *additionally* pinned; it is bound-checked here because
- * the composer-side bound is not a receiver-side guarantee (§10.6 bounded strings).
+ * the composer-side bound is not a receiver-side guarantee (§10.6 bounded strings). A message
+ * may also arrive with no snapshot at all (ADR #285) — then the pin is the whole effect, and
+ * its send time comes from the payload's own key.
  */
 class PartnerActivityReceiver(private val storeFactory: AppRulesStoreFactory) {
 
@@ -26,7 +28,6 @@ class PartnerActivityReceiver(private val storeFactory: AppRulesStoreFactory) {
      *  contract, so this returns quietly when the store is unavailable. */
     suspend fun applyAppended(pairId: String, payload: EventPayload, sequence: Long) {
         val valid = classifyActivity(payload) as? ActivityEvent.Valid ?: return
-        val state = valid.payload.stateAfter ?: return
         val dao = storeFactory.open()?.partnerActivityDao() ?: return
 
         // An oversized or blank message is refused at the boundary while its snapshot still
@@ -36,6 +37,16 @@ class PartnerActivityReceiver(private val storeFactory: AppRulesStoreFactory) {
             PartnerActivityJournal.normalizeMessage(valid.payload.text)
         } else {
             null
+        }
+
+        val state = valid.payload.stateAfter
+        if (state == null) {
+            // ADR #285: snapshot-less message — pin only, and nothing at all when the body
+            // was refused, so a bad message can never create a phantom projection row.
+            if (pinned != null) {
+                dao.pinMessage(pairId, pinned, valid.payload.messageAtMs ?: System.currentTimeMillis())
+            }
+            return
         }
 
         dao.applyStateAfter(

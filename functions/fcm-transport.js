@@ -5,11 +5,14 @@
 // opaque message id only. `messageId` is not in §8.12's forbidden list and is what lets the
 // client handle the triggering message first; every other field is deliberately absent.
 //
-// Priority/TTL/collapse (§7 Step 9): a relay wake is ordinary sync, so it uses NORMAL priority
-// (never high priority for background-only work) and expires after 30 minutes — a wake older
-// than that is useless because the mailbox is the source of truth and the next periodic pass
-// fetches everything. The constant collapse key means an offline device wakes once for a
-// burst: any single wake runs the full mailbox pass, so no event is lost by coalescing.
+// Priority/TTL/collapse: HIGH priority (owner ruling 2026-11-09 — "notifications must be seen
+// seconds after sent"). The wake itself renders nothing, but its only outcome is a
+// user-visible partner alert, and a NORMAL-priority wake is deferred outright while the
+// receiving phone is in Doze — the observed "15 minutes to hours late". FCM's high-priority
+// guidance permits a message whose delivery results in a user-visible notification, which is
+// exactly this path. TTL stays 30 minutes: a wake older than that adds nothing the mailbox's
+// next pass will not fetch, and the constant collapse key still coalesces a burst into one
+// full pass without losing an event.
 
 const { getMessaging } = require('firebase-admin/messaging');
 const { registerTransport } = require('./dispatch');
@@ -24,7 +27,7 @@ function buildWakeMessage(installation, data) {
     token: installation.token,
     data,
     android: {
-      priority: 'normal',
+      priority: 'high',
       ttl: WAKE_TTL_MS,
       collapseKey: WAKE_COLLAPSE_KEY,
       restrictedPackageName: ANDROID_PACKAGE,

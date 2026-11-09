@@ -206,6 +206,13 @@ object PartnerNotifications {
                 context.getString(R.string.partner_message_title_named, partnerName) to
                     payload.text.takeIf { it.isNotBlank() }
                         ?.let { context.getString(R.string.partner_message_quoted, it) }
+            // Owner ruling 2026-11-09: the revoke names the streak that left the partner's
+            // view. Always rich — a nameless body is still the honest signal.
+            EventPayload.TYPE_STREAK_SHARING_STOPPED ->
+                context.getString(R.string.partner_sharing_stopped_title_named, partnerName) to
+                    (payload.stateAfter?.habitLabel?.takeIf { it.isNotBlank() }
+                        ?.let { context.getString(R.string.partner_sharing_stopped_body_labeled, it) }
+                        ?: context.getString(R.string.partner_sharing_stopped_body))
             // ADR #193: a new or edited plan is the one plan event worth an alert — progress
             // is filtered out before this call.
             PlanWire.TYPE_PLAN_PUBLISHED ->

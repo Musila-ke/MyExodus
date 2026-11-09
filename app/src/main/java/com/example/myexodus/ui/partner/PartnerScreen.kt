@@ -287,6 +287,10 @@ fun PartnerScreen(
     onFixNotifications: () -> Unit,
     onCheckNow: suspend () -> Boolean,
     modifier: Modifier = Modifier,
+    /** Owner ruling 2026-11-09: assigned blocks are listed on "What you share" automatically. */
+    loadRuleSharing: suspend () -> Map<String, List<RuleSharingItem>> = { emptyMap() },
+    /** Revokes one item there; the unassign journals, so the partner is notified. */
+    disconnectRule: suspend (RuleSharingItem) -> Boolean = { true },
     /** §8 Step 16: true while the system dialog can still be raised (33+, not yet asked);
      *  false means the only fix path left is the settings screen. */
     notificationsRequestable: Boolean = false,
@@ -369,10 +373,6 @@ fun PartnerScreen(
     // Owner ask 2026-10-04: true = paired but nothing is being shared with the active partner.
     // Null = not paired, or the store refused a read — no honest claim, so no card.
     var sharesNothing by remember { mutableStateOf<Boolean?>(null) }
-    // ADR #135: the journal refuses a message unless this pair is consented to a streak, so the
-    // Activity composer must not offer a send that is guaranteed to fail. Null = unknown (the
-    // store refused the read) — keep the composer, the gate still backstops.
-    var canEncourage by remember { mutableStateOf<Boolean?>(null) }
     // ADR #193: the hub tile's live datum; null = no honest count (store refused, or still
     // loading), which renders as the tile's description rather than a fabricated zero.
     var planHub by remember { mutableStateOf<PlanHubStatus?>(null) }
@@ -413,10 +413,6 @@ fun PartnerScreen(
         val shares = (state as? PartnerDashboardUi.Paired)?.let { paired ->
             runCatching { habitRepository.sharesNothingWith(paired.pairId) }.getOrNull()
         }
-        // ADR #135 feed for the composer: same pair, same read path, same failure semantics.
-        val canEncourageNow = (state as? PartnerDashboardUi.Paired)?.let { paired ->
-            runCatching { habitRepository.sharesStreakWith(paired.pairId) }.getOrNull()
-        }
         // Plan Step 8: every repaint path (pull, resume, switch, check-now) refreshes the
         // connection reading through the client's one-call-a-minute bound, so a burst of
         // reloads can never become a callable burst. A failure clears it rather than repeating
@@ -432,7 +428,6 @@ fun PartnerScreen(
         // dashboard the state guard above closes.
         if (epoch != reloadEpoch.get()) return
         sharesNothing = shares
-        canEncourage = canEncourageNow
         partnerStatus = status
     }
 
@@ -613,6 +608,8 @@ fun PartnerScreen(
             loadPartnerNames = { source.partnerDisplayNames() },
             onBack = { view = null },
             modifier = modifier,
+            loadRuleSharing = loadRuleSharing,
+            disconnectRule = disconnectRule,
         )
         return
     }
@@ -758,10 +755,9 @@ fun PartnerScreen(
                     )
                     VIEW_ACTIVITY -> {
                         // Owner ruling 2026-10-31 ("each page has its own responsibility"): this
-                        // page shows the partner's activity. The composer stays an action; when
-                        // sharing gates it (ADR #135), the reason and the route live inside the
-                        // dialog at the moment the viewer tries to send — not as a passive block
-                        // of the viewer's own sharing configuration on the partner's page.
+                        // page shows the partner's activity. The composer stays an action, and
+                        // since ADR #285 it never asks the viewer to share before sending — a
+                        // supervisor who shares nothing is the message's whole audience.
                         //
                         // Owner directive 2026-11-01: the shared aggregate leads this page — the
                         // hub tile answers "how are they doing?", and this is where that answer
@@ -896,13 +892,20 @@ fun PartnerScreen(
                         // Days free is the number the user expects this row to answer
                         // (owner report 2026-10-31: "activity is always 0" — the old tile
                         // counted only this week's events, so a shared streak read as zero).
+                        // ADR #285: a snapshot-less message writes only the pin, and its
+                        // placeholder row reads days_free 0 — that is "nothing shared", never
+                        // a zero-day streak. The page's own card applies the same rule.
                         subtitle = when (val activity = current.activity) {
                             null -> stringResource(R.string.partner_tile_activity_none)
-                            else -> pluralStringResource(
-                                R.plurals.partner_tile_activity_days,
-                                activity.daysFree,
-                                activity.daysFree,
-                            )
+                            else -> if (activity.lastEventOccurredAtEpochMillis == null) {
+                                stringResource(R.string.partner_tile_activity_none)
+                            } else {
+                                pluralStringResource(
+                                    R.plurals.partner_tile_activity_days,
+                                    activity.daysFree,
+                                    activity.daysFree,
+                                )
+                            }
                         },
                         onClick = { view = VIEW_ACTIVITY },
                     )
@@ -1150,12 +1153,6 @@ fun PartnerScreen(
             onDismiss = {
                 composing = false
                 messageOutcome = null
-            },
-            needsSharing = canEncourage == false,
-            onOpenSharing = {
-                composing = false
-                messageOutcome = null
-                view = VIEW_SHARING
             },
         )
     }
@@ -1445,49 +1442,54 @@ private fun PartnerConnectionCard(status: PartnerStatus) {
 @Composable
 private fun PartnerSummaryCard(activity: PartnerActivityUi, chainStatus: PartnerChainStatus) {
     PartnerSurface(spacing = 12.dp) {
-        // Owner directive 2026-11-09: no card title — the page header already says "How
-        // they're doing", and the repeated line pushed the hero number below the fold.
-        // Days free is the one number the tab exists to answer, so it takes the reference's
-        // hero slot — and its freshness note rides under the label rather than in a third
-        // line, which is what made the old card read as a wall of equal-weight text.
-        HeroStatRow(
-            label = stringResource(R.string.partner_summary_days),
-            caption = activity.lastEventOccurredAtEpochMillis?.let { at ->
-                stringResource(
-                    R.string.partner_summary_last_event,
-                    relativeTimeText(System.currentTimeMillis(), at),
-                )
-            },
-            value = activity.daysFree,
-            unit = pluralStringResource(
-                R.plurals.partner_summary_days_unit,
-                activity.daysFree,
-                activity.daysFree,
-            ),
-        )
-        // Equal thirds: intrinsic widths squeezed the third label below the width of its
-        // longest word, which broke "Coaching items" mid-word on the 720px device.
-        Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-            StatColumn(
-                stringResource(R.string.partner_summary_relapses),
-                activity.relapseCount.toString(),
-                modifier = Modifier.weight(1f),
-            )
-            StatColumn(
-                stringResource(R.string.partner_summary_milestones_label),
-                activity.milestonesReached.joinToString(", ").ifEmpty {
-                    stringResource(R.string.partner_summary_milestones_none)
+        // ADR #285: a snapshot-less message writes only the pin. No shared state means no
+        // numbers — zeros would be a claim about the partner the absent events do not support.
+        val hasSharedState = activity.lastEventOccurredAtEpochMillis != null
+        if (hasSharedState) {
+            // Owner directive 2026-11-09: no card title — the page header already says "How
+            // they're doing", and the repeated line pushed the hero number below the fold.
+            // Days free is the one number the tab exists to answer, so it takes the reference's
+            // hero slot — and its freshness note rides under the label rather than in a third
+            // line, which is what made the old card read as a wall of equal-weight text.
+            HeroStatRow(
+                label = stringResource(R.string.partner_summary_days),
+                caption = activity.lastEventOccurredAtEpochMillis?.let { at ->
+                    stringResource(
+                        R.string.partner_summary_last_event,
+                        relativeTimeText(System.currentTimeMillis(), at),
+                    )
                 },
-                modifier = Modifier.weight(1f),
+                value = activity.daysFree,
+                unit = pluralStringResource(
+                    R.plurals.partner_summary_days_unit,
+                    activity.daysFree,
+                    activity.daysFree,
+                ),
             )
-            StatColumn(
-                stringResource(R.string.partner_summary_coaching_label),
-                activity.coachingProgress.toString(),
-                modifier = Modifier.weight(1f),
-            )
+            // Equal thirds: intrinsic widths squeezed the third label below the width of its
+            // longest word, which broke "Coaching items" mid-word on the 720px device.
+            Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+                StatColumn(
+                    stringResource(R.string.partner_summary_relapses),
+                    activity.relapseCount.toString(),
+                    modifier = Modifier.weight(1f),
+                )
+                StatColumn(
+                    stringResource(R.string.partner_summary_milestones_label),
+                    activity.milestonesReached.joinToString(", ").ifEmpty {
+                        stringResource(R.string.partner_summary_milestones_none)
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                StatColumn(
+                    stringResource(R.string.partner_summary_coaching_label),
+                    activity.coachingProgress.toString(),
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
         activity.pinnedMessageText?.let { message ->
-            HorizontalDivider()
+            if (hasSharedState) HorizontalDivider()
             Text(
                 stringResource(R.string.partner_summary_pinned_label),
                 style = MaterialTheme.typography.labelMedium,
@@ -1497,7 +1499,7 @@ private fun PartnerSummaryCard(activity: PartnerActivityUi, chainStatus: Partner
         }
         // §8.11 degraded: a gap means these numbers are not the whole story, and saying so is
         // cheaper than letting the user believe a stale card.
-        if (chainStatus != PartnerChainStatus.HEALTHY) {
+        if (hasSharedState && chainStatus != PartnerChainStatus.HEALTHY) {
             Text(
                 stringResource(R.string.partner_summary_partial),
                 style = MaterialTheme.typography.bodySmall,
@@ -1512,6 +1514,8 @@ private fun PartnerSummaryCard(activity: PartnerActivityUi, chainStatus: Partner
  * the receiving projection enforce). The message is journaled locally, then the send call
  * kicks a sync pass — what the dialog reports back is the real outcome ([MessageSendOutcome]):
  * SENT closes, QUEUED keeps the sheet open with the honest "saved" note, FAILED shows inline.
+ * Since ADR #285 there is no sharing prerequisite: a message carries only its text, so it is
+ * offered to every pair and ships snapshot-less when the sender shares nothing.
  */
 @Composable
 private fun ComposeMessageDialog(
@@ -1521,10 +1525,6 @@ private fun ComposeMessageDialog(
     toName: String,
     onSend: (String) -> Unit,
     onDismiss: () -> Unit,
-    /** ADR #135: the journal refuses a message unless this pair is consented to a streak, so
-     *  the explanation and its route appear here, at the moment the viewer tries to send. */
-    needsSharing: Boolean = false,
-    onOpenSharing: () -> Unit = {},
 ) {
     // Non-null only after the write attempt: FAILED renders inline red, QUEUED renders the
     // neutral "saved" note and disables Send (re-tapping would queue a duplicate).
@@ -1541,107 +1541,84 @@ private fun ComposeMessageDialog(
         // Never trap the sheet (finding 2026-11-02): the message is journaled before sending,
         // so closing while it is in flight cannot lose it — the retry cadence owns it then.
         onDismissRequest = onDismiss,
-        title = {
-            Text(
-                stringResource(
-                    if (needsSharing) {
-                        R.string.partner_compose_needs_sharing_title
-                    } else {
-                        R.string.partner_compose_title
-                    },
-                ),
-            )
-        },
+        title = { Text(stringResource(R.string.partner_compose_title)) },
         text = {
-            if (needsSharing) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    stringResource(R.string.partner_compose_needs_sharing_body, toName),
+                    stringResource(R.string.partner_compose_to, toName),
                     style = MaterialTheme.typography.bodyMedium,
                 )
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(R.string.partner_compose_body),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                suggestions.forEach { suggestion ->
+                    OutlinedButton(
+                        onClick = { text = suggestion; tooLong = false },
+                        enabled = !sending,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(suggestion, style = MaterialTheme.typography.bodySmall) }
+                }
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = {
+                        text = it
+                        tooLong = it.trim().length > max
+                    },
+                    label = { Text(stringResource(R.string.partner_compose_hint)) },
+                    isError = tooLong,
+                    minLines = 2,
+                    maxLines = 4,
+                    enabled = !sending,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    stringResource(R.string.partner_compose_characters, text.trim().length, max),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (tooLong) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+                if (tooLong) {
                     Text(
-                        stringResource(R.string.partner_compose_to, toName),
-                        style = MaterialTheme.typography.bodyMedium,
+                        stringResource(R.string.partner_compose_too_long, max),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
                     )
+                }
+                if (outcome == MessageSendOutcome.FAILED) {
                     Text(
-                        stringResource(R.string.partner_compose_body),
+                        stringResource(R.string.partner_compose_failed),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (queued) {
+                    Text(
+                        stringResource(R.string.partner_compose_queued),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    suggestions.forEach { suggestion ->
-                        OutlinedButton(
-                            onClick = { text = suggestion; tooLong = false },
-                            enabled = !sending,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text(suggestion, style = MaterialTheme.typography.bodySmall) }
-                    }
-                    OutlinedTextField(
-                        value = text,
-                        onValueChange = {
-                            text = it
-                            tooLong = it.trim().length > max
-                        },
-                        label = { Text(stringResource(R.string.partner_compose_hint)) },
-                        isError = tooLong,
-                        minLines = 2,
-                        maxLines = 4,
-                        enabled = !sending,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Text(
-                        stringResource(R.string.partner_compose_characters, text.trim().length, max),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (tooLong) {
-                            MaterialTheme.colorScheme.error
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                    if (tooLong) {
-                        Text(
-                            stringResource(R.string.partner_compose_too_long, max),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                    if (outcome == MessageSendOutcome.FAILED) {
-                        Text(
-                            stringResource(R.string.partner_compose_failed),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                    if (queued) {
-                        Text(
-                            stringResource(R.string.partner_compose_queued),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
                 }
             }
         },
         confirmButton = {
-            if (needsSharing) {
-                TextButton(onClick = onOpenSharing) {
-                    Text(stringResource(R.string.partner_compose_open_sharing))
-                }
-            } else {
-                TextButton(
-                    onClick = { onSend(text) },
-                    enabled = !sending && !queued && text.isNotBlank() && !tooLong,
-                ) {
-                    Text(
-                        stringResource(
-                            when {
-                                sending -> R.string.partner_compose_sending
-                                queued -> R.string.partner_compose_saved
-                                else -> R.string.partner_compose_send
-                            },
-                        ),
-                    )
-                }
+            TextButton(
+                onClick = { onSend(text) },
+                enabled = !sending && !queued && text.isNotBlank() && !tooLong,
+            ) {
+                Text(
+                    stringResource(
+                        when {
+                            sending -> R.string.partner_compose_sending
+                            queued -> R.string.partner_compose_saved
+                            else -> R.string.partner_compose_send
+                        },
+                    ),
+                )
             }
         },
         dismissButton = {
@@ -2331,9 +2308,11 @@ private fun ActivityCard(summary: AlertSummary, activity: PartnerActivityUi?) {
         if (summary.recent.isEmpty()) {
             Text(
                 // Two causes, two statements: nothing was ever shared, or sharing is on and
-                // the week was quiet. One shared empty sentence conflated them.
+                // the week was quiet. One shared empty sentence conflated them. A snapshot-less
+                // message (ADR #285) creates the row without shared state, so the state field
+                // — not row presence — is the discriminator.
                 stringResource(
-                    if (activity == null) {
+                    if (activity?.lastEventOccurredAtEpochMillis == null) {
                         R.string.partner_activity_none_shared
                     } else {
                         R.string.partner_activity_empty

@@ -26,7 +26,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -70,6 +69,7 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -111,6 +111,7 @@ import com.example.myexodus.ui.streaks.daysFree
 import com.example.myexodus.ui.streaks.daysUntil
 import com.example.myexodus.ui.streaks.nextMilestone
 import com.example.myexodus.ui.streaks.splashMilestones
+import com.example.myexodus.ui.theme.DisplayFamily
 import com.example.myexodus.ui.visibleRules
 import com.example.myexodus.vpn.VpnLifecycle
 import kotlinx.coroutines.Dispatchers
@@ -999,11 +1000,13 @@ private fun StatePill(label: String, active: Boolean) {
  * time — same honesty rule the dashboard follows, a stale message must not read as if it
  * just arrived.
  *
- * Revised 2026-11-06 (owner: the two partner cards read "basic, generic, slot"): ADR #255's
- * grammar is unchanged — glyph, sender + age, authored bubble, footer pager — but the card is
- * now a poster: extra-large radius, a 56 dp surface tile bearing the accent glyph, and a
- * titleLarge sender line. Emphasis order still holds (reach-out primaryContainer above this
- * card's secondaryContainer, operational cards quieter below).
+ * Redesigned 2026-11-09 (owner: the previous bubble-in-a-beige-box read as the ugliest card
+ * on Home). The note is a parchment artifact painted from the scheme's tertiary container, a
+ * teal monogram disc naming the sender, and the words set in Fraunces as an editorial quote —
+ * no nested bubble. The first pass inverted the card against the page; the owner ruled the
+ * ink block did not complement Desert Dawn, so the card now sits inside the palette. ADR
+ * #255's grammar still holds (masthead, authored words, footer pager), and the age keeps its
+ * honesty rule.
  */
 @Composable
 private fun PinnedMessageCard(
@@ -1016,39 +1019,75 @@ private fun PinnedMessageCard(
     onNext: () -> Unit,
 ) {
     Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
         shape = MaterialTheme.shapes.extraLarge,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
-            Modifier.padding(20.dp),
+            Modifier.padding(horizontal = 20.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            PartnerCardHeader(
-                glyph = Icons.AutoMirrored.Outlined.Chat,
-                glyphTint = MaterialTheme.colorScheme.secondary,
-                title = if (senderName != null) {
-                    stringResource(R.string.home_pinned_from, senderName)
-                } else {
-                    stringResource(R.string.home_pinned_title)
-                },
-                age = sentAtMillis?.let {
-                    stringResource(R.string.home_pinned_sent, relativeTimeText(nowMillis, it))
-                },
-            )
-            Surface(
-                color = MaterialTheme.colorScheme.surface,
-                contentColor = MaterialTheme.colorScheme.onSurface,
-                shape = MaterialTheme.shapes.large,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                        // The monogram repeats the name beside it; screen readers skip it.
+                        .clearAndSetSemantics { },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val initial = senderName?.trim()?.firstOrNull()?.uppercaseChar()?.toString()
+                    if (initial != null) {
+                        Text(
+                            initial,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
+                    } else {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.Chat,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .padding(start = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(1.dp),
+                ) {
+                    Text(
+                        if (senderName != null) {
+                            stringResource(R.string.home_pinned_from, senderName)
+                        } else {
+                            stringResource(R.string.home_pinned_title)
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    sentAtMillis?.let {
+                        Text(
+                            stringResource(R.string.home_pinned_sent, relativeTimeText(nowMillis, it)),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f),
+                        )
+                    }
+                }
                 Text(
-                    text,
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.padding(16.dp),
+                    "“",
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.clearAndSetSemantics { },
                 )
             }
+            Text(
+                text,
+                style = MaterialTheme.typography.titleLarge.copy(fontFamily = DisplayFamily),
+            )
             if (position != null) {
                 val (index, count) = position
                 Row(
@@ -1065,6 +1104,7 @@ private fun PinnedMessageCard(
                     Text(
                         stringResource(R.string.home_pinned_position, index, count),
                         style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f),
                     )
                     IconButton(onClick = onNext, enabled = index < count) {
                         Icon(
@@ -1075,50 +1115,6 @@ private fun PinnedMessageCard(
                 }
             }
         }
-    }
-}
-
-/**
- * The shared partner-card masthead (ADR #255 grammar, restyled 2026-11-06): a surface tile
- * carrying the accent glyph — the card's anchor, one size up from an avatar circle — and the
- * sender line with its own send time underneath. [trailing] is the reach-out card's dismiss.
- */
-@Composable
-private fun PartnerCardHeader(
-    glyph: ImageVector,
-    glyphTint: Color,
-    title: String,
-    age: String?,
-    trailing: @Composable (() -> Unit)? = null,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(56.dp)
-                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(18.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                glyph,
-                contentDescription = null,
-                tint = glyphTint,
-                modifier = Modifier.size(28.dp),
-            )
-        }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-            )
-            age?.let {
-                Text(it, style = MaterialTheme.typography.labelSmall)
-            }
-        }
-        trailing?.invoke()
     }
 }
 
@@ -1475,6 +1471,12 @@ internal fun RevealPrependedCard(cardPresent: Boolean, listState: LazyListState)
  * tray entry is cancelled after it commits) and the card clears through the listener. The
  * sender's message renders when one was written (v2 envelope); a v1 nudge has none and the
  * card shows only the title — it never implies a message was written.
+ *
+ * Redesigned 2026-11-09 (owner: the boxed-icon masthead and nested bubble read as slop).
+ * It now shares [PinnedMessageCard]'s editorial family: a monogram disc naming the sender,
+ * the ask and its honest send time, and the partner's words set directly on the surface in
+ * the display face — no nested bubble, no glyph tile. The teal container keeps it the
+ * strongest surface on Home while the parchment card stays visually its own event.
  */
 @Composable
 private fun NudgeCardView(
@@ -1490,44 +1492,68 @@ private fun NudgeCardView(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
-            Modifier.padding(20.dp),
+            Modifier.padding(horizontal = 20.dp, vertical = 18.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            // Owner directive 2026-11-01: the reach-out leads Home, so it wears the strongest
-            // surface on the page — a glyph that names the event, the sender's words in their
-            // own bubble, and a title naming who needs the check-in. No reply action: the
-            // partner answers by calling or messaging, not in the app.
-            PartnerCardHeader(
-                glyph = Icons.Outlined.Handshake,
-                glyphTint = MaterialTheme.colorScheme.primary,
-                title = partnerName?.let { stringResource(R.string.sos_card_title_named, it) }
-                    ?: stringResource(R.string.sos_card_title),
-                age = stringResource(
-                    R.string.sos_card_sent,
-                    relativeTimeText(nowMillis, card.createdAtMs),
-                ),
-                trailing = {
-                    IconButton(onClick = onAcknowledge) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                        // The monogram repeats the name beside it; screen readers skip it.
+                        .clearAndSetSemantics { },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val initial = partnerName?.trim()?.firstOrNull()?.uppercaseChar()?.toString()
+                    if (initial != null) {
+                        Text(
+                            initial,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
+                    } else {
                         Icon(
-                            Icons.Default.Close,
-                            contentDescription = stringResource(R.string.sos_card_dismiss),
+                            Icons.Outlined.Handshake,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(20.dp),
                         )
                     }
-                },
-            )
-            card.message?.let {
-                Surface(
-                    color = MaterialTheme.colorScheme.surface,
-                    contentColor = MaterialTheme.colorScheme.onSurface,
-                    shape = MaterialTheme.shapes.large,
-                    modifier = Modifier.fillMaxWidth(),
+                }
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .padding(start = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(1.dp),
                 ) {
                     Text(
-                        it,
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.padding(16.dp),
+                        partnerName?.let { stringResource(R.string.sos_card_title_named, it) }
+                            ?: stringResource(R.string.sos_card_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        stringResource(
+                            R.string.sos_card_sent,
+                            relativeTimeText(nowMillis, card.createdAtMs),
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
                     )
                 }
+                IconButton(onClick = onAcknowledge) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = stringResource(R.string.sos_card_dismiss),
+                    )
+                }
+            }
+            card.message?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.titleLarge.copy(fontFamily = DisplayFamily),
+                )
             }
         }
     }

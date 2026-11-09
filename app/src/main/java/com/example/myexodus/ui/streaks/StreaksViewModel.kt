@@ -204,11 +204,16 @@ class StreaksViewModel @Inject constructor(
         _setupError.value = null
     }
 
+    /** [partnerPairId] (owner ruling 2026-11-09): picking a partner in the setup form shares
+     *  the new streak with them automatically — all three switches on, so it lands in What you
+     *  share with no second step. A failed share write never undoes the created habit; the
+     *  partner can be added again from What you share. */
     fun onboard(
         targetLabel: String,
         durationYears: Int,
         severity: WithdrawalSeverity,
         recoveryStartAt: Long,
+        partnerPairId: String? = null,
     ) {
         if (_onboardingInFlight.value) return
         _onboardingInFlight.value = true
@@ -224,6 +229,18 @@ class StreaksViewModel @Inject constructor(
                     recoveryStartAt = recoveryStartAt,
                 )) {
                     is HabitRepository.OnboardingResult.Ready -> {
+                        if (partnerPairId != null) {
+                            try {
+                                repository.setPairStreakSharing(
+                                    partnerPairId, result.state.habitId,
+                                    shareStreak = true, shareRelapses = true, shareMilestones = true,
+                                )
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                // Habit exists already; a failed share is re-addable in What you share.
+                            }
+                        }
                         _relapseFeedback.value = null
                         _addingHabit.value = false
                         _habits.value = repository.habits()

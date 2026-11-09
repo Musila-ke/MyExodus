@@ -558,7 +558,8 @@ class PartnerSyncCoordinator(
      *  when visible, else the first visible one — because the receiver applies the snapshot
      *  wholesale: an aggregate from a hidden habit would leak its day count through a row
      *  that itself is consented. Null = no truthful anchor exists; the caller records the row
-     *  as undeliverable for this pair.
+     *  as undeliverable for this pair — except a motivational message, which ships
+     *  snapshot-less (ADR #285): its text is the payload, not the state.
      *
      *  Sub-content is scrubbed by the pair's own sub-switches: relapse count 0 and milestone
      *  list empty when the corresponding switch is off, coaching count 0 without recovery
@@ -584,9 +585,24 @@ class PartnerSyncCoordinator(
                 habitLabel = row.habitLabel,
             )
         } else {
-            anchor = row.habitProgressId?.let { id -> visibleHabits.firstOrNull { it.progressId == id } }
+            val visible = row.habitProgressId?.let { id -> visibleHabits.firstOrNull { it.progressId == id } }
                 ?: visibleHabits.firstOrNull()
-                ?: return null
+            if (visible == null) {
+                // ADR #285: nothing shared means no snapshot to apply, but a message is
+                // still a message — the send time rides its own key so it can be pinned.
+                return if (row.kind == EventPayload.TYPE_MOTIVATIONAL_MESSAGE) {
+                    EventPayload(
+                        type = row.kind,
+                        text = row.text,
+                        protocolVersion = row.protocolVersion,
+                        schemaVersion = row.schemaVersion,
+                        messageAtMs = row.occurredAtMs,
+                    )
+                } else {
+                    null
+                }
+            }
+            anchor = visible
             val streak = store.recoveryStreakDao().getActiveStreak(anchor.progressId)
             base = Aggregate(
                 // Same displayed day count as the sender's own surfaces (ADR #128/#176).

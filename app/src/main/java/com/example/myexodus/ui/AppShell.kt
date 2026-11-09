@@ -110,6 +110,7 @@ import com.example.myexodus.ui.partner.PairingCeremonyDeps
 import com.example.myexodus.ui.partner.PartnerDashboardSource
 import com.example.myexodus.ui.partner.ReachOutTarget
 import com.example.myexodus.ui.partner.PartnerScreen
+import com.example.myexodus.ui.partner.RuleSharingItem
 import com.example.myexodus.ui.partner.PartnerSelection
 import com.example.myexodus.ui.partner.UnpairOutcome
 import com.example.myexodus.ui.recovery.RECOVERY_VIEW_ASSIST
@@ -299,7 +300,9 @@ fun AppShell(
     // dialog picks exactly one; nothing fans out.
     var sosTargets by remember { mutableStateOf<List<ReachOutTarget>>(emptyList()) }
     LaunchedEffect(contentTab) {
-        if (contentTab == 0) {
+        // Streaks reads the same roster (owner ruling 2026-11-09) for its setup form's
+        // "Share with" choice; Home's reach-out dialog uses it too.
+        if (contentTab == 0 || contentTab == 3) {
             partnerNames = withContext(Dispatchers.IO) {
                 runCatching { partnerSource.partnerDisplayNames() }.getOrDefault(emptyMap())
             }
@@ -563,6 +566,7 @@ fun AppShell(
                         onDeleteHabit = streaks::deleteHabit,
                         onClearManageFeedback = streaks::clearManageFeedback,
                         onOnboard = streaks::onboard,
+                        partners = sosTargets,
                         onOpenHabitPicker = { pickerOpen = true },
                         onCancelAddHabit = streaks::cancelAddHabit,
                         onRelapse = streaks::logRelapse,
@@ -571,6 +575,40 @@ fun AppShell(
                     contentTab == 4 -> PartnerScreen(
                         source = partnerSource,
                         habitRepository = habitRepository,
+                        // Owner ruling 2026-11-09: assigning a partner in an editor is the
+                        // share. This reads the rule store itself, so the item is listed in
+                        // What you share with no separate grant step.
+                        loadRuleSharing = {
+                            runCatching {
+                                repository.getActiveRules()
+                                    .filter { it.assignedPairId != null }
+                                    .groupBy { it.assignedPairId!! }
+                                    .mapValues { (_, assigned) ->
+                                        assigned.filter { it.batchId == null }
+                                            .map { RuleSharingItem(it.ruleId, it.blockedPackage, batch = false) } +
+                                            assigned.filter { it.batchId != null }
+                                                .distinctBy { it.batchId }
+                                                .map {
+                                                    RuleSharingItem(
+                                                        id = it.batchId!!,
+                                                        label = it.batchName?.takeIf(String::isNotBlank)
+                                                            ?: it.blockedPackage,
+                                                        batch = true,
+                                                    )
+                                                }
+                                    }
+                            }.getOrDefault(emptyMap())
+                        },
+                        disconnectRule = { item ->
+                            runCatching {
+                                if (item.batch) {
+                                    repository.removeBatchPartner(item.id)
+                                } else {
+                                    repository.unassignRule(item.id)
+                                }
+                                true
+                            }.getOrDefault(false)
+                        },
                         planRepository = partnerPlanRepository,
                         selection = partnerSelection,
                         ceremony = ceremonyDeps,
