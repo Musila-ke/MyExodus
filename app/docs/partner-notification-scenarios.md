@@ -57,7 +57,7 @@ Columns: **#**, **scenario**, **expected (source)**, **device result**.
 | S7 | Block naturally expires (set duration runs out) | EXPIRED → "«label» ended. Its set duration ran out." | |
 | S8 | Create a batch with partner assigned | One batch row → "You were added as accountability partner on the «batch» batch (N items)." | |
 | S9 | Modify / turn off / delete a watched batch; remove partner from it | One batch-level row per action naming the batch, never N item rows | |
-| S10 | Blocked attempt on a standalone watched block | "«partner» tried to open a blocked app / «app» was blocked." — only while Check-ins is on for that pair, and the rule assignment turns Check-ins on automatically (ADR #295); switching it off silences the alerts and tells the partner so | |
+| S10 | Blocked attempt on a standalone watched block | "«partner» tried to open a blocked app / «app» was blocked." — only while Check-ins is on for that pair, and the rule assignment turns Check-ins on automatically (ADR #295); switching it off silences the alerts and tells the partner so | PASSED 2026-11-10: blocked Adobe Scan on .106 → exactly ONE `partner:event` notification on .107 (the 30 s dedupe collapsed the launch-grace retry) and one "Adobe Scan — Blocked · 1m ago" row on the receiver's Rules & blocks (mailbox 22:22:37.969Z). The copy path ("tried to open a blocked app / «app» was blocked") was device-proven earlier on the 2026-10-31 build (ADR #257) |
 | S11 | Blocked attempt on a rule inside a batch | "«partner» tried to open a blocked app / «app» was blocked in the «batch» batch." — the batch name must appear (owner ruling) | |
 | S12 | Override used instead of a block | "«partner» used an override / «app» was opened with an override (in the «batch» batch)." | |
 
