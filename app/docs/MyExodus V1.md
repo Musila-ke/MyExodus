@@ -1029,6 +1029,18 @@ hub-and-spoke split), **ADR #78** (Partner split + shared `BackRow`/`NavTile` ch
   moved behind the Pairing tile. `BackRow` (4 call sites) and `NavTile` (2) were extracted to
   `ui/`; the two coaching-plan screens that inline their own back rows were deliberately left
   alone and recorded as follow-up rather than changed blind on an unverifiable screen.
+  **Revision 2026-11-09 (ADR #283, owner night-shift directive):** the three-tile hub is
+  superseded — the hub is now an identity card, one conditional "Needs you" attention card, and
+  three grouped `IndexRow` sections with muted headers (**Their progress** · **Rules and plans** ·
+  **Manage**), the grammar Settings uses. The repeated "Viewing <name>" band is gone (one quiet
+  person line per subpage, headline name on the identity card); the Check-ins tile/page is renamed
+  **Their phone** and leads with the two-signal explanation (protection vs phone check-ins, silence
+  proves neither); the Activity page states an empty share once, not twice; the shared scroll state
+  resets to the top on every page change; What you share keeps ADR #135's three-level
+  per-(item, partner) consent and adds tone dots to its overview and partner rows; Plans and
+  Pairing adopt the grouped-row grammar with honest empty states. Presentation only — transport,
+  consent semantics and every data-honesty rule are unchanged; device pass on both phones, both
+  themes, JVM 2,550/0/0.
 * **Streaks spoke (ADR #79, same standing rule):** the REQ-18 four-week timeline moved behind a
   `LinkRow` opening a `VIEW_TIMELINE` spoke. The screen's real problem was weight rather than
   structure — `WithdrawalTimelineCard` rendered ~13 content lines (four bars, five paragraphs,

@@ -899,15 +899,19 @@
          viewer's side of the partnership — what THEY share with the partner — and the label
          says whose side it is. -->
     <string name="partner_tile_sharing">What you share</string>
+    <string name="partner_tile_sharing_body">Choose what they can see</string>
     <!-- Owner directive 2026-11-01: the partner's device signals (monitoring report and the
-         connection check-in) share one destination instead of two equal-weight hub cards. -->
-    <string name="partner_tile_checkins">Check-ins</string>
+         connection check-in) share one destination instead of two equal-weight hub cards.
+         Owner directive 2026-11-09: the tile answers "is their phone okay" — "Check-ins"
+         was misleading because the heartbeats happen automatically. -->
+    <string name="partner_tile_checkins">Their phone</string>
     <string name="partner_checkins_empty_title">Nothing reported yet</string>
-    <string name="partner_checkins_empty_body">Their phone hasn’t shared a monitoring report or a check-in yet. This page fills in once it does.</string>
+    <string name="partner_checkins_empty_body">Their phone hasn’t sent a monitoring report or a check-in yet. This page fills in once it does.</string>
+    <string name="partner_checkins_intro">Two separate signals. Protection says whether their app is still monitoring. Phone check-ins say whether their phone still reaches the server. A quiet phone is not proof either one changed.</string>
     <string name="partner_tile_pairing">Pairing</string>
-    <!-- Owner directive 2026-11-01: the hub's identity card also opens "People you support",
-         so its first line reads as a statement of who the tab is about. -->
-    <string name="partner_viewing">Viewing %1$s</string>
+    <string name="partner_group_progress">Their progress</string>
+    <string name="partner_group_setup">Rules and plans</string>
+    <string name="partner_group_manage">Manage</string>
     <string name="partner_tile_sharing_none">Nothing shared</string>
     <!-- Owner ask 2026-10-21: the hub groups everything time-boxed under one heading instead of
          letting each card shout at the same weight. -->
@@ -934,6 +938,9 @@
     <string name="partner_tile_rules_none">None shared with you yet</string>
     <string name="partner_rules_empty_title">No rule updates yet</string>
     <string name="partner_rules_empty_body">When a rule or batch you watch is created, changed, turned off, or ends, it shows up here.</string>
+    <string name="partner_rules_intro">Newest first. Each row names the rule or batch and what changed.</string>
+    <string name="partner_day_today">Today</string>
+    <string name="partner_day_yesterday">Yesterday</string>
     <plurals name="partner_rules_count">
         <item quantity="one">%1$d rule update</item>
         <item quantity="other">%1$d rule updates</item>
@@ -943,7 +950,7 @@
     <string name="partner_plans_from_header">From your partner</string>
     <string name="partner_plans_given_header">You shared</string>
     <string name="partner_plans_mine_header">Just for me</string>
-    <string name="partner_plans_empty">No plans yet. Write one below, or wait for your partner to share one.</string>
+    <string name="partner_plans_empty_title">No plans yet</string>
     <string name="partner_plans_unavailable">Couldn’t read your plans. Reopen this page to try again.</string>
     <string name="partner_plans_new">New plan</string>
     <string name="partner_plans_for_whom">Who is this plan for?</string>
@@ -1032,8 +1039,8 @@
     </plurals>
     <!-- §7 Step 11 delta: the partner's shared aggregate. Days free is the dominant number;
          activity time and sync time are ALWAYS separate lines (§8.11) — a quiet partner is not
-         a broken sync. -->
-    <string name="partner_summary_title">How they\'re doing</string>
+         a broken sync. Owner directive 2026-11-09: the page header already says "How they're
+         doing", so the card no longer repeats it. -->
     <string name="partner_summary_days">Days free</string>
     <plurals name="partner_summary_days_unit">
         <item quantity="one">day</item>
@@ -1044,13 +1051,12 @@
     <string name="partner_summary_relapses">Relapses logged</string>
     <string name="partner_summary_coaching_label">Coaching items</string>
     <string name="partner_summary_last_event">Last shared %1$s</string>
-    <string name="partner_summary_no_events">Nothing shared yet. This shows what your partner chooses to share: streaks, relapses and milestones.</string>
     <string name="partner_summary_partial">Some history is missing, so these numbers may be behind.</string>
     <string name="partner_summary_pinned_label">Their message to you</string>
     <!-- §7 Step 7 / §8.13 device monitoring: their app's own encrypted status report. Kept
          apart from sync and chain status — a live mailbox never proves their monitor runs,
          and a stale report reads Unknown rather than keeping an old Active. -->
-    <string name="partner_monitoring_title">Monitoring</string>
+    <string name="partner_monitoring_title">Protection</string>
     <string name="partner_monitoring_state_active">Active</string>
     <string name="partner_monitoring_state_limited">Limited</string>
     <string name="partner_monitoring_state_off">Off</string>
@@ -1064,7 +1070,7 @@
     <string name="partner_monitoring_delayed">Some of their updates may be delayed.</string>
     <!-- Plan Step 8 (§4/§8.13): server-derived connection. Coarse buckets only; never a
          timestamp. "Not shared" is a distinct state, not a claim of lateness. -->
-    <string name="partner_connection_title">Check-ins</string>
+    <string name="partner_connection_title">Phone check-ins</string>
     <string name="partner_connection_state_checking_in">Checking in</string>
     <string name="partner_connection_state_late">Late</string>
     <string name="partner_connection_state_not_checking_in">Not checking in</string>
@@ -1124,7 +1130,6 @@
     <!-- #96: the composer and every partner subpage name which supported user they act on —
          a device can hold several pairings, so "your partner" alone is ambiguous. -->
     <string name="partner_compose_to">To: %1$s</string>
-    <string name="partner_context_label">Viewing</string>
     <string name="partner_context_switch">Switch</string>
     <string name="partner_switch_close">Close</string>
     <string name="partner_alert_blocked">Blocked</string>

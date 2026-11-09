@@ -18,6 +18,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -45,8 +46,9 @@ import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.data.db.entity.PartnerPlan
 import com.example.myexodus.data.db.entity.PartnerPlanTask
 import com.example.myexodus.ui.BackRow
-import com.example.myexodus.ui.LinkRow
 import com.example.myexodus.ui.relativeTimeText
+import com.example.myexodus.ui.settings.IndexRow
+import com.example.myexodus.ui.settings.RowDivider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -228,11 +230,29 @@ fun PartnerPlansScreen(
 
                 else -> {
                     if (plans.isEmpty()) {
-                        Text(
-                            stringResource(R.string.partner_plans_empty),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        // Owner directive 2026-11-09: the empty page was one floating line over
+                        // blank space. The card names the feature and repeats the route ("Write
+                        // one below" pointed at nothing — New plan is in the header).
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            shape = MaterialTheme.shapes.medium,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(
+                                Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text(
+                                    stringResource(R.string.partner_plans_empty_title),
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text(
+                                    stringResource(R.string.partner_plans_intro),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                     } else {
                         PlanSection(
                             header = stringResource(R.string.partner_plans_from_header),
@@ -321,31 +341,45 @@ private fun PlanSection(
     onOpen: (String) -> Unit,
 ) {
     if (plans.isEmpty()) return
-    Text(
-        header,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    plans.forEach { plan ->
-        val tasks = tasksByPlan[plan.planId].orEmpty()
-        val done = tasks.count { it.done }
-        val progress = stringResource(R.string.partner_plans_progress, done, tasks.size)
-        val who = when {
-            plan.pairId == null -> stringResource(R.string.partner_plans_local)
-            plan.authored -> stringResource(
-                R.string.partner_plans_with,
-                names[plan.pairId] ?: stringResource(R.string.partner_plans_unknown_partner),
-            )
-            else -> stringResource(
-                R.string.partner_plans_from,
-                names[plan.pairId] ?: stringResource(R.string.partner_plans_unknown_partner),
-            )
-        }
-        LinkRow(
-            title = plan.title,
-            body = "$progress · $who",
-            onClick = { onOpen(plan.planId) },
+    // Owner directive 2026-11-09: each section is one grouped surface of index rows, the same
+    // grammar the hub and Settings use — free-floating link rows read as body text here.
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            header,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column {
+                plans.forEachIndexed { index, plan ->
+                    val tasks = tasksByPlan[plan.planId].orEmpty()
+                    val done = tasks.count { it.done }
+                    val progress = stringResource(R.string.partner_plans_progress, done, tasks.size)
+                    val who = when {
+                        plan.pairId == null -> stringResource(R.string.partner_plans_local)
+                        plan.authored -> stringResource(
+                            R.string.partner_plans_with,
+                            names[plan.pairId] ?: stringResource(R.string.partner_plans_unknown_partner),
+                        )
+                        else -> stringResource(
+                            R.string.partner_plans_from,
+                            names[plan.pairId] ?: stringResource(R.string.partner_plans_unknown_partner),
+                        )
+                    }
+                    if (index > 0) RowDivider()
+                    IndexRow(
+                        icon = Icons.Outlined.CheckCircle,
+                        title = plan.title,
+                        subtitle = "$progress · $who",
+                        onClick = { onOpen(plan.planId) },
+                    )
+                }
+            }
+        }
     }
 }
 

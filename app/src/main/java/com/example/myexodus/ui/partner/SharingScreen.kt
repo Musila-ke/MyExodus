@@ -41,6 +41,7 @@ import com.example.myexodus.streaks.StreakSharingFlags
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.settings.IndexRow
 import com.example.myexodus.ui.settings.RowDivider
+import com.example.myexodus.ui.settings.StatusTone
 import com.example.myexodus.ui.settings.ToggleRow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -237,6 +238,14 @@ fun SharingScreen(
                         Column {
                             partners.forEachIndexed { index, (pairId, name) ->
                                 if (index > 0) RowDivider()
+                                val shared = when (openItem) {
+                                    is OpenItem.Streak ->
+                                        (openItem.item.perPair[pairId] ?: StreakSharingFlags.None).shareStreak
+                                    OpenItem.Other ->
+                                        (current.profile[pairId] ?: ProfileSharingFlags.None).let {
+                                            it.shareCheckIns || it.shareRecovery || it.shareAvailability
+                                        }
+                                }
                                 IndexRow(
                                     icon = Icons.Outlined.Person,
                                     title = name,
@@ -248,6 +257,9 @@ fun SharingScreen(
                                             current.profile[pairId] ?: ProfileSharingFlags.None,
                                         )
                                     },
+                                    // Owner directive 2026-11-09: the summary line already names
+                                    // who sees it; the dot makes "shared" scannable at a glance.
+                                    tone = if (shared) StatusTone.GOOD else StatusTone.INFO,
                                     onClick = { openPairId = pairId },
                                 )
                             }
@@ -286,6 +298,11 @@ fun SharingScreen(
                                         partners.filter { item.perPair[it.first]?.shareStreak == true }
                                             .map { it.second },
                                     ),
+                                    tone = if (partners.any { item.perPair[it.first]?.shareStreak == true }) {
+                                        StatusTone.GOOD
+                                    } else {
+                                        StatusTone.INFO
+                                    },
                                     onClick = {
                                         openItemId = item.progressId
                                         if (!partnerLevelShown) openPairId = partners.first().first
@@ -310,6 +327,15 @@ fun SharingScreen(
                                     flags.shareCheckIns || flags.shareRecovery || flags.shareAvailability
                                 }.map { it.second },
                             ),
+                            tone = if (partners.any {
+                                    val flags = current.profile[it.first] ?: ProfileSharingFlags.None
+                                    flags.shareCheckIns || flags.shareRecovery || flags.shareAvailability
+                                }
+                            ) {
+                                StatusTone.GOOD
+                            } else {
+                                StatusTone.INFO
+                            },
                             onClick = {
                                 openItemId = ITEM_OTHER
                                 if (!partnerLevelShown) openPairId = partners.first().first

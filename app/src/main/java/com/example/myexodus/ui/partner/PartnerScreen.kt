@@ -15,14 +15,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -36,6 +34,7 @@ import androidx.compose.material.icons.outlined.Handshake
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.SelfImprovement
@@ -102,10 +101,11 @@ import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.ui.AppMark
 import com.example.myexodus.ui.BackRow
-import com.example.myexodus.ui.LinkRow
-import com.example.myexodus.ui.NavTile
 import com.example.myexodus.ui.PillTone
 import com.example.myexodus.ui.StatusPill
+import com.example.myexodus.ui.settings.IndexRow
+import com.example.myexodus.ui.settings.RowDivider
+import com.example.myexodus.ui.settings.StatusTone
 import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.insights.shareOf
@@ -209,14 +209,40 @@ private fun PartnerSurface(
 }
 
 /**
- * The chain verdict as a glanceable mark. The glyph changes with the state and carries the
- * words, so the verdict never depends on colour alone — the tint only reinforces it. A healthy
- * chain still draws (`VerifiedUser`, quiet tone): the mark's job is to say "checked and fine",
- * which is a different statement from the warning cards' absence.
+ * One labelled stack of index rows (owner directive 2026-11-09). The hub's destinations used
+ * to be a two-column tile grid; grouped rows carry the same live datum at a fraction of the
+ * height and read as an order instead of a dashboard. The row chrome (bare icon, chevron,
+ * divider inset) is the one Settings already uses, so both tabs read as one app.
  */
 @Composable
-private fun ChainVerdictMark(status: PartnerChainStatus) {
-    val (icon, description) = when (status) {
+private fun HubGroup(titleRes: Int, rows: @Composable ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            stringResource(titleRes),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(content = rows)
+        }
+    }
+}
+
+/**
+ * The chain verdict as one quiet line under the identity. The glyph and the words change with
+ * the state, so the verdict never depends on colour alone — the tint only reinforces it. A
+ * healthy chain still draws (`VerifiedUser`): the line's job is to say "checked and fine",
+ * which is a different statement from the warning cards' absence. Owner directive 2026-11-09:
+ * the old 40dp tinted disc put a coloured badge in front of the person's name and made the
+ * verification state look like decoration; the line reads as a sentence instead.
+ */
+@Composable
+private fun ChainVerdictLine(status: PartnerChainStatus) {
+    val (icon, text) = when (status) {
         PartnerChainStatus.HEALTHY ->
             Icons.Outlined.VerifiedUser to stringResource(R.string.partner_chain_verified_mark)
         PartnerChainStatus.CATCHING_UP ->
@@ -226,20 +252,17 @@ private fun ChainVerdictMark(status: PartnerChainStatus) {
         PartnerChainStatus.UNVERIFIED ->
             Icons.Outlined.GppBad to stringResource(R.string.partner_chain_unverified_title)
     }
-    val tone = when (status) {
-        PartnerChainStatus.HEALTHY -> null
-        PartnerChainStatus.UNVERIFIED -> CardTone.ALERT
-        else -> CardTone.NOTICE
+    val tint = if (status == PartnerChainStatus.UNVERIFIED) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
     }
-    Surface(
-        color = tone?.container() ?: MaterialTheme.colorScheme.surfaceContainerHighest,
-        contentColor = tone?.onContainer() ?: MaterialTheme.colorScheme.onSurfaceVariant,
-        shape = CircleShape,
-        modifier = Modifier.size(40.dp),
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = description, modifier = Modifier.size(22.dp))
-        }
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+        Text(text, style = MaterialTheme.typography.labelMedium, color = tint)
     }
 }
 
@@ -593,10 +616,15 @@ fun PartnerScreen(
         )
         return
     }
+    // Owner directive 2026-11-09 (devices, 2026-11-09): one scroll state served the hub and
+    // every subpage, so opening a page while the hub was scrolled down dropped the viewer
+    // mid-page with the back row off-screen. Each page change starts at its top.
+    val scroller = rememberScrollState()
+    LaunchedEffect(view) { scroller.scrollTo(0) }
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scroller)
             .padding(horizontal = sidePadding, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -709,11 +737,17 @@ fun PartnerScreen(
                 )
                 // #96 (owner ruling): a subpage acts on one partner, so it says which one, and
                 // lets the viewer switch right there. Owner ruling 2026-09-29 (live review): the
-                // Requests queue is the exception — "Viewing / Switch" above a decision list read
-                // as a control to fiddle with instead of a queue to clear, so the bar is gone
-                // there; the hub's roster is one tap back.
+                // Requests queue is the exception — a person line above a decision list read as
+                // a control to fiddle with instead of a queue to clear, so it is gone there; the
+                // hub's roster is one tap back.
+                // Owner directive 2026-11-09: one quiet person line, not a tinted band — the
+                // band plus the hub hero made every subpage open with the same "Viewing X" twice.
                 if (view != VIEW_REQUESTS) {
-                    PartnerContextBar(current, onSwitch = { switching = true })
+                    PartnerContextLine(
+                        label = current.partnerLabel ?: shortKeyId(current.partnerKeyId),
+                        canSwitch = current.users.size > 1,
+                        onSwitch = { switching = true },
+                    )
                 }
                 when (view) {
                     VIEW_REQUESTS -> RequestsView(
@@ -732,8 +766,16 @@ fun PartnerScreen(
                         // Owner directive 2026-11-01: the shared aggregate leads this page — the
                         // hub tile answers "how are they doing?", and this is where that answer
                         // gets its detail instead of stretching the hub.
-                        PartnerSummaryCard(current.activity, current.chainStatus)
+                        // Owner directive 2026-11-09: with nothing shared there is no
+                        // summary — the activity card below already says why the page is
+                        // empty, and a second "nothing shared" sentence above it repeated
+                        // the same absence in two cards.
+                        current.activity?.let { PartnerSummaryCard(it, current.chainStatus) }
                         ActivityChartCard(current.alerts)
+                        // Owner directive 2026-11-09: the answer (summary + picture + list)
+                        // comes before the composer. The send action used to sit between the
+                        // chart and the list, splitting one story in half.
+                        ActivityCard(current.alerts, current.activity)
                         ComposeMessageCard(
                             onCompose = {
                                 // A dismissal while a send was in flight must not surface its
@@ -745,7 +787,6 @@ fun PartnerScreen(
                         // Owner ask 2026-10-01: the writer sees their own last message here —
                         // the mirror of the hub's "Their message to you".
                         current.sentMessageText?.let { SentMessageCard(it) }
-                        ActivityCard(current.alerts, current.activity)
                     }
                     VIEW_CHECKINS -> CheckinsView(state = current, status = partnerStatus)
                     VIEW_RULES -> RulesView(current)
@@ -785,9 +826,12 @@ fun PartnerScreen(
                 // time-boxed card now shares one labelled group, so the hub reads as identity,
                 // then "Needs you", then the partner's state — instead of six equal-weight
                 // blocks competing. An empty group renders nothing, not a heading.
+                // Owner directive 2026-11-09: "nothing shared" is something the viewer may have
+                // to act on, so it joins this group instead of floating below the tiles.
                 val needsYou = current.pairingUnreachable ||
                     current.chainStatus != PartnerChainStatus.HEALTHY ||
                     pending.isNotEmpty() ||
+                    sharesNothing == true ||
                     checkFailed ||
                     syncNeedsAttention(current)
                 if (needsYou) {
@@ -830,44 +874,52 @@ fun PartnerScreen(
                             prominentAction = false,
                         )
                     }
+                    // Owner ask 2026-10-04: a pair with every switch off looks identical to an
+                    // active one, and the partner silently receives nothing. Said once, with the
+                    // one route to fixing it.
+                    if (sharesNothing == true) {
+                        NothingSharedCard(
+                            partnerName = current.partnerLabel ?: shortKeyId(current.partnerKeyId),
+                            onOpenSharing = { view = VIEW_SHARING },
+                        )
+                    }
                 }
-                // Owner ask 2026-10-04: a pair with every switch off looks identical to an
-                // active one, and the partner silently receives nothing. Said once, with the
-                // one route to fixing it.
-                if (sharesNothing == true) {
-                    NothingSharedCard(
-                        partnerName = current.partnerLabel ?: shortKeyId(current.partnerKeyId),
-                        onOpenSharing = { view = VIEW_SHARING },
-                    )
-                }
-                // Owner directive 2026-11-01: every destination is an icon-led tile carrying its
-                // own live datum. Plans and Rules & blocks previously hid below the grid as plain
-                // text rows — the reason the tab felt like it had nothing on it. The partner's
-                // aggregate, monitoring and connection cards moved onto their own pages so the
-                // hub answers "where do I go?" instead of stacking equal-weight reports.
-                Row(
-                    modifier = Modifier.height(IntrinsicSize.Min),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    NavTile(
-                        icon = Icons.Outlined.Layers,
-                        label = stringResource(R.string.partner_tile_plans),
-                        status = when (val hub = planHub) {
-                            null -> stringResource(R.string.partner_plans_intro)
-                            else -> when {
-                                !hub.hasPlans -> stringResource(R.string.partner_tile_plans_none)
-                                hub.todo == null -> stringResource(R.string.partner_plans_intro)
-                                hub.todo == 0 -> stringResource(R.string.partner_tile_plans_all_done)
-                                else -> stringResource(R.string.partner_tile_plans_todo, hub.todo)
-                            }
+                // Owner directive 2026-11-09: destinations are grouped index rows, not a grid
+                // of tiles. The tile grid spent a third of the hub's height repeating its own
+                // labels, wrapped "None shared with you yet" mid-phrase and left Requests
+                // floating alone; grouped rows read top-down in the order the viewer acts —
+                // their progress, then rules and plans, then the management surfaces.
+                HubGroup(R.string.partner_group_progress) {
+                    IndexRow(
+                        icon = Icons.Outlined.Timeline,
+                        title = stringResource(R.string.partner_tile_activity),
+                        // Days free is the number the user expects this row to answer
+                        // (owner report 2026-10-31: "activity is always 0" — the old tile
+                        // counted only this week's events, so a shared streak read as zero).
+                        subtitle = when (val activity = current.activity) {
+                            null -> stringResource(R.string.partner_tile_activity_none)
+                            else -> pluralStringResource(
+                                R.plurals.partner_tile_activity_days,
+                                activity.daysFree,
+                                activity.daysFree,
+                            )
                         },
-                        onClick = { view = VIEW_PLANS },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        onClick = { view = VIEW_ACTIVITY },
                     )
-                    NavTile(
+                    RowDivider()
+                    IndexRow(
+                        icon = Icons.Outlined.VerifiedUser,
+                        title = stringResource(R.string.partner_tile_checkins),
+                        subtitle = partnerStatus?.let { stringResource(connectionStateTextRes(it)) },
+                        tone = partnerStatus?.let(::connectionStateTone),
+                        onClick = { view = VIEW_CHECKINS },
+                    )
+                }
+                HubGroup(R.string.partner_group_setup) {
+                    IndexRow(
                         icon = Icons.Outlined.GppBad,
-                        label = stringResource(R.string.partner_tile_rules),
-                        status = if (current.ruleHistory.isEmpty()) {
+                        title = stringResource(R.string.partner_tile_rules),
+                        subtitle = if (current.ruleHistory.isEmpty()) {
                             stringResource(R.string.partner_tile_rules_none)
                         } else {
                             pluralStringResource(
@@ -877,74 +929,55 @@ fun PartnerScreen(
                             )
                         },
                         onClick = { view = VIEW_RULES },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                    )
+                    RowDivider()
+                    IndexRow(
+                        icon = Icons.Outlined.Layers,
+                        title = stringResource(R.string.partner_tile_plans),
+                        subtitle = when (val hub = planHub) {
+                            null -> stringResource(R.string.partner_plans_intro)
+                            else -> when {
+                                !hub.hasPlans -> stringResource(R.string.partner_tile_plans_none)
+                                hub.todo == null -> stringResource(R.string.partner_plans_intro)
+                                hub.todo == 0 -> stringResource(R.string.partner_tile_plans_all_done)
+                                else -> stringResource(R.string.partner_tile_plans_todo, hub.todo)
+                            }
+                        },
+                        onClick = { view = VIEW_PLANS },
                     )
                 }
-                Row(
-                    modifier = Modifier.height(IntrinsicSize.Min),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    NavTile(
-                        icon = Icons.Outlined.Timeline,
-                        label = stringResource(R.string.partner_tile_activity),
-                        // Days free is the number the user expects this tile to answer
-                        // (owner report 2026-10-31: "activity is always 0" — the tile counted
-                        // only this week's events, so a shared streak read as zero).
-                        status = when (val activity = current.activity) {
-                            null -> stringResource(R.string.partner_tile_activity_none)
-                            else -> pluralStringResource(
-                                R.plurals.partner_tile_activity_days,
-                                activity.daysFree,
-                                activity.daysFree,
-                            )
-                        },
-                        onClick = { view = VIEW_ACTIVITY },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                    )
-                    NavTile(
-                        icon = Icons.Outlined.VerifiedUser,
-                        label = stringResource(R.string.partner_tile_checkins),
-                        status = partnerStatus?.let { status ->
-                            stringResource(
-                                if (!status.consent) {
-                                    R.string.partner_connection_state_not_shared
-                                } else {
-                                    when (status.connection) {
-                                        PartnerConnection.CHECKING_IN ->
-                                            R.string.partner_connection_state_checking_in
-                                        PartnerConnection.LATE ->
-                                            R.string.partner_connection_state_late
-                                        PartnerConnection.NOT_CHECKING_IN ->
-                                            R.string.partner_connection_state_not_checking_in
-                                        PartnerConnection.NO_DATA ->
-                                            R.string.partner_connection_state_no_data
-                                    }
-                                },
-                            )
-                        },
-                        onClick = { view = VIEW_CHECKINS },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                    )
-                }
-                Row(
-                    modifier = Modifier.height(IntrinsicSize.Min),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    NavTile(
+                HubGroup(R.string.partner_group_manage) {
+                    // Requests earns a row only while there is something to read: with no
+                    // request ever filed, an empty inbox page is a dead end (owner question
+                    // 2026-11-01).
+                    if (current.approvals.isNotEmpty()) {
+                        IndexRow(
+                            icon = Icons.Outlined.Inbox,
+                            title = stringResource(R.string.partner_tile_requests),
+                            subtitle = if (pending.isEmpty()) {
+                                stringResource(R.string.partner_tile_requests_none)
+                            } else {
+                                stringResource(R.string.partner_tile_requests_waiting, pending.size)
+                            },
+                            onClick = { view = VIEW_REQUESTS },
+                        )
+                        RowDivider()
+                    }
+                    IndexRow(
                         icon = Icons.Outlined.Visibility,
-                        label = stringResource(R.string.partner_tile_sharing),
-                        status = if (sharesNothing == true) {
+                        title = stringResource(R.string.partner_tile_sharing),
+                        subtitle = if (sharesNothing == true) {
                             stringResource(R.string.partner_tile_sharing_none)
                         } else {
-                            null
+                            stringResource(R.string.partner_tile_sharing_body)
                         },
                         onClick = { view = VIEW_SHARING },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
-                    NavTile(
+                    RowDivider()
+                    IndexRow(
                         icon = Icons.Outlined.Handshake,
-                        label = stringResource(R.string.partner_tile_pairing),
-                        status = if (current.lastSyncedAtEpochMillis == null) {
+                        title = stringResource(R.string.partner_tile_pairing),
+                        subtitle = if (current.lastSyncedAtEpochMillis == null) {
                             stringResource(R.string.partner_tile_never_synced)
                         } else {
                             stringResource(
@@ -956,26 +989,7 @@ fun PartnerScreen(
                             )
                         },
                         onClick = { view = VIEW_PAIRING },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
                     )
-                }
-                // Requests earns a tile only while there is something to read: with no request
-                // ever filed, an empty inbox page is a dead end (owner question 2026-11-01).
-                if (current.approvals.isNotEmpty()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        NavTile(
-                            icon = Icons.Outlined.Inbox,
-                            label = stringResource(R.string.partner_tile_requests),
-                            status = if (pending.isEmpty()) {
-                                stringResource(R.string.partner_tile_requests_none)
-                            } else {
-                                stringResource(R.string.partner_tile_requests_waiting, pending.size)
-                            },
-                            onClick = { view = VIEW_REQUESTS },
-                            modifier = Modifier.weight(1f),
-                        )
-                        Spacer(Modifier.weight(1f))
-                    }
                 }
             }
         }
@@ -1240,6 +1254,14 @@ fun PartnerScreen(
  */
 @Composable
 private fun CheckinsView(state: PartnerDashboardUi.Paired, status: PartnerStatus?) {
+    // Owner directive 2026-11-09: the page leads with what it answers. The old page dropped
+    // two status cards on blank space, and nothing said how "protection" and "checking in"
+    // relate — or that silence proves neither.
+    Text(
+        stringResource(R.string.partner_checkins_intro),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
     if (state.monitoring == null && status == null) {
         InfoCard(
             title = stringResource(R.string.partner_checkins_empty_title),
@@ -1257,90 +1279,89 @@ private fun CheckinsView(state: PartnerDashboardUi.Paired, status: PartnerStatus
  * combined "healthy" badge. A report older than the recorder's cadence can never keep reading
  * ACTIVE: it becomes UNKNOWN ([PartnerMonitoringUi.stale]).
  */
-/** The leading disc that gives the partner status cards a glanceable subject (owner
- *  directive 2026-11-01) — same weight as the account cards, so the pages read as one app. */
-@Composable
-private fun PartnerIconDisc(icon: ImageVector) {
-    Box(
-        modifier = Modifier
-            .size(40.dp)
-            .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp),
-        )
-    }
-}
-
 @Composable
 private fun PartnerMonitoringCard(monitoring: PartnerMonitoringUi) {
     PartnerSurface(spacing = 6.dp) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            PartnerIconDisc(Icons.Outlined.Visibility)
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        stringResource(R.string.partner_monitoring_title),
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    StatusPill(
-                        text = stringResource(
-                            when (monitoring.state) {
-                                MonitoringState.ACTIVE -> R.string.partner_monitoring_state_active
-                                MonitoringState.DEGRADED -> R.string.partner_monitoring_state_limited
-                                MonitoringState.UNAVAILABLE -> R.string.partner_monitoring_state_off
-                                MonitoringState.UNKNOWN -> R.string.partner_monitoring_state_unknown
-                            },
-                        ),
-                        tone = when (monitoring.state) {
-                            MonitoringState.ACTIVE -> PillTone.POSITIVE
-                            MonitoringState.UNAVAILABLE -> PillTone.NEGATIVE
-                            else -> PillTone.QUIET
-                        },
-                    )
-                }
-                Text(
-                    stringResource(
-                        when (monitoring.state) {
-                            MonitoringState.ACTIVE -> R.string.partner_monitoring_body_active
-                            MonitoringState.DEGRADED -> R.string.partner_monitoring_body_limited
-                            MonitoringState.UNAVAILABLE -> R.string.partner_monitoring_body_off
-                            MonitoringState.UNKNOWN -> R.string.partner_monitoring_body_unknown
-                        },
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    stringResource(
-                        if (monitoring.stale) {
-                            R.string.partner_monitoring_report_stale
-                        } else {
-                            R.string.partner_monitoring_report_fresh
-                        },
-                        relativeTimeText(
-                            System.currentTimeMillis(),
-                            monitoring.lastReportAtEpochMillis,
-                        ),
-                    ),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (monitoring.updatesDelayed) {
-                    Text(
-                        stringResource(R.string.partner_monitoring_delayed),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                stringResource(R.string.partner_monitoring_title),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            StatusPill(
+                text = stringResource(
+                    when (monitoring.state) {
+                        MonitoringState.ACTIVE -> R.string.partner_monitoring_state_active
+                        MonitoringState.DEGRADED -> R.string.partner_monitoring_state_limited
+                        MonitoringState.UNAVAILABLE -> R.string.partner_monitoring_state_off
+                        MonitoringState.UNKNOWN -> R.string.partner_monitoring_state_unknown
+                    },
+                ),
+                tone = when (monitoring.state) {
+                    MonitoringState.ACTIVE -> PillTone.POSITIVE
+                    MonitoringState.UNAVAILABLE -> PillTone.NEGATIVE
+                    else -> PillTone.QUIET
+                },
+            )
+        }
+        Text(
+            stringResource(
+                when (monitoring.state) {
+                    MonitoringState.ACTIVE -> R.string.partner_monitoring_body_active
+                    MonitoringState.DEGRADED -> R.string.partner_monitoring_body_limited
+                    MonitoringState.UNAVAILABLE -> R.string.partner_monitoring_body_off
+                    MonitoringState.UNKNOWN -> R.string.partner_monitoring_body_unknown
+                },
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            stringResource(
+                if (monitoring.stale) {
+                    R.string.partner_monitoring_report_stale
+                } else {
+                    R.string.partner_monitoring_report_fresh
+                },
+                relativeTimeText(
+                    System.currentTimeMillis(),
+                    monitoring.lastReportAtEpochMillis,
+                ),
+            ),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (monitoring.updatesDelayed) {
+            Text(
+                stringResource(R.string.partner_monitoring_delayed),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
+}
+
+/** The hub row and the check-ins card read one mapping, so the two cannot disagree. */
+@StringRes
+private fun connectionStateTextRes(status: PartnerStatus): Int =
+    if (!status.consent) {
+        R.string.partner_connection_state_not_shared
+    } else {
+        when (status.connection) {
+            PartnerConnection.CHECKING_IN -> R.string.partner_connection_state_checking_in
+            PartnerConnection.LATE -> R.string.partner_connection_state_late
+            PartnerConnection.NOT_CHECKING_IN -> R.string.partner_connection_state_not_checking_in
+            PartnerConnection.NO_DATA -> R.string.partner_connection_state_no_data
+        }
+    }
+
+/** LATE is deliberately INFO, not ATTENTION: 45-90 quiet minutes can be completely normal
+ *  (doze, WorkManager deferral), and a status dot would read as a fault. */
+private fun connectionStateTone(status: PartnerStatus): StatusTone = when {
+    !status.consent -> StatusTone.INFO
+    status.connection == PartnerConnection.CHECKING_IN -> StatusTone.GOOD
+    status.connection == PartnerConnection.NOT_CHECKING_IN -> StatusTone.ATTENTION
+    else -> StatusTone.INFO
 }
 
 /**
@@ -1352,150 +1373,120 @@ private fun PartnerMonitoringCard(monitoring: PartnerMonitoringUi) {
 @Composable
 private fun PartnerConnectionCard(status: PartnerStatus) {
     PartnerSurface(spacing = 6.dp) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            PartnerIconDisc(Icons.Outlined.VerifiedUser)
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        stringResource(R.string.partner_connection_title),
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    StatusPill(
-                        text = stringResource(
-                            if (!status.consent) {
-                                R.string.partner_connection_state_not_shared
-                            } else {
-                                when (status.connection) {
-                                    PartnerConnection.CHECKING_IN ->
-                                        R.string.partner_connection_state_checking_in
-                                    PartnerConnection.LATE -> R.string.partner_connection_state_late
-                                    PartnerConnection.NOT_CHECKING_IN ->
-                                        R.string.partner_connection_state_not_checking_in
-                                    PartnerConnection.NO_DATA ->
-                                        R.string.partner_connection_state_no_data
-                                }
-                            },
-                        ),
-                        tone = if (!status.consent) {
-                            PillTone.QUIET
-                        } else {
-                            when (status.connection) {
-                                PartnerConnection.CHECKING_IN -> PillTone.POSITIVE
-                                PartnerConnection.NOT_CHECKING_IN -> PillTone.NEGATIVE
-                                else -> PillTone.QUIET
-                            }
-                        },
-                    )
-                }
-                Text(
-                    stringResource(
-                        if (!status.consent) {
-                            R.string.partner_connection_body_not_shared
-                        } else {
-                            when (status.connection) {
-                                PartnerConnection.CHECKING_IN ->
-                                    R.string.partner_connection_body_checking_in
-                                PartnerConnection.LATE -> R.string.partner_connection_body_late
-                                PartnerConnection.NOT_CHECKING_IN ->
-                                    R.string.partner_connection_body_not_checking_in
-                                PartnerConnection.NO_DATA ->
-                                    R.string.partner_connection_body_no_data
-                            }
-                        },
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                // A server answer can only carry a real bucket alongside a real connection;
-                // NO_DATA in either place means there is nothing to time, so no bucket line is
-                // claimed.
-                val bucketRes = when (status.bucket) {
-                    PartnerConnectionBucket.WITHIN_1H -> R.string.partner_connection_bucket_within_hour
-                    PartnerConnectionBucket.HOURS_1_TO_6 -> R.string.partner_connection_bucket_hours
-                    PartnerConnectionBucket.OVER_6H -> R.string.partner_connection_bucket_over_six
-                    PartnerConnectionBucket.NO_DATA -> null
-                }
-                if (status.consent && status.connection != PartnerConnection.NO_DATA &&
-                    bucketRes != null
-                ) {
-                    Text(
-                        stringResource(bucketRes),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                // §18 DoD: whenever the partner is looking at anything but a fresh check-in,
-                // say what silence is not. Heartbeat absence is never evidence of removal,
-                // tamper, or violation.
-                if (status.consent && status.connection != PartnerConnection.CHECKING_IN) {
-                    Text(
-                        stringResource(R.string.partner_connection_silence_note),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                stringResource(R.string.partner_connection_title),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            StatusPill(
+                text = stringResource(connectionStateTextRes(status)),
+                tone = if (!status.consent) {
+                    PillTone.QUIET
+                } else {
+                    when (status.connection) {
+                        PartnerConnection.CHECKING_IN -> PillTone.POSITIVE
+                        PartnerConnection.NOT_CHECKING_IN -> PillTone.NEGATIVE
+                        else -> PillTone.QUIET
+                    }
+                },
+            )
+        }
+        Text(
+            stringResource(
+                if (!status.consent) {
+                    R.string.partner_connection_body_not_shared
+                } else {
+                    when (status.connection) {
+                        PartnerConnection.CHECKING_IN ->
+                            R.string.partner_connection_body_checking_in
+                        PartnerConnection.LATE -> R.string.partner_connection_body_late
+                        PartnerConnection.NOT_CHECKING_IN ->
+                            R.string.partner_connection_body_not_checking_in
+                        PartnerConnection.NO_DATA ->
+                            R.string.partner_connection_body_no_data
+                    }
+                },
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        // A server answer can only carry a real bucket alongside a real connection;
+        // NO_DATA in either place means there is nothing to time, so no bucket line is
+        // claimed.
+        val bucketRes = when (status.bucket) {
+            PartnerConnectionBucket.WITHIN_1H -> R.string.partner_connection_bucket_within_hour
+            PartnerConnectionBucket.HOURS_1_TO_6 -> R.string.partner_connection_bucket_hours
+            PartnerConnectionBucket.OVER_6H -> R.string.partner_connection_bucket_over_six
+            PartnerConnectionBucket.NO_DATA -> null
+        }
+        if (status.consent && status.connection != PartnerConnection.NO_DATA &&
+            bucketRes != null
+        ) {
+            Text(
+                stringResource(bucketRes),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        // §18 DoD: whenever the partner is looking at anything but a fresh check-in,
+        // say what silence is not. Heartbeat absence is never evidence of removal,
+        // tamper, or violation.
+        if (status.consent && status.connection != PartnerConnection.CHECKING_IN) {
+            Text(
+                stringResource(R.string.partner_connection_silence_note),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
 
 @Composable
-private fun PartnerSummaryCard(activity: PartnerActivityUi?, chainStatus: PartnerChainStatus) {
+private fun PartnerSummaryCard(activity: PartnerActivityUi, chainStatus: PartnerChainStatus) {
     PartnerSurface(spacing = 12.dp) {
-        Text(
-            stringResource(R.string.partner_summary_title),
-            style = MaterialTheme.typography.titleMedium,
+        // Owner directive 2026-11-09: no card title — the page header already says "How
+        // they're doing", and the repeated line pushed the hero number below the fold.
+        // Days free is the one number the tab exists to answer, so it takes the reference's
+        // hero slot — and its freshness note rides under the label rather than in a third
+        // line, which is what made the old card read as a wall of equal-weight text.
+        HeroStatRow(
+            label = stringResource(R.string.partner_summary_days),
+            caption = activity.lastEventOccurredAtEpochMillis?.let { at ->
+                stringResource(
+                    R.string.partner_summary_last_event,
+                    relativeTimeText(System.currentTimeMillis(), at),
+                )
+            },
+            value = activity.daysFree,
+            unit = pluralStringResource(
+                R.plurals.partner_summary_days_unit,
+                activity.daysFree,
+                activity.daysFree,
+            ),
         )
-        if (activity == null) {
-            Text(
-                stringResource(R.string.partner_summary_no_events),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        // Equal thirds: intrinsic widths squeezed the third label below the width of its
+        // longest word, which broke "Coaching items" mid-word on the 720px device.
+        Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+            StatColumn(
+                stringResource(R.string.partner_summary_relapses),
+                activity.relapseCount.toString(),
+                modifier = Modifier.weight(1f),
             )
-        } else {
-            HorizontalDivider()
-            // Days free is the one number the tab exists to answer, so it takes the reference's
-            // hero slot — and its freshness note rides under the label rather than in a third
-            // line, which is what made the old card read as a wall of equal-weight text.
-            HeroStatRow(
-                label = stringResource(R.string.partner_summary_days),
-                caption = activity.lastEventOccurredAtEpochMillis?.let { at ->
-                    stringResource(
-                        R.string.partner_summary_last_event,
-                        relativeTimeText(System.currentTimeMillis(), at),
-                    )
+            StatColumn(
+                stringResource(R.string.partner_summary_milestones_label),
+                activity.milestonesReached.joinToString(", ").ifEmpty {
+                    stringResource(R.string.partner_summary_milestones_none)
                 },
-                value = activity.daysFree,
-                unit = pluralStringResource(
-                    R.plurals.partner_summary_days_unit,
-                    activity.daysFree,
-                    activity.daysFree,
-                ),
+                modifier = Modifier.weight(1f),
             )
-            // Equal thirds: intrinsic widths squeezed the third label below the width of its
-            // longest word, which broke "Coaching items" mid-word on the 720px device.
-            Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-                StatColumn(
-                    stringResource(R.string.partner_summary_relapses),
-                    activity.relapseCount.toString(),
-                    modifier = Modifier.weight(1f),
-                )
-                StatColumn(
-                    stringResource(R.string.partner_summary_milestones_label),
-                    activity.milestonesReached.joinToString(", ").ifEmpty {
-                        stringResource(R.string.partner_summary_milestones_none)
-                    },
-                    modifier = Modifier.weight(1f),
-                )
-                StatColumn(
-                    stringResource(R.string.partner_summary_coaching_label),
-                    activity.coachingProgress.toString(),
-                    modifier = Modifier.weight(1f),
-                )
-            }
+            StatColumn(
+                stringResource(R.string.partner_summary_coaching_label),
+                activity.coachingProgress.toString(),
+                modifier = Modifier.weight(1f),
+            )
         }
-        activity?.pinnedMessageText?.let { message ->
+        activity.pinnedMessageText?.let { message ->
             HorizontalDivider()
             Text(
                 stringResource(R.string.partner_summary_pinned_label),
@@ -1506,7 +1497,7 @@ private fun PartnerSummaryCard(activity: PartnerActivityUi?, chainStatus: Partne
         }
         // §8.11 degraded: a gap means these numbers are not the whole story, and saying so is
         // cheaper than letting the user believe a stale card.
-        if (activity != null && chainStatus != PartnerChainStatus.HEALTHY) {
+        if (chainStatus != PartnerChainStatus.HEALTHY) {
             Text(
                 stringResource(R.string.partner_summary_partial),
                 style = MaterialTheme.typography.bodySmall,
@@ -2010,15 +2001,18 @@ private fun remainingTimeText(nowMillis: Long, untilMillis: Long): String {
 }
 
 /**
- * The hub's first row: who this device is paired with, and the chain verdict as a mark beside
- * it. The mark is deliberately not a portrait — the pairing model has no portrait and, without
- * a §19.5 label, no name either; drawing one would be inventing an identity the app does not
- * have. The label is the partner's own words for themselves, so it is shown verbatim, with the
- * key fragment only as the never-labelled fallback.
+ * The hub's first row: who this device is paired with, and the chain verdict under the name.
+ * The leading mark is deliberately not a portrait — the pairing model has no portrait and,
+ * without a §19.5 label, no name either; drawing one would be inventing an identity the app
+ * does not have. The label is the partner's own words for themselves, so it is shown verbatim,
+ * with the key fragment only as the never-labelled fallback.
  *
- * Owner directive 2026-11-01: the card doubles as the entrance to "People you support" — the
- * "Viewing X / Switch" line is the obvious way to change who the tab is about, or to add and
- * rename people, without spending a second card on the hub.
+ * Owner directive 2026-11-01: the card doubles as the entrance to "People you support", where
+ * the viewer switches, renames, or adds someone, without spending a second card on the hub.
+ *
+ * Owner directive 2026-11-09: the name owns the card at headline weight with no "Viewing"
+ * prefix — prefix + single line truncated John Maingi to "John Ma…" on the 720px device, and
+ * the trailing "Switch" word read as a setting rather than the person being the way in.
  */
 @Composable
 private fun PartnerIdentityCard(state: PartnerDashboardUi.Paired, onOpenSwitcher: () -> Unit) {
@@ -2032,17 +2026,14 @@ private fun PartnerIdentityCard(state: PartnerDashboardUi.Paired, onOpenSwitcher
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(start = 16.dp, end = 12.dp, top = 16.dp, bottom = 16.dp),
         ) {
-            ChainVerdictMark(state.chainStatus)
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    stringResource(
-                        R.string.partner_viewing,
-                        state.partnerLabel ?: shortKeyId(state.partnerKeyId),
-                    ),
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
+                    state.partnerLabel ?: shortKeyId(state.partnerKeyId),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
@@ -2050,12 +2041,12 @@ private fun PartnerIdentityCard(state: PartnerDashboardUi.Paired, onOpenSwitcher
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // The Needs-you group carries every unhealthy state as its own card; the line
+                // here affirms the healthy case so a quiet hub still says "checked and fine".
+                if (state.chainStatus == PartnerChainStatus.HEALTHY) {
+                    ChainVerdictLine(state.chainStatus)
+                }
             }
-            Text(
-                stringResource(R.string.partner_context_switch),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-            )
             Icon(
                 Icons.Outlined.ChevronRight,
                 contentDescription = null,
@@ -2116,30 +2107,25 @@ private fun SyncCard(
 ) {
     PartnerSurface(tone = tone) {
         if (showIdentity) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                ChainVerdictMark(state.chainStatus)
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        stringResource(
-                            R.string.partner_paired_with,
-                            state.partnerLabel ?: shortKeyId(state.partnerKeyId),
-                        ),
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        stringResource(
-                            R.string.partner_paired_since,
-                            pairedOnText(state.pairedAtEpochMillis),
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    stringResource(
+                        R.string.partner_paired_with,
+                        state.partnerLabel ?: shortKeyId(state.partnerKeyId),
+                    ),
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    stringResource(
+                        R.string.partner_paired_since,
+                        pairedOnText(state.pairedAtEpochMillis),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                ChainVerdictLine(state.chainStatus)
             }
             // Finding #6: the key-id fragment was a bare mystery string to a first-time user.
             // With no §19.5 label the card explains the code instead of inventing a name.
@@ -2236,7 +2222,9 @@ private val ACTIVITY_BAR_SHAPE =
 @Composable
 private fun ActivityChartCard(summary: AlertSummary) {
     val counts = summary.dailyCounts
-    if (counts.isEmpty()) return
+    // Nothing received in the week means the picture would be seven empty bars — the exact
+    // all-zero chart the owner reported as "broken". The list below names the empty state.
+    if (counts.isEmpty() || summary.recent.isEmpty()) return
     val today = LocalDate.now(ZoneId.systemDefault())
     val lastIndex = counts.lastIndex
     val max = (counts.maxOrNull() ?: 0).toLong()
@@ -2375,18 +2363,53 @@ private fun RulesView(state: PartnerDashboardUi.Paired) {
         )
         return
     }
-    PartnerSurface {
-        Text(
-            pluralStringResource(
-                R.plurals.partner_rules_count,
-                state.ruleHistory.size,
-                state.ruleHistory.size,
-            ),
-            style = MaterialTheme.typography.titleMedium,
-        )
-        HorizontalDivider()
-        state.ruleHistory.forEach { alert -> AlertRow(alert) }
+    // Owner directive 2026-11-09: one undivided card mixed today's changes with month-old
+    // ones. Day sections give the list the same "when did this happen" spine the activity
+    // feed has, without inventing a second row shape.
+    val zone = ZoneId.systemDefault()
+    val today = LocalDate.now(zone)
+    val byDay = state.ruleHistory
+        .sortedByDescending { it.atEpochMillis }
+        .groupBy { Instant.ofEpochMilli(it.atEpochMillis).atZone(zone).toLocalDate() }
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                pluralStringResource(
+                    R.plurals.partner_rules_count,
+                    state.ruleHistory.size,
+                    state.ruleHistory.size,
+                ),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                stringResource(R.string.partner_rules_intro),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        byDay.forEach { (day, alerts) ->
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    ruleDayLabel(day, today),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                PartnerSurface {
+                    alerts.forEachIndexed { index, alert ->
+                        if (index > 0) RowDivider()
+                        AlertRow(alert)
+                    }
+                }
+            }
+        }
     }
+}
+
+@Composable
+private fun ruleDayLabel(day: LocalDate, today: LocalDate): String = when (day) {
+    today -> stringResource(R.string.partner_day_today)
+    today.minusDays(1) -> stringResource(R.string.partner_day_yesterday)
+    else -> day.format(DateTimeFormatter.ofPattern("MMM d"))
 }
 
 /**
@@ -2655,28 +2678,40 @@ private fun PairingView(
  */
 @Composable
 private fun AddUserCard(onAddUser: (CeremonyMode) -> Unit) {
-    // Owner ask 2026-10-21: two stacked full-width buttons made the optional "another person"
-    // path the loudest thing on the Pairing page. Navigation rows match the hub's other
-    // destinations and say what each one does.
+    // Owner ask 2026-10-21: the optional "another person" path must not be the loudest thing
+    // on the Pairing page. Owner directive 2026-11-09: same grouped-row grammar as the hub
+    // and Settings; the roster explanation reads as the note under the two actions.
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             stringResource(R.string.partner_pair_add_user_title),
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column {
+                IndexRow(
+                    icon = Icons.Outlined.PersonAdd,
+                    title = stringResource(R.string.partner_pair_invite_cta),
+                    subtitle = stringResource(R.string.partner_pair_invite_body),
+                    onClick = { onAddUser(CeremonyMode.INVITE) },
+                )
+                RowDivider()
+                IndexRow(
+                    icon = Icons.Outlined.Handshake,
+                    title = stringResource(R.string.partner_pair_join_cta),
+                    subtitle = stringResource(R.string.partner_pair_join_body),
+                    onClick = { onAddUser(CeremonyMode.JOIN) },
+                )
+            }
+        }
         Text(
             stringResource(R.string.partner_pair_add_user_body),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        LinkRow(
-            title = stringResource(R.string.partner_pair_invite_cta),
-            body = stringResource(R.string.partner_pair_invite_body),
-            onClick = { onAddUser(CeremonyMode.INVITE) },
-        )
-        LinkRow(
-            title = stringResource(R.string.partner_pair_join_cta),
-            body = stringResource(R.string.partner_pair_join_body),
-            onClick = { onAddUser(CeremonyMode.JOIN) },
         )
     }
 }
@@ -2730,39 +2765,36 @@ private fun PartnerUserRow(
  * supported user — the page names which one, and when there is a roster, switching happens
  * right here (a dialog over the page, not a trip back to the hub), keeping the viewer where
  * they were. The Requests queue deliberately does not carry it (owner ruling 2026-09-29).
+ *
+ * Owner directive 2026-11-09: a quiet person line under the back row, not a tinted band. The
+ * band repeated the hub hero's "Viewing <name>" on every page and the two-line stack made the
+ * subpages open with their own header twice.
  */
 @Composable
-private fun PartnerContextBar(state: PartnerDashboardUi.Paired, onSwitch: () -> Unit) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        shape = MaterialTheme.shapes.medium,
+private fun PartnerContextLine(label: String, canSwitch: Boolean, onSwitch: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
-        ) {
-            Column(
-                Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Text(
-                    stringResource(R.string.partner_context_label),
-                    style = MaterialTheme.typography.labelSmall,
-                )
-                Text(
-                    state.partnerLabel ?: shortKeyId(state.partnerKeyId),
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (state.users.size > 1) {
-                TextButton(onClick = onSwitch) {
-                    Text(stringResource(R.string.partner_context_switch))
-                }
+        Icon(
+            Icons.Outlined.Person,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        if (canSwitch) {
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = onSwitch) {
+                Text(stringResource(R.string.partner_context_switch))
             }
         }
     }
