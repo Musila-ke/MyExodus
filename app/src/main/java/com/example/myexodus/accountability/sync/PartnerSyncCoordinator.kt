@@ -25,6 +25,7 @@ import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.accountability.state.ChainStateStore
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.prunePartnerActivity
 import com.example.myexodus.data.db.dao.PartnerActivityDao
 import com.example.myexodus.data.db.entity.AttemptLog
 import com.example.myexodus.data.db.entity.HabitProgress
@@ -702,19 +703,10 @@ class PartnerSyncCoordinator(
         }
     }
 
-    /** Every pair-scoped content row outside the chain tables: the partner's snapshots, plans,
-     *  rule changes, sharing consent, and the Home pinned message. Shared by the orphan sweep
-     *  and the account-deletion purge (which must not wait for the next pass's sweep). */
+    /** Orphan sweep and account-deletion purge entry point (the latter must not wait for the
+     *  next pass's sweep); the deletes live in [prunePartnerActivity]. */
     private suspend fun pruneActivityFor(pairIds: List<String>) {
-        val store = storeFactory.open() ?: return
-        store.partnerActivityDao().deleteLinksFor(pairIds)
-        store.partnerActivityDao().deleteProjectionsFor(pairIds)
-        store.partnerActivityDao().deleteStreakProjectionsFor(pairIds)
-        store.pairSharingDao().deleteStreakFor(pairIds)
-        store.pairSharingDao().deleteProfileFor(pairIds)
-        store.partnerPlanDao().deleteForPairs(pairIds)
-        store.partnerMonitoringSnapshotDao().deleteFor(pairIds)
-        store.partnerRuleChangeDao().deleteFor(pairIds)
+        storeFactory.open()?.prunePartnerActivity(pairIds)
     }
 
     /**

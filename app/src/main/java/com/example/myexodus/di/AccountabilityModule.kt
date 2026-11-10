@@ -72,6 +72,7 @@ import com.example.myexodus.accountability.sync.decodePublicKey
 import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.prunePartnerActivity
 import com.example.myexodus.data.db.LocalDatabaseMigration
 import com.example.myexodus.data.db.entity.decodeMilestoneDays
 import com.example.myexodus.secrets.SecretsRepository
@@ -543,12 +544,14 @@ object AccountabilityModule {
         firestore: FirebaseFirestore,
         functions: FirebaseFunctions,
         crashReporting: CrashReporting,
+        storeFactory: AppRulesStoreFactory,
     ): BilateralDeletion {
         return BilateralDeletion(
             creator = creator,
             enrollmentDao = enrollmentDao,
             store = store,
             journal = db.unpairStateDao(),
+            prunePartnerActivity = { pairId -> storeFactory.open()?.prunePartnerActivity(listOf(pairId)) },
             destroyPairAgreementKey = keystore::destroyPairAgreementKey,
             destroyDeviceAgreementKey = keystore::destroyAgreementKey,
             terminatePair = exchange::terminatePair,
@@ -687,6 +690,7 @@ object AccountabilityModule {
             // false re-pair card on a brand-new, working pairing.
             reachability.markReachable(pairId)
         },
+        prunePartnerActivity = { pairId -> storeFactory.open()?.prunePartnerActivity(listOf(pairId)) },
     )
 
     @Provides @Singleton

@@ -79,6 +79,11 @@ class BilateralDeletion(
     private val pollPartnerAck: suspend (partnerUid: String, messageId: String) -> Boolean,
     /** Writes this device's own AD-18b ack for the deletion message it received. */
     private val ackReceived: suspend (messageId: String) -> Boolean,
+    /** Clears the pair's partner-view rows from the rules store (projections, plans, sharing
+     *  consent). They outlive ChainStateStore.wipePair, and AD-07's deterministic pairId would
+     *  otherwise show the ended session's data under a re-pair. Best effort: the chain wipe is
+     *  the authorization boundary; a miss self-heals via the orphan sweep while unenrolled. */
+    private val prunePartnerActivity: suspend (pairId: String) -> Unit = {},
     private val now: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -239,6 +244,11 @@ class BilateralDeletion(
         // Enrollment row and pair rows fall together, enrollment first (Step 10 §8.2): the
         // local authorization record is the thing every write path checks.
         store.wipePair(pairId)
+        // The partner-view rows live in the rules store, not the chain store — without this
+        // the ended session's data survives into a re-pair (same pairId, AD-07). Best effort:
+        // the authorization boundary is already down.
+        runCatching { prunePartnerActivity(pairId) }
+            .onFailure { Log.w(TAG, "partner activity prune failed for $pairId", it) }
         // Crash-resume where the wipe already ran (record == null): nothing left to derive
         // from, so the shared key must still go.
         if (enrollmentDao.all().isEmpty()) destroyDeviceAgreementKey()

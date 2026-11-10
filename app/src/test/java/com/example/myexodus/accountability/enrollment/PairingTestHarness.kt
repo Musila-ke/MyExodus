@@ -68,6 +68,7 @@ internal fun pairingTestFlow(
     },
     // AD-22 wipe canary: recorded so tests can prove it is minted only by a durable enrollment.
     markPairingCompleted: () -> Unit = { },
+    prunePartnerActivity: suspend (String) -> Unit = { },
     nowMillis: () -> Long,
 ): PairingFlow = PairingFlow(
     enrollmentFlow = pairingTestEnrollmentFlow,
@@ -84,6 +85,7 @@ internal fun pairingTestFlow(
     agreementPrivateKey = { keys.agreement.private },
     destroyAgreementKey = destroyAgreementKey,
     markPairingCompleted = markPairingCompleted,
+    prunePartnerActivity = prunePartnerActivity,
 )
 
 internal fun pairingTestSigning(privateKey: PrivateKey): Signature =

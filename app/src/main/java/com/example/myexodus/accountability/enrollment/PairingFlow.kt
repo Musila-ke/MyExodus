@@ -69,6 +69,10 @@ class PairingFlow(
     // identity keys are created before the server round-trip, so an aborted attempt that set
     // this marker would read as a wiped database on the next start (AVD-caught 2026-10-23).
     private val markPairingCompleted: () -> Unit = {},
+    // AD-07: a re-pair reuses the durable pairId, so a previous session's partner-view rows
+    // would otherwise render under this brand-new session. Cleared before the enrollment lands
+    // so every pairing starts with a clean slate regardless of how the last session ended.
+    private val prunePartnerActivity: suspend (pairId: String) -> Unit = {},
 ) {
 
     sealed interface Outcome {
@@ -651,6 +655,10 @@ class PairingFlow(
         // the runtime encrypts under, not of a session-scoped variant.
         val cek = enrollmentFlow.deriveCek(durablePairId, agreementPrivateKey(aliasOf(sessionId)), partnerAgreementPublicKey)
         val mySigningPubKeyBytes = EnrollmentTranscript.pubKeyBytes(signingPublicKey())
+        // Best effort, pre-durable: stale rows are a display defect, never a reason to fail a
+        // pairing whose keys are already agreed.
+        runCatching { prunePartnerActivity(durablePairId) }
+            .onFailure { Log.w(TAG, "pairing-time activity prune failed for $durablePairId", it) }
         enrollmentDao.upsert(
             EnrollmentRecord(
                 pairId = durablePairId,

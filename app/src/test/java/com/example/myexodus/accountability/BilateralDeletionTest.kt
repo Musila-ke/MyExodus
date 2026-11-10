@@ -76,6 +76,7 @@ class BilateralDeletionTest {
     private var destroyedDeviceKey = false
     private val destroyedPairAliases = mutableListOf<String>()
     private val terminated = mutableListOf<String>()
+    private val prunedPairs = mutableListOf<String>()
     private val ops = mutableListOf<String>()
 
     /** Simulates the 2026-09-28 crypto-dead pair: EventCreator cannot derive a CEK. */
@@ -142,6 +143,7 @@ class BilateralDeletionTest {
                 acked += messageId
                 ackWorks
             },
+            prunePartnerActivity = { prunedPairs += it },
             now = { clock },
         )
         runBlocking {
@@ -198,6 +200,15 @@ class BilateralDeletionTest {
     }
 
     // --- Initiator: §12 partner-reachable vs partner-unreachable ---
+
+    @Test
+    fun shredPrunesThePartnerActivityRowsForThePair() = runTest {
+        // AD-07: the chain wipe leaves the rules-store partner rows, and a re-pair reuses the
+        // pairId — so the shred itself must take them, not wait for an orphan sweep that will
+        // never fire once the pair is enrolled again (owner report 2026-11-10).
+        deletion.initiate(pairId, "uid-a", "uid-b", signing())
+        assertEquals(listOf(pairId), prunedPairs)
+    }
 
     @Test
     fun partnerReachable_confirmsOnAck_terminalPhase() = runTest {

@@ -67,6 +67,12 @@ interface PartnerEventJournalDao {
     @Query("DELETE FROM partner_event_journal WHERE event_id = :eventId")
     suspend fun deleteById(eventId: String): Int
 
+    /** Unpair prune: undelivered rule rows for the pair die with the enrollment, so a re-pair
+     *  neither re-sends them (the creation gate already blocks that) nor counts them in
+     *  [observePendingRuleChanges]'s banner. */
+    @Query("DELETE FROM partner_event_journal WHERE route_pair_id IN (:pairIds)")
+    suspend fun deleteRuleRowsFor(pairIds: List<String>)
+
     /** §8.7 retention sweep: the body detail goes after its 30-day window. */
     @Query("DELETE FROM partner_event_journal WHERE expires_at_ms <= :nowMs")
     suspend fun deleteExpired(nowMs: Long): Int

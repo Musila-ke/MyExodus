@@ -332,6 +332,12 @@ interface PartnerActivityDao {
     @Query("DELETE FROM partner_streak_projection WHERE pair_id IN (:pairIds)")
     suspend fun deleteStreakProjectionsFor(pairIds: List<String>)
 
+    /** Targeted rows (composed messages, enable-time snapshots) are pair-addressed, so
+     *  `latestSentMessageText` reads them with no enrollment gate — they must die on unpair or
+     *  a re-pair under AD-07's deterministic pairId shows the previous session's message. */
+    @Query("DELETE FROM partner_activity_outbox WHERE target_pair_id IN (:pairIds)")
+    suspend fun deleteTargetedJournalFor(pairIds: List<String>)
+
     @Query("DELETE FROM partner_activity_link WHERE pair_id IN (:pairIds)")
     suspend fun deleteLinksFor(pairIds: List<String>)
 

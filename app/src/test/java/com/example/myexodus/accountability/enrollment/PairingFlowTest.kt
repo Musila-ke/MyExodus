@@ -33,6 +33,35 @@ import org.robolectric.annotation.Config
 class PairingFlowTest {
 
     @Test
+    fun pairingPrunesThePreviousSessionsPartnerViewRows() = runTest {
+        // AD-07: re-pairing reuses the durable pairId, so the rules-store partner rows from an
+        // earlier session would render under the new one (owner report 2026-11-10). Pairing
+        // must clear them before the new enrollment lands.
+        var nowEpochMillis = 1_700_000_000_000L
+        val cloud = FakeCloud()
+        val initiator = DeviceKeys()
+        val partner = DeviceKeys()
+        val pruned = mutableListOf<String>()
+        val initiatorFlow = flow(
+            initiator, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets(),
+            prunePartnerActivity = { pruned += it },
+        ) { nowEpochMillis }
+        val partnerFlow = flow(partner, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets()) { nowEpochMillis }
+
+        val initiation = initiatorFlow.initiate("uid-a")
+        val partnerJob = async {
+            partnerFlow.complete(initiation.qrBytes, "uid-b", signing(partner.signing.private))
+        }
+        val await = checkNotNull(initiatorFlow.awaitPartner(initiation.token, 30_000)) {
+            "initiator never saw the partner's token response"
+        }
+        initiatorFlow.submitInitiatorSignature(await, initiation.token, "uid-a", signing(initiator.signing.private))
+        partnerJob.await()
+
+        assertEquals(listOf(EnrollmentTranscript.durablePairIdOf("uid-a", "uid-b")), pruned)
+    }
+
+    @Test
     fun fullRoundTrip_pairsBothDevices_sameSas_durablePairId_tokenDeleted() = runTest {
         var nowEpochMillis = 1_700_000_000_000L
         val cloud = FakeCloud()
@@ -922,6 +951,7 @@ class PairingFlowTest {
             AccountabilityKeyStore.GenerationResult.Success(strongBox = false)
         },
         markPairingCompleted: () -> Unit = { },
+        prunePartnerActivity: suspend (String) -> Unit = { },
         nowMillis: () -> Long,
     ): PairingFlow = pairingTestFlow(
         keys, cloud, scheduler, dao, secrets,
@@ -930,6 +960,7 @@ class PairingFlowTest {
         destroyAgreementKey = destroyAgreementKey,
         ensureIdentityKeys = ensureIdentityKeys,
         markPairingCompleted = markPairingCompleted,
+        prunePartnerActivity = prunePartnerActivity,
     )
 
     private fun signing(privateKey: PrivateKey): Signature = pairingTestSigning(privateKey)

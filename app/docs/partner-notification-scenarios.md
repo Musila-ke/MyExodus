@@ -84,16 +84,22 @@ Columns: **#**, **scenario**, **expected (source)**, **device result**.
 | S21 | Try to send a message with nothing shared | Composer opens directly (ADR #285 supersedes #284): send succeeds, reconcile ships the message snapshot-less, receiver pins it and posts the text notification, and the dashboard does **not** fill (nothing was shared) | **COVERED by S20 under ADR #285 (2026-11-10).** The pre-send gate no longer exists in the shipped build — `ComposeMessageCard` opens the composer unconditionally ("a supervisor who shares nothing is the message's whole audience"), so the S21 precondition cannot change behavior; S20 device-proved the open → send → notify → received path on v9. The old ADR #284 blocked-sheet flow is unreachable and stays obsolete |
 | S22 | "How they're doing" completeness | Shows days free, relapses, milestones, coaching items, last-event age, pinned message, chart + recent activity + rule changes; each snapshot applies wholesale | **PASSED 2026-11-10 (release v9).** One receiver state (after the S14-style re-share of Matrix Quiet II, `drain: 1` 16:32:44.705) renders the full set: "Viewing Matrix Quiet II" (exactly-one branch), Days free 1 with "Last shared just now" (last-event age), "Relapses logged 1", "Milestones met — None yet", "Coaching items 0", "Their message to you — Hello John, v9 matrix message" (pinned), "Shared events per day" chart (7 weekday bars, Today 23), "Recent activity" with Events today/last 7 days 23. Rule changes live on the Rules & blocks subpage, captured row by row in S2/S4/S5/S8/S9/S11. Wholesale application proven by the S26 isolation (one event never moved the other streak) and the S16 relapse flipping all of the selected streak's numbers in one received row (`PartnerScreen.kt:1467-1570` renders selector → hero → three StatColumns → pin) |
 | S23 | Accuracy check after each scenario above | Dashboard counts/rows match what was actually received; last-event age advances | **PASSED 2026-11-10 (release v9), checked after every leg.** S16: one "Log it" → Relapses logged 1 on Matrix Quiet while Matrix Shared stayed 0 (`total_relapses` bump, `HabitRepository.kt:857`). S18: deleting Matrix Shared dropped exactly that chip, "Viewing Matrix Quiet" carried its numbers unchanged. S19: the STOP row removed the last projection entirely (no chip, no stats). S25: rename relabeled the same row with numbers intact. S14-style re-share: Days free 1 + "Last shared just now" after the S16 relapse at 16:23. Last-event age advanced across observations ("1m ago" → "4m ago" per streak in S26; "just now" at 16:33). Feed totals (Events today 23 / last 7 days 23) matched the received rows rendered in Recent activity |
-| S24 | Each page where the user shared nothing | Partner sees per-page empty copy; activity page says nothing has been shared yet (owner wants the "you can ask them to" nudge added) | |
+| S24 | Each page where the user shared nothing | Partner sees per-page empty copy; activity page says nothing has been shared yet (owner wants the "you can ask them to" nudge added) | **PASSED on v12/1.1.10, 2026-11-10 evening (fresh pair), all four surfaces in both directions.** How they're doing (.106 and .107): "Recent activity 0 / Events today 0 / Events last 7 days 0" plus "Nothing has been shared with you yet. This page fills in when your partner turns on sharing. You can ask them to." — the owner-requested nudge, no fabricated data. Their phone (.106 and .107): "Not shared" with the honest device-availability explanation and the exact path "Partner tab, then What you share, then Device availability". Rules & blocks (.106 and .107): "No rule updates yet / When a rule or batch you watch changes, or a blocked app is opened, it shows up here." — consent-independent, never claims sharing. Plans: .106 showed the real shared plan; the nothing-shared shape was .107's "No plans yet / A plan is a short checklist…" copy before the S27 leg |
 
 ### D. Shared plans (ADR #193)
 
 | # | Scenario | Expected from source | Result |
 |---|---|---|---|
-| S27 | Create a plan with the partner | One TYPE_PLAN_PUBLISHED on creation → "«partner» shared a plan with you / Plan: «title»" (`partner_plan_title_named`, `partner_plan_body_named`); the plan appears on the receiver's Plans page under "From your partner" | PARTIAL 2026-11-10: creator side shows the plan under "You shared", receiver side under "From your partner" with the title; the publish notification copy was captured on .107 verbatim. The isolated creation notification is not time-stamped: both the creation and the later edit post under the same tray tag (`partner:event:<pairId>`), and the edit's record replaced the creation's |
+| S27 | Create a plan with the partner | One TYPE_PLAN_PUBLISHED on creation → "«partner» shared a plan with you / Plan: «title»" (`partner_plan_title_named`, `partner_plan_body_named`); the plan appears on the receiver's Plans page under "From your partner" | **PASSED on v12/1.1.10, 2026-11-10 evening (fresh pair).** John (.107) created "Evening routine" (1 task) for Kelvin (.106): saved at 20:34 local, epoch 1794332082; the receiver's tray posted "John Maingi shared a plan with you" / "Plan: Evening routine" (tag `partner:event:6OzMb…`, record 0x0acf6424, `when=1794332089.980`) — ~8 s after save, time-isolated this run, closing the previous PARTIAL gap. Receiver Plans page read "From your partner — Evening routine, 0 of 1 done · From John Maingi". The receiver checked the task → "1 of 1 done" on both phones, and .107 held zero `partner:event:` notifications (TYPE_PLAN_PROGRESS filtered, as designed). The edit leg (S28) added "Read for 10 minutes" (saved epoch 1794332202) → the tray record replaced the creation under the same tag (new id 0x0fac86c1, `when=1794332209.498`, same "shared a plan with you" copy), and the receiver detail re-read "1 of 2 done" with the checked state preserved across the revision bump |
 | S28 | Modify a shared plan (title/tasks) | Same TYPE_PLAN_PUBLISHED with a full payload and a bumped revision → same "shared a plan with you" copy; the receiver's detail re-reads the edited content; no extra notification type | **PASSED 2026-11-10.** .106 edit saved 04:30:54 local → cold sheet at 04:30:55.659 (ADR #296 prompt) → cancellation → `drain: 1 event(s) delivered` 04:31:40.263; Firestore message `c28e85ed` 2026-11-10T01:31:41.272Z; .107 notification at 04:31:47 ("Kelvin Musila shared a plan with you", "Plan: Evening routine…"), and .107's detail now shows the edited task "No screens after 10 pmx" |
 | S29 | Recipient checks / unchecks a plan task | No notification (TYPE_PLAN_PROGRESS is filtered before notifications); the check is journaled as a progress row and the author's detail shows "N of 4 done" once a pass delivers it | SENDER-LOCAL PASSED, RECEIVER BLOCKED 2026-11-10: five toggles on .107 flipped the checkbox and counter locally ("1 of 4 done" ↔ "2 of 4 done") and journaled progress; nothing reached the Kelvin mailbox (newest `3ea66cd3` 01:02:12.515Z) because .107's §8.1 window stayed cold and the sheet was never answered. Blocked on owner authentication; the journal heals on the next warm pass. **HEALED 2026-11-10 09:49 EAT:** the pending progress was delivered as one coalesced `plan_progress` row (`fb6caac4`, 06:49:15.947Z) at the next warm pass, and the author's app consumed it before its 10:02:04 pass (`pulledCount=0`, `signingBlocked=false`), so the authored copy applies the recipient's checked set. Author-side Plans page confirmed 2026-11-10 14:35 EAT: "2 of 4 done · With John Maingi" |
 | S30 | Author checks a task on their own copy | Nothing is sent — the author's copy is display-only (`setTaskDone` returns before journaling) | **PASSED 2026-11-10.** The author's detail renders hollow progress dots with "«partner» checks these off; their progress shows here"; tapping task 1 left "0 of 4 done" unchanged, produced no sync/activity log lines, and John's mailbox stayed at 60 messages |
+
+### E. Device loss
+
+| # | Scenario | Expected from source | Result |
+|---|---|---|---|
+| S32 | Uninstall MyExodus on the partner's phone while shared content exists | No notification of any kind: an uninstall sends nothing, and FCM's invalid-token handling in `functions/dispatch.js` (`isTokenInvalid`) is silent; the remaining phone keeps its last-delivered projections and the pairing stays listed until a delivery attempt is denied | **PASSED 2026-11-10 evening (owner-ordered final leg, run last).** Live tracked content first: .106 (Kelvin) held John's shared plan "Evening routine" (1 of 2 done), pairing "Synced 3m ago". `adb uninstall com.example.myexodus` on .107 at epoch 1794332368 (`Success`; only the stale `.test` APK remains). Observed on .106 for 60 s and beyond: the notification set was unchanged — still exactly the one plan-edit record (id 0x0fac86c1, `when=1794332209.498`), no new `partner:event:` row, no revocation or "partner left" message; the hub kept "John Maingi · Shared activity is verified", "Plans — 1 to do", "Pairing — Synced 3m ago". Absence-of-signal matches the source (an uninstall has no wire event); the aging "Synced" is the documented last-delivered cache, not an error claim. Rotation guard run on both serials afterwards (`accelerometer_rotation=0`) |
 
 ## Owner run order (restated 2026-11-09)
 
@@ -232,11 +238,52 @@ S23 (accuracy) after every one:
 
 ## Device run ground rules
 
-- Physical X6532 (Kelvin) + X6532C (John), release v9/1.1.7 from 2026-11-10 (v8/1.1.6 for
-  runs before that install); `uiautomator dump` before every tap.
+- Physical X6532 (Kelvin) + X6532C (John), release builds only; each cell names the build it
+  ran on (v8/1.1.6 through v12/1.1.10 across 2026-11-09–10, several different pairings);
+  `uiautomator dump` before every tap.
 - Evidence per scenario: recipient `dumpsys notification` line (tag/id + title/text) and/or
   screenshot; sender state screenshot where the scenario changes a page.
 - After any injected input: `scripts/rotation-guard.sh` on both serials, verify
   `accelerometer_rotation=0`.
 - Anything not runnable today (e.g., a real milestone day, natural expiry in hours) is marked
   BLOCKED with the reason, never PASSED by inference.
+11. **A fresh pairing reused the previous session's partner view (found and fixed in 1.1.9, ADR #298).**
+    Owner report: "we terminated partnership but its showing the old partnerships data accurate
+    but i thought we start a fresh?" and "look at the inisghts page its saying in matrix quit 2
+    i have 2 relapses in partner page in how theyer doing partner sees 1 ... what is the source
+    of truth". Two mechanisms, one display and one retention:
+    - **By design, the two pages read different stores.** Insights is the author's local truth
+      (`InsightsRepository.kt:150`); "How they're doing" is the receiver-local last-delivered
+      projection (`AccountabilityModule.kt:782-810`, `PartnerScreen.kt:1475`/`:1534`). It
+      showed 1 because ADR #297's wipe ate the second-relapse delivery; the projection froze.
+      A lagging partner view is the cache design, not a sync defect.
+    - **Ending a partnership never cleared the partner-view rows.** AD-07's pairId is
+      deterministic, so the re-pair reused it; `ChainStateStore.wipePair` clears only chain
+      tables, and the orphan sweep skips any id that is enrolled again
+      (`PartnerSyncCoordinator.kt:678-703`). Fixed by pruning the rules-store partner rows on
+      every unpair (`BilateralDeletion.shredPair`) and again at pairing completion
+      (`PairingFlow.finalizePairing`, before the enrollment lands). Device proof of the
+      destructive leg (end partnership → page clears → fresh pair shows "Nothing shared yet")
+      **PASSED on 1.1.9, 2026-11-10 evening**, invitation code N8EV-FMH0-AJ5E-2, safety
+      compare 45783: .106 ended the partnership (owner biometric) → .107 received the
+      revocation and erased its copy (the stale "Matrix Quiet II · 1 day free" card vanished)
+      → .106 confirmed "Your partner's device has also erased its data." → both read "No
+      partner yet" → the same accounts re-paired → both Partner tabs read the new session
+      ("Since Nov 10, 2026", "Shared activity is verified", "Nothing shared yet").
+    - **The 1.1.9 prune was still incomplete (fixed in 1.1.10, ADR #298 Amendment).** After
+      that successful re-pair, .106's "How they're doing" still showed "Your latest message —
+      Hello John, v9 matrix message". Root cause: `latestSentMessageText`
+      (`PartnerActivityDao.kt:104-111`) reads targeted `partner_activity_outbox` rows by
+      `target_pair_id` with **no enrollment-time gate** (unlike every delivery query), and the
+      prune never deleted those rows — the deterministic pairId handed them to the new
+      session. The same audit found undelivered `partner_event_journal` rule rows inflating
+      the Rules "waiting to be sent" banner counter. Both deletes now live in
+      `prunePartnerActivity` (`deleteTargetedJournalFor`, `deleteRuleRowsFor`).
+    - **Device proof on 1.1.10, 2026-11-10 evening:** the same accounts re-paired on v12
+      (invitation code 6MDM-W7WG-2R68-3, safety compare 11610) after having sent "Hello
+      John, v9 matrix message" under v9. .106's "How they're doing" no longer showed the
+      message card — `deleteTargetedJournalFor` is device-proven. `deleteRuleRowsFor` has no
+      display proof from this run because both rule stores were empty at unpair (no pending
+      banner to observe); it is a plain column delete, covered by the JVM suite and
+      lintDebug. The fix is not retroactive: rows created before 1.1.10 still need one
+      unpair on 1.1.10+.
