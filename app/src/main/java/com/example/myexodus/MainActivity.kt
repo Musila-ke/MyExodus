@@ -152,6 +152,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -425,52 +426,73 @@ class MainActivity : FragmentActivity() {
     private val signingHealMutex = Mutex()
 
     /**
-     * ADR #216 + owner ruling 2026-11-05: partner delivery is automatic. The §8.1 key refuses
-     * to sign while its 900 s window is cold — a window every device authentication re-opens
-     * without any app prompt — so an automatic pass signs when warm and otherwise leaves the
-     * rows journaled. The periodic worker runs the same pass, so the next unlock delivers the
-     * backlog: nothing waits on a tap, and no sheet exists for the subject to dismiss and
-     * suppress the partner. Prompts remain only on explicit user-initiated actions (Check now,
-     * pairing, unpair, message send); a partner-visible act never raises one (ADR #294).
+     * ADR #216 + owner ruling 2026-11-10 (ADR #296): partner delivery is automatic, and when
+     * the §8.1 key's 900 s window is cold the app now asks for device authentication at the
+     * act instead of waiting for the next unlock (owner: "if it goes cold prompt user"). The
+     * pass only prompts when rows are actually queued behind the window, so a warm or idle
+     * sync never raises a sheet; a cancelled prompt leaves the rows journaled for the next
+     * trigger. See [deliverQueuedPartnerEvents].
      */
     private fun startPartnerSigningHeal() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                // ADR #294: with no prompt left, the pass that turns a just-warmed §8.1
-                // window (the unlock that brought the app back) into delivery runs on every
-                // foreground start instead of waiting for the 15-minute worker.
-                launch { deliverQueuedPartnerEvents() }
+                // ADR #294: the pass that turns a just-warmed §8.1 window (the unlock that
+                // brought the app back) into delivery runs on every foreground start instead
+                // of waiting for the 15-minute worker.
+                launch { deliverQueuedPartnerEvents(queued = false) }
                 launch {
-                    // ADR #216 retry, gated on real warmth: a cold pass re-emits this signal,
-                    // so retrying unconditionally looped a full network pass every ~15 s for as
-                    // long as the window stayed cold (device evidence 2026-11-10).
-                    PartnerSyncSignals.signingNeeded.collect {
-                        if (signingWindowWarm()) deliverQueuedPartnerEvents()
-                    }
+                    // ADR #216 + #296: a cold pass re-emits this signal, so the mutex inside
+                    // [deliverQueuedPartnerEvents] is what keeps a re-entrant emission from
+                    // stacking a second sheet while the first pass still holds it.
+                    PartnerSyncSignals.signingNeeded.collect { deliverQueuedPartnerEvents(queued = true) }
                 }
                 launch {
                     // Owner ruling 2026-11-05: a rule save, edit, deactivate or delete is
                     // delivered automatically — never gated on a confirmation the subject can
-                    // ignore. A cold window only defers the delivery, never drops it.
-                    PartnerSyncSignals.ruleChangesJournaled.collect { deliverQueuedPartnerEvents() }
+                    // ignore. A cold window prompts (ADR #296) instead of deferring.
+                    PartnerSyncSignals.ruleChangesJournaled.collect { deliverQueuedPartnerEvents(queued = true) }
+                }
+                launch {
+                    // Plans and block episodes alert through this tick (its app-scope consumer
+                    // has no UI and runs a full pass before any prompt could fire). The tick is
+                    // emitted only after a partner-visible row commits, so the sheet can go up
+                    // now (owner report 2026-11-10: the cold prompt lagged ~20 s behind the act).
+                    PartnerSyncSignals.activityEmitted.collect { deliverQueuedPartnerEvents(queued = true) }
                 }
             }
         }
     }
 
     /**
-     * One automatic delivery pass. A cold signing window is not an error and never raises a
-     * sheet: the journal row is durable and the next pass after any device authentication
-     * (foreground start or the periodic worker) signs and sends it.
+     * One automatic delivery pass. Warm (§8.1 window open): signs and sends silently. Cold
+     * with rows queued behind the window: raises the device-auth prompt, then runs the pass —
+     * the partner hears about the act now rather than at the next unlock (owner ruling
+     * 2026-11-10, ADR #296). Nothing to sign never prompts. A cancelled prompt is not an
+     * error: the journal row stays durable and the next trigger tries again.
+     *
+     * [queued] marks triggers that already proved a partner-visible row is waiting: the
+     * journal signals fire only after their transaction commits, and
+     * [PartnerSyncSignals.signingNeeded] comes from a pass that stopped on the cold window. Those prompt BEFORE the first network pass,
+     * so the sheet is up in about a second (owner report 2026-11-10: two full passes ran ahead
+     * of it, ~20 s of silent delay). The foreground-start trigger passes false: it has no such
+     * proof, so its pass detects the block first.
      */
-    private suspend fun deliverQueuedPartnerEvents() {
+    private suspend fun deliverQueuedPartnerEvents(queued: Boolean) {
         if (!signingHealMutex.tryLock()) return
         try {
             if (!isOnline()) return
+            if (queued && !signingWindowWarm()) {
+                signWithAuthPrompt(getString(R.string.partner_sync_auth_title)) ?: return
+                runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator)
+                return
+            }
             if (!runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked) return
             if (signingWindowWarm()) {
                 runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator)
+                return
             }
+            signWithAuthPrompt(getString(R.string.partner_sync_auth_title)) ?: return
+            runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -796,9 +818,9 @@ class MainActivity : FragmentActivity() {
                                 healBlockedPartnerSigning()
                             }.getOrDefault(false)
                         },
-                        // ADR #294: share changes deliver silently — a cold window queues the
-                        // rows instead of raising the sheet over the tap.
-                        onPartnerDeliverSilently = { deliverQueuedPartnerEvents() },
+                        // ADR #294/#296: a share toggle has just journalled its rows, so a
+                        // cold window prompts now instead of silently queueing.
+                        onPartnerDeliverSilently = { deliverQueuedPartnerEvents(queued = true) },
                         onRespondToApproval = { requestEventId, approve ->
                             respondToApproval(requestEventId, approve)
                         },
@@ -1090,77 +1112,86 @@ class MainActivity : FragmentActivity() {
             }
         }
         val credentialOnly = authenticators == BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        // A prompt whose continuation never answers (the OS can drop the sheet during an
+        // activity transition) used to suspend forever and hold signingHealMutex, silently
+        // killing every later cold prompt until process death — observed on X6532C
+        // 2026-11-10, un-wedged only by an app restart. Bounded so delivery retries.
         return withContext(Dispatchers.Main.immediate) {
-            suspendCancellableCoroutine { cont ->
-                val prompt = BiometricPrompt(
-                    this@MainActivity,
-                    ContextCompat.getMainExecutor(this@MainActivity),
-                    object : BiometricPrompt.AuthenticationCallback() {
-                        override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                            // A failure here is read as "cancelled" upstream; keep the
-                            // real reason in logcat (diagnosed blind on the missing-key rig,
-                            // 2026-09-28). A permanent invalidation is the exception — it
-                            // cannot be a cancel, the caller must migrate (§9).
-                            val signed = runCatching {
-                                signature.initSign(accountabilityKeyStore.signingPrivateKey())
+            withTimeoutOrNull<BiometricOutcome>(PROMPT_TIMEOUT_MS) {
+                suspendCancellableCoroutine { cont ->
+                    val prompt = BiometricPrompt(
+                        this@MainActivity,
+                        ContextCompat.getMainExecutor(this@MainActivity),
+                        object : BiometricPrompt.AuthenticationCallback() {
+                            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                                // A failure here is read as "cancelled" upstream; keep the
+                                // real reason in logcat (diagnosed blind on the missing-key rig,
+                                // 2026-09-28). A permanent invalidation is the exception — it
+                                // cannot be a cancel, the caller must migrate (§9).
+                                val signed = runCatching {
+                                    signature.initSign(accountabilityKeyStore.signingPrivateKey())
+                                }
+                                    .fold(
+                                        onSuccess = { BiometricOutcome.Signed(signature) as BiometricOutcome },
+                                        onFailure = { e ->
+                                            Log.w(TAG, "biometric sign after authentication failed", e)
+                                            if (accountabilitySigner.isPermanentlyInvalidated(e)) {
+                                                BiometricOutcome.PermanentlyInvalidated
+                                            } else {
+                                                BiometricOutcome.Cancelled
+                                            }
+                                        },
+                                    )
+                                cont.resume(signed)
                             }
-                                .fold(
-                                    onSuccess = { BiometricOutcome.Signed(signature) as BiometricOutcome },
-                                    onFailure = { e ->
-                                        Log.w(TAG, "biometric sign after authentication failed", e)
-                                        if (accountabilitySigner.isPermanentlyInvalidated(e)) {
-                                            BiometricOutcome.PermanentlyInvalidated
-                                        } else {
-                                            BiometricOutcome.Cancelled
-                                        }
-                                    },
-                                )
-                            cont.resume(signed)
-                        }
 
-                        override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                            Log.w(TAG, "approval biometric prompt: $errString")
-                            val outcome = when (errorCode) {
-                                // Owner report 2026-11-02: the sheet's own credential link
-                                // is painted by SystemUI and can be invisible in light
-                                // mode (TranSystemUI, X6532C), so the visible app-labeled
-                                // negative button carries the screen-lock route instead.
-                                BiometricPrompt.ERROR_NEGATIVE_BUTTON,
-                                -> BiometricOutcome.CredentialRequested
+                            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                                Log.w(TAG, "approval biometric prompt: $errString")
+                                val outcome = when (errorCode) {
+                                    // Owner report 2026-11-02: the sheet's own credential link
+                                    // is painted by SystemUI and can be invisible in light
+                                    // mode (TranSystemUI, X6532C), so the visible app-labeled
+                                    // negative button carries the screen-lock route instead.
+                                    BiometricPrompt.ERROR_NEGATIVE_BUTTON,
+                                    -> BiometricOutcome.CredentialRequested
 
-                                BiometricPrompt.ERROR_LOCKOUT,
-                                BiometricPrompt.ERROR_LOCKOUT_PERMANENT,
-                                -> BiometricOutcome.LockedOut
+                                    BiometricPrompt.ERROR_LOCKOUT,
+                                    BiometricPrompt.ERROR_LOCKOUT_PERMANENT,
+                                    -> BiometricOutcome.LockedOut
 
-                                else -> BiometricOutcome.Cancelled
+                                    else -> BiometricOutcome.Cancelled
+                                }
+                                cont.resume(outcome)
                             }
-                            cont.resume(outcome)
-                        }
 
-                        override fun onAuthenticationFailed() = Unit
-                    },
-                )
-                cont.invokeOnCancellation { prompt.cancelAuthentication() }
-                // Owner ruling 2026-11-02 supersedes #17's in-sheet credential entry:
-                // DEVICE_CREDENTIAL rendered its "Use Numeric Password" link through
-                // SystemUI's own (untheable) style, which paints invisible on some light-mode
-                // skins. The biometric sheet therefore carries an app-labeled negative button
-                // (visible text path) for the screen-lock route, and the credential-only
-                // prompt opens straight on PIN entry. Neither prompt is crypto-bound (owner
-                // ruling 2026-10-04); the key's 900s window authorizes the initSign in the
-                // success callback instead. A negative button is forbidden with
-                // DEVICE_CREDENTIAL (PromptInfo.build() throws).
-                val promptInfo = BiometricPrompt.PromptInfo.Builder()
-                    .setTitle(title)
-                    .setSubtitle(getString(R.string.partner_approval_prompt_subtitle))
-                    .setAllowedAuthenticators(authenticators)
-                    .apply {
-                        if (!credentialOnly) {
-                            setNegativeButtonText(getString(R.string.partner_signing_use_pin))
+                            override fun onAuthenticationFailed() = Unit
+                        },
+                    )
+                    cont.invokeOnCancellation { prompt.cancelAuthentication() }
+                    // Owner ruling 2026-11-02 supersedes #17's in-sheet credential entry:
+                    // DEVICE_CREDENTIAL rendered its "Use Numeric Password" link through
+                    // SystemUI's own (untheable) style, which paints invisible on some light-mode
+                    // skins. The biometric sheet therefore carries an app-labeled negative button
+                    // (visible text path) for the screen-lock route, and the credential-only
+                    // prompt opens straight on PIN entry. Neither prompt is crypto-bound (owner
+                    // ruling 2026-10-04); the key's 900s window authorizes the initSign in the
+                    // success callback instead. A negative button is forbidden with
+                    // DEVICE_CREDENTIAL (PromptInfo.build() throws).
+                    val promptInfo = BiometricPrompt.PromptInfo.Builder()
+                        .setTitle(title)
+                        .setSubtitle(getString(R.string.partner_approval_prompt_subtitle))
+                        .setAllowedAuthenticators(authenticators)
+                        .apply {
+                            if (!credentialOnly) {
+                                setNegativeButtonText(getString(R.string.partner_signing_use_pin))
+                            }
                         }
-                    }
-                    .build()
-                prompt.authenticate(promptInfo)
+                        .build()
+                    prompt.authenticate(promptInfo)
+                }
+            } ?: run {
+                Log.w(TAG, "signing prompt timed out without an answer")
+                BiometricOutcome.Cancelled
             }
         }
     }
@@ -1398,6 +1429,10 @@ class MainActivity : FragmentActivity() {
         const val TAB_PARTNER = NavKeys.PARTNER
 
         private const val TAG = "MyExodus"
+
+        /** Long enough for a deliberate PIN entry; short enough that a lost prompt callback
+         *  cannot strand partner delivery for the process lifetime. */
+        private const val PROMPT_TIMEOUT_MS = 120_000L
     }
 }
 

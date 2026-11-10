@@ -44,10 +44,11 @@ object PartnerSyncSignals {
     )
 
     /** ADR #216: a pass stopped with partner-visible rows still queued because the §8.1
-     *  signing window was cold. [runPartnerSyncPass] ticks this and the Activity retries the
-     *  pass automatically once the window is warm (owner ruling 2026-11-05: never a prompt).
-     *  Background runs tick with nobody collecting — dropped by design; the next foreground
-     *  pass re-detects the same block and ticks again. */
+     *  signing window was cold. [runPartnerSyncPass] ticks this; the foreground Activity
+     *  answers with a delivery attempt that prompts for device authentication when the window
+     *  is still cold (owner ruling 2026-11-10, ADR #296 — supersedes the never-prompt half of
+     *  #216). Background runs tick with nobody collecting — dropped by design; the next
+     *  foreground pass re-detects the same block and ticks again. */
     val signingNeeded = MutableSharedFlow<Unit>(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
@@ -67,6 +68,7 @@ object PartnerSyncSignals {
     /** Owner-approved A (2026-11-09): true while the last pass left partner-visible rows queued
      *  behind a cold §8.1 signing window. State rather than an event, so a partner page opened
      *  after the pass still tells the truth; any pass that gets through clears it. Automatic
-     *  delivery still never prompts — the surface only explains the wait and offers Check now. */
+     *  delivery now prompts while the Activity is foregrounded (ADR #296), so this state is
+     *  normally true only for background runs or a cancelled prompt. */
     val signingDeferred = MutableStateFlow(false)
 }

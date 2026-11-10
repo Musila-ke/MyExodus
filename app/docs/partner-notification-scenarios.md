@@ -50,7 +50,7 @@ Columns: **#**, **scenario**, **expected (source)**, **device result**.
 |---|---|---|---|
 | S1 | Create a single block, assigned to partner | Partner notification "You were added as accountability partner on «label»." (CREATED) + Rules page row | PARTIAL 2026-11-09: receiver tray record `partner:event:P9XV…` id 1949173998, title "Rule update from Kelvin Musila", text "You were added as accountability partner on Adobe Scan." Delivered late on a warm sync pass (finding 5), not at create time. Rules page row not yet re-checked after delivery |
 | S2 | Assign partner to an existing unassigned block (edit) | UNASSIGNED to nobody, ASSIGNED to partner → "You were added as accountability partner on «label»." | PASSED 2026-11-10 (warm window): assigned John Maingi to the existing unassigned Adobe Scan rule; the receiver's Rules & blocks lists "Adobe Scan — Rule assigned to you · 3m ago" and the notification "You were added as accountability partner on Adobe Scan" was delivered (mailbox 22:21:20.249Z). The same act auto-enabled blocked-app check-ins for the pair (ADR #295) |
-| S3 | Modify a watched block (change app/expiry while still assigned) | UPDATED → "«label» was changed." | BLOCKED 2026-11-10 (cold window, not a defect): edited Adobe Scan "Active on: Every day → Weekdays" on .106, local save confirmed ("Always on · weekdays · Watched by John Maingi", snapshot v66). Receiver got no notification / no new Rules & blocks row; mailbox newest stayed 22:22:37Z. Sender: `drain: 0 event(s)` at 22:26:42Z/22:27:03Z and `keystore2: matching auth token is expired` + `KEY_USER_NOT_AUTHENTICATED` on every pass — the §8.1 900 s window is cold, the UPDATED row is journaled and deletes only after `Emit.Created` (`PartnerSyncCoordinator.kt:487-497`), so delivery defers to the next device authentication per ADR #294 item 3 / honest limit 2 (phone kept awake through the long device run). Retest after the next owner unlock |
+| S3 | Modify a watched block (change app/expiry while still assigned) | UPDATED → "«label» was changed." | **PASSED 2026-11-10.** Edited Adobe Scan "Every day → Weekdays" on .106 while the §8.1 window was cold: no notification then (drains 0, `KEY_USER_NOT_AUTHENTICATED`), row journaled — exactly the deferral ADR #294 prescribes. After the owner unlocked the sender, delivery ran silently on the foreground pass: receiver tray shows `partner:event:P9XVq…` "Rule update from Kelvin Musila" / "Adobe Scan was changed." (when=1794265379639). Copy matches the expected cell verbatim. Defer-then-deliver proven end to end |
 | S4 | Turn a watched block off (toggle) | DISABLED → "«label» was turned off." (no approval request) | |
 | S5 | Delete a watched block | DELETED → "«label» was deleted." | |
 | S6 | Remove the partner from a watched block | UNASSIGNED → "You were removed from «label»." | |
@@ -84,6 +84,15 @@ Columns: **#**, **scenario**, **expected (source)**, **device result**.
 | S22 | "How they're doing" completeness | Shows days free, relapses, milestones, coaching items, last-event age, pinned message, chart + recent activity + rule changes; each snapshot applies wholesale | |
 | S23 | Accuracy check after each scenario above | Dashboard counts/rows match what was actually received; last-event age advances | |
 | S24 | Each page where the user shared nothing | Partner sees per-page empty copy; activity page says nothing has been shared yet (owner wants the "you can ask them to" nudge added) | |
+
+### D. Shared plans (ADR #193)
+
+| # | Scenario | Expected from source | Result |
+|---|---|---|---|
+| S27 | Create a plan with the partner | One TYPE_PLAN_PUBLISHED on creation → "«partner» shared a plan with you / Plan: «title»" (`partner_plan_title_named`, `partner_plan_body_named`); the plan appears on the receiver's Plans page under "From your partner" | PARTIAL 2026-11-10: creator side shows the plan under "You shared", receiver side under "From your partner" with the title; the publish notification copy was captured on .107 verbatim. The isolated creation notification is not time-stamped: both the creation and the later edit post under the same tray tag (`partner:event:<pairId>`), and the edit's record replaced the creation's |
+| S28 | Modify a shared plan (title/tasks) | Same TYPE_PLAN_PUBLISHED with a full payload and a bumped revision → same "shared a plan with you" copy; the receiver's detail re-reads the edited content; no extra notification type | **PASSED 2026-11-10.** .106 edit saved 04:30:54 local → cold sheet at 04:30:55.659 (ADR #296 prompt) → cancellation → `drain: 1 event(s) delivered` 04:31:40.263; Firestore message `c28e85ed` 2026-11-10T01:31:41.272Z; .107 notification at 04:31:47 ("Kelvin Musila shared a plan with you", "Plan: Evening routine…"), and .107's detail now shows the edited task "No screens after 10 pmx" |
+| S29 | Recipient checks / unchecks a plan task | No notification (TYPE_PLAN_PROGRESS is filtered before notifications); the check is journaled as a progress row and the author's detail shows "N of 4 done" once a pass delivers it | SENDER-LOCAL PASSED, RECEIVER BLOCKED 2026-11-10: five toggles on .107 flipped the checkbox and counter locally ("1 of 4 done" ↔ "2 of 4 done") and journaled progress; nothing reached the Kelvin mailbox (newest `3ea66cd3` 01:02:12.515Z) because .107's §8.1 window stayed cold and the sheet was never answered. Blocked on owner authentication; the journal heals on the next warm pass |
+| S30 | Author checks a task on their own copy | Nothing is sent — the author's copy is display-only (`setTaskDone` returns before journaling) | **PASSED 2026-11-10.** The author's detail renders hollow progress dots with "«partner» checks these off; their progress shows here"; tapping task 1 left "0 of 4 done" unchanged, produced no sync/activity log lines, and John's mailbox stayed at 60 messages |
 
 ## Owner run order (restated 2026-11-09)
 
@@ -157,20 +166,22 @@ S23 (accuracy) after every one:
    **Generalized (ADR #293, owner mandate 2026-11-09; reversed by ADR #294 the same day):** the
    first version routed every user-act rules write through the prompting heal; on the live
    pair that raised the biometric sheet over a rule save and the owner rejected it ("this is
-   supposed to be automatic why the hell do i have to input this"). Now every rules write —
-   save, edit, pause/resume, batch create/toggle/delete, disconnect, unlock — kicks the silent
-   pass at the act: warm delivers in seconds, cold queues the rows and delivers at the first
-   pass after the phone's next unlock (foreground start or the 15-minute worker). No app path
-   asks for authentication except the actions where delivering IS the action: Check now,
-   pairing, unpair, message send.
+   supposed to be automatic why the hell do i have to input this"). ADR #294 then made every
+   rules write kick a silent pass, but the wait-for-unlock cost drew the 2026-11-10 ruling
+   ("i realy hate how maybe ive been using my phone for a while but have to lock and unlock
+   it so notifications reach instantly its stupid"). **Current rule (ADR #296):** every
+   partner-visible act runs the delivery pass; warm delivers silently, cold with rows queued
+   raises the device-auth prompt right there ("Share your updates") and delivers on success.
+   Nothing queued never prompts; a cancelled prompt keeps the rows for the next trigger.
 6. **Cold-window retry hot loop (found and fixed 2026-11-10).** While S3 sat cold, the
    foreground ran a full partner sync pass every ~15 s indefinitely: each blocked pass emits
    `PartnerSyncSignals.signingNeeded`, and `MainActivity`'s collector reran the pass without
    checking warmth, re-emitting the signal. Evidence: `keystore2: matching auth token is
-   expired` + continuous `drain: 0 event(s) delivered` lines. The collector now retries only
-   when `signingWindowWarm()`; warmth arrives via device authentication, which brings the
-   900 s-warm foreground pass anyway (ADR #216, amended 2026-11-10). No delivery contract
-   changed: a cold backlog still waits for the next unlock (ADR #294).
+   expired` + continuous `drain: 0 event(s) delivered` lines. The retry is now the point of
+   the feature (ADR #296 prompts on cold), so the loop is closed by the delivery mutex, which
+   spans the prompt: a signal re-emitted by the blocked pass finds the mutex held and is
+   dropped, not stacked into a second sheet. A cancelled prompt ends the attempt; the next
+   trigger starts a new one.
 7. **Messaging requires sharing, which locks out a pure supervisor.** MOTIVATIONAL_MESSAGE is
    journaled only when at least one streak is shared with the pair
    (`PartnerActivityJournal.kt:183-184`); the UI mirrors it (`PartnerScreen.kt:426` →
@@ -180,10 +191,24 @@ S23 (accuracy) after every one:
    Proposed, awaiting ruling: allow a snapshot-less message, accept null `stateAfter` for
    messages only, and have the receiver apply a snapshot only when present. This would make
    ADR #284's in-place Share rows unnecessary; the empty-state nudge stays.
+8. **A lost prompt continuation wedged cold delivery for the process lifetime (found and
+   fixed 2026-11-10).** On the X6532C, toggles from 04:22 to 04:35 journaled progress and the
+   app-scope kick kept hitting `KEY_USER_NOT_AUTHENTICATED`, but no sheet ever appeared: an
+   earlier `BiometricPrompt` continuation had been dropped (no callback), suspending
+   `deliverQueuedPartnerEvents` while it held `signingHealMutex`. HOME + relaunch released it
+   and the next toggle prompted in 0.3 s. Fixed by bounding the prompt wait
+   (`withTimeoutOrNull` 120 s, ADR #296 amendment); a timeout cancels the sheet and returns
+   `Cancelled`, releasing the mutex. Re-proven on device: instant sheet, clean BACK cancel,
+   fresh sheet on the next toggle.
+9. **An edited plan reuses the "shared a plan with you" copy.** TYPE_PLAN_PUBLISHED covers
+   both creation and edits and only `partner_plan_title_named` exists, so a modification
+   notification reads like a first share; the body does name the plan. Owner decision:
+   add a distinct edit title or keep one copy.
 
 ## Device run ground rules
 
-- Physical X6532 (Kelvin) + X6532C (John), release v8/1.1.6; `uiautomator dump` before every tap.
+- Physical X6532 (Kelvin) + X6532C (John), release v9/1.1.7 from 2026-11-10 (v8/1.1.6 for
+  runs before that install); `uiautomator dump` before every tap.
 - Evidence per scenario: recipient `dumpsys notification` line (tag/id + title/text) and/or
   screenshot; sender state screenshot where the scenario changes a page.
 - After any injected input: `scripts/rotation-guard.sh` on both serials, verify
