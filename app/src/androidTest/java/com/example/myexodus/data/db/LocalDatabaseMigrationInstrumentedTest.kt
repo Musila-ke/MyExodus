@@ -243,6 +243,63 @@ class LocalDatabaseMigrationInstrumentedTest {
         )
     }
 
+    /**
+     * Pre-1.1.8 installs ran the live accountability store on the legacy name (the wipe
+     * detector's eager injection built it before the scope decision — X6532 2026-11-10).
+     * The first post-fix start must adopt it into the scoped name, exactly once.
+     */
+    @Test
+    fun preFixInstallAdoptsTheLiveLegacyStoreOnce() {
+        seedPlainAccountability(legacyAccountabilityFile())
+        seedEnrollmentRows(legacyAccountabilityFile(), 1)
+        val scoped = File(databaseDir(), scopeOf(UID).accountabilityName)
+        assertFalse(scoped.exists())
+
+        assertTrue(LocalDatabaseMigration.adoptPreFixForTest(context, UID))
+
+        assertEquals(1L, plainCount(scoped, "enrollments"))
+        assertTrue("the source stays as the rollback copy", legacyAccountabilityFile().exists())
+        assertFalse("adoption is one-time", LocalDatabaseMigration.adoptPreFixForTest(context, UID))
+    }
+
+    @Test
+    fun adoptionNeverOverwritesALiveScopedStore() {
+        seedEnrollmentRows(legacyAccountabilityFile(), 1)
+        val scoped = File(databaseDir(), scopeOf(UID).accountabilityName)
+        seedEnrollmentRows(scoped, 2)
+
+        assertFalse(LocalDatabaseMigration.adoptPreFixForTest(context, UID))
+
+        assertEquals("the store with more enrollments is the live one", 2L, plainCount(scoped, "enrollments"))
+        assertTrue(legacyAccountabilityFile().exists())
+    }
+
+    /**
+     * The pre-scope files are one install-wide copy claimed by the journal scope. Forgetting a
+     * different identity must not delete them (or their keys) — on a pre-1.1.8 install they can
+     * be the journal scope's only data.
+     */
+    @Test
+    fun forgettingAnotherIdentityLeavesTheJournalScopesRollbackCopies() {
+        seedRules(legacyRulesFile(), RulesStoreKeyManager(context).getOrCreateDek())
+        seedPlainAccountability(legacyAccountabilityFile())
+        seedEnrollmentRows(legacyAccountabilityFile(), 1)
+        assertTrue(LocalDatabaseMigration.migrateForTest(context, UID))
+
+        assertTrue(LocalDatabaseMigration.forgetScope(context, scopeOf(OTHER_UID).uidHash))
+
+        assertTrue(legacyRulesFile().exists())
+        assertTrue(legacyAccountabilityFile().exists())
+        assertTrue(
+            legacyKeyManager(RulesStoreKeyManager.LEGACY_KEK_ALIAS, RulesStoreKeyManager.LEGACY_PREFS)
+                .hasWrappedKey(),
+        )
+        assertEquals(1L, plainCount(File(databaseDir(), scopeOf(UID).accountabilityName), "enrollments"))
+
+        assertTrue(LocalDatabaseMigration.forgetScope(context, scopeOf(UID).uidHash))
+        assertFalse("the journal scope's purge still erases them", legacyAccountabilityFile().exists())
+    }
+
     @Test
     fun preEncryptionPlaintextRulesSourceIsCopiedVerbatim() {
         AndroidSQLiteDriver().open(legacyRulesFile().absolutePath).use { conn ->
@@ -261,6 +318,8 @@ class LocalDatabaseMigrationInstrumentedTest {
         LocalDatabaseMigration.resetForTest()
         LocalDatabaseMigration.resetJournalForTest(context)
         recovery.resetAllDataEmulatorOnly()
+        // resetAllData covers the pre-split combined DB, not the accountability store.
+        listOf("", "-wal", "-shm", "-journal").forEach { File(legacyAccountabilityFile().path + it).delete() }
         listOf(UID, OTHER_UID).map(::scopeOf).forEach { scope ->
             deleteScopedFiles(scope)
             scopedKeyManager(RulesStoreKeyManager.LEGACY_KEK_ALIAS, RulesStoreKeyManager.LEGACY_PREFS, scope).resetKeyMaterial()
@@ -318,6 +377,13 @@ class LocalDatabaseMigrationInstrumentedTest {
             )
         } finally {
             db.close()
+        }
+    }
+
+    private fun seedEnrollmentRows(file: File, count: Int) {
+        AndroidSQLiteDriver().open(file.absolutePath).use { conn ->
+            exec(conn, "CREATE TABLE IF NOT EXISTS enrollments (pair_id TEXT PRIMARY KEY NOT NULL)")
+            repeat(count) { exec(conn, "INSERT OR IGNORE INTO enrollments VALUES ('pair-$it')") }
         }
     }
 

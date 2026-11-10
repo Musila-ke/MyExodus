@@ -102,6 +102,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import java.io.File
 import java.util.Base64
+import javax.inject.Provider
 import javax.inject.Singleton
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
@@ -155,23 +156,31 @@ object AccountabilityModule {
      *  The keystore is resolved lazily *inside* the lambdas: it cannot be constructed on
      *  every surface this provider graphs into (JVM/Robolectric, and a broken keystore on a real
      *  device), and resolving there puts any such failure inside the detector's own
-     *  signal-check guard instead of at app-startup injection. */
+     *  signal-check guard instead of at app-startup injection.
+     *
+     *  The database and store are [Provider]s for a hard reason, not style: this detector is
+     *  field-injected into [MyExodusApp], so a direct parameter built the Room store during
+     *  `super.onCreate()` — BEFORE `LocalDatabaseMigration.start()` chooses the scope. Room
+     *  binds its file name at construction, so the live store stayed on the pre-split legacy
+     *  name while every deletion path treated that name as a disposable rollback copy. That is
+     *  the 2026-11-10 enrollment wipe (X6532, proven by `dumpsys dbinfo`). Resolving inside the
+     *  lambdas keeps the store unbuilt until after the scope decision. */
     @Provides @Singleton
     fun provideLocalWipeDetector(
-        db: AccountabilityDatabase,
+        db: Provider<AccountabilityDatabase>,
         keystore: Lazy<AccountabilityKeyStore>,
-        store: ChainStateStore,
+        store: Provider<ChainStateStore>,
     ): LocalWipeDetector = LocalWipeDetector(
         hasPriorPairingSignal = { keystore.get().hasPairCanary() },
         enrollments = {
             // Backfill for installs paired before the canary existed (2026-10-23): a live
             // enrollment is proof a pairing completed, so mint the marker the check keys on.
             // Best effort — a failure simply retries on the next start.
-            db.enrollmentDao().all().also { rows ->
+            db.get().enrollmentDao().all().also { rows ->
                 if (rows.isNotEmpty()) runCatching { keystore.get().ensurePairCanary() }
             }
         },
-        wipeOrphanPairData = store::wipeAllPairData,
+        wipeOrphanPairData = { store.get().wipeAllPairData() },
     )
 
     @Provides @Singleton

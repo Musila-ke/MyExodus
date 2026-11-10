@@ -57,6 +57,8 @@ internal object LocalDatabaseMigration {
     private const val KEY_OP_ID = "operation_id"
     private const val KEY_ACTIVATED_AT = "activated_at"
     private const val KEY_CLEANED = "legacy_cleaned"
+    /** One-time: the pre-1.1.8 live accountability store (legacy name) was adopted. */
+    private const val KEY_LEGACY_ADOPTED = "legacy_live_adopted"
     private const val ROLLBACK_WINDOW_MS = 7L * 24 * 60 * 60 * 1000
     private val SQLITE_MAGIC = "SQLite format 3".toByteArray(Charsets.ISO_8859_1) + 0.toByte()
     private val SCOPED_STORE_NAME =
@@ -99,6 +101,9 @@ internal object LocalDatabaseMigration {
                     )
                     prefs.edit(commit = true) { putString(KEY_LAST_UID_HASH, currentHash) }
                 }
+                // Reaches only installs whose journal predates this build: they ran with the
+                // live store on the legacy name (see adoptPreFixLiveStore).
+                if (storedHash != null) adoptPreFixLiveStore(context, scope, prefs)
                 activeScope = scope
                 Log.i(TAG, "local databases scoped to uid hash ${hash.take(8)}…")
             }
@@ -242,8 +247,6 @@ internal object LocalDatabaseMigration {
             StoreSpec("activity", File(dbDir, ActivityLogSchema.DB_NAME), File(dbDir, scope.activityName)),
             StoreSpec("accountability", File(dbDir, AccountabilityNames.LEGACY), File(dbDir, scope.accountabilityName)),
         )
-        // Copies from a previous attempt are disposable; the legacy sources are the authority.
-        specs.forEach { deleteDatabaseFile(it.target) }
         val copied = mutableListOf<StoreSpec>()
         return try {
             val rulesKey = ScopedKey(
@@ -256,6 +259,10 @@ internal object LocalDatabaseMigration {
             )
             for (spec in specs) {
                 if (!spec.source.exists()) continue
+                // Copies from a previous attempt are disposable; the legacy sources are the
+                // authority. Only when a source exists — post-scope, a store can be live on the
+                // scoped name alone, and deleting it here would erase it with nothing to copy.
+                deleteDatabaseFile(spec.target)
                 when (spec.name) {
                     "rules" -> copyStore(spec, rulesKey)
                     "activity" -> copyStore(spec, activityKey)
@@ -276,6 +283,52 @@ internal object LocalDatabaseMigration {
             copied.forEach { deleteDatabaseFile(it.target) }
             false
         }
+    }
+
+    /**
+     * Pre-1.1.8 installs built the accountability store during Hilt field injection — before
+     * [start] chose the scope — so Room bound the legacy file name and the LIVE enrollments
+     * stayed there while the scoped file froze at its migration-time copy. Adopt that store
+     * exactly once, before anything reads either name. The enrollment-count guard is the
+     * safety: a scoped store with more rows is the live one and is never overwritten.
+     */
+    private fun adoptPreFixLiveStore(context: Context, scope: Scope, prefs: SharedPreferences): Boolean {
+        if (prefs.getBoolean(KEY_LEGACY_ADOPTED, false)) return false
+        val dbDir = context.getDatabasePath("x").parentFile ?: return false
+        val source = File(dbDir, AccountabilityNames.LEGACY)
+        val target = File(dbDir, scope.accountabilityName)
+        val sourceRows = if (source.exists()) enrollmentRows(source) else 0L
+        val targetRows = if (target.exists()) enrollmentRows(target) else 0L
+        var adopted = false
+        if (sourceRows > targetRows) {
+            try {
+                deleteDatabaseFile(target)
+                copyPlain(StoreSpec("accountability", source, target))
+                adopted = true
+                Log.i(TAG, "adopted the pre-scope live accountability store ($sourceRows enrollments)")
+            } catch (e: Throwable) {
+                // Keep the legacy source: it is still the only copy of this data.
+                deleteDatabaseFile(target)
+                Log.e(TAG, "pre-scope live store adoption failed; legacy source preserved", e)
+                return false
+            }
+        }
+        prefs.edit(commit = true) { putBoolean(KEY_LEGACY_ADOPTED, true) }
+        return adopted
+    }
+
+    /** Enrollment rows in [file]; 0 when the file is absent, unreadable, or predates the table. */
+    private fun enrollmentRows(file: File): Long = runCatching {
+        AndroidSQLiteDriver().open(file.absolutePath).use { conn ->
+            val present = conn.prepare(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='enrollments'",
+            ).use { it.step() }
+            if (!present) 0L
+            else conn.prepare("SELECT COUNT(*) FROM enrollments").use { it.step(); it.getLong(0) }
+        }
+    }.getOrElse {
+        Log.w(TAG, "could not read enrollment rows from ${file.name}", it)
+        0L
     }
 
     /** A plaintext store (rules conversion still pending) is copied as-is; the open path converts it. */
@@ -507,19 +560,24 @@ internal object LocalDatabaseMigration {
 
     /**
      * Account plan §6.8/§6.9.3: erases one identity's local stores. The retained pre-scope
-     * copies hold the same person's data, so they go too — and only once every file is gone is
-     * the journal marker cleared, which keeps a failed delete from re-copying them later.
-     * Returns true when nothing is left to delete.
+     * copies hold the same person's data, so they go too — but only when the journal scope IS
+     * this identity: they are one install-wide copy, and on a pre-1.1.8 install they may be the
+     * journal scope's live store. The journal marker clears only once every file is gone, which
+     * keeps a failed delete from re-copying them later. Returns true when nothing is left.
      */
     fun forgetScope(context: Context, uidHashValue: String): Boolean = synchronized(lock) {
         val scope = Scope(uidHashValue)
         val dbDir = context.getDatabasePath("x").parentFile
         var deleted = true
+        val prefs = prefs(context)
+        val scopePointsHere = prefs.getString(KEY_SCOPE_HASH, null) == uidHashValue
         if (dbDir != null) {
             listOf(scope.rulesName, scope.activityName, scope.accountabilityName).forEach {
                 if (!deleteDatabaseFile(File(dbDir, it))) deleted = false
             }
-            legacySources(dbDir).forEach { if (!deleteDatabaseFile(it)) deleted = false }
+            if (scopePointsHere) {
+                legacySources(dbDir).forEach { if (!deleteDatabaseFile(it)) deleted = false }
+            }
         }
         runCatching {
             KeystoreWrappedDekManager(
@@ -534,13 +592,14 @@ internal object LocalDatabaseMigration {
             ).deleteKeyMaterial()
         }.onFailure { Log.w(TAG, "scoped key deletion failed", it) }
         if (deleted) {
-            resetLegacyKeys(context)
-            val prefs = prefs(context)
-            val scopePointsHere = prefs.getString(KEY_SCOPE_HASH, null) == uidHashValue
+            if (scopePointsHere) resetLegacyKeys(context)
             prefs.edit(commit = true) {
                 if (scopePointsHere) {
                     remove(KEY_SCOPE_HASH)
                     remove(KEY_ACTIVATED_AT)
+                    // Legacy sources are gone only when this purge claimed them; another
+                    // identity's purge must leave the rollback sweep armed for the journal.
+                    putBoolean(KEY_CLEANED, true)
                 }
                 if (prefs.getString(KEY_ACTIVE_HASH, null) == uidHashValue) remove(KEY_ACTIVE_HASH)
                 if (prefs.getString(KEY_LAST_UID_HASH, null) == uidHashValue) remove(KEY_LAST_UID_HASH)
@@ -551,7 +610,6 @@ internal object LocalDatabaseMigration {
                 if (prefs.getString(KEY_RECOVERY_UID_HASH, null) == uidHashValue) {
                     remove(KEY_RECOVERY_UID_HASH)
                 }
-                putBoolean(KEY_CLEANED, true)
             }
             if (activeScope?.uidHash == uidHashValue) activeScope = null
         }
@@ -612,6 +670,7 @@ internal object LocalDatabaseMigration {
                 remove(KEY_ACTIVATED_AT)
                 remove(KEY_ACTIVE_HASH)
                 remove(KEY_LAST_UID_HASH)
+                remove(KEY_LEGACY_ADOPTED)
                 putBoolean(KEY_CLEANED, false)
             }
             activeScope = null
@@ -620,6 +679,10 @@ internal object LocalDatabaseMigration {
 
     internal fun cleanupForTest(context: Context, nowMs: Long) = synchronized(lock) {
         cleanupExpired(context, nowMs)
+    }
+
+    internal fun adoptPreFixForTest(context: Context, uid: String): Boolean = synchronized(lock) {
+        adoptPreFixLiveStore(context, Scope(uidHash(uid)), prefs(context))
     }
 
     internal fun resetForTest() {
