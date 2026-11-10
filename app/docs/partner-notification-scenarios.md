@@ -99,7 +99,7 @@ Columns: **#**, **scenario**, **expected (source)**, **device result**.
 
 | # | Scenario | Expected from source | Result |
 |---|---|---|---|
-| S32 | Uninstall MyExodus on the partner's phone while shared content exists | No notification of any kind: an uninstall sends nothing, and FCM's invalid-token handling in `functions/dispatch.js` (`isTokenInvalid`) is silent; the remaining phone keeps its last-delivered projections and the pairing stays listed until a delivery attempt is denied | **PASSED 2026-11-10 evening (owner-ordered final leg, run last).** Live tracked content first: .106 (Kelvin) held John's shared plan "Evening routine" (1 of 2 done), pairing "Synced 3m ago". `adb uninstall com.example.myexodus` on .107 at epoch 1794332368 (`Success`; only the stale `.test` APK remains). Observed on .106 for 60 s and beyond: the notification set was unchanged — still exactly the one plan-edit record (id 0x0fac86c1, `when=1794332209.498`), no new `partner:event:` row, no revocation or "partner left" message; the hub kept "John Maingi · Shared activity is verified", "Plans — 1 to do", "Pairing — Synced 3m ago". Absence-of-signal matches the source (an uninstall has no wire event); the aging "Synced" is the documented last-delivered cache, not an error claim. Rotation guard run on both serials afterwards (`accelerometer_rotation=0`) |
+| S32 | Uninstall MyExodus on the partner's phone while shared content exists | No notification of any kind: an uninstall runs no app code, so it sends no wire event, and the pair documents are untouched. A later dispatch hitting the dead token is handled silently server-side (`functions/dispatch.js` `isTokenInvalid` → `markInstallationStale` + a warn log; nothing is written back to the other member, and the app has no read path to the partner's installations). `pairingUnreachable` does **not** fire for an uninstall — it requires a definitive PERMISSION_DENIED read of the pair document (`PartnerSyncCoordinator.kt:1006-1019`), which an uninstall does not cause. The remaining phone keeps its last-delivered projections and the pairing listing; only the sync age grows (gap recorded as Finding 12) | **PASSED 2026-11-10 evening (owner-ordered final leg, run last).** Live tracked content first: .106 (Kelvin) held John's shared plan "Evening routine" (1 of 2 done), pairing "Synced 3m ago". `adb uninstall com.example.myexodus` on .107 at epoch 1794332368 (`Success`; only the stale `.test` APK remains). Observed on .106 for 60 s and beyond: the notification set was unchanged — still exactly the one plan-edit record (id 0x0fac86c1, `when=1794332209.498`), no new `partner:event:` row, no revocation or "partner left" message; the hub kept "John Maingi · Shared activity is verified", "Plans — 1 to do", "Pairing — Synced 3m ago". Re-checked live ~9 min after the uninstall: same single record, still nothing new. Absence-of-signal matches the source; the aging "Synced" is the documented last-delivered cache, not an error claim. Rotation guard run on both serials afterwards (`accelerometer_rotation=0`) |
 
 ## Owner run order (restated 2026-11-09)
 
@@ -287,3 +287,18 @@ S23 (accuracy) after every one:
       banner to observe); it is a plain column delete, covered by the JVM suite and
       lintDebug. The fix is not retroactive: rows created before 1.1.10 still need one
       unpair on 1.1.10+.
+12. **An uninstall is invisible to the partner (owner question 2026-11-10: "wait partner isnt
+    notified on unistall?").** Shipped behavior, source-verified: an uninstall runs no app code,
+    so no wire event exists; the Firestore pair documents survive, so the remaining phone's
+    reads still succeed and `pairingUnreachable` never fires; and when a later dispatch hits the
+    dead FCM token, `functions/dispatch.js` marks the installation stale and logs a warning
+    without writing anything to the other member — the app has no read path to the partner's
+    installation state. The remaining phone therefore keeps a frozen last-delivered view and the
+    only signal is the growing sync age. This is a product gap, not a bug: the accountability
+    contract implies the partner should learn the app is gone. Options, owner decision pending:
+    (a) leave silent; (b) server-side, when a user's last non-stale installation goes stale,
+    write a system event into the other pair members' mailboxes ("MyExodus is no longer
+    installed on John's phone" / "John's phone is no longer receiving updates") delivered on
+    the remaining phone's next pass. (b) needs a multi-installation-aware trigger so token
+    rotation or a second device never raises a false "gone", and reinstall/data-clear/device
+    switch all look identical to the server today.
