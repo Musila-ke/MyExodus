@@ -100,6 +100,7 @@ Columns: **#**, **scenario**, **expected (source)**, **device result**.
 | # | Scenario | Expected from source | Result |
 |---|---|---|---|
 | S32 | Uninstall MyExodus on the partner's phone while shared content exists | No notification of any kind: an uninstall runs no app code, so it sends no wire event, and the pair documents are untouched. A later dispatch hitting the dead token is handled silently server-side (`functions/dispatch.js` `isTokenInvalid` → `markInstallationStale` + a warn log; nothing is written back to the other member, and the app has no read path to the partner's installations). `pairingUnreachable` does **not** fire for an uninstall — it requires a definitive PERMISSION_DENIED read of the pair document (`PartnerSyncCoordinator.kt:1006-1019`), which an uninstall does not cause. The remaining phone keeps its last-delivered projections and the pairing listing; only the sync age grows (gap recorded as Finding 12) | **PASSED 2026-11-10 evening (owner-ordered final leg, run last).** Live tracked content first: .106 (Kelvin) held John's shared plan "Evening routine" (1 of 2 done), pairing "Synced 3m ago". `adb uninstall com.example.myexodus` on .107 at epoch 1794332368 (`Success`; only the stale `.test` APK remains). Observed on .106 for 60 s and beyond: the notification set was unchanged — still exactly the one plan-edit record (id 0x0fac86c1, `when=1794332209.498`), no new `partner:event:` row, no revocation or "partner left" message; the hub kept "John Maingi · Shared activity is verified", "Plans — 1 to do", "Pairing — Synced 3m ago". Re-checked live ~9 min after the uninstall: same single record, still nothing new. Absence-of-signal matches the source; the aging "Synced" is the documented last-delivered cache, not an error claim. Rotation guard run on both serials afterwards (`accelerometer_rotation=0`) |
+| S33 | Device availability ON, with a shared rule and streak tied, then uninstall the partner's phone | (a) The last delivered snapshot keeps rendering until it exceeds two recorder cycles — then Protection reads Unknown, never a carried-forward Off (`PartnerDashboardSource.kt:194-213`, `MONITORING_STALE_MILLIS` line 265). (b) Phone check-ins are server-derived at read time from the last accepted heartbeat: Checking in <45 min, Late 45–90, Not checking in ≥90 (`dms-logic.js:94-106`). (c) The shipped detector is the DMS `AVAILABILITY_6H` notice: `deadlineDecision` (`dms-logic.js:145-169`) makes ONE partner notice due 6 h after the last accepted heartbeat, recipient = the consenting active partner (`consentingPartner`, `dms-logic.js:128-132`); dispatch revalidates relationship + consent (`suppressionReason`, `dms-logic.js:214-225`). Copy is deliberately honest: "Partner check-in" / "A paired device has not checked in recently. This is not proof the app was removed or blocking was turned off." (`dms-processor.js:64-68`). No immediate uninstall notice exists — an uninstall runs no app code | **PASSED on v12/1.1.10, 2026-11-10 evening (fresh pair; owner-ordered device-availability + uninstall leg with rules/streaks tied).** Tracked content first: .107 (John) shared streak "Smoking" (1–2 years, Moderate) and a website rule youtube.com "Block all day" assigned to Kelvin; .106 received "Rule update from John Maingi — You were added as accountability partner on youtube.com." and read "Smoking · 1 day free". Device availability enabled on .107 (consent `updatedAtMs` 1794334130747) → snapshot delivered only after a force-stop + relaunch forced the recorder's FGS-start snapshot past the consent watermark; .106's Their phone then read Protection Off / "Updated just now" / Checking in / within the hour. Uninstall on .107 at epoch 1794334246 (`Success`), 20 s after the last accepted heartbeat 1794334226010 (21:10:26 EAT). For ≥60 s after the uninstall .106's notification set was unchanged — no uninstall event, as designed. Firestore live at 21:12 EAT: `dms_install_state` `QianW…_eslgZqeWQNG6kOegYR8wt7` `notice_state: NONE`, `next_deadline_at 2026-11-11T00:10:26.010Z` (03:10:26 EAT) — the six-hour partner notice is ARMED; pairing doc `status: active`, `availabilityConsent[John].enabled=true` (updated 1794334130747), no terminationReason. Their phone at 21:14 EAT truthfully read Protection Off (fresh snapshot) and Checking in / within the hour; expected aging: Late ≈21:55, Not checking in ≈22:40, bucket 1–6 h ≈22:10, Protection → Unknown ≈23:10 (2 h after receipt), six-hour notice ≈03:10 EAT |
 
 ## Owner run order (restated 2026-11-09)
 
@@ -287,18 +288,25 @@ S23 (accuracy) after every one:
       banner to observe); it is a plain column delete, covered by the JVM suite and
       lintDebug. The fix is not retroactive: rows created before 1.1.10 still need one
       unpair on 1.1.10+.
-12. **An uninstall is invisible to the partner (owner question 2026-11-10: "wait partner isnt
-    notified on unistall?").** Shipped behavior, source-verified: an uninstall runs no app code,
-    so no wire event exists; the Firestore pair documents survive, so the remaining phone's
-    reads still succeed and `pairingUnreachable` never fires; and when a later dispatch hits the
-    dead FCM token, `functions/dispatch.js` marks the installation stale and logs a warning
-    without writing anything to the other member — the app has no read path to the partner's
-    installation state. The remaining phone therefore keeps a frozen last-delivered view and the
-    only signal is the growing sync age. This is a product gap, not a bug: the accountability
-    contract implies the partner should learn the app is gone. Options, owner decision pending:
-    (a) leave silent; (b) server-side, when a user's last non-stale installation goes stale,
-    write a system event into the other pair members' mailboxes ("MyExodus is no longer
-    installed on John's phone" / "John's phone is no longer receiving updates") delivered on
-    the remaining phone's next pass. (b) needs a multi-installation-aware trigger so token
-    rotation or a second device never raises a false "gone", and reinstall/data-clear/device
-    switch all look identical to the server today.
+12. **An uninstall sends no IMMEDIATE signal; the DMS six-hour notice is the shipped detector
+    (corrected 2026-11-10, S33).** An uninstall runs no app code, so no wire event exists; the
+    Firestore pair documents survive, so the remaining phone's reads still succeed, and
+    `pairingUnreachable` never fires. The immediate event is therefore invisible (S32/S33).
+    What IS shipped, and was live-verified in S33: when the monitored member enabled Device
+    availability, the DMS deadline worker makes one partner notice due 6 h after the last
+    accepted heartbeat (`deadlineDecision`, `dms-logic.js:145-169`), addressed only to the
+    consenting active partner (`consentingPartner`, `dms-logic.js:128-132`) and revalidated at
+    dispatch (`suppressionReason`, `dms-logic.js:214-225`). The copy is deliberately honest —
+    "A paired device has not checked in recently. This is not proof the app was removed or
+    blocking was turned off." (`dms-processor.js:64-68`) — because a force-stop, doze or a
+    removed app all look identical server-side. A previous revision of this finding said the
+    partner was never notified; that was wrong for the availability-consent case. The
+    remaining gap is an IMMEDIATE uninstall-specific notice. The only hard signal is the
+    invalid FCM token on a later dispatch (`functions/dispatch.js` `isTokenInvalid` →
+    `markInstallationStale`, tombstone kept), which fires on the next wake attempt — e.g. the
+    45-minute LATE probe to the dead token — while the 6 h partner notice still lands. Options,
+    owner decision pending: (a) keep as shipped (6 h, consent-scoped, honest copy);
+    (b) additionally write a system event into the partner's mailbox when a user's last
+    non-stale installation goes stale ("MyExodus is no longer installed on John's phone"),
+    which needs multi-installation-aware handling so token rotation or a second device never
+    raises a false "gone", and reinstall/data-clear/device switch all look identical today.
