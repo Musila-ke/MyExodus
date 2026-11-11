@@ -36,6 +36,11 @@ const NOTICE_AVAILABILITY = 'AVAILABILITY_6H';
 const NOTICE_RECOVERY = 'RECOVERY';
 const NOTICE_TYPES = [NOTICE_AVAILABILITY, NOTICE_RECOVERY];
 
+// A state row whose installation really is gone, but whose user still has a live device: it
+// must never notify (availability is read user-level) and never probe again. Any accepted
+// heartbeat on this install clears the marker back to 'NONE'.
+const NOTICE_STATE_SUPERSEDED = 'SUPERSEDED';
+
 const NOTICE_PENDING = 'PENDING';
 const NOTICE_DISPATCHING = 'DISPATCHING';
 const NOTICE_SENT = 'SENT';
@@ -132,6 +137,21 @@ function consentingPartner(pairing, monitoredUid) {
 }
 
 /**
+ * True when another installation of the same user reported inside the partner-notice window.
+ * Availability is READ user-level (`readPartnerStatus` takes the max receipt across the user's
+ * installs), so one install going quiet is only news when it was the user's last one. A phone
+ * the user replaced or reinstalled must never make the partner think the app is gone — and a
+ * silent row that has a live sibling is superseded precisely so it cannot.
+ */
+function hasLiveSibling(states, installId, nowMs, windowMs = PARTNER_PUSH_AFTER_MS) {
+  return (Array.isArray(states) ? states : []).some((state) => {
+    if (!state || state.install_id === installId) return false;
+    const lastReceivedAtMs = Number(state.last_received_at_ms) || 0;
+    return lastReceivedAtMs > 0 && nowMs - lastReceivedAtMs < windowMs;
+  });
+}
+
+/**
  * One due-row decision. The caller re-reads the row inside the transaction and passes the
  * original snapshot values as `expectedGeneration`/`expectedLastReceivedAtMs`: a heartbeat
  * that landed between the due query and the transaction turns the claim into a no-op.
@@ -155,6 +175,9 @@ function deadlineDecision({ state, expectedGeneration = null, expectedLastReceiv
   }
   if (state.notice_state === 'NOTIFIED') {
     return { action: 'STALE', reason: 'ALREADY_NOTIFIED' };
+  }
+  if (state.notice_state === NOTICE_STATE_SUPERSEDED) {
+    return { action: 'STALE', reason: 'SUPERSEDED' };
   }
   const base = Math.max(lastReceivedAtMs, Number(outageEndMs) || 0);
   const dueAtMs = base + PARTNER_PUSH_AFTER_MS;
@@ -196,6 +219,9 @@ function livenessProbeDecision({ state, expectedGeneration = null, expectedLastR
   }
   if (Number(state.late_reminder_generation) >= generation) {
     return { action: 'STALE', reason: 'ALREADY_PROBED' };
+  }
+  if (state.notice_state === NOTICE_STATE_SUPERSEDED) {
+    return { action: 'STALE', reason: 'SUPERSEDED' };
   }
   const base = Math.max(lastReceivedAtMs, Number(outageEndMs) || 0);
   const dueAtMs = base + LATE_AFTER_MS;
@@ -277,6 +303,7 @@ module.exports = {
   NOTICE_AVAILABILITY,
   NOTICE_RECOVERY,
   NOTICE_TYPES,
+  NOTICE_STATE_SUPERSEDED,
   NOTICE_PENDING,
   NOTICE_DISPATCHING,
   NOTICE_SENT,
@@ -292,6 +319,7 @@ module.exports = {
   activePartner,
   consentEnabled,
   consentingPartner,
+  hasLiveSibling,
   deadlineDecision,
   livenessProbeDecision,
   suppressionReason,

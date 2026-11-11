@@ -151,10 +151,12 @@ function createSubmitHeartbeatHandler({ db, now = () => Date.now() }) {
           // fresh beat moves the deadline and makes any in-flight probe claim a no-op.
           late_deadline_at: Timestamp.fromMillis(decision.lastReceivedAtMs + LATE_AFTER_MS),
           // The deadline processor owns the generation; a heartbeat carries it forward and
-          // clears the notice flag, which is what ends the outage.
+          // clears any notice marker: an accepted beat is proof of life, so both NOTIFIED
+          // (ends the outage) and SUPERSEDED (a sibling install was live; this one is too)
+          // must give way to a clean row with a fresh six-hour deadline.
           last_notified_generation: previous ? previous.last_notified_generation || 0 : 0,
           outage_generation: outageGeneration,
-          notice_state: wasNotified ? 'NONE' : (previous && previous.notice_state) || 'NONE',
+          notice_state: 'NONE',
           updated_at: Timestamp.fromMillis(nowMs),
         };
         if (wasNotified) stateUpdate.recovered_at_ms = nowMs;

@@ -20,6 +20,7 @@ const {
   BUCKET_NO_DATA,
   NOTICE_AVAILABILITY,
   NOTICE_RECOVERY,
+  NOTICE_STATE_SUPERSEDED,
   MAX_DISPATCH_ATTEMPTS,
   normalizeConfig,
   noticeDocId,
@@ -27,6 +28,7 @@ const {
   activePartner,
   consentEnabled,
   consentingPartner,
+  hasLiveSibling,
   deadlineDecision,
   livenessProbeDecision,
   suppressionReason,
@@ -168,6 +170,11 @@ test('deadlineDecision: stale generations and already-notified rows are no-ops',
   assert.strictEqual(
     deadlineDecision({ state: { ...state, notice_state: 'NOTIFIED' }, nowMs: NOW }).action,
     'STALE',
+  );
+  assert.deepStrictEqual(
+    deadlineDecision({ state: { ...state, notice_state: NOTICE_STATE_SUPERSEDED }, nowMs: NOW }),
+    { action: 'STALE', reason: 'SUPERSEDED' },
+    'a row with a live sibling install is terminal, even when its receipt is old',
   );
 });
 
@@ -450,6 +457,32 @@ test('livenessProbeDecision: CAS and no-data inputs are stale, never a probe', (
   assert.deepStrictEqual(
     livenessProbeDecision({ state, expectedLastReceivedAtMs: NOW - 5 * MINUTE, nowMs: NOW }),
     { action: 'STALE', reason: 'RECEIPT_MOVED' },
+  );
+  assert.deepStrictEqual(
+    livenessProbeDecision({ state: { ...state, notice_state: NOTICE_STATE_SUPERSEDED }, nowMs: NOW }),
+    { action: 'STALE', reason: 'SUPERSEDED' },
+    'a superseded row is never probed',
+  );
+});
+
+test('hasLiveSibling: any other install inside the notice window keeps the user alive', () => {
+  const rows = [
+    { install_id: 'mine', last_received_at_ms: NOW - 30 * MINUTE },
+    { install_id: 'theirs', last_received_at_ms: NOW - 5 * MINUTE },
+  ];
+  assert.strictEqual(hasLiveSibling(rows, 'mine', NOW), true);
+  assert.strictEqual(
+    hasLiveSibling([rows[0], { install_id: 'theirs', last_received_at_ms: NOW - PARTNER_PUSH_AFTER_MS }], 'mine', NOW),
+    false,
+    'exactly six hours old is no longer live',
+  );
+  assert.strictEqual(hasLiveSibling([rows[0]], 'mine', NOW), false, 'its own row is not a sibling');
+  assert.strictEqual(hasLiveSibling([], 'mine', NOW), false);
+  assert.strictEqual(hasLiveSibling(null, 'mine', NOW), false);
+  assert.strictEqual(
+    hasLiveSibling([{ install_id: 'theirs', last_received_at_ms: 0 }], 'mine', NOW),
+    false,
+    'a receipt-less row is not evidence of life',
   );
 });
 

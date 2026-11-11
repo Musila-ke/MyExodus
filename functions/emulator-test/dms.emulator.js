@@ -832,6 +832,145 @@ test('liveness probe: an UNREGISTERED token is removed and the probe is never re
   assert.strictEqual(probes.sends.length, 1, 'at-most-once: no retry after a provider failure');
 });
 
+test('liveness probe: a provider-confirmed dead token notifies the partner immediately', async () => {
+  await seedPairing();
+  await register(MON, INSTALL);
+  await register(WATCH, WATCH_INSTALL);
+  await seedState({
+    lastReceivedAtMs: NOW - 60 * MINUTE,
+    extra: { late_deadline_at: Timestamp.fromMillis(NOW - 15 * MINUTE) },
+  });
+  const probes = probeRecorder({
+    failTimes: 1,
+    code: 'messaging/registration-token-not-registered',
+  });
+  const pushes = pushRecorder();
+
+  const result = await workerWith(pushes.sendPush, probes.sendProbe)();
+  assert.strictEqual(result.lateReminded, 1);
+  assert.strictEqual(result.lateNotified, 1, 'the uninstall signal became a notice in this pass');
+  assert.strictEqual(result.notified, 1);
+  assert.strictEqual(result.outboxCreated, 1);
+  assert.strictEqual(result.sent, 1, 'same-pass dispatch: the partner is told in minutes, not days');
+
+  const state = (await stateRef().get()).data();
+  assert.strictEqual(state.notice_state, 'NOTIFIED');
+  assert.strictEqual(state.last_notified_generation, 1);
+  assert.strictEqual(state.outage_generation, 1);
+  assert.strictEqual(state.next_deadline_at, undefined, 'the six-hour deadline cannot duplicate');
+  assert.strictEqual(state.late_deadline_at, undefined, 'no further probes');
+
+  const row = (await outboxRef(INSTALL, 1).get()).data();
+  assert.strictEqual(row.status, NOTICE_SENT);
+  assert.strictEqual(row.notice_type, NOTICE_AVAILABILITY);
+  assert.strictEqual(row.expected_notified_generation, 1);
+  assert.strictEqual(pushes.sends[0].row.notice_type, NOTICE_AVAILABILITY);
+  assert.deepStrictEqual(pushes.sends[0].installs.map((i) => i.id), [WATCH_INSTALL]);
+
+  clockMs += HOUR;
+  await workerWith(pushes.sendPush, probes.sendProbe)();
+  assert.strictEqual(pushes.sends.length, 1, 'never a second notice for the same outage');
+});
+
+test('liveness probe: a live sibling install supersedes the immediate notice', async () => {
+  await seedPairing();
+  await register(MON, INSTALL);
+  await register(WATCH, WATCH_INSTALL);
+  await seedState({
+    lastReceivedAtMs: NOW - 60 * MINUTE,
+    extra: { late_deadline_at: Timestamp.fromMillis(NOW - 15 * MINUTE) },
+  });
+  await seedState({ installId: 'install-mon-2', lastReceivedAtMs: NOW - 5 * MINUTE, generation: 2 });
+  const probes = probeRecorder({
+    failTimes: 1,
+    code: 'messaging/registration-token-not-registered',
+  });
+  const pushes = pushRecorder();
+
+  const result = await workerWith(pushes.sendPush, probes.sendProbe)();
+  assert.strictEqual(result.lateReminded, 1);
+  assert.strictEqual(result.lateNotified, 0);
+  assert.strictEqual(result.notified, 0);
+  assert.strictEqual(result.superseded, 1);
+  assert.strictEqual(pushes.sends.length, 0, 'a replaced phone is not partner news');
+
+  const state = (await stateRef().get()).data();
+  assert.strictEqual(state.notice_state, 'SUPERSEDED');
+  assert.strictEqual(state.next_deadline_at, undefined);
+  assert.strictEqual(state.late_deadline_at, undefined);
+  assert.strictEqual((await outboxRef(INSTALL, 1).get()).exists, false);
+  assert.strictEqual(
+    (await stateRef(MON, 'install-mon-2').get()).data().notice_state,
+    'NONE',
+    'the live install is untouched',
+  );
+});
+
+test('deadline: a live sibling install supersedes the six-hour row instead of notifying', async () => {
+  await seedPairing();
+  await register(WATCH, WATCH_INSTALL);
+  await seedState({ lastReceivedAtMs: NOW - 7 * HOUR });
+  await seedState({ installId: 'install-mon-2', lastReceivedAtMs: NOW - 5 * MINUTE, generation: 2 });
+  const pushes = pushRecorder();
+
+  const result = await workerWith(pushes.sendPush)();
+  assert.strictEqual(result.notified, 0);
+  assert.strictEqual(result.superseded, 1);
+  assert.strictEqual(pushes.sends.length, 0);
+  const state = (await stateRef().get()).data();
+  assert.strictEqual(state.notice_state, 'SUPERSEDED');
+  assert.strictEqual((await outboxRef(INSTALL, 1).get()).exists, false);
+});
+
+test('heartbeat: an accepted beat revives a superseded row cleanly', async () => {
+  await seedPairing();
+  await register(MON, INSTALL);
+  await seedState({
+    lastReceivedAtMs: NOW - 60 * MINUTE,
+    extra: { notice_state: 'SUPERSEDED' },
+  });
+  await stateRef().update({
+    next_deadline_at: FieldValue.delete(),
+    late_deadline_at: FieldValue.delete(),
+  });
+
+  const reply = await heartbeatHandler()({ auth: { uid: MON }, data: { installId: INSTALL, counter: 2 } });
+  assert.strictEqual(reply.accepted, true);
+  const state = (await stateRef().get()).data();
+  assert.strictEqual(state.notice_state, 'NONE');
+  assert.strictEqual(state.next_deadline_at.toMillis(), NOW + DMS_PARTNER_PUSH_MS);
+  assert.strictEqual(state.late_deadline_at.toMillis(), NOW + 45 * MINUTE);
+  assert.strictEqual(state.recovered_at_ms, undefined, 'no one was notified, so no recovery is owed');
+  assert.strictEqual((await outboxRef(INSTALL, 1, NOTICE_RECOVERY).get()).exists, false);
+});
+
+test('worker: immediate uninstall notices count toward the fleet breaker', async () => {
+  await seedPairing();
+  await register(MON, INSTALL);
+  await register(WATCH, WATCH_INSTALL);
+  await seedState({
+    lastReceivedAtMs: NOW - 60 * MINUTE,
+    extra: { late_deadline_at: Timestamp.fromMillis(NOW - 15 * MINUTE) },
+  });
+  await configRef().set({ late_burst_threshold: 1 });
+  const probes = probeRecorder({
+    failTimes: 1,
+    code: 'messaging/registration-token-not-registered',
+  });
+  const pushes = pushRecorder();
+
+  const result = await workerWith(pushes.sendPush, probes.sendProbe)();
+  assert.strictEqual(result.lateNotified, 1);
+  assert.strictEqual(result.breakerOpened, true);
+  assert.strictEqual(result.dispatchHeld, true);
+  assert.strictEqual(result.sent, 0, 'a burst of dead tokens is an incident, not a fan-out');
+  assert.strictEqual(pushes.sends.length, 0);
+  assert.strictEqual((await outboxRef(INSTALL, 1).get()).data().status, NOTICE_PENDING);
+  const config = (await configRef().get()).data();
+  assert.strictEqual(config.dispatch_hold, true);
+  assert.strictEqual(config.incident_reason, 'LATE_BURST');
+});
+
 // ---------------------------------------------------------------------------
 // heartbeat recovery
 
