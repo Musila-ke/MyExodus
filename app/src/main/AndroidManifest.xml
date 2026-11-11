@@ -115,6 +115,16 @@
             </intent-filter>
         </receiver>
 
+        <!-- Partner delivery plan §4.1: BOOT_COMPLETED after first unlock reconciles the
+             event queue; ordinary (non-direct-boot) work is unreachable before USER_UNLOCKED. -->
+        <receiver
+            android:name=".accountability.delivery.PartnerEventBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
         <!-- Notification actions for the degraded-protection alert (§8.2 explicit
             re-enable). Component-explicit intents only; never exported to other apps. -->
         <receiver

@@ -8,5 +8,5 @@ package com.example.myexodus.accountability.delivery
  * documented regeneration paths in [PartnerEventResultCode].
  */
 interface PartnerDeliveryTransport {
-    suspend fun submit(batch: PartnerEventBatchV1): PartnerEventBatchResultV1
+    suspend fun submit(installationId: String, batch: PartnerEventBatchV1): PartnerEventBatchResultV1
 }

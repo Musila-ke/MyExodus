@@ -24,6 +24,8 @@ import com.example.myexodus.account.GuestTransitionCoordinator
 import com.example.myexodus.account.LegacyCachePurge
 import com.example.myexodus.account.LocalSessionManager
 import com.example.myexodus.account.ScopeRecoveryImporter
+import com.example.myexodus.accountability.delivery.PartnerDeliveryCoordinator
+import com.example.myexodus.accountability.delivery.enqueuePartnerEventSync
 import com.example.myexodus.accountability.state.LocalWipeDetector
 import com.example.myexodus.accountability.sync.AppCheckInstaller
 import com.example.myexodus.accountability.sync.PartnerNotifications
@@ -137,6 +139,9 @@ class MyExodusApp : Application(), Configuration.Provider {
     // Lazy: the outbox's prefs are CE and throw when constructed pre-unlock (§8.9).
     @Inject lateinit var attemptRecorder: dagger.Lazy<AttemptRecorder>
     @Inject lateinit var milestoneScheduler: MilestoneScheduler
+    // Partner delivery plan §4.1/§6.1 step 4: foreground drains and startup reconciliation.
+    // Lazy: the chain reaches FirebaseAuth and the accountability stores (§8.9 Direct Boot).
+    @Inject lateinit var partnerDelivery: dagger.Lazy<PartnerDeliveryCoordinator>
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -327,7 +332,13 @@ class MyExodusApp : Application(), Configuration.Provider {
             // Plan §7 step 10: no sync work under a signed-out or transitioning session —
             // the worker would only no-op against the fence, and a signed-out account has no
             // pairs to serve. Anonymous sessions are fenced-active and keep syncing (ADR #125).
-            if (localSessionManager.get().current() != null) enqueuePartnerSync(this)
+            if (localSessionManager.get().current() != null) {
+                enqueuePartnerSync(this)
+                // Partner delivery plan §4.1/§6.1 step 4: the 15-minute backstop plus the
+                // startup reconciliation for rows a crash left without scheduled work.
+                enqueuePartnerEventSync(this)
+                applicationScope.launch { partnerDelivery.get().reconcileOnStart() }
+            }
             enqueueDailyMaintenance(this)
             UpdateCheckWorker.enqueue(this)
             UpdateCheckWorker.enqueueForegroundIfDue(this)
@@ -543,7 +554,17 @@ class MyExodusApp : Application(), Configuration.Provider {
     /** App backgrounded (last activity stopped): bounded WAL growth on both stores. */
     private val backgroundCheckpointer = object : ActivityLifecycleCallbacks {
         override fun onActivityStarted(activity: Activity) {
+            val firstInForeground = foregroundActivities == 0
             foregroundActivities++
+            if (!firstInForeground) return
+            // Partner delivery plan §4.1: every foreground transition drains in-process,
+            // ahead of any WorkManager dispatch latency. App Lock gates enrollment/rotation
+            // to the vault-access states (§8.3.1).
+            applicationScope.launch {
+                partnerDelivery.get().drainInProcess(
+                    appLockCoordinator.get().state.value.allowsVaultAccess,
+                )
+            }
         }
 
         override fun onActivityStopped(activity: Activity) {

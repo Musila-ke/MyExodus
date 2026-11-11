@@ -442,3 +442,170 @@ the three new tables and touches nothing older. Both registered in `ALL_MIGRATIO
 5. `.107` reinstall + re-pair before the Phase 8 two-device matrix.
 
 **Next:** Phase 4 — background signing and worker.
+
+## Phase 4 — Background signing and worker (2026-11-11)
+
+**Status: PASSED (implementation and JVM tests). Device validation of screen-lock and
+process-death is BLOCKED on the Phase 8 two-device matrix — not claimed here.**
+
+**Scope:** plan §7 Phase 4 (verbatim: generate/register the background key; integrate
+`SHA256withECDSA` JCS signing, WorkManager unique sync, token acquisition, leases,
+partial-response reconciliation, backoff, outage recovery and key invalidation states),
+§4.1/§4.3/§6.1 step 4, §8.1 retention lines, §8.2 signed envelope, §8.3 registration and
+rotation, §8.5 WorkManager and triggers, §9 whole-request failures, and Phase 3 carry #1
+(terminal `PERMANENT_REJECTED` retention).
+
+**Touched files**
+
+- `app/src/main/java/.../accountability/delivery/PartnerEventKeyStore.kt` (new) — Android
+  Keystore P-256 (`SHA256withECDSA`) per installation; StrongBox on API 28+ with a
+  `StrongBoxUnavailableException` fallback to TEE; `setAttestationChallenge` at keygen;
+  `keyId = base64url(SHA-256(SPKI DER))`; chain read is challenge-checked.
+- `app/src/main/java/.../accountability/delivery/PartnerEventRegistrar.kt` (new) — the §8.3
+  registration half: `registerDeviceChallenge({installationId,intent})`, JCS message
+  (`v`, `ownerUid`, `installationId`, `keyId`, `challenge`) signed with the fresh key,
+  `registerOrRotateDevice` wire (standard-base64 SPKI, base64url signature, optional chain +
+  challenge, debug-only `allowUnattested`), challenge-size/expiry checks, server-`keyId`
+  equality before any commit, and `ROTATION_REQUIRED` / `ROTATION_NOT_ENROLLED` retried once
+  with the other intent.
+- `app/src/main/java/.../accountability/delivery/PartnerDeliveryTransport.kt` (modified) and
+  `FirebasePartnerDeliveryTransport.kt` (new) — one `ingestPartnerEvents` callable round trip;
+  Auth and App Check ride the callable protocol via `AppCheckInstaller.install`; a
+  `RESOURCE_EXHAUSTED` whole-request failure becomes `DeliveryRateLimitedException`.
+- `app/src/main/java/.../accountability/delivery/PartnerEventDrain.kt` (new) — mutexed
+  claim → sign → submit → reconcile loop: batch limits, per-index result handling, lease
+  release, `PERMANENT_REJECTED` source erasure, `RECIPIENT_KEY_STALE` regeneration for the
+  server's authorized key set only, `RETRYABLE`/unknown/missing-index backoff, exponential
+  delay (30 s base, 30 min cap, ≤25% jitter), fixed 300 s defer for rate limits, waiting-row
+  re-probe, and cleanup of ACKED and rejected shells.
+- `app/src/main/java/.../accountability/delivery/PartnerDeliveryCoordinator.kt` (new) —
+  recorder commit kick (wake marker bound), in-process foreground drain carrying the App Lock
+  verdict, and startup reconciliation of an armed-but-unscheduled marker.
+- `app/src/main/java/.../accountability/delivery/PartnerEventSyncWorker.kt` (new) —
+  `@HiltWorker`; immediate unique work (`APPEND_OR_REPLACE`), periodic 15-minute backstop
+  (`UPDATE`), and a timed retry slot (`REPLACE`) carrying the drain's exact earliest due
+  time; `NetworkType.CONNECTED`, WorkManager `EXPONENTIAL` 30 s backoff.
+- `app/src/main/java/.../accountability/delivery/PartnerEventBootReceiver.kt` (new) — handles
+  only `ACTION_BOOT_COMPLETED`, only after `UserManager.isUserUnlocked`, only with a signed-in
+  account; schedules the backstop and one immediate pass.
+- `app/src/main/java/.../di/PartnerDeliveryModule.kt` (new) — binds the outbox, protector,
+  E2EE adapter, clock, transport, registrar, recorder, drain and coordinator; supplies the
+  recipient SPKI and the `auth_time` verdict; `allowUnattested = BuildConfig.DEBUG`.
+- `app/src/main/java/.../accountability/delivery/ServiceOutboxEntities.kt` (modified) —
+  `installation_state.recipient_key_id`, `pending_partner_events.signing_signature` and
+  `terminal_at_ms`, `service_outbox_wake_state`, `REJECTED_RETENTION_MILLIS`.
+- `app/src/main/java/.../accountability/delivery/ServiceEventOutboxDao.kt` (modified) —
+  registration update, guarded lease claim, due scan, lease release, retry scheduling,
+  signature recording, re-enroll suspension/resume, waiting re-probe, ACK and terminal
+  transitions, both cleanup queries, and the wake marker.
+- `app/src/main/java/.../accountability/delivery/ServiceEventOutbox.kt` (modified) —
+  repository wrappers for every transition above, `requestWake`/`clearWake`, terminal
+  `permanentReject`, `cleanupRejected`.
+- `app/src/main/java/.../accountability/delivery/PartnerEventProtocol.kt`,
+  `PartnerEventRecorder.kt`, `ExistingE2eeRecipientEncryptor.kt` (modified) — wire map and
+  result parsing, envelope decode, regeneration outcomes used by the drain.
+- `app/src/main/java/.../accountability/state/AccountabilityDatabase.kt` (modified) — schema
+  **v17**; `MIGRATION_15_16`, `MIGRATION_16_15`, `MIGRATION_16_17`, `MIGRATION_17_16`,
+  all in `ALL_MIGRATIONS`.
+- `app/src/main/java/.../MyExodusApp.kt` (modified) — startup periodic enqueue plus
+  `reconcileOnStart()`; every foreground transition drains in-process with
+  `appLockCoordinator.state.allowsVaultAccess`.
+- `app/src/main/AndroidManifest.xml` (modified) — `RECEIVE_BOOT_COMPLETED` and the exported
+  `PartnerEventBootReceiver` filtered to the system `BOOT_COMPLETED` action.
+- `app/src/test/java/.../accountability/delivery/PartnerEventDrainTest.kt` (new — 15 tests).
+- `app/src/test/java/.../accountability/delivery/PartnerEventRegistrarTest.kt` (new — 8 tests).
+- `app/src/test/java/.../accountability/state/AccountabilityDatabaseMigrationTest.kt`
+  (modified — two new tests; 19 total).
+
+**Requirements verified**
+
+| Requirement | How |
+|---|---|
+| Background key generation/registration | Registrar emits the exact documented challenge and register wires, signs the exact JCS message, and commits only on `keyId` equality (`enroll_signsTheDocumentedJcsMessage_andSendsTheExactWire`); chain-presented calls carry the matching `attestationChallenge` and never the opt-in (`attestedChain_isPresentedWithTheMatchingChallenge_andNeverTheOptIn`); a chainless release key stops before any register call (`missingChainWithoutTheDebugOptIn_isAttestationRequired_beforeAnyRegisterCall`) |
+| `SHA256withECDSA` over JCS | The drain signs `PartnerEventProtocol.canonicalBytes(event)` with the row's recorded schema version; the signature is persisted and reused only when the canonical bytes and key still match (`acceptedBatch...`, `partialResponse...`, `transportFailure...`) |
+| WorkManager unique sync | Three unique names: immediate `APPEND_OR_REPLACE`, periodic `UPDATE`, timed retry `REPLACE`; the persistent wake marker allows exactly one append per armed marker (`requestWake` true→true-false→rearm, pinned in the v15→v16 migration test and the coordinator contract) |
+| Token acquisition | Firebase callable protocol supplies the ID token and App Check attestation automatically; no hand-written header parser (§8.4) |
+| Leases | `claimDue` leases with a 120 s bound; a lease left by a killed process is reclaimed after expiry and redelivered (`leaseLeftByAKilledProcess_isReclaimedAfterExpiry`) |
+| Partial-response reconciliation | Accepted index ACKed; an index with no result stays `PENDING`, records `RESULT_MISSING`/`WIRE_UNKNOWN`, and resends the identical JCS bytes and signature (`partialResponse_defersOnlyTheMissingIndex_asUnknown_andResendsTheExactBytes`) |
+| Backoff | 30 s base doubling to the 30 min cap with jitter (`transportFailure_backsOffExponentially_andKeepsTheSignature`); `RESOURCE_EXHAUSTED` uses the fixed 300 s defer because callables expose no `Retry-After` (`quotaRejection_usesTheFixedLongDefer_withNoRetryAfterOnCallables`) |
+| Outage recovery | A thrown whole-request failure schedules every row and keeps the exact signed bytes; an ambiguous outcome is never treated as acceptance (`transportFailure...`); waiting rows re-probe once per drain and are never submitted without ciphertext (`waitingRow_isReprobedOnceAnEnrollmentExists_thenDelivered`, `staleKey_withNoLocalEnrollment_parksTheRowWaiting`) |
+| Key invalidation states | `RECIPIENT_KEY_STALE` re-encrypts only for the server's authorized keys and makes the row immediately due (`staleKey_regeneratesForTheAuthorizedKey_andIsDueAgainImmediately`); an EMPTY authorized set is passed through as an empty set, never `null` ("every local enrollment"), so the row parks `WAITING_FOR_RECIPIENT_KEY` instead of re-encrypting for revoked keys (`staleKey_withEmptyAuthorizedSet_parksWaiting_andNeverReencryptsForALocalEnrollment`); `REENROLL_REQUIRED` and a missing/mismatched signing key suspend the installation and keep every row, then a foreground-registered drain resumes (`reenrollRequired_suspendsTheInstallation_thenARegisteredDrainResumesEveryRow`, `missingSigningKey_waitsForAForegroundRegistration_andThenDelivers`) |
+| Registration intent preconditions | `ROTATION_REQUIRED` and `ROTATION_NOT_ENROLLED` are each retried once with the other intent, with a challenge for that intent and a fresh key (`rotationPrecondition_isRetriedWithTheOtherIntent`, `rotationNotEnrolled_isRetriedAsEnroll_whenLocalStateClaimedActive`) |
+| §8.3.1 foreground gate | The worker drains with `allowRegistration = false`; only the foreground pass carries the App Lock verdict, and a stale/absent auth makes no network call (`staleAuth_makesNoNetworkCall`) |
+| §8.1 terminal retention (Phase 3 carry #1) | The terminal UPDATE erases source, envelopes, signed envelope and signature in the same write and records `terminal_at_ms`; the empty shell is deleted only after seven days in bounded batches (`serverPermanentRejection_erasesTheSource_keepsTheShell_andNeverResubmits`, `terminalShell_isDeletedOnlyAfterTheSevenDayWindow`) |
+| Unreadable rows | An unsupported kind is `PERMANENT_REJECTED` without signing or sending anything (`unreadableRow_isPermanentlyRejected_withoutSigningAnything`) |
+| Signed-out no-op | No owner means no claim, no signing, no network (`noSignedInOwner_isANoOp`) |
+| §8.5 BFU/trigger rules | Receiver acts only on the system boot action and only after first unlock; no network-change manifest receiver was added; the periodic worker is a best-effort backstop |
+| Migration | v15→v16 and v16→v17 forward paths run through Room's real migration and post-migration validation; rollback steps are registered (D-33) |
+
+**Tests**
+
+- `:app:testDebugUnitTest --tests "...PartnerEventDrainTest"` — 15 tests, 0 failures,
+  0 errors, 0 skipped.
+- `:app:testDebugUnitTest --tests "...PartnerEventRegistrarTest"` — 8 tests, 0 failures,
+  0 errors, 0 skipped.
+- `:app:testDebugUnitTest --tests "...AccountabilityDatabaseMigrationTest"` — 19 tests,
+  0 failures, 0 errors, 0 skipped (two new: v15→v16 background-signing state and v16→v17
+  terminal timestamp, both against real v12-origin files).
+- `:app:compileDebugKotlin` / `:app:compileDebugUnitTestKotlin` — clean.
+
+**Migration status**
+
+Schema **v15 → v16 → v17**. v16 is additive: `installation_state.recipient_key_id`,
+`pending_partner_events.signing_signature`, and the singleton
+`service_outbox_wake_state(id, wake_requested)` table. v17 adds
+`pending_partner_events.terminal_at_ms`. Both forward and both rollback steps are registered
+in `ALL_MIGRATIONS`, and `allMigrations_coverEveryVersionStepToTheDeclaredSchemaVersion`
+still passes for every step to v17.
+
+**Deviations from the plan (each deliberate)**
+
+1. **`auth_time` freshness is a caller-supplied verdict, and anonymous sessions skip it**
+   (`user.isAnonymous ||` in `PartnerDeliveryModule.currentAuth`). Anonymous accounts have no
+   reauthentication concept, and both physical test devices run anonymous sessions (ADR #125).
+   Non-anonymous accounts still require `auth_time` within 300 s. The actual reauthentication
+   UX for a hardware-assured account remains the §8.3.1 foreground work.
+2. **No `Retry-After` on callables.** A whole-request `RESOURCE_EXHAUSTED` uses a fixed 300 s
+   defer (`DrainLimits.rateLimitedDeferMs`); this is the one translation the transport
+   performs, and it is marked in the drain's header comment.
+3. **The capture kick uses a persistent singleton wake marker plus `APPEND_OR_REPLACE`**, not
+   a bare append per event. The marker admits exactly one follow-up behind a running worker
+   and the startup reconciliation clears a marker orphaned by a crash between the DB write and
+   the WorkManager enqueue. This is §8.5's "bounded coalesced follow-up", made durable.
+4. **Background drains never register a key.** Enrollment/rotation is foreground-only by
+   §8.3.1; the worker passes `allowRegistration = false` and reports
+   `registrationRequired` instead of signing with a suspended installation.
+5. **Terminal rejection uses its own `terminal_at_ms` column** rather than reusing
+   `acked_server_at_ms`. A row rejected long after capture would otherwise have zero shell
+   retention (the timestamp would predate the rejection by more than seven days); the new
+   column bounds retention from the actual transition.
+6. **The cleanup of ACKED and rejected shells runs at the top of every drain**, not in a
+   separate maintenance job. It is a bounded 200-row delete behind a `runCatching`, so it can
+   never block a delivery pass.
+7. **Registration `allowUnattested` is enabled only in debug builds**
+   (`BuildConfig.DEBUG`). A release build with no attestation chain stops at
+   `AttestationRequired`; unattested release enrollment needs the explicit §8.3.6 path, not
+   an automatic downgrade.
+
+**Post-gate review fix (2026-11-12)**
+
+The post-implementation review found one fail-open path in the `RECIPIENT_KEY_STALE`
+handler: `.takeIf { it.isNotEmpty() }` turned an empty server authorized-key set into
+`null`, which `ExistingE2eeRecipientEncryptor` reads as "every local enrollment" — it
+would have re-encrypted for a locally-known, possibly revoked recipient key. The drain
+now passes the empty set through unchanged, so the regeneration filters to zero recipients
+(`RecipientKeyUnavailable`), the null-envelope write parks the row `WAITING_FOR_RECIPIENT_KEY`
+(clearing the stale signature and digest), and the row defers 900 s. Regression test
+`staleKey_withEmptyAuthorizedSet_parksWaiting_andNeverReencryptsForALocalEnrollment` pins it.
+
+**Carries**
+
+1. **Device validation of screen-lock, process-death, Doze and real attestation chains is
+   BLOCKED** on the Phase 8 two-device matrix. This entry claims JVM/unit evidence only.
+2. `WAITING_FOR_RECIPIENT_KEY` still lacks §8.1's >24 h safe diagnostic and seven-day
+   operator incident — Phase 6 health work.
+3. Producer switch from the legacy journal to `PartnerEventRecorder` — Phase 7. Until then
+   the new drain has no production producers except the existing capture seams.
+4. `.107` reinstall + re-pair before the Phase 8 matrix.
+
+**Next:** Phase 5 — partner delivery.

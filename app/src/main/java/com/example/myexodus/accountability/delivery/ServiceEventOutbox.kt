@@ -126,6 +126,87 @@ class ServiceEventOutbox(
 
     suspend fun event(eventId: String): PendingPartnerEvent? = dao.event(eventId)
 
+    suspend fun installation(ownerUid: String): InstallationState? = dao.installationForOwner(ownerUid)
+
+    suspend fun installationById(installationId: String): InstallationState? = dao.installation(installationId)
+
+    suspend fun markRegistered(
+        installationId: String,
+        keyId: String,
+        recipientKeyId: String,
+    ): Boolean =
+        dao.updateRegistration(
+            installationId, keyId, recipientKeyId, InstallationState.REGISTRATION_ACTIVE,
+        ) > 0
+
+    /** §8.3.8: suspend the whole installation and keep every row for re-signing. */
+    suspend fun markReenrollRequired(installationId: String): Int = db.withWriteTransaction {
+        dao.updateRegistrationState(
+            installationId, InstallationState.REGISTRATION_REENROLL_REQUIRED,
+        )
+        dao.suspendForReenroll(installationId)
+    }
+
+    /**
+     * §4.3 lease claim. Expired leases are reclaimed and each due row is taken by a guarded
+     * update in the same write transaction, so two drains can never carry the same row.
+     */
+    suspend fun claimDue(
+        ownerUid: String,
+        nowMs: Long,
+        limit: Int,
+        leaseUntilMs: Long,
+    ): List<PendingPartnerEvent> = db.withWriteTransaction {
+        dao.resetExpiredLeases(nowMs)
+        dao.dueRows(ownerUid, nowMs, limit).filter { dao.leaseRow(it.eventId, leaseUntilMs) > 0 }
+    }
+
+    suspend fun releaseLeases(eventIds: Collection<String>) {
+        if (eventIds.isEmpty()) return
+        db.withWriteTransaction { eventIds.forEach { dao.releaseLease(it) } }
+    }
+
+    suspend fun resetAllLeases(): Int = dao.resetAllLeases()
+
+    suspend fun waitingRows(ownerUid: String, nowMs: Long, limit: Int): List<PendingPartnerEvent> =
+        dao.waitingRows(ownerUid, nowMs, limit)
+
+    suspend fun deferWaiting(eventId: String, nextAttemptAtMs: Long): Boolean =
+        dao.deferWaitingRow(eventId, nextAttemptAtMs) > 0
+
+    suspend fun recordSignature(
+        eventId: String,
+        signedEnvelope: ByteArray,
+        signature: ByteArray,
+        keyId: String,
+    ): Boolean = dao.recordSignature(eventId, signedEnvelope, signature, keyId) > 0
+
+    suspend fun scheduleRetry(
+        eventId: String,
+        wireOutcome: String,
+        nextAttemptAtMs: Long,
+        errorCode: String?,
+        wireDigest: String?,
+    ): Boolean =
+        dao.retryRow(eventId, wireOutcome, nextAttemptAtMs, errorCode, wireDigest) > 0
+
+    /** Terminal: erases the retained source in the same write; the shell expires separately. */
+    suspend fun permanentReject(eventId: String, errorCode: String?, terminalAtMs: Long): Boolean =
+        dao.permanentRejectRow(eventId, errorCode, terminalAtMs) > 0
+
+    /** §8.3.8 after a successful re-enrollment: rebuild signatures, keep event identity. */
+    suspend fun resumeAfterReenroll(installationId: String): Int = dao.resumeAfterReenroll(installationId)
+
+    suspend fun earliestNextAttempt(ownerUid: String): Long? = dao.earliestNextAttempt(ownerUid)
+
+    /** True only for the false→true transition; the caller may then append one work request. */
+    suspend fun requestWake(): Boolean = db.withWriteTransaction {
+        dao.ensureWakeRow(ServiceOutboxWakeState(wakeRequested = false))
+        dao.armWake() > 0
+    }
+
+    suspend fun clearWake(): Int = dao.clearWake()
+
     /**
      * §6.1 step 8: only ACCEPTED / ALREADY_ACCEPTED reach here, and only they erase the
      * retained source. Every other outcome keeps the row resendable.
@@ -156,6 +237,10 @@ class ServiceEventOutbox(
      *  days. Bounded per call. */
     suspend fun cleanupAcked(nowMs: Long): Int =
         dao.deleteAckedBefore(nowMs - PendingPartnerEvent.ACKED_RETENTION_MILLIS, limits.cleanupBatchSize)
+
+    /** §8.1: a terminal rejection keeps only its diagnostic shell, and only for a week. */
+    suspend fun cleanupRejected(nowMs: Long): Int =
+        dao.deleteRejectedBefore(nowMs - PendingPartnerEvent.REJECTED_RETENTION_MILLIS, limits.cleanupBatchSize)
 
     suspend fun health(): ServiceOutboxHealth? = dao.health()
 }

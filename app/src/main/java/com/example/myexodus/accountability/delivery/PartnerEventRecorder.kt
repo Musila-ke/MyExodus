@@ -20,6 +20,8 @@ class PartnerEventRecorder(
     private val clock: PartnerDeliveryClock,
     private val ownerUid: () -> String?,
     private val newEventId: () -> String = { UUID.randomUUID().toString() },
+    /** §6.1 step 4 post-commit signal; must never change the record's own outcome. */
+    private val onRecorded: suspend () -> Unit = {},
 ) {
 
     sealed interface RecordResult {
@@ -144,8 +146,16 @@ class PartnerEventRecorder(
                     clock.wallClockMs(),
                 )
             ) {
-                is ServiceEventOutbox.EnqueueOutcome.Enqueued ->
+                is ServiceEventOutbox.EnqueueOutcome.Enqueued -> {
+                    // The row is durable; a failed kick only delays it to the periodic pass.
+                    try {
+                        onRecorded()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                    }
                     RecordResult.Recorded(outcome.eventId, outcome.sequence, status)
+                }
                 is ServiceEventOutbox.EnqueueOutcome.CapacityExceeded ->
                     RecordResult.CapacityExceeded(
                         outcome.health.pendingRowCount, outcome.health.pendingByteCount,
@@ -166,6 +176,7 @@ class PartnerEventRecorder(
     suspend fun regenerateRecipientEnvelopes(
         eventId: String,
         recipientKeyRevision: Int? = null,
+        authorizedRecipientKeyIds: Set<String>? = null,
     ): RegenerationResult {
         return try {
             val uid = ownerUid() ?: return RegenerationResult.NoAccount
@@ -195,7 +206,9 @@ class PartnerEventRecorder(
                 return RegenerationResult.SourceUnavailable
             }
             when (
-                val encryption = encryptor.encryptForAll(eventId, row.installationId, uid, kind, source)
+                val encryption = encryptor.encryptForAll(
+                    eventId, row.installationId, uid, kind, source, authorizedRecipientKeyIds,
+                )
             ) {
                 is Encrypted -> if (
                     outbox.applyRegeneratedEnvelopes(eventId, encryption.envelopes, recipientKeyRevision)

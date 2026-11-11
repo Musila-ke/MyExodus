@@ -10,6 +10,7 @@ import com.example.myexodus.accountability.delivery.InstallationState
 import com.example.myexodus.accountability.delivery.PendingPartnerEvent
 import com.example.myexodus.accountability.delivery.ServiceEventOutboxDao
 import com.example.myexodus.accountability.delivery.ServiceOutboxHealth
+import com.example.myexodus.accountability.delivery.ServiceOutboxWakeState
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 
@@ -29,10 +30,11 @@ import com.example.myexodus.accountability.enrollment.EnrollmentRecord
         PendingPartnerEvent::class,
         InstallationState::class,
         ServiceOutboxHealth::class,
+        ServiceOutboxWakeState::class,
         ProcessedEvent::class,
         UnpairState::class,
     ],
-    version = 15,
+    version = 17,
     exportSchema = false,
 )
 abstract class AccountabilityDatabase : RoomDatabase() {
@@ -453,6 +455,64 @@ abstract class AccountabilityDatabase : RoomDatabase() {
         }
 
         /**
+         * v16 adds Phase 4's background-signing state: the installation's registered recipient
+         * key id, the raw ECDSA signature bytes (the signature cannot be re-derived from the
+         * envelope), and the singleton wake-marker row that bounds WorkManager append churn.
+         * Additive only — every v15 row survives unchanged.
+         */
+        internal val MIGRATION_15_16 = object : Migration(15, 16) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE `installation_state` ADD COLUMN `recipient_key_id` TEXT",
+                ).use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE `pending_partner_events` ADD COLUMN `signing_signature` BLOB",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS `service_outbox_wake_state` (" +
+                        "`id` INTEGER NOT NULL, " +
+                        "`wake_requested` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`id`))",
+                ).use { it.step() }
+            }
+        }
+
+        /** v16 rollback (D-33): drop the wake table and the two additive columns. */
+        internal val MIGRATION_16_15 = object : Migration(16, 15) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("DROP TABLE IF EXISTS `service_outbox_wake_state`").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE `pending_partner_events` DROP COLUMN `signing_signature`",
+                ).use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE `installation_state` DROP COLUMN `recipient_key_id`",
+                ).use { it.step() }
+            }
+        }
+
+        /**
+         * v17 adds the terminal-rejection timestamp: a PERMANENT_REJECTED row erases its
+         * content at the transition, and this column bounds the empty diagnostic shell's
+         * retention. Additive only — every v16 row survives with a NULL timestamp.
+         */
+        internal val MIGRATION_16_17 = object : Migration(16, 17) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE `pending_partner_events` ADD COLUMN `terminal_at_ms` INTEGER",
+                ).use { it.step() }
+            }
+        }
+
+        /** v17 rollback (D-33): drop the additive column. */
+        internal val MIGRATION_17_16 = object : Migration(17, 16) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE `pending_partner_events` DROP COLUMN `terminal_at_ms`",
+                ).use { it.step() }
+            }
+        }
+
+        /**
          * Every migration, oldest schema to current, plus the one downgrade step (D-33) that
          * Room selects by `(from, to)` — the one list every builder registers.
          * Hand-maintained copies have silently diverged twice (7→8, ADR #50; 9→10, ADR #58),
@@ -463,7 +523,8 @@ abstract class AccountabilityDatabase : RoomDatabase() {
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
             MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_12, MIGRATION_13_14, MIGRATION_14_13,
-            MIGRATION_14_15, MIGRATION_15_14,
+            MIGRATION_14_15, MIGRATION_15_14, MIGRATION_15_16, MIGRATION_16_15,
+            MIGRATION_16_17, MIGRATION_17_16,
         )
 
         @Volatile private var instance: AccountabilityDatabase? = null

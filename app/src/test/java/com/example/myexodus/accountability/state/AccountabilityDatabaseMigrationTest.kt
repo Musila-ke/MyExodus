@@ -11,6 +11,7 @@ import com.example.myexodus.accountability.delivery.InstallationState
 import com.example.myexodus.accountability.delivery.PartnerEventKind
 import com.example.myexodus.accountability.delivery.PartnerEventProtocol
 import com.example.myexodus.accountability.delivery.PendingPartnerEvent
+import com.example.myexodus.accountability.delivery.ServiceEventOutbox
 import com.example.myexodus.accountability.delivery.ServiceOutboxHealth
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import kotlinx.coroutines.runBlocking
@@ -943,6 +944,85 @@ class AccountabilityDatabaseMigrationTest {
     }
 
     /**
+     * Partner-delivery Phase 4 (v15→v16): the background-signing state appears and Room's
+     * post-migration validation accepts the schema. A v15 chain row survives, the registered
+     * recipient key and the persisted signature round-trip, and the wake marker's false→true
+     * append bound is live on the upgraded file.
+     */
+    @Test
+    fun migration15to16_addsBackgroundSigningState_andRoomAcceptsSchema() {
+        val dbPath = context.getDatabasePath(AccountabilityDatabase.DB_NAME).absolutePath
+
+        AndroidSQLiteDriver().open(dbPath).use { conn ->
+            V12_DDL.forEach { ddl -> conn.prepare(ddl).use { it.step() } }
+            conn.prepare(
+                "INSERT INTO events (pair_id, sender_key_id, epoch, sequence, previous_event_hash, " +
+                    "event_hash, envelope, direction, created_at, sync_state) " +
+                    "VALUES ('pair-a', 'k1', 0, 1, NULL, x'01', x'02', 'OUT', 5, 'PENDING')",
+            ).use { it.step() }
+            runBlocking {
+                AccountabilityDatabase.MIGRATION_12_13.migrate(conn)
+                AccountabilityDatabase.MIGRATION_13_14.migrate(conn)
+                AccountabilityDatabase.MIGRATION_14_15.migrate(conn)
+            }
+            conn.prepare("PRAGMA user_version = 15").use { it.step() }
+        }
+
+        val db = Room.databaseBuilder(
+            context,
+            AccountabilityDatabase::class.java,
+            AccountabilityDatabase.DB_NAME,
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
+        runBlocking {
+            val dao = db.serviceEventOutboxDao()
+            dao.insertInstallation(InstallationState("inst-1", "uid-1", 0))
+            assertEquals(
+                1,
+                dao.updateRegistration(
+                    "inst-1", "key-1", "recipient-1", InstallationState.REGISTRATION_ACTIVE,
+                ),
+            )
+            val installation = checkNotNull(dao.installation("inst-1"))
+            assertEquals("the registered recipient key round-trips", "recipient-1", installation.recipientKeyId)
+            assertEquals("key-1", installation.activeKeyId)
+
+            dao.insertEvent(
+                PendingPartnerEvent(
+                    eventId = "e-1",
+                    installationId = "inst-1",
+                    ownerUid = "uid-1",
+                    sequence = 1,
+                    schemaVersion = PartnerEventProtocol.VERSION,
+                    kind = PartnerEventKind.CHECK_IN.wire,
+                    safeMetadataJson = "{}",
+                    deviceOccurredAtMs = 10,
+                    signingSignature = byteArrayOf(7),
+                    status = PendingPartnerEvent.STATUS_PENDING,
+                    createdLocalAtMs = 10,
+                ),
+            )
+            assertArrayEquals(
+                "the persisted signing signature round-trips",
+                byteArrayOf(7),
+                checkNotNull(dao.event("e-1")).signingSignature,
+            )
+
+            val outbox = ServiceEventOutbox(db)
+            assertTrue("the first capture arms the wake marker", outbox.requestWake())
+            assertFalse("a burst while armed appends nothing", outbox.requestWake())
+            assertEquals(1, outbox.clearWake())
+            assertTrue("a capture after a worker consumed it re-arms", outbox.requestWake())
+
+            assertEquals(
+                "the pre-v16 chain row survives",
+                1L,
+                db.chainEventDao().chainFor("pair-a").single().sequence,
+            )
+        }
+        db.close()
+    }
+
+    /**
      * v15 rollback (D-33): the three delivery tables are dropped whole and every pre-v15 table
      * and row remains. Nothing under them existed before v15, so the downgrade loses only
      * delivery queue state, never accountability history.
@@ -1006,6 +1086,55 @@ class AccountabilityDatabaseMigrationTest {
             }
             assertTrue("chain_heads survives", columnNames(conn, "chain_heads").isNotEmpty())
         }
+    }
+
+    /**
+     * Partner-delivery Phase 4 (v16→v17): the terminal-rejection timestamp appears and Room's
+     * post-migration validation accepts the schema. A v16 row survives with a NULL timestamp.
+     */
+    @Test
+    fun migration16to17_addsTerminalAtAndRoomAcceptsSchema() {
+        val dbPath = context.getDatabasePath(AccountabilityDatabase.DB_NAME).absolutePath
+
+        AndroidSQLiteDriver().open(dbPath).use { conn ->
+            V12_DDL.forEach { ddl -> conn.prepare(ddl).use { it.step() } }
+            runBlocking {
+                AccountabilityDatabase.MIGRATION_12_13.migrate(conn)
+                AccountabilityDatabase.MIGRATION_13_14.migrate(conn)
+                AccountabilityDatabase.MIGRATION_14_15.migrate(conn)
+                AccountabilityDatabase.MIGRATION_15_16.migrate(conn)
+            }
+            conn.prepare("PRAGMA user_version = 16").use { it.step() }
+        }
+
+        val db = Room.databaseBuilder(
+            context,
+            AccountabilityDatabase::class.java,
+            AccountabilityDatabase.DB_NAME,
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
+        runBlocking {
+            val dao = db.serviceEventOutboxDao()
+            dao.insertInstallation(InstallationState("inst-1", "uid-1", 0))
+            dao.insertEvent(
+                PendingPartnerEvent(
+                    eventId = "e-1",
+                    installationId = "inst-1",
+                    ownerUid = "uid-1",
+                    sequence = 1,
+                    schemaVersion = PartnerEventProtocol.VERSION,
+                    kind = PartnerEventKind.CHECK_IN.wire,
+                    safeMetadataJson = "{}",
+                    temporaryLocalCiphertext = byteArrayOf(1),
+                    deviceOccurredAtMs = 10,
+                    status = PendingPartnerEvent.STATUS_PENDING,
+                    createdLocalAtMs = 10,
+                ),
+            )
+            val row = checkNotNull(dao.event("e-1"))
+            assertNull("a pre-v17 row has no terminal timestamp", row.terminalAtMs)
+            assertEquals("pre-v17 data survives the upgrade", byteArrayOf(1).toList(), row.temporaryLocalCiphertext!!.toList())
+        }
+        db.close()
     }
 
     /**

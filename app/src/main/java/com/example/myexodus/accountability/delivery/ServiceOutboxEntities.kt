@@ -19,6 +19,8 @@ data class InstallationState(
     @ColumnInfo(name = "current_sequence") val currentSequence: Long,
     @ColumnInfo(name = "heartbeat_counter", defaultValue = "0") val heartbeatCounter: Long = 0,
     @ColumnInfo(name = "active_key_id") val activeKeyId: String? = null,
+    /** The recipient encryption key this installation registered for the active pairing. */
+    @ColumnInfo(name = "recipient_key_id") val recipientKeyId: String? = null,
     @ColumnInfo(name = "registration_state") val registrationState: String? = null,
     @ColumnInfo(name = "schema_version") val schemaVersion: Int = PartnerEventProtocol.VERSION,
 ) {
@@ -54,6 +56,7 @@ data class PendingPartnerEvent(
     @ColumnInfo(name = "device_occurred_at_ms") val deviceOccurredAtMs: Long,
     @ColumnInfo(name = "elapsed_realtime_at_capture_ms") val elapsedRealtimeAtCaptureMs: Long? = null,
     @ColumnInfo(name = "signed_envelope") val signedEnvelope: ByteArray? = null,
+    @ColumnInfo(name = "signing_signature") val signingSignature: ByteArray? = null,
     @ColumnInfo(name = "signing_key_id") val signingKeyId: String? = null,
     @ColumnInfo(name = "status") val status: String,
     @ColumnInfo(name = "recipient_key_revision") val recipientKeyRevision: Int? = null,
@@ -65,12 +68,15 @@ data class PendingPartnerEvent(
     @ColumnInfo(name = "last_error_code") val lastErrorCode: String? = null,
     @ColumnInfo(name = "created_local_at_ms") val createdLocalAtMs: Long,
     @ColumnInfo(name = "acked_server_at_ms") val ackedServerAtMs: Long? = null,
+    @ColumnInfo(name = "terminal_at_ms") val terminalAtMs: Long? = null,
 ) {
     companion object {
         const val STATUS_PENDING = "PENDING"
+        const val STATUS_LEASED = "LEASED"
         const val STATUS_WAITING_FOR_RECIPIENT_KEY = "WAITING_FOR_RECIPIENT_KEY"
         const val STATUS_ACKED = "ACKED"
         const val STATUS_OWNER_AUTH_REQUIRED = "OWNER_AUTH_REQUIRED"
+        const val STATUS_REENROLL_REQUIRED = "REENROLL_REQUIRED"
         const val STATUS_PERMANENT_REJECTED = "PERMANENT_REJECTED"
 
         const val WIRE_NOT_SENT = "NOT_SENT"
@@ -79,12 +85,16 @@ data class PendingPartnerEvent(
         const val WIRE_RECIPIENT_KEY_STALE = "RECIPIENT_KEY_STALE"
         const val WIRE_RETRYABLE = "RETRYABLE"
         const val WIRE_PERMANENT_REJECTED = "PERMANENT_REJECTED"
+        const val WIRE_REENROLL_REQUIRED = "REENROLL_REQUIRED"
         const val WIRE_UNKNOWN = "UNKNOWN"
 
         const val ERROR_PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
 
         /** §8.1 retention: ACKED rows live empty for seven days, then are deleted. */
         const val ACKED_RETENTION_MILLIS = 7L * 24 * 60 * 60 * 1000
+
+        /** Terminal rejections erase their content at once; the shell is kept as long. */
+        const val REJECTED_RETENTION_MILLIS = 7L * 24 * 60 * 60 * 1000
     }
 }
 
@@ -100,5 +110,20 @@ data class ServiceOutboxHealth(
     companion object {
         const val SINGLETON_ID = 1
         const val QUEUE_CAPACITY_EXCEEDED = "QUEUE_CAPACITY_EXCEEDED"
+    }
+}
+
+/**
+ * §8.5 bounded coalescing. A false→true transition is the only moment an append may be
+ * scheduled, so a burst of captures cannot build an unbounded chain of work requests.
+ * A worker clears it before its first read; anything recorded afterwards re-arms it.
+ */
+@Entity(tableName = "service_outbox_wake_state")
+data class ServiceOutboxWakeState(
+    @PrimaryKey @ColumnInfo(name = "id") val id: Int = SINGLETON_ID,
+    @ColumnInfo(name = "wake_requested") val wakeRequested: Boolean,
+) {
+    companion object {
+        const val SINGLETON_ID = 1
     }
 }

@@ -106,12 +106,30 @@ data class PartnerEventWireV1(
     val signature: String,
 )
 
+fun PartnerEventWireV1.toWireMap(): Map<String, Any?> = linkedMapOf(
+    "keyId" to keyId,
+    "event" to event.toJcsValue(),
+    "signature" to signature,
+)
+
+/** One currently authorized partner recipient key (`partner-ingest.js` currentAuthorizedKeys). */
+data class RecipientKeyRef(
+    val keyId: String,
+    val revision: Int?,
+    val installationId: String?,
+)
+
+/** One row of the per-event result list; `index` matches the submitted batch position. */
 data class PartnerEventResultV1(
-    val eventId: String,
+    val index: Int,
+    val eventId: String?,
     val code: PartnerEventResultCode,
-    /** Populated by RECIPIENT_KEY_STALE: the currently authorized key IDs. */
-    val currentRecipientKeyIds: List<String> = emptyList(),
-    val currentKeyRevision: Int? = null,
+    /** Server validation code (PERMANENT_REJECTED rows) for diagnostics only. */
+    val issue: String? = null,
+    /** Server reason (e.g. EVENT_ID_CONFLICT, SIGNATURE_INVALID) for diagnostics only. */
+    val reason: String? = null,
+    /** Populated by RECIPIENT_KEY_STALE: the currently authorized recipient keys. */
+    val currentRecipientKeys: List<RecipientKeyRef> = emptyList(),
 )
 
 data class PartnerEventBatchV1(val events: List<PartnerEventWireV1>) {
@@ -227,8 +245,47 @@ object PartnerEventProtocol {
         return null
     }
 
+    /**
+     * Parses the `ingestPartnerEvents` payload. A row this client does not understand (unknown
+     * code, unexpected shape) becomes RETRYABLE — a new server rejection can never be mistaken
+     * for an acceptance or a regeneration permit.
+     */
+    fun parseResults(data: Any?): PartnerEventBatchResultV1 {
+        val root = data as? Map<*, *> ?: return PartnerEventBatchResultV1(emptyList())
+        val rows = root["results"] as? List<*> ?: return PartnerEventBatchResultV1(emptyList())
+        return PartnerEventBatchResultV1(
+            rows.mapIndexedNotNull { fallbackIndex, raw ->
+                val row = raw as? Map<*, *> ?: return@mapIndexedNotNull null
+                PartnerEventResultV1(
+                    index = (row["index"] as? Number)?.toInt() ?: fallbackIndex,
+                    eventId = row["eventId"] as? String,
+                    code = PartnerEventResultCode.fromWire(row["code"] as? String ?: "")
+                        ?: PartnerEventResultCode.RETRYABLE,
+                    issue = row["issue"] as? String,
+                    reason = row["reason"] as? String,
+                    currentRecipientKeys = (row["currentRecipientKeys"] as? List<*>)
+                        ?.mapNotNull { it as? Map<*, *> }
+                        ?.mapNotNull { key ->
+                            (key["keyId"] as? String)?.let {
+                                RecipientKeyRef(
+                                    keyId = it,
+                                    revision = (key["revision"] as? Number)?.toInt(),
+                                    installationId = key["installationId"] as? String,
+                                )
+                            }
+                        }
+                        .orEmpty(),
+                )
+            },
+        )
+    }
+
     private const val MAX_SAFE_INTEGER = 9_007_199_254_740_991L
 
     fun base64Url(bytes: ByteArray): String =
         Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+
+    /** base64url(SHA-256(SPKI DER)) — byte-identical to the server's `keyIdFor`. */
+    fun keyIdOf(spkiDer: ByteArray): String =
+        base64Url(MessageDigest.getInstance("SHA-256").digest(spkiDer))
 }

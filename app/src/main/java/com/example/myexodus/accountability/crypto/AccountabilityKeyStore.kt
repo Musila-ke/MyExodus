@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
 import android.util.Log
+import com.example.myexodus.accountability.delivery.PartnerEventKeyStore
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PrivateKey
@@ -206,9 +207,13 @@ open class AccountabilityKeyStore @Inject constructor() {
         keyStore.deleteEntry(SIGNING_ALIAS)
         keyStore.deleteEntry(AGREEMENT_ALIAS)
         keyStore.deleteEntry(PAIR_CANARY_ALIAS)
-        // Collected first — deleting while enumerating the alias set is not safe.
+        // Collected first — deleting while enumerating the alias set is not safe. The
+        // installation-scoped event-signing keys (plan §8.3) die with the identity too.
         keyStore.aliases().toList()
-            .filter { it.startsWith(PAIR_AGREEMENT_ALIAS_PREFIX) }
+            .filter {
+                it.startsWith(PAIR_AGREEMENT_ALIAS_PREFIX) ||
+                    it.startsWith(PartnerEventKeyStore.ALIAS_PREFIX)
+            }
             .forEach { keyStore.deleteEntry(it) }
     }
 

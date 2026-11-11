@@ -49,11 +49,18 @@ class ExistingE2eeRecipientEncryptor(
         ownerUid: String,
         kind: PartnerEventKind,
         plaintext: ByteArray,
+        /** Non-null restricts the set to the server's current authorized recipient key IDs. */
+        authorizedRecipientKeyIds: Set<String>? = null,
     ): Outcome {
-        val records = try {
+        val all = try {
             enrollments()
         } catch (_: Exception) {
             return Outcome.RecipientKeyUnavailable
+        }
+        val records = if (authorizedRecipientKeyIds == null) {
+            all
+        } else {
+            all.filter { recipientKeyIdOf(it.partnerAgreementPubKey) in authorizedRecipientKeyIds }
         }
         if (records.isEmpty()) return Outcome.RecipientKeyUnavailable
         return try {
