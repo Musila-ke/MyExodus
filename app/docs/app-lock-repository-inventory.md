@@ -707,3 +707,31 @@ pass as recorded in §15; only the owner-gated physical-device and API 26-29 leg
   baseline (see Backup compatibility above).
 - BLOCKED (unchanged): biometric and physical-device release-build legs (owner), API 26-29
   tier (§12.2 release blocker).
+
+**Post-gate store refresh (owner-reported defect, 2026-11-12)**
+
+- Symptom (owner, live use): with App Lock on, Home and other pages sat in their failed/loading
+  state after opening the app and only recovered when "Try again" was tapped; the retry then
+  loaded everything immediately.
+- Root cause chain: the activity-scoped `streaksViewModel` and `nudgeSettingsViewModel` are both
+  lazily created and refreshed from `MainActivity.onResume()`; on a locked start that callback
+  runs before the vault gate opens, so `AppRulesStoreFactory.open()`'s `requireVaultAccess()`
+  threw `VaultLockedException`. `StreaksViewModel.refresh()` catches any failure into
+  `_loadFailed = true`, which Home renders as the `MilestoneSectionCard` error branch with
+  `home_grid_retry` ("Try again"); `NudgeSettingsRepository.load()` swallowed the same throw and
+  silently dropped the Settings block-switch state. Nothing re-ran either read after the unlock,
+  so only the manual retry recovered them.
+- Fix (no factory contract change, no gate relaxation): `MainActivity.onResume()` (`:370-381`)
+  now runs those store reads only when `appLockCoordinator.state.value.allowsVaultAccess` is
+  true — they cannot succeed while the gate is closed. Inside `setContent`, a
+  `LaunchedEffect(appLockState)` (`:616-626`) re-runs `streaksViewModel.refresh()`,
+  `nudgeSettingsViewModel.refresh()` and `refreshWebsiteLimitTunnel()` on the transition to
+  `AppLockState.UNLOCKED`, the first state that admits the stores. With App Lock DISABLED the
+  resume reads still run unchanged (`allowsVaultAccess` is true).
+- Evidence: full JVM suite green on the fixed tree (BUILD SUCCESSFUL 7m22s, exit 0).
+  Device, emulator-5558 API 34 debug, App Lock on, PIN 1234: app cold-started behind the gate
+  ("My Exodus is locked"), Unlock → system credential "Unlock My Exodus" → PIN →
+  `MyExodusAppLock: Vault verified: sessions=0 log_rows=0`; Home then resolved on its own —
+  "Day 1" plus the populated Milestones ladder, no "Try again" — and Settings rendered with
+  "App Lock On". No failure state was observed after the unlock.
+- BLOCKED: biometric leg (AVD has no fingerprint enrolled) and the physical release-build run.

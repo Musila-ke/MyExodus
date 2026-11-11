@@ -369,10 +369,16 @@ class MainActivity : FragmentActivity() {
      *  covers the first launch. */
     override fun onResume() {
         super.onResume()
-        streaksViewModel.refresh()
-        // SOS §8.19: the block switch's state is re-read at the same boundary (a pair change
-        // or a write from elsewhere lands the fresh value on the way back to Settings).
-        nudgeSettingsViewModel.refresh()
+        // §8.3: on a locked start this callback runs before the vault gate opens, and an
+        // open() here throws [VaultLockedException] into these screens' failure states.
+        // The unlock transition re-runs them (setContent's App Lock effect).
+        if (appLockCoordinator.state.value.allowsVaultAccess) {
+            streaksViewModel.refresh()
+            // SOS §8.19: the block switch's state is re-read at the same boundary (a pair
+            // change or a write from elsewhere lands the fresh value on the way back to
+            // Settings).
+            nudgeSettingsViewModel.refresh()
+        }
         // §8.2: enrollment changes cannot invalidate the key itself (time-bound keys sit
         // outside setInvalidatedByBiometricEnrollment's scope — android-36 javadoc), so the
         // poll runs here: startup and every ON_RESUME.
@@ -608,6 +614,16 @@ class MainActivity : FragmentActivity() {
             // is the durable copy, this is the live one.
             var themeMode by remember { mutableStateOf(themeSettings.mode) }
             val appLockState by appLockCoordinator.state.collectAsStateWithLifecycle()
+            // Owner-reported 2026-11-12: with App Lock on, pages sat in their failed/loading
+            // state until a manual retry. The ON_RESUME store reads above run while the vault
+            // gate is still closed on a locked start, so nothing re-read after the unlock.
+            // Re-run them at the only transition that admits the stores.
+            LaunchedEffect(appLockState) {
+                if (appLockState != AppLockState.UNLOCKED) return@LaunchedEffect
+                streaksViewModel.refresh()
+                nudgeSettingsViewModel.refresh()
+                refreshWebsiteLimitTunnel()
+            }
             MyExodusTheme(darkTheme = rememberDarkTheme(themeMode)) {
                 // §8.2: sole parent of the protected tree. While the state is neither DISABLED
                 // nor UNLOCKED, no app navigation, sheet, dialog or screen below exists.
