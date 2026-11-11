@@ -25,6 +25,14 @@ object VaultEnvelope {
     /** Wrapped secret is the rules-store SQLCipher DEK. */
     const val KIND_RULES_DEK: Int = 1
 
+    /**
+     * Wrapped secret is the vault's SQLCipher DEK bundle (rules + activity log), so one
+     * envelope costs one prompt-authorized encrypt and one prompt-authorized decrypt (§8.4).
+     */
+    const val KIND_VAULT_DEKS: Int = 2
+
+    private val SUPPORTED_KINDS = setOf(KIND_RULES_DEK, KIND_VAULT_DEKS)
+
     const val IV_BYTES: Int = 12
     const val GCM_TAG_BITS: Int = 128
 
@@ -49,6 +57,7 @@ object VaultEnvelope {
 
     fun encode(envelope: Envelope): ByteArray {
         require(envelope.keyVersion > 0) { "key version must be positive" }
+        require(envelope.kind in SUPPORTED_KINDS) { "unsupported kind ${envelope.kind}" }
         require(envelope.iv.size == IV_BYTES) { "IV must be $IV_BYTES bytes" }
         require(envelope.ciphertext.size >= GCM_TAG_BYTES) { "ciphertext must carry the GCM tag" }
         val out = ByteArrayOutputStream()
@@ -112,7 +121,7 @@ object VaultEnvelope {
         val resolvedKeyVersion = keyVersion ?: throw VaultEnvelopeException("missing key version")
         val resolvedKind = kind ?: throw VaultEnvelopeException("missing kind")
         if (resolvedKeyVersion <= 0) throw VaultEnvelopeException("key version must be positive")
-        if (resolvedKind != KIND_RULES_DEK) throw VaultEnvelopeException("unsupported kind $resolvedKind")
+        if (resolvedKind !in SUPPORTED_KINDS) throw VaultEnvelopeException("unsupported kind $resolvedKind")
         return Envelope(
             keyVersion = resolvedKeyVersion,
             kind = resolvedKind,

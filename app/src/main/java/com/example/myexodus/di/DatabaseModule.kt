@@ -3,6 +3,9 @@ package com.example.myexodus.di
 import android.content.Context
 import com.example.myexodus.accountability.sync.enqueuePartnerSyncNow
 import com.example.myexodus.applock.AppLockCoordinator
+import com.example.myexodus.applock.VaultStoreKeys
+import com.example.myexodus.applock.crypto.VaultEnvelopeStore
+import com.example.myexodus.applock.crypto.VaultKeyManager
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.RulesSnapshotPublisher
 import com.example.myexodus.data.db.ActivityLogKeyManager
@@ -15,6 +18,7 @@ import com.example.myexodus.data.db.DatabaseMigration
 import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.data.db.RulesStoreEncryption
 import com.example.myexodus.data.db.RulesStoreKeyManager
+import com.example.myexodus.data.db.SqlCipherVaultKeys
 import dagger.Lazy
 import dagger.Module
 import dagger.Provides
@@ -82,6 +86,19 @@ object DatabaseModule {
         @ApplicationContext context: Context,
         keyManager: ActivityLogKeyManager,
     ): ActivityLogStore = ActivityLogStore(context, keyManager)
+
+    /** Auth-bound vault wrapping key and envelope store (§8.4); no-backup, Keystore-backed. */
+    @Provides @Singleton
+    fun provideVaultKeyManager(): VaultKeyManager = VaultKeyManager()
+
+    @Provides @Singleton
+    fun provideVaultEnvelopeStore(@ApplicationContext context: Context): VaultEnvelopeStore =
+        VaultEnvelopeStore(context)
+
+    /** Wrap-only migration seam (§8.7 route 1) over the two SQLCipher stores. */
+    @Provides @Singleton
+    fun provideVaultStoreKeys(@ApplicationContext context: Context): VaultStoreKeys =
+        SqlCipherVaultKeys(context)
 
     @Provides @Singleton
     fun provideDatabaseMigration(

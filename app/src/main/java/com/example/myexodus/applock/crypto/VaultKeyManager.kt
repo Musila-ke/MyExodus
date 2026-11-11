@@ -26,39 +26,24 @@ class VaultKeyManager(
     private val keyLookup: (String) -> SecretKey? = { alias ->
         androidKeyStore().getKey(alias, null) as? SecretKey
     },
+    // Keystore generation/deletion cannot run on the JVM (no AndroidKeyStore provider in
+    // Robolectric); the seams exist only so enrollment logic is unit-testable, and both
+    // defaults are the production Keystore path.
+    private val keyGenerator: (String) -> Unit = { alias -> generateAndroidKey(alias) },
+    private val keyDeleter: (String) -> Unit = { alias -> androidKeyStore().deleteEntry(alias) },
 ) {
 
     fun hasKey(keyVersion: Int = KEY_VERSION): Boolean =
-        androidKeyStore().containsAlias(aliasFor(keyVersion))
+        keyLookup(aliasFor(keyVersion)) != null
 
     /** Creates the wrapping key once; existing material is never replaced here. */
     fun createKey(keyVersion: Int = KEY_VERSION) {
-        val store = androidKeyStore()
-        if (store.containsAlias(aliasFor(keyVersion))) return
-        val builder = KeyGenParameterSpec.Builder(
-            aliasFor(keyVersion),
-            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-        )
-            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .setKeySize(KEY_BITS)
-            .setUserAuthenticationRequired(true)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            builder.setUserAuthenticationParameters(
-                0,
-                KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            builder.setUserAuthenticationValidityDurationSeconds(LEGACY_WINDOW_SECONDS)
-        }
-        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
-        generator.init(builder.build())
-        generator.generateKey()
+        if (hasKey(keyVersion)) return
+        keyGenerator(aliasFor(keyVersion))
     }
 
     fun deleteKey(keyVersion: Int = KEY_VERSION) {
-        androidKeyStore().deleteEntry(aliasFor(keyVersion))
+        keyDeleter(aliasFor(keyVersion))
     }
 
     /**
@@ -88,8 +73,8 @@ class VaultKeyManager(
         applicationId: String,
         databaseId: String,
         keyVersion: Int = KEY_VERSION,
+        kind: Int = VaultEnvelope.KIND_RULES_DEK,
     ): ByteArray {
-        val kind = VaultEnvelope.KIND_RULES_DEK
         cipher.updateAAD(VaultEnvelope.canonicalAad(applicationId, databaseId, keyVersion, kind))
         val ciphertext = cipher.doFinal(secret)
         val iv = cipher.iv ?: throw VaultEnvelopeException("cipher produced no IV")
@@ -104,9 +89,18 @@ class VaultKeyManager(
      * wrong version or any tampered byte throws (AEADBadTagException / [VaultEnvelopeException])
      * and no secret is returned.
      */
-    fun open(encoded: ByteArray, applicationId: String, databaseId: String): ByteArray {
+    fun open(
+        encoded: ByteArray,
+        applicationId: String,
+        databaseId: String,
+        authenticatedCipher: Cipher? = null,
+    ): ByteArray {
         val envelope = VaultEnvelope.parse(encoded)
-        val cipher = decryptionCipher(envelope.iv, envelope.keyVersion)
+        val cipher = authenticatedCipher ?: decryptionCipher(envelope.iv, envelope.keyVersion)
+        val cipherIv = cipher.iv
+        if (cipherIv != null && !cipherIv.contentEquals(envelope.iv)) {
+            throw VaultEnvelopeException("cipher IV does not match the envelope")
+        }
         cipher.updateAAD(
             VaultEnvelope.canonicalAad(applicationId, databaseId, envelope.keyVersion, envelope.kind),
         )
@@ -135,5 +129,28 @@ class VaultKeyManager(
 
         private fun androidKeyStore(): KeyStore =
             KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+
+        private fun generateAndroidKey(alias: String) {
+            val builder = KeyGenParameterSpec.Builder(
+                alias,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(KEY_BITS)
+                .setUserAuthenticationRequired(true)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                builder.setUserAuthenticationParameters(
+                    0,
+                    KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                builder.setUserAuthenticationValidityDurationSeconds(LEGACY_WINDOW_SECONDS)
+            }
+            val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+            generator.init(builder.build())
+            generator.generateKey()
+        }
     }
 }

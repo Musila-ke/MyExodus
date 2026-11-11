@@ -18,9 +18,9 @@ class VaultEnvelopeTest {
     // A software key lets the real VaultKeyManager seal/open path run on the JVM; the Android
     // Keystore provider and its auth-bound specs are device-verified, not unit-tested.
     private val key: SecretKey = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
-    private val keyManager = VaultKeyManager { alias ->
+    private val keyManager = VaultKeyManager(keyLookup = { alias ->
         if (alias == VaultKeyManager.ALIAS_V1) key else null
-    }
+    })
     private val secret = ByteArray(32) { (it * 7 + 3).toByte() }
 
     @Test
@@ -161,7 +161,7 @@ class VaultEnvelopeTest {
             VaultEnvelope.parse(
                 raw(
                     record(0x01, byteArrayOf(0, 0, 0, 1)),
-                    record(0x02, byteArrayOf(2)),
+                    record(0x02, byteArrayOf(3)),
                     record(0x03, ByteArray(12)),
                     record(0x04, ByteArray(32)),
                 ),
@@ -188,6 +188,34 @@ class VaultEnvelopeTest {
                     record(0x04, ByteArray(15)),
                 ),
             )
+        }
+    }
+
+    @Test
+    fun `a vault DEK bundle envelope round-trips under KIND_VAULT_DEKS`() {
+        val payload = ByteArray(68) { (it * 5 + 1).toByte() }
+
+        val sealed = keyManager.seal(
+            keyManager.encryptionCipher(),
+            payload,
+            APP_ID,
+            DB_ID,
+            kind = VaultEnvelope.KIND_VAULT_DEKS,
+        )
+
+        assertEquals(VaultEnvelope.KIND_VAULT_DEKS, VaultEnvelope.parse(sealed).kind)
+        assertArrayEquals(payload, keyManager.open(sealed, APP_ID, DB_ID))
+    }
+
+    @Test
+    fun `the kind is bound into the AAD`() {
+        val sealed = keyManager.seal(keyManager.encryptionCipher(), secret, APP_ID, DB_ID)
+        val swapped = VaultEnvelope.encode(
+            VaultEnvelope.parse(sealed).copy(kind = VaultEnvelope.KIND_VAULT_DEKS),
+        )
+
+        assertThrows(AEADBadTagException::class.java) {
+            keyManager.open(swapped, APP_ID, DB_ID)
         }
     }
 

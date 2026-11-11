@@ -431,3 +431,99 @@ WAL-aware staged migration or wrap-only migration (the Phase 1 inventory selecte
 an install whose rules DB already has an independent random DEK); atomic staging/active envelope
 persistence and migration journal in no-backup storage; enrollment encrypt-auth + decrypt-verify;
 first-real-unlock cleanup; disable/recovery. The §12/§13 evidence above must stay green.
+
+## 14. Phase 5 status — wrap-only migration, journal and recovery
+
+**What shipped (plan §6.1, §8.7 route 1, §8.11, §8.12)**
+
+- `applock/crypto/VaultSecretBundle.kt` — the plaintext payload of the single envelope: one
+  framed 256-bit SQLCipher DEK per vault database (rules + activity log). Strict decode: exactly
+  68 bytes, each frame exactly 32; any deviation is a `VaultEnvelopeException`, never a partial
+  bundle. The plain accountability store is operational and never bundled (inventory D2).
+- `applock/crypto/VaultEnvelopeStore.kt` — single-envelope persistence under
+  `noBackupFilesDir/vault`: fsync'd `.tmp` write then same-directory `ATOMIC_MOVE`; staging and
+  active are separate files; an interrupted `.tmp` is swept at startup and never read as an
+  envelope. An envelope restored onto another device without the original Keystore key can only
+  surface as RECOVERY_REQUIRED, never as a fresh install.
+- `applock/VaultDatabase.kt`, `applock/VaultStoreKeys.kt` — the two vault database identities
+  and the migration seam (`unwrapLegacy` / `adoptLegacy` / `deleteLegacyMaterial` / `verify`).
+- `applock/VaultMigration.kt` — journal-first orchestrator: `enroll`, `disable`,
+  `completeFirstUnlock`, `recoverInterrupted`.
+- `data/db/SqlCipherVaultKeys.kt` — production seam over the existing Keystore-wrapped DEKs
+  (`RulesStoreKeyManager.getOrCreateDek`, `ActivityLogKeyManager.getOrCreateKey`); `adoptLegacy`
+  re-wraps through the same pre-feature KEK (`KeystoreWrappedDekManager.adoptKey`); `verify`
+  opens the real SQLCipher file with the raw key and reads `sqlite_master` (a missing file is
+  not an error and is never created).
+- `applock/AppLockStatusStore.kt` — journal constants and `restoreActivePendingJournal`.
+  Unknown/half-written durable state still maps to RECOVERY_REQUIRED (INV-10).
+- `applock/crypto/VaultEnvelope.kt` — `KIND_VAULT_DEKS = 2` added to the supported set and bound
+  into the canonical AAD, so a kind swap also fails the tag.
+- `applock/crypto/VaultKeyManager.kt` — `kind` on `seal`; `generateAndroidKey` moved to the
+  companion (constructor default lambdas cannot call instance methods).
+- `di/DatabaseModule.kt` — providers for `VaultKeyManager`, `VaultEnvelopeStore`,
+  `VaultStoreKeys`.
+
+**Crash ordering (verified by tests)**
+
+- Enroll: staging journal → unwrap both DEKs → prompt-authorized encrypt → durable staging write
+  → read-back → a second, independently initiated prompt-authorized decrypt → bundle equality →
+  both stores actually open with their DEKs → rename envelope to active → one atomic prefs edit
+  (enabled + `active_pending_first_unlock`). A crash therefore never leaves "enabled" without its
+  key. Any pre-commit failure discards staging and rolls the journal to none; a crash that leaves
+  the staging journal is swept by `recoverInterrupted`, which also deletes the unused auth-bound
+  alias. A clean cancel keeps the alias (harmless: it wraps nothing, and `createKey` never
+  replaces existing material).
+- Disable: `beginDisabling` → re-wrap each DEK under the pre-feature KEK → read it back through
+  that wrap and open the real store → single `commitDisabled` edit → only then delete the
+  auth-bound envelope and alias (best-effort; idempotent at startup). The only key is never
+  deleted while the feature is enabled.
+- `recoverInterrupted` is journal-first. DISABLED sweeps leftover staging/active artifacts and
+  the alias. LOCKED requires the active envelope; a missing one is RECOVERY_REQUIRED with
+  nothing touched. An interrupted disable returns to `active_pending_first_unlock` — never
+  "verified", because premature marking would leave the pre-feature wrap usable as a bypass —
+  and a verified first-unlock cleanup is finished idempotently. Unknown states are preserved
+  untouched (INV-06/INV-10).
+
+**Evidence (unit, this change set)**
+
+- `VaultMigrationTest` 18/18: happy path (one envelope, enabled, pending journal, exactly two
+  prompt calls); refusal when already enabled and when the vault cannot quiesce (no durable
+  write); cancel at either prompt rolls back; a swapped verification key → `crypto_error`, no
+  commit; a store the recovered key cannot open → `db_verify_failed` and the first failing
+  verify short-circuits; crash-after-staging swept to DISABLED; enabled without its envelope →
+  RECOVERY_REQUIRED with the journal preserved; unknown status + artifact preserved untouched;
+  interrupted disable → LOCKED, journal restored, envelope kept; interrupted first-unlock
+  cleanup completes at startup; `completeFirstUnlock` is idempotent and a no-op when disabled;
+  disable round-trip re-wraps under the legacy KEK and removes the vault; a failed disabled-mode
+  verify rolls the journal back and keeps the vault; disable refuses when not enabled or busy.
+- `VaultSecretBundleCodecTest` 4/4: round-trip; a wrong DEK size is refused on encode; any total
+  length deviation is rejected; a mis-framed DEK length is rejected.
+- `VaultEnvelopeTest` 13/13 (adds the `KIND_VAULT_DEKS` round-trip and proves the kind is
+  AAD-bound).
+- Full JVM suite: 281 classes / 2,669 tests, 0 failures, 0 errors, 0 skipped.
+- `:app:lintDebug` alone (ADR #208): 0 errors, the same 2 pre-existing warnings
+  (`BatchEditor.kt:102`, `res/values/strings.xml:305`); no new warnings.
+
+**Gate accounting (§7 Phase 5)**
+
+- PASSED (unit): journal ordering, rollback, crash recovery, disable inversion, and the
+  "enabled is never observable without its key" invariant, with real AES-GCM on a software key.
+- The §7 clause "old PIN privacy route removed only after commit" is **vacuous**: inventory
+  §6/D7 records that no app PIN exists (partner approval is the only existing gate), so there
+  was no route to remove and nothing was deleted for it.
+- A still-plaintext legacy store fails the strict DEK probe, so enrollment refuses
+  non-destructively (`db_verify_failed`) and leaves the file untouched for the existing
+  conversion-on-open path; route 3 (export/rekey) remains out of scope by the §8.7 decision.
+- NOT YET EXECUTABLE (carried to Phase 6/7): the two prompt-authorized Keystore operations
+  (per-use `CryptoObject` on API 30+, Keyguard window on 26-29) need a real prompt; they are
+  emulator/manual-device legs. No production caller enables the feature yet, so the enrollment
+  authorizer/prompt wiring and any enrollment UI are Phase 6 work.
+- UNRESOLVED RELEASE BLOCKER (§12.2): the API 26-29 physical tier is unchanged.
+
+**Phase 6 entry conditions**
+
+Wire enrollment/disable to `VaultMigration` with an `AppLockAuthenticator`-backed
+`VaultCipherAuthorizer`; gate the `MyExodusApp.kt:272` startup open behind the coordinator and
+defer it while locked (the Phase 3 crash proved this gap); reconcile `LocalDatabaseMigration`
+scope switching with the vault-enabled DEK source; backup compatibility and lock triggers. The
+§12-§14 evidence above must stay green.
