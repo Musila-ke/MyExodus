@@ -10,6 +10,8 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.accountability.delivery.InstallationState
 import com.example.myexodus.accountability.delivery.PartnerEventKind
 import com.example.myexodus.accountability.delivery.PartnerEventProtocol
+import com.example.myexodus.accountability.delivery.PartnerMailboxDelivery
+import com.example.myexodus.accountability.delivery.PartnerMailboxState
 import com.example.myexodus.accountability.delivery.PendingPartnerEvent
 import com.example.myexodus.accountability.delivery.ServiceEventOutbox
 import com.example.myexodus.accountability.delivery.ServiceOutboxHealth
@@ -1133,6 +1135,71 @@ class AccountabilityDatabaseMigrationTest {
             val row = checkNotNull(dao.event("e-1"))
             assertNull("a pre-v17 row has no terminal timestamp", row.terminalAtMs)
             assertEquals("pre-v17 data survives the upgrade", byteArrayOf(1).toList(), row.temporaryLocalCiphertext!!.toList())
+        }
+        db.close()
+    }
+
+    /**
+     * Partner-delivery Phase 5 (v17→v18): the recipient mailbox receipts and watermark appear
+     * and Room's post-migration validation accepts the schema. A v17 chain row survives, and
+     * every new DAO path — receipt insert/read, duplicate IGNORE, watermark null→set — is live
+     * on the upgraded file.
+     */
+    @Test
+    fun migration17to18_addsPartnerMailboxState_andRoomAcceptsSchema() {
+        val dbPath = context.getDatabasePath(AccountabilityDatabase.DB_NAME).absolutePath
+
+        AndroidSQLiteDriver().open(dbPath).use { conn ->
+            V12_DDL.forEach { ddl -> conn.prepare(ddl).use { it.step() } }
+            conn.prepare(
+                "INSERT INTO events (pair_id, sender_key_id, epoch, sequence, previous_event_hash, " +
+                    "event_hash, envelope, direction, created_at, sync_state) " +
+                    "VALUES ('pair-a', 'k1', 0, 1, NULL, x'01', x'02', 'OUT', 5, 'PENDING')",
+            ).use { it.step() }
+            runBlocking {
+                AccountabilityDatabase.MIGRATION_12_13.migrate(conn)
+                AccountabilityDatabase.MIGRATION_13_14.migrate(conn)
+                AccountabilityDatabase.MIGRATION_14_15.migrate(conn)
+                AccountabilityDatabase.MIGRATION_15_16.migrate(conn)
+                AccountabilityDatabase.MIGRATION_16_17.migrate(conn)
+            }
+            conn.prepare("PRAGMA user_version = 17").use { it.step() }
+        }
+
+        val db = Room.databaseBuilder(
+            context,
+            AccountabilityDatabase::class.java,
+            AccountabilityDatabase.DB_NAME,
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
+        runBlocking {
+            val dao = db.partnerMailboxDao()
+            assertNull("a fresh installation has no watermark", dao.watermark("inst-1"))
+            assertNull(dao.receipt("inst-1", "m-1"))
+            assertEquals(
+                1L,
+                dao.insertDelivery(
+                    PartnerMailboxDelivery("inst-1", "m-1", PartnerMailboxDelivery.STATUS_DELIVERED),
+                ),
+            )
+            assertEquals(PartnerMailboxDelivery.STATUS_DELIVERED, dao.receipt("inst-1", "m-1"))
+            // IGNORE: a re-read document never rewrites its terminal receipt.
+            dao.insertDelivery(
+                PartnerMailboxDelivery("inst-1", "m-1", PartnerMailboxDelivery.STATUS_UNDECRYPTABLE),
+            )
+            assertEquals(PartnerMailboxDelivery.STATUS_DELIVERED, dao.receipt("inst-1", "m-1"))
+            // Receipts are keyed per installation.
+            assertNull(dao.receipt("inst-2", "m-1"))
+
+            dao.upsertState(PartnerMailboxState("inst-1", 500))
+            assertEquals(500L, dao.watermark("inst-1"))
+            dao.upsertState(PartnerMailboxState("inst-1", 900))
+            assertEquals("the watermark is replaceable, not append-only", 900L, dao.watermark("inst-1"))
+
+            assertEquals(
+                "the pre-v18 chain row survives",
+                1L,
+                db.chainEventDao().chainFor("pair-a").single().sequence,
+            )
         }
         db.close()
     }

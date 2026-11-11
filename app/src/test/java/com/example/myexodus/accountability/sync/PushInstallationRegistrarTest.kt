@@ -31,6 +31,7 @@ class PushInstallationRegistrarTest {
         val eligible: Boolean = true,
     ) {
         val writes = mutableListOf<Write>()
+        val recipientWrites = mutableListOf<Write>()
         val legacyDeletes = mutableListOf<Pair<String, String>>()
         var uidCalls = 0
         var fidCalls = 0
@@ -44,6 +45,9 @@ class PushInstallationRegistrarTest {
             deleteLegacyFails: Boolean = false,
             legacyInstallationId: String? = "android-id-legacy",
             sessionActive: Boolean = true,
+            recipientId: String? = "svc-inst-1",
+            recipientThrows: Boolean = false,
+            writeRecipientFails: Boolean = false,
         ) = PushInstallationRegistrar(
             ensureInstallationId = {
                 fidCalls++
@@ -73,6 +77,14 @@ class PushInstallationRegistrarTest {
                 if (deleteLegacyFails) throw IllegalStateException("delete denied")
                 legacyDeletes += uid to installationId
             },
+            recipientInstallationId = {
+                if (recipientThrows) throw IllegalStateException("outbox down")
+                recipientId
+            },
+            writeRecipient = { uid, installationId, data ->
+                if (writeRecipientFails) throw IllegalStateException("mirror denied")
+                recipientWrites += Write(uid, installationId, data)
+            },
         )
     }
 
@@ -85,7 +97,10 @@ class PushInstallationRegistrarTest {
         assertEquals("uid-a", write.uid)
         assertEquals("fid-1", write.installationId)
         assertEquals(
-            setOf("provider", "token", "platform", "appVersion", "pushEligible", "updatedAt", "createdAt"),
+            setOf(
+                "provider", "token", "platform", "appVersion", "pushEligible",
+                "registrationKind", "updatedAt", "createdAt",
+            ),
             write.data.keys,
         )
         assertEquals("fcm", write.data["provider"])
@@ -93,6 +108,49 @@ class PushInstallationRegistrarTest {
         assertEquals("android", write.data["platform"])
         assertEquals("9.9", write.data["appVersion"])
         assertEquals(true, write.data["pushEligible"])
+        assertEquals("TOKEN", write.data["registrationKind"])
+    }
+
+    @Test
+    fun register_mirrorsTheSameTokenUnderTheServiceInstallationId() = runBlocking {
+        // §8.6: the partner notifier dispatches to the service installation id, not the FID.
+        val fake = Fake()
+        assertTrue(fake.registrar().register())
+
+        val mirror = fake.recipientWrites.single()
+        assertEquals("uid-a", mirror.uid)
+        assertEquals("svc-inst-1", mirror.installationId)
+        assertEquals(fake.writes.single().data, mirror.data)
+    }
+
+    @Test
+    fun register_skipsTheMirror_whenTheServiceIdIsTheFid() = runBlocking {
+        val fake = Fake()
+        assertTrue(fake.registrar(recipientId = "fid-1").register())
+        assertEquals(1, fake.writes.size)
+        assertEquals(0, fake.recipientWrites.size)
+    }
+
+    @Test
+    fun register_skipsTheMirror_whenNoServiceInstallationExistsYet() = runBlocking {
+        val fake = Fake()
+        assertTrue(fake.registrar(recipientId = null).register())
+        assertEquals(1, fake.writes.size)
+        assertEquals(0, fake.recipientWrites.size)
+    }
+
+    @Test
+    fun register_succeeds_whenOnlyTheMirrorFails() = runBlocking {
+        // The mailbox pull converges without push wake, so a mirror miss must not fail the pass.
+        assertTrue(Fake().registrar(writeRecipientFails = true).register())
+        assertTrue(Fake().registrar(recipientThrows = true).register())
+    }
+
+    @Test
+    fun register_doesNotMirror_whenThePrimaryWriteFailed() = runBlocking {
+        val fake = Fake()
+        assertFalse(fake.registrar(writeFails = true).register())
+        assertEquals(0, fake.recipientWrites.size)
     }
 
     @Test

@@ -47,14 +47,12 @@ const MAX_INLINE_RECIPIENTS = 20;
 const MAX_RECIPIENTS = 200;
 
 // §8.6: BLOCK_ATTEMPT pushes coalesce per recipient installation in a rolling 60 s window.
-const BLOCK_GROUP_MS = 60 * 1000;
+// The group id is shared with the Phase 5 notifier so ingest and fanout materialization
+// stamp identical groups.
+const { blockGroupId } = require('./partner-notify-logic');
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const REQUEST_KEYS = ['installationId', 'events'];
-
-function blockGroupId(recipientUid, installationId, at) {
-  return `blk:${recipientUid}:${installationId}:${Math.floor(at / BLOCK_GROUP_MS)}`;
-}
 
 /**
  * Currently authorized recipient keys for `uid`: every ACTIVE recipient key of every
@@ -242,7 +240,12 @@ async function processEvent({ db, uid, installationId, wire, at }) {
         db.doc(`${COLLECTIONS.mailboxes}/${entry.recipientUid}/messages/${event.eventId}__${recipientInstallationId}`),
         {
           ownerUid: uid,
+          // §8.2 AAD inputs: the recipient needs the sender's installation id and kind to
+          // reconstruct PartnerEventEnvelopeAad. Without them the payload is undecryptable.
+          installationId,
+          kind: event.kind,
           eventId: event.eventId,
+          recipientInstallationId,
           recipientKeyId: entry.envelope.recipientEncryptionKeyId,
           recipientKeyRevision: entry.key.revision,
           payload: entry.envelope.payload,
@@ -258,10 +261,13 @@ async function processEvent({ db, uid, installationId, wire, at }) {
           eventId: event.eventId,
           recipientUid: entry.recipientUid,
           recipientInstallationId,
+          kind: event.kind,
           groupId: event.kind === KIND.BLOCK_ATTEMPT
             ? blockGroupId(entry.recipientUid, recipientInstallationId, at)
             : null,
           status: 'PENDING',
+          attempts: 0,
+          nextAttemptAt: at,
           leaseUntil: null,
           sentAt: null,
           createdAt: at,

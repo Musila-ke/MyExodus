@@ -14,14 +14,18 @@ import com.example.myexodus.accountability.delivery.PartnerEventDrain
 import com.example.myexodus.accountability.delivery.PartnerEventKeyStore
 import com.example.myexodus.accountability.delivery.PartnerEventRecorder
 import com.example.myexodus.accountability.delivery.PartnerEventRegistrar
+import com.example.myexodus.accountability.delivery.PartnerMailboxDecryptor
+import com.example.myexodus.accountability.delivery.PartnerMailboxReceiver
 import com.example.myexodus.accountability.delivery.ServiceEventOutbox
 import com.example.myexodus.accountability.delivery.ServicePayloadProtector
 import com.example.myexodus.accountability.delivery.SystemPartnerDeliveryClock
 import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.state.AccountabilityDatabase
+import com.example.myexodus.accountability.sync.FirestoreSchema
 import com.example.myexodus.accountability.sync.await
 import com.example.myexodus.accountability.sync.decodePublicKey
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.functions.FirebaseFunctions
 import dagger.Module
 import dagger.Provides
@@ -61,6 +65,42 @@ object PartnerDeliveryModule {
             )
         },
         cipher = eventCipher,
+    )
+
+    @Provides @Singleton
+    fun providePartnerMailboxDecryptor(
+        db: AccountabilityDatabase,
+        keys: AccountabilityKeyStore,
+        cekDerivation: CekDerivation,
+        eventCipher: EventCipher,
+    ): PartnerMailboxDecryptor = PartnerMailboxDecryptor(
+        enrollmentFor = db.enrollmentDao()::getByPairId,
+        deriveCek = { enrollment ->
+            cekDerivation.deriveCek(
+                enrollment.pairId,
+                keys.agreementPrivateKeyFor(enrollment.myAgreementKeyAlias),
+                decodePublicKey(enrollment.partnerAgreementPubKey),
+            )
+        },
+        cipher = eventCipher,
+    )
+
+    /** §8.6 Phase 5 recipient half: the mailbox the server fans partner events into. The
+     *  default [PartnerMailboxReceiver.onDelivered] no-op is the Phase 7 projection seam. */
+    @Provides @Singleton
+    fun providePartnerMailboxReceiver(
+        db: AccountabilityDatabase,
+        outbox: ServiceEventOutbox,
+        decryptor: PartnerMailboxDecryptor,
+        firestore: FirebaseFirestore,
+    ): PartnerMailboxReceiver = PartnerMailboxReceiver(
+        dao = db.partnerMailboxDao(),
+        ownerUid = { FirebaseAuth.getInstance().currentUser?.uid },
+        recipientInstallationId = { uid -> outbox.ensureInstallation(uid).installationId },
+        queryMailbox = { uid, installationId, fromMs, limit ->
+            FirestoreSchema.partnerMailboxDocsAfter(firestore, uid, installationId, fromMs, limit)
+        },
+        decrypt = decryptor::open,
     )
 
     @Provides @Singleton

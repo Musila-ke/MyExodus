@@ -89,6 +89,18 @@ class PartnerPushParserTest {
     }
 
     @Test
+    fun partnerEventWake_runsASyncPassThatPullsTheMailbox() {
+        // functions/partner-notify.js wake: data { v:'1', type:'PARTNER_EVENT', eventId }.
+        // The event id is not a message id — the mailbox pull reconciles by receipt watermark.
+        assertEquals(
+            PartnerPushWake.Sync(null),
+            PartnerPushParser.parse(
+                mapOf("v" to "1", "type" to "PARTNER_EVENT", "eventId" to "evt-1"),
+            ),
+        )
+    }
+
+    @Test
     fun unknownOrAbsentType_isIgnored() {
         assertEquals(PartnerPushWake.Ignored, PartnerPushParser.parse(emptyMap()))
         assertEquals(PartnerPushWake.Ignored, PartnerPushParser.parse(mapOf("v" to "1")))

@@ -18,6 +18,8 @@ import com.example.myexodus.accountability.crypto.AttestationVerifier
 import com.example.myexodus.accountability.crypto.EventCipher
 import com.example.myexodus.accountability.crypto.IdentityEpochStore
 import com.example.myexodus.accountability.crypto.IdentityMigration
+import com.example.myexodus.accountability.delivery.PartnerMailboxReceiver
+import com.example.myexodus.accountability.delivery.ServiceEventOutbox
 import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.EnrollmentFlow
@@ -415,6 +417,7 @@ object AccountabilityModule {
         resolver: PairUidResolver,
         crashReporting: CrashReporting,
         sessionFence: SessionFence,
+        outbox: ServiceEventOutbox,
     ): PushInstallationRegistrar = PushInstallationRegistrar(
         ensureInstallationId = { PushInstallationRegistrar.installationIdOf() },
         platform = "android",
@@ -435,6 +438,14 @@ object AccountabilityModule {
             FirestoreSchema.pushInstallationDocument(firestore, uid, installationId)
                 .delete()
                 .awaitReportingDenial(crashReporting, "push_installation_delete")
+        },
+        // §8.6 Phase 5: the partner notifier dispatches to the owner-bound service
+        // installation id (partnerRecipientKeys), so the same token is mirrored there.
+        recipientInstallationId = { uid -> outbox.ensureInstallation(uid).installationId },
+        writeRecipient = { uid, installationId, data ->
+            FirestoreSchema.pushInstallationDocument(firestore, uid, installationId)
+                .set(data)
+                .awaitReportingDenial(crashReporting, "push_installation_recipient")
         },
     )
 
@@ -905,6 +916,7 @@ object AccountabilityModule {
         reachability: PairingReachabilityStore,
         dms: PartnerDmsClient,
         sessionFence: SessionFence,
+        recipientMailbox: PartnerMailboxReceiver,
     ): PartnerSyncCoordinator = PartnerSyncCoordinator(
         enrollmentDao = enrollmentDao,
         storeFactory = storeFactory,
@@ -925,6 +937,7 @@ object AccountabilityModule {
         pruneReachability = reachability::prune,
         consumeIdentityRotation = reachability::consumeIdentityRotation,
         checkIn = { force -> heartbeat.checkIn(force) },
+        pullPartnerEvents = { recipientMailbox.pull().delivered },
         syncAvailabilityConsent = { pairId, enabled -> dms.syncConsent(pairId, enabled) },
         fence = sessionFence,
         resolveRuleLabel = { _, target -> com.example.myexodus.ui.appLabel(context, target) },

@@ -279,6 +279,12 @@ exports._createRegisterDeviceChallenge = createRegisterDeviceChallenge;
 exports._createRegisterOrRotateDevice = createRegisterOrRotateDevice;
 exports._createIngestPartnerEvents = createIngestPartnerEvents;
 
+// §8.6 (Phase 5): partner notification dispatch — prompt trigger plus the every-minute
+// sweeper that also materializes fanout tasks and reclaims expired leases.
+const { createPartnerNotifyTrigger, createPartnerNotifySweep } = require('./partner-notify');
+exports.partnerNotifyTrigger = createPartnerNotifyTrigger();
+exports.partnerNotifySweep = createPartnerNotifySweep();
+
 // §8 Step 5 / AD-10: mailbox-create trigger → validation, pairing re-check, rate limits,
 // per-installation push dispatch. Re-exported so the deploy unit sees it at the root.
 const { relayMailboxMessage } = require('./relay');

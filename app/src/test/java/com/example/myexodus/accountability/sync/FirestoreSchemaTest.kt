@@ -80,11 +80,16 @@ class FirestoreSchemaTest {
             platform = "android",
             appVersion = "1.0",
             pushEligible = true,
+            registrationKind = "TOKEN",
         )
         // firestore.rules: push_installations create/update hasOnly(provider, token, platform,
-        // appVersion, pushEligible, updatedAt, createdAt) — any extra key is a rules rejection.
+        // appVersion, pushEligible, registrationKind, updatedAt, createdAt) — any extra key is a
+        // rules rejection, and registrationKind must be FID or TOKEN (§8.6).
         assertEquals(
-            setOf("provider", "token", "platform", "appVersion", "pushEligible", "updatedAt", "createdAt"),
+            setOf(
+                "provider", "token", "platform", "appVersion", "pushEligible",
+                "registrationKind", "updatedAt", "createdAt",
+            ),
             data.keys,
         )
         assertEquals("fcm", data["provider"])
@@ -92,6 +97,7 @@ class FirestoreSchemaTest {
         assertEquals("android", data["platform"])
         assertEquals("1.0", data["appVersion"])
         assertEquals(true, data["pushEligible"])
+        assertEquals("TOKEN", data["registrationKind"])
         assertTrue(data["updatedAt"] is FieldValue) // rules: updatedAt == request.time
         assertTrue(data["createdAt"] is FieldValue)
     }

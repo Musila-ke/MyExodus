@@ -34,6 +34,11 @@ internal object PartnerPushParser {
     const val TYPE_LEGACY_DOMAIN_EVENT = "domain-event"
     const val TYPE_LIVENESS_PROBE = "LIVENESS_PROBE"
 
+    /** §8.6 Phase 5: the partner notifier's data-only wake (its `eventId` key is content-free
+     *  routing data; the mailbox pull reconciles by receipt watermark, so there is no
+     *  expedited-id path to take here). */
+    const val TYPE_PARTNER_EVENT = "PARTNER_EVENT"
+
     private val MESSAGE_ID = Regex("^[A-Za-z0-9_-]{1,128}$")
 
     fun parse(data: Map<String, String>): PartnerPushWake {
@@ -57,6 +62,7 @@ internal object PartnerPushParser {
                 if (id != null && MESSAGE_ID.matches(id)) PartnerPushWake.Sync(id) else PartnerPushWake.Ignored
             }
             TYPE_LIVENESS_PROBE -> PartnerPushWake.LivenessProbe
+            TYPE_PARTNER_EVENT -> PartnerPushWake.Sync(null)
             else -> PartnerPushWake.Ignored
         }
     }

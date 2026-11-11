@@ -79,7 +79,10 @@ class PushInstallationInstrumentedTest {
             val snapshot = doc.get().await()
             assertTrue("registered install must exist under (uid, fid)", snapshot.exists())
             assertEquals(
-                setOf("provider", "token", "platform", "appVersion", "pushEligible", "updatedAt", "createdAt"),
+                setOf(
+                    "provider", "token", "platform", "appVersion", "pushEligible",
+                    "registrationKind", "updatedAt", "createdAt",
+                ),
                 snapshot.data?.keys,
             )
         } else {
@@ -89,7 +92,9 @@ class PushInstallationInstrumentedTest {
             // breakage wearing the same boolean.
             val failure = runCatching {
                 doc.set(
-                    FirestoreSchema.pushInstallationData("fcm", token!!, "android", "instrumented", true),
+                    FirestoreSchema.pushInstallationData(
+                        "fcm", token!!, "android", "instrumented", true, "TOKEN",
+                    ),
                 ).await()
             }.exceptionOrNull()
             assertTrue(

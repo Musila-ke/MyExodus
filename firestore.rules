@@ -98,6 +98,7 @@ service cloud.firestore {
     match /partnerRecipientKeys/{document=**} { allow read, write: if false; }
     match /partnerEvents/{document=**} { allow read, write: if false; }
     match /partnerNotificationOutbox/{document=**} { allow read, write: if false; }
+    match /partnerNotificationWindows/{document=**} { allow read, write: if false; }
     match /partnerFanoutTasks/{document=**} { allow read, write: if false; }
     match /partnerDeviceLiveness/{document=**} { allow read, write: if false; }
 
@@ -189,14 +190,17 @@ service cloud.firestore {
     // Per-device/provider push registrations (AD-18a). provider is constrained to the
     // transports that exist (plan §8 Steps 7/8); token freshness is tracked via updatedAt.
     // pushEligible (SOS §8.12) is optional so pre-SOS clients keep registering; when present
-    // it is a capability snapshot, never authority.
+    // it is a capability snapshot, never authority. registrationKind (§8.6 Phase 5) is
+    // optional for the same rollout reason; when present it tells the partner notifier how
+    // the token string is addressed.
     match /users/{uid}/push_installations/{installationId} {
       allow read: if request.auth.uid == uid
         && !exists(/databases/$(database)/documents/deletionJobs/$(uid));
       allow create, update: if request.auth.uid == uid
         && !exists(/databases/$(database)/documents/deletionJobs/$(uid))
         && request.resource.data.keys().hasOnly(
-             ['provider', 'token', 'platform', 'appVersion', 'pushEligible', 'updatedAt', 'createdAt'])
+             ['provider', 'token', 'platform', 'appVersion', 'pushEligible', 'registrationKind',
+              'updatedAt', 'createdAt'])
         && request.resource.data.provider in ['fcm', 'hms']
         && request.resource.data.token is string
         && request.resource.data.token.size() > 0
@@ -206,6 +210,8 @@ service cloud.firestore {
         && request.resource.data.appVersion.size() <= 32
         && (!request.resource.data.keys().hasAny(['pushEligible'])
             || request.resource.data.pushEligible is bool)
+        && (!request.resource.data.keys().hasAny(['registrationKind'])
+            || request.resource.data.registrationKind in ['FID', 'TOKEN'])
         && request.resource.data.updatedAt == request.time;
       allow delete: if request.auth.uid == uid
         && !exists(/databases/$(database)/documents/deletionJobs/$(uid));

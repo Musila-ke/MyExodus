@@ -48,6 +48,15 @@ class PushInstallationRegistrar(
     private val sessionActive: () -> Boolean = { true },
     private val legacyInstallationId: String? = null,
     private val deleteLegacy: suspend (uid: String, installationId: String) -> Unit = { _, _ -> },
+    /**
+     * §8.6 Phase 5: the owner-bound service installation id (`partnerRecipientKeys` registers
+     * it, and `partnerNotificationOutbox` jobs dispatch to it). The FID-keyed row above is the
+     * SOS transport's; the partner notifier needs a row under THIS id, holding the same token.
+     * Null = no service installation yet — the mirror is skipped and retried next registration;
+     * mailbox delivery is unaffected.
+     */
+    private val recipientInstallationId: suspend (uid: String) -> String? = { null },
+    private val writeRecipient: suspend (uid: String, installationId: String, data: Map<String, Any>) -> Unit = { _, _, _ -> },
 ) {
 
     suspend fun register(): Boolean {
@@ -73,17 +82,25 @@ class PushInstallationRegistrar(
                 Log.i(TAG, "registration skipped: the session changed while resolving")
                 return false
             }
-            write(
-                uid,
-                installationId,
-                FirestoreSchema.pushInstallationData(
-                    provider = PROVIDER_FCM,
-                    token = token,
-                    platform = platform,
-                    appVersion = appVersion,
-                    pushEligible = pushEligible(),
-                ),
+            val data = FirestoreSchema.pushInstallationData(
+                provider = PROVIDER_FCM,
+                token = token,
+                platform = platform,
+                appVersion = appVersion,
+                pushEligible = pushEligible(),
+                registrationKind = REGISTRATION_KIND_TOKEN,
             )
+            write(uid, installationId, data)
+            // §8.6: the partner notifier addresses the service installation id, not the FID.
+            // Secondary by design — the primary registration already landed, so a mirror
+            // failure degrades push wake only; the mailbox pull still converges.
+            val recipientId = runCatching { recipientInstallationId(uid) }
+                .onFailure { Log.w(TAG, "recipient installation resolve failed", it) }
+                .getOrNull()
+            if (recipientId != null && recipientId != installationId) {
+                runCatching { writeRecipient(uid, recipientId, data) }
+                    .onFailure { Log.w(TAG, "recipient push registration failed", it) }
+            }
             Log.i(TAG, "push installation registered")
             // Only after the replacement landed: removing the legacy row first would leave
             // the device unregistered if this write then failed. Best-effort from here on.
@@ -101,6 +118,11 @@ class PushInstallationRegistrar(
 
     companion object {
         const val PROVIDER_FCM = "fcm"
+
+        /** §8.6: `token` holds an FCM registration token — the only kind the partner notifier
+         *  may pass to a token-addressing send API. `FID` rows exist in the rules' vocabulary
+         *  for other transports; this client never writes one. */
+        const val REGISTRATION_KIND_TOKEN = "TOKEN"
         private const val TAG = "MyExodusPushRegistrar"
 
         /**

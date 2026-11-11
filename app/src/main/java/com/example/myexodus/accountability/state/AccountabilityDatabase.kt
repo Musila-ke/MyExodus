@@ -7,6 +7,9 @@ import androidx.room3.RoomDatabase
 import androidx.room3.migration.Migration
 import androidx.sqlite.SQLiteConnection
 import com.example.myexodus.accountability.delivery.InstallationState
+import com.example.myexodus.accountability.delivery.PartnerMailboxDao
+import com.example.myexodus.accountability.delivery.PartnerMailboxDelivery
+import com.example.myexodus.accountability.delivery.PartnerMailboxState
 import com.example.myexodus.accountability.delivery.PendingPartnerEvent
 import com.example.myexodus.accountability.delivery.ServiceEventOutboxDao
 import com.example.myexodus.accountability.delivery.ServiceOutboxHealth
@@ -27,6 +30,8 @@ import com.example.myexodus.accountability.enrollment.EnrollmentRecord
         EnrollmentRecord::class,
         IdentityEpoch::class,
         Outbox::class,
+        PartnerMailboxDelivery::class,
+        PartnerMailboxState::class,
         PendingPartnerEvent::class,
         InstallationState::class,
         ServiceOutboxHealth::class,
@@ -34,7 +39,7 @@ import com.example.myexodus.accountability.enrollment.EnrollmentRecord
         ProcessedEvent::class,
         UnpairState::class,
     ],
-    version = 17,
+    version = 18,
     exportSchema = false,
 )
 abstract class AccountabilityDatabase : RoomDatabase() {
@@ -45,6 +50,7 @@ abstract class AccountabilityDatabase : RoomDatabase() {
     abstract fun enrollmentDao(): EnrollmentDao
     abstract fun identityEpochDao(): IdentityEpochDao
     abstract fun outboxDao(): OutboxDao
+    abstract fun partnerMailboxDao(): PartnerMailboxDao
     abstract fun processedEventDao(): ProcessedEventDao
     abstract fun serviceEventOutboxDao(): ServiceEventOutboxDao
     abstract fun unpairStateDao(): UnpairStateDao
@@ -513,6 +519,38 @@ abstract class AccountabilityDatabase : RoomDatabase() {
         }
 
         /**
+         * v18 adds Phase 5's recipient mailbox state: the `(recipientInstallationId, eventId)`
+         * delivery receipts and the per-installation `createdAt` watermark. New tables only —
+         * every v17 row survives unchanged, and an upgraded device re-reads its mailbox from
+         * date zero (server cleanup governs what still exists).
+         */
+        internal val MIGRATION_17_18 = object : Migration(17, 18) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS `partner_mailbox_delivery` (" +
+                        "`recipient_installation_id` TEXT NOT NULL, " +
+                        "`mailbox_event_id` TEXT NOT NULL, " +
+                        "`status` TEXT NOT NULL, " +
+                        "PRIMARY KEY(`recipient_installation_id`, `mailbox_event_id`))",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS `partner_mailbox_state` (" +
+                        "`installation_id` TEXT NOT NULL, " +
+                        "`watermark_created_at_ms` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`installation_id`))",
+                ).use { it.step() }
+            }
+        }
+
+        /** v18 rollback (D-33): both tables are new in v18, so a downgrade drops them whole. */
+        internal val MIGRATION_18_17 = object : Migration(18, 17) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("DROP TABLE IF EXISTS `partner_mailbox_state`").use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS `partner_mailbox_delivery`").use { it.step() }
+            }
+        }
+
+        /**
          * Every migration, oldest schema to current, plus the one downgrade step (D-33) that
          * Room selects by `(from, to)` — the one list every builder registers.
          * Hand-maintained copies have silently diverged twice (7→8, ADR #50; 9→10, ADR #58),
@@ -524,7 +562,7 @@ abstract class AccountabilityDatabase : RoomDatabase() {
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
             MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_12, MIGRATION_13_14, MIGRATION_14_13,
             MIGRATION_14_15, MIGRATION_15_14, MIGRATION_15_16, MIGRATION_16_15,
-            MIGRATION_16_17, MIGRATION_17_16,
+            MIGRATION_16_17, MIGRATION_17_16, MIGRATION_17_18, MIGRATION_18_17,
         )
 
         @Volatile private var instance: AccountabilityDatabase? = null

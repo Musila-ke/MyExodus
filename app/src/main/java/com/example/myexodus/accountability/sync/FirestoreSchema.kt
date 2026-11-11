@@ -1,5 +1,6 @@
 package com.example.myexodus.accountability.sync
 
+import com.example.myexodus.accountability.delivery.PartnerMailboxDocument
 import com.example.myexodus.accountability.enrollment.PairingToken
 import com.google.firebase.firestore.CollectionReference
 import com.google.firebase.firestore.DocumentReference
@@ -29,6 +30,7 @@ object FirestoreSchema {
     const val USERS_COLLECTION = "users"
     const val PUSH_INSTALLATIONS_COLLECTION = "push_installations"
     const val MAILBOXES_COLLECTION = "mailboxes"
+    const val PARTNER_MAILBOXES_COLLECTION = "partnerMailboxes"
     const val MESSAGES_COLLECTION = "messages"
     const val ACKS_COLLECTION = "acks"
     const val NUDGES_COLLECTION = "nudges"
@@ -95,6 +97,46 @@ object FirestoreSchema {
         pairId = doc.getString("pairId"),
     )
 
+    /**
+     * §8.6 Phase 5 recipient page: `partnerMailboxes/{uid}/messages` filtered to this
+     * installation and ordered by `createdAt` from the persisted watermark. The composite
+     * index (recipientInstallationId, createdAt) in firestore.indexes.json backs this shape.
+     * `>=` not `>`: documents tying the watermark are re-read and dedupe through the delivery
+     * receipt, so a tie can never be skipped. `orderBy` also excludes any document missing
+     * `createdAt` — one that cannot be ordered cannot be placed behind the watermark anyway.
+     */
+    suspend fun partnerMailboxDocsAfter(
+        firestore: FirebaseFirestore,
+        recipientUid: String,
+        installationId: String,
+        createdAtFromMs: Long,
+        limit: Int,
+    ): List<PartnerMailboxDocument> = firestore
+        .collection(PARTNER_MAILBOXES_COLLECTION).document(recipientUid)
+        .collection(MESSAGES_COLLECTION)
+        .whereEqualTo("recipientInstallationId", installationId)
+        .whereGreaterThanOrEqualTo("createdAt", timestampOf(createdAtFromMs))
+        .orderBy("createdAt")
+        .limit(limit.toLong())
+        .get().await()
+        .documents.map(::partnerMailboxDocumentOf)
+
+    /** Backend field names (partner-ingest.js): the sender's `ownerUid`/`installationId` are
+     *  exactly the AAD inputs the receiver needs to open the envelope. */
+    fun partnerMailboxDocumentOf(doc: DocumentSnapshot): PartnerMailboxDocument =
+        PartnerMailboxDocument(
+            messageId = doc.id,
+            eventId = doc.getString("eventId"),
+            senderInstallationId = doc.getString("installationId"),
+            senderOwnerUid = doc.getString("ownerUid"),
+            kind = doc.getString("kind"),
+            recipientKeyId = doc.getString("recipientKeyId"),
+            payload = doc.getString("payload"),
+            encoding = doc.getString("encoding"),
+            pairId = doc.getString("pairId"),
+            createdAtMs = doc.getTimestamp("createdAt")?.toDate()?.time ?: 0L,
+        )
+
     /** The watermark is persisted as epoch millis (server timestamps have microsecond
      *  precision — sub-ms ties are not reachable in practice, so the truncation loses
      *  nothing). */
@@ -144,7 +186,9 @@ object FirestoreSchema {
      * delta): exactly the keys the v2 rules' create/update `hasOnly` allows, nothing else.
      * `updatedAt` must equal the server timestamp (rules gate), so every write refreshes
      * AD-18c staleness. `pushEligible` is the §8.12 capability snapshot the SOS dispatcher
-     * queries; optional under the rules so pre-SOS clients keep registering. Writers replace
+     * queries; optional under the rules so pre-SOS clients keep registering. `registrationKind`
+     * (§8.6 Phase 5) tells the partner notifier how the token is addressed — it refuses a
+     * non-`TOKEN` row rather than passing an FID to a token-addressing API. Writers replace
      * the document (no merge) — a server-written `stale: true` flag must disappear on
      * re-registration, and merge would keep it.
      */
@@ -154,12 +198,14 @@ object FirestoreSchema {
         platform: String,
         appVersion: String,
         pushEligible: Boolean,
+        registrationKind: String,
     ): Map<String, Any> = mapOf(
         "provider" to provider,
         "token" to token,
         "platform" to platform,
         "appVersion" to appVersion,
         "pushEligible" to pushEligible,
+        "registrationKind" to registrationKind,
         "updatedAt" to FieldValue.serverTimestamp(),
         "createdAt" to FieldValue.serverTimestamp(),
     )

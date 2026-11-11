@@ -106,6 +106,9 @@ class PartnerSyncCoordinatorTest {
     private var pullCalls = mutableListOf<String>()
     private var pullWakeIds = mutableListOf<String?>()
     private var repairCalls = 0
+    /** §8.6: the account-scoped recipient mailbox pulls, counted per pass. */
+    private var partnerEventPulls = 0
+    private var partnerEventsToPull: () -> Int = { 0 }
     private var rejectionChecks = mutableListOf<Pair<String, String>>()
     private var rejectionsToReport = 0
     private val stepOrder = mutableListOf<String>()
@@ -270,6 +273,37 @@ class PartnerSyncCoordinatorTest {
         assertEquals("me", authorUid)
         assertEquals("partner", partnerUid)
         assertEquals(listOf(pairId), pullCalls)
+    }
+
+    @Test
+    fun recipientMailboxPull_ridesTheReportOncePerEnrolledPass() = runTest {
+        enroll()
+        partnerEventsToPull = { 4 }
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(1, partnerEventPulls)
+        assertEquals(4, report.recipientEventsPulled)
+    }
+
+    @Test
+    fun recipientMailboxPull_failureIsContainedToTheReport() = runTest {
+        enroll()
+        partnerEventsToPull = { error("firestore down") }
+
+        val report = coordinator.syncOnce()
+
+        assertEquals(true, report.enrolled)
+        assertEquals("a failed pull reads as zero delivered, never a failed pass", 0, report.recipientEventsPulled)
+        assertTrue(drainCalls.isNotEmpty())
+    }
+
+    @Test
+    fun recipientMailboxPull_doesNotRunWithoutAnEnrollment() = runTest {
+        val report = coordinator.syncOnce()
+
+        assertEquals(false, report.enrolled)
+        assertEquals(0, partnerEventPulls)
     }
 
     @Test
@@ -493,6 +527,7 @@ class PartnerSyncCoordinatorTest {
             drainCalls.toSet(),
         )
         assertEquals(setOf(pairId, secondPair), pullCalls.toSet())
+        assertEquals("account-scoped, so once per pass — not once per pair", 1, partnerEventPulls)
         assertEquals(setOf(pairId to "partner", secondPair to "partner-two"), rejectionChecks.toSet())
         assertEquals("repair pass ran for both", 2, repairCalls)
         assertEquals(2 * 2, report.drainedCount)
@@ -1552,6 +1587,7 @@ class PartnerSyncCoordinatorTest {
         syncConsent: suspend (String, Boolean) -> Boolean = { _, _ -> true },
         fence: SessionFence = SessionFence.Unfenced,
         resolveRuleLabel: (String, String) -> String = { _, target -> target },
+        pullPartnerEvents: suspend () -> Int = { partnerEventPulls++; partnerEventsToPull() },
     ) = PartnerSyncCoordinator(
         enrollmentDao = db.enrollmentDao(),
         storeFactory = factory,
@@ -1598,6 +1634,7 @@ class PartnerSyncCoordinatorTest {
         },
         fence = fence,
         resolveRuleLabel = resolveRuleLabel,
+        pullPartnerEvents = pullPartnerEvents,
     )
 
     private fun enroll(

@@ -102,6 +102,12 @@ class PartnerSyncCoordinator(
      *  liveness probe proves the server has not accepted a beat recently, so the local window
      *  must not suppress the reply). */
     private val checkIn: suspend (Boolean) -> Unit = {},
+    /** §8.6 Phase 5 recipient half: pull this installation's partner mailbox and return the
+     *  events opened this pass. FCM-independent by construction — the periodic pass, the wake's
+     *  sync work and the foreground refresh all reach the same code, so a device that never got
+     *  a push still converges here. Account-scoped (the service installation id), so it runs
+     *  once per pass next to [checkIn], not once per pair. */
+    private val pullPartnerEvents: suspend () -> Int = { 0 },
     /** Step 8 (§8.10): converge this pair's explicit `DEVICE_AVAILABILITY_STATUS` choice onto
      *  the authoritative pairing document. True = the server holds it (or already did). */
     private val syncAvailabilityConsent: suspend (pairId: String, enabled: Boolean) -> Boolean =
@@ -129,6 +135,9 @@ class PartnerSyncCoordinator(
         val drained: Boolean = false,
         val drainedCount: Int = 0,
         val pulledCount: Int = 0,
+        /** §8.6 Phase 5 recipient half: partner events opened from this installation's mailbox
+         *  this pass (delivered only — duplicates and terminal receipts are not counted). */
+        val recipientEventsPulled: Int = 0,
         val repairRequestsCreated: Int = 0,
         val approvalsExpired: Int = 0,
         /** Non-null when this pass rotated the pair's session key (Step 15). */
@@ -214,7 +223,17 @@ class PartnerSyncCoordinator(
         }
         runCatching { checkIn(forceHeartbeat) }
             .onFailure { Log.w(TAG, "heartbeat check-in failed", it) }
-        var report = SyncReport(enrolled = true, unpairAdvanced = unpairAdvanced)
+        // §8.6: the account-scoped mailbox pull runs every pass whether or not any push ever
+        // arrived — the periodic cadence IS the delivery mechanism for a device with denied
+        // notifications, no token, or a killed app.
+        val recipientEventsPulled = runCatching { pullPartnerEvents() }
+            .onFailure { Log.w(TAG, "partner mailbox pull failed", it) }
+            .getOrDefault(0)
+        var report = SyncReport(
+            enrolled = true,
+            unpairAdvanced = unpairAdvanced,
+            recipientEventsPulled = recipientEventsPulled,
+        )
         var resolved = 0
         for (enrollment in enrollments) {
             if (!fence.isCurrent(fingerprint)) {

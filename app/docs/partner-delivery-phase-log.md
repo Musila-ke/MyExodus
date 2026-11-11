@@ -609,3 +609,130 @@ now passes the empty set through unchanged, so the regeneration filters to zero 
 4. `.107` reinstall + re-pair before the Phase 8 matrix.
 
 **Next:** Phase 5 — partner delivery.
+
+---
+
+## Phase 5 — Partner delivery (2026-11-12)
+
+**Status: PASSED (client + backend).** The recipient half ships and is deployed: mailbox
+retrieval runs on every sync pass whether or not any push arrived, the notifier suite is
+live in production, and the two device-facing registrations the notifier needs now exist.
+Client-side projection into the partner UI is the Phase 7 seam (`onDelivered` no-op).
+
+**Scope:** plan §7 Phase 5 (verbatim: wire existing partner mailbox, notification outbox,
+Firestore trigger and sweeper, 60-second coalescing for noisy noncritical recipient pushes,
+privacy-safe FCM messages, recipient deduplication and registration maintenance; implement
+notification permission handling and mailbox retrieval independent of FCM), §8.6.
+
+**Touched files**
+
+- `app/src/main/java/com/example/myexodus/accountability/delivery/PartnerMailboxEntities.kt`
+  (new) — `partner_mailbox_delivery` (composite PK `recipient_installation_id` +
+  `mailbox_event_id`, status `DELIVERED`/`UNDECRYPTABLE`/`SKIPPED`) and
+  `partner_mailbox_state` (`installation_id` PK, `watermark_created_at_ms`). No plaintext
+  is stored (I07).
+- `app/src/main/java/com/example/myexodus/accountability/delivery/PartnerMailboxDao.kt` (new)
+  — receipt lookup, IGNORE-insert delivery row, watermark read/replace.
+- `app/src/main/java/com/example/myexodus/accountability/delivery/PartnerMailboxReceiver.kt`
+  (new) — FCM-independent `pull()`: query `createdAt >=` watermark ascending, receipt-before-
+  watermark-advance, duplicates suppressed by `(installationId, messageId)`, missing/foreign/
+  unknown documents terminal SKIPPED, unopenable envelopes terminal UNDECRYPTABLE (AC07),
+  `onDelivered` exceptions propagate so the document is retried.
+- `app/src/main/java/com/example/myexodus/accountability/delivery/PartnerMailboxDecryptor.kt`
+  (new) — mirror of `ExistingE2eeRecipientEncryptor`: pair CEK from the enrollment's agreement
+  key, AAD inputs taken from the mailbox document itself (sender installation/owner, kind,
+  recipient key id).
+- `app/src/main/java/com/example/myexodus/accountability/state/AccountabilityDatabase.kt`
+  (modified) — schema v18 with `MIGRATION_17_18` / `MIGRATION_18_17` in `ALL_MIGRATIONS`.
+- `app/src/main/java/com/example/myexodus/accountability/sync/FirestoreSchema.kt` (modified) —
+  `partnerMailboxes` collection constant, `partnerMailboxDocsAfter` (the §8.6 mailbox query;
+  composite index below), `partnerMailboxDocumentOf` (backend field names `ownerUid` /
+  `installationId` map to the AAD sender inputs), `pushInstallationData` gains required
+  `registrationKind`.
+- `app/src/main/java/com/example/myexodus/accountability/sync/PushInstallationRegistrar.kt`
+  (modified) — writes `registrationKind = TOKEN` and mirrors the same token+data under the
+  owner-bound SERVICE installation id (`outbox.ensureInstallation`), which is the id
+  `partnerRecipientKeys` registers and `partnerNotificationOutbox` jobs dispatch to. The
+  mirror is secondary: resolve/write failures log and never fail the registration pass.
+- `app/src/main/java/com/example/myexodus/accountability/sync/PartnerSyncCoordinator.kt`
+  (modified) — `pullPartnerEvents` seam invoked once per account pass (after check-in,
+  enrolled-only), `SyncReport.recipientEventsPulled`.
+- `app/src/main/java/com/example/myexodus/accountability/sync/PartnerPushParser.kt` (modified)
+  — `PARTNER_EVENT` wake (`{v:'1', type:'PARTNER_EVENT', eventId}` from
+  `functions/partner-notify.js`) routes to `Sync(null)`; the mailbox pull reconciles by
+  receipt watermark, so no expedited path is needed.
+- `app/src/main/java/com/example/myexodus/di/PartnerDeliveryModule.kt` (modified) — decryptor
+  and receiver providers; coordinator wiring in `AccountabilityModule.kt`.
+- `firestore.rules` (modified) — `push_installations` `hasOnly` gains `registrationKind`,
+  constrained to `FID`/`TOKEN`.
+- `firestore.indexes.json` (modified) — `messages` composite index
+  (`recipientInstallationId` ASC, `createdAt` ASC), COLLECTION scope.
+- `functions/partner-notify.js`, `functions/partner-notify-logic.js` (new) — prompt
+  trigger + every-minute sweeper: transaction claim with lease expiry, 60 s rolling window
+  for `BLOCK_ATTEMPT` (server-owned group id shared with ingest via
+  `partner-notify-logic.blockGroupId`), fanout materialization, `SENT_TO_FCM` with server
+  time, invalid registration prunes the registration and never touches the mailbox,
+  non-`TOKEN` kinds are never handed to the token-addressing API.
+- `functions/partner-ingest.js` (modified) — mailbox documents now carry the §8.2 AAD inputs
+  (`installationId`, `kind`, `recipientInstallationId`); shared `blockGroupId`.
+- `functions/index.js` (modified) — exports `partnerNotifyTrigger`, `partnerNotifySweep`.
+- Tests: `PartnerMailboxReceiverTest` (new — 9), `PartnerMailboxDecryptorTest` (new — 7),
+  `AccountabilityDatabaseMigrationTest` (v17→v18), `PartnerSyncCoordinatorTest` (3 seam
+  tests + per-pass assertion), `PushInstallationRegistrarTest` (5 mirror tests, key set),
+  `FirestoreSchemaTest`, `PartnerPushParserTest`, `PushInstallationInstrumentedTest`,
+  `functions/emulator-test/firestore-rules.emulator.js` (registrationKind).
+
+**Requirements verified (§8.6)**
+
+| Requirement | How |
+|---|---|
+| Mailbox retrieval independent of FCM | `pullPartnerEvents` runs from the periodic/foreground pass unconditionally in the enrolled branch; push is only a wake |
+| One registration repository, per-account records | `PushInstallationRegistrar` (uid-scoped documents) + `PushMapping.unregister` on logout (shipped earlier) |
+| Registration kind explicit; matching addressing | `registrationKind='TOKEN'` written; notifier refuses non-TOKEN rows before any send |
+| Generic/privacy-safe push content | Data-only wake `{v,type,eventId}`; no payload, activity, or label leaves the server |
+| POST_NOTIFICATIONS on 13+, denied → keep mailbox, show on open | Permission UX shipped earlier; the pull is the display path, projection lands Phase 7 |
+| BLOCK_ATTEMPT coalescing, bypass, job id, claim/lease, SENT_TO_FCM | Backend Phase 2 + notifier logic; unit-tested in `functions/test/partner-notify-logic.test.js` |
+| Client dedupe by mailbox id | `partner_mailbox_delivery` receipt checked before any side effect; duplicate re-read at the `>=` watermark counted, not reprocessed |
+| Invalid registration pruned, mailbox retained | `reconcileOutcome` → `pruneRegistration: true`; mailbox documents are never deleted by any outcome |
+
+**Deploy evidence (production, 2026-11-12)**
+
+`firebase deploy --only firestore:indexes,firestore:rules,functions:partnerNotifyTrigger,functions:partnerNotifySweep,functions:ingestPartnerEvents --project myexodus-53804`
+→ rules released; indexes deployed (composite `messages` index); `partnerNotifyTrigger` and
+`partnerNotifySweep` created; `ingestPartnerEvents` updated. All succeeded.
+
+**Tests**
+
+- JVM: 133 across the 7 touched classes — PASSED.
+- Backend: `npm test` — 242/242 PASSED.
+- Rules emulator: `npm run test:rules` — 18/18 PASSED (incl. the new `registrationKind` test).
+- Migration: v17→v18 via the real chain in `AccountabilityDatabaseMigrationTest` — PASSED.
+
+**Deviations from the plan (each deliberate)**
+
+1. **Only `TOKEN` registrations are written by this client.** FID-addressing send APIs in
+   this SDK generation are `AndroidConfigV2` (pre-GA/EAP), which §8.6's first bullet forbids
+   adding. The column exists in the rules vocabulary for future transports; the notifier
+   refuses anything but `TOKEN` rather than guessing.
+2. **The registrar mirrors the token under the service installation id** in addition to the
+   FID-keyed SOS row. Without the mirror the notifier (which resolves
+   `users/{uid}/push_installations/{recipientInstallationId}` using the service id) could
+   never find a token — the delivery blocker this phase fixes. The mirror is best-effort;
+   mailbox pull converges regardless.
+3. **`PARTNER_EVENT` wakes perform a full sync pass** (`Sync(null)`) instead of a targeted
+   fetch. The mailbox pull is watermark-reconciled and deduped, so a targeted path would be
+   duplicate machinery for no gain.
+4. **`UNDECRYPTABLE` is a terminal receipt** (AC07) rather than an unbounded retry: a
+   shredded pair key or a foreign envelope cannot become readable on this device, and
+   retrying would stall every later document behind the watermark.
+
+**Carries**
+
+1. **Display-on-open / recipient projection** — `onDelivered` is a no-op until Phase 7
+   switches producers to `PartnerEventRecorder` and projects delivered events into partner
+   UI state.
+2. **Hardware push-leg validation** (real FCM delivery, Doze, denied permission) — Phase 8
+   two-device matrix.
+3. Phase 4 carries 2–4 remain open (>24 h diagnostics, producer switch, `.107` re-pair).
+
+**Next:** Phase 6 — liveness integration.

@@ -311,6 +311,33 @@ test('partner mailboxes are recipient-read-only', async () => {
   await assertFails(deleteDoc(doc(bob, 'partnerMailboxes/bob/messages/evt-1')));
 });
 
+// Partner event delivery v1 (§8.6 Phase 5): registration kind is explicit and closed-set.
+test('push registrations carry an optional FID or TOKEN registration kind', async () => {
+  const base = {
+    provider: 'fcm',
+    token: 'token-1',
+    platform: 'android',
+    appVersion: '1.0.0',
+    pushEligible: true,
+    updatedAt: serverTimestamp(),
+  };
+  await assertSucceeds(
+    setDoc(doc(alice, 'users/alice/push_installations/inst-token'), { ...base, registrationKind: 'TOKEN' }),
+  );
+  await assertSucceeds(
+    setDoc(doc(alice, 'users/alice/push_installations/inst-fid'), { ...base, registrationKind: 'FID' }),
+  );
+  await assertSucceeds(
+    setDoc(doc(alice, 'users/alice/push_installations/inst-legacy'), base),
+  );
+  await assertFails(
+    setDoc(doc(alice, 'users/alice/push_installations/inst-bad'), { ...base, registrationKind: 'SOMETHING' }),
+  );
+  await assertFails(
+    setDoc(doc(alice, 'users/alice/push_installations/inst-extra'), { ...base, registrationKind: 'TOKEN', extra: true }),
+  );
+});
+
 test('partner delivery registry, ledger, job and liveness documents are server-only', async () => {
   const paths = [
     'partnerDeviceSigningRegistrations/alice:inst',
