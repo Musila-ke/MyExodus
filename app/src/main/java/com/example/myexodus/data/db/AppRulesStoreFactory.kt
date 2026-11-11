@@ -74,10 +74,21 @@ class AppRulesStoreFactory(
     fun open(): AppRulesStore? = synchronized(lock) {
         requireVaultAccess()
         if (swapping) return@synchronized null
-        database ?: openInternal()?.also {
+        database ?: run {
             // Fresh open only — a cached hit is silent (ADR #153 cold-start attribution).
-            database = it
-            Log.i(TAG, "Rules store opened fresh thread=${Thread.currentThread().name}")
+            // Duration feeds the plan §11 SQLCipher baseline; monotonic source (Robolectric
+            // freezes SystemClock, and a test log value is irrelevant anyway).
+            val started = System.nanoTime()
+            val store = openInternal()
+            if (store != null) {
+                database = store
+                Log.i(
+                    TAG,
+                    "Rules store opened fresh in ${(System.nanoTime() - started) / 1_000_000}ms " +
+                        "thread=${Thread.currentThread().name}",
+                )
+            }
+            store
         }
     }
 
@@ -104,6 +115,7 @@ class AppRulesStoreFactory(
      * never force-close underneath an executing operation.
      */
     fun lockVault(timeoutMs: Long = 2_000L): Boolean {
+        val lockStarted = System.nanoTime()
         synchronized(gateLock) {
             closing = true
             sessionGeneration++
@@ -131,7 +143,11 @@ class AppRulesStoreFactory(
             closing = false
             (gateLock as Object).notifyAll()
         }
-        Log.i(TAG, "Vault closed generation=$sessionGeneration")
+        Log.i(
+            TAG,
+            "Vault closed generation=$sessionGeneration in " +
+                "${(System.nanoTime() - lockStarted) / 1_000_000}ms",
+        )
         return true
     }
 

@@ -321,6 +321,23 @@ entry points cannot read closed vault." Plan §8.3 names the target class `Vault
   must be wired before the feature can be enabled. It cannot fire for any current user because
   the only reachable startup state is DISABLED until the Phase 5 enrollment writer exists.
 
+**§11 performance baseline (recorded 2026-11-11, end of Phase 3)**
+
+Measured on the low-end physical X6532 (.106) running the signed release build, before any
+auth-bound wrapping exists (plan §11: "early baseline at the end of Phase 3"):
+
+- Cold process start (`am force-stop` then `am start -W`): `LaunchState: COLD`,
+  `TotalTime 3592 ms`, `WaitTime 3749 ms`.
+- SQLCipher rules-store **first actual open** (off-main): **239 ms** on
+  `DefaultDispatcher-worker-2`, from the new fresh-open log line in `AppRulesStoreFactory.open()`.
+  A cached hit logs nothing (ADR #153 cold-start attribution preserved).
+- Room close latency: **not yet measurable** — no production caller invokes `lockVault` until the
+  Phase 5/6 trigger; the timer now exists in `lockVault` and records it once wired. This is
+  recorded honestly as deferred, not passed.
+
+The instrumentation uses `System.nanoTime()` (Robolectric freezes `SystemClock`) and is silent on
+cached hits so log-based cold-start attribution keeps working.
+
 **Next phase entry conditions (§7 Phase 4)**
 
 Disposable test database; API 30+ per-use `CryptoObject` key; API 26-29 legacy time-bound key;
