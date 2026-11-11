@@ -1222,6 +1222,11 @@
     <!-- Plan Step 8: the server's availability notice channel ("A paired device has not checked
          in recently"). Created at startup so the channel exists before the first 6-hour notice. -->
     <string name="partner_channel_availability_name">MyExodus partner check-ins</string>
+    <!-- Plan §6.3/§8.7: the silent status entry posted in a liveness-probe callback — the
+         user-visible half that keeps the data-only high-priority probe honest. -->
+    <string name="partner_channel_device_status_name">MyExodus device status</string>
+    <string name="partner_probe_status_title">Connection check</string>
+    <string name="partner_probe_status_text">MyExodus is checking its connection</string>
 
     <!-- Partner SOS (V1 Req 35, plan §8.14/§8 Step 7): the nudge channel ("Accountability
          Check-ins"), the check-ins-off Home banner (plan copy), the ceremony's ask, and the

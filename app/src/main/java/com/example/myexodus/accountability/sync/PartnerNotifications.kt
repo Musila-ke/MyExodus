@@ -89,6 +89,12 @@ object PartnerNotifications {
      *  the payload itself is fixed generic copy. */
     const val CHANNEL_AVAILABILITY_ALERTS = "availability_alerts_v1"
 
+    /** §8.7 probe transparency: the probe is a data-only high-priority push, and Android
+     *  grants that priority only when the app shows something the user can see. This LOW
+     *  channel carries the silent status entry that keeps the probe honest. */
+    const val CHANNEL_DEVICE_STATUS = "device_status_v1"
+    const val NOTIF_LIVENESS_PROBE = 2006
+
     /** Retired 2026-10-28 (owner ruling): the server no longer asks the user to check in.
      *  The liveness probe is data-only, and this tray-visible nudge is deleted at startup. */
     internal const val CHANNEL_CHECKIN_REMINDERS_LEGACY = "checkin_reminders_v1"
@@ -105,6 +111,21 @@ object PartnerNotifications {
      *  for the same pair — the one case that must replace in place. */
     internal fun partnerTag(category: String, pairId: String): String =
         "partner:$category:$pairId"
+
+    /** §8.7: the silent status entry posted in the probe callback — shade-visible, no sound,
+     *  no banner (LOW). Permission denied skips it inside [post]; the probe still runs, it
+     *  just counts as weaker evidence. */
+    fun notifyLivenessProbe(context: Context) =
+        post(
+            context,
+            CHANNEL_DEVICE_STATUS,
+            context.getString(R.string.partner_channel_device_status_name),
+            NotificationManager.IMPORTANCE_LOW,
+            NOTIF_LIVENESS_PROBE,
+            R.string.partner_probe_status_title,
+            R.string.partner_probe_status_text,
+            tag = "device-status",
+        )
 
     fun ensureSyncStatusChannel(context: Context) {
         if (!BuildConfig.DEBUG) return

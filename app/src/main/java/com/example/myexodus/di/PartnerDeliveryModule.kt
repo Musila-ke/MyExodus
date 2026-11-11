@@ -4,6 +4,9 @@ import android.content.Context
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.accountability.crypto.AccountabilityKeyStore
 import com.example.myexodus.accountability.crypto.EventCipher
+import com.example.myexodus.accountability.delivery.DeviceContactClient
+import com.example.myexodus.accountability.delivery.DeviceContactProtocol
+import com.example.myexodus.accountability.delivery.EnforcementHealthSnapshot
 import com.example.myexodus.accountability.delivery.ExistingE2eeRecipientEncryptor
 import com.example.myexodus.accountability.delivery.FirebasePartnerDeliveryTransport
 import com.example.myexodus.accountability.delivery.KeystoreServicePayloadProtector
@@ -21,9 +24,17 @@ import com.example.myexodus.accountability.delivery.ServicePayloadProtector
 import com.example.myexodus.accountability.delivery.SystemPartnerDeliveryClock
 import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.state.AccountabilityDatabase
+import com.example.myexodus.accountability.sync.AppCheckInstaller
 import com.example.myexodus.accountability.sync.FirestoreSchema
 import com.example.myexodus.accountability.sync.await
 import com.example.myexodus.accountability.sync.decodePublicKey
+import com.example.myexodus.blocking.BlockerAccessibilityService
+import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.entity.hasLiveWebsiteRule
+import com.example.myexodus.data.db.entity.isExpiredAt
+import com.example.myexodus.notifications.NotificationAccess
+import com.example.myexodus.vpn.DnsSinkholeVpnService
+import com.example.myexodus.vpn.VpnEngineState
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.functions.FirebaseFunctions
@@ -105,6 +116,51 @@ object PartnerDeliveryModule {
 
     @Provides @Singleton
     fun providePartnerDeliveryClock(): PartnerDeliveryClock = SystemPartnerDeliveryClock
+
+    /** §6.3 signed contact. The required mask is the effective policy — a capability a live
+     *  rule actually needs, so an optional VPN is not reported as required. An unreadable
+     *  rules table yields a null snapshot and the contact is skipped: absence of a report
+     *  reads as unavailable, never as a fabricated healthy or fully-revoked claim. */
+    @Provides @Singleton
+    fun provideDeviceContactClient(
+        @ApplicationContext context: Context,
+        outbox: ServiceEventOutbox,
+        keyStore: PartnerEventKeyStore,
+        clock: PartnerDeliveryClock,
+        storeFactory: AppRulesStoreFactory,
+        functions: FirebaseFunctions,
+    ): DeviceContactClient = DeviceContactClient(
+        outbox = outbox,
+        keyStore = keyStore,
+        clock = clock,
+        ownerUid = { FirebaseAuth.getInstance().currentUser?.uid },
+        healthSnapshot = snapshot@{
+            runCatching {
+                val store = storeFactory.open() ?: return@snapshot null
+                val nowMs = clock.wallClockMs()
+                val rules = store.restrictionRuleDao().getActiveRules()
+                EnforcementHealthSnapshot(
+                    accessibilityEnabled = BlockerAccessibilityService.connected.get(),
+                    vpnActive = DnsSinkholeVpnService.state == VpnEngineState.ACTIVE,
+                    // No device-admin surface is implemented in this build (§7 Phase 6).
+                    deviceAdminActive = false,
+                    notificationPermissionGranted = NotificationAccess.canPost(context),
+                    requiredCapabilities = buildList {
+                        if (rules.any { it.isEnabled && !it.isExpiredAt(nowMs) }) {
+                            add(DeviceContactProtocol.CAPABILITY_ACCESSIBILITY)
+                        }
+                        if (hasLiveWebsiteRule(rules, nowMs)) {
+                            add(DeviceContactProtocol.CAPABILITY_VPN)
+                        }
+                    },
+                )
+            }.getOrNull()
+        },
+        send = { wire ->
+            AppCheckInstaller.install(context)
+            functions.getHttpsCallable("submitDeviceContact").call(wire).await().data
+        },
+    )
 
     @Provides @Singleton
     fun providePartnerDeliveryTransport(

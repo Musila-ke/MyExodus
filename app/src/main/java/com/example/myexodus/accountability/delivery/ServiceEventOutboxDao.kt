@@ -46,6 +46,16 @@ interface ServiceEventOutboxDao {
     @Query("SELECT current_sequence FROM installation_state WHERE installation_id = :installationId")
     suspend fun currentSequence(installationId: String): Long?
 
+    /** §6.3 signed-contact counter — a namespace separate from the event sequence. */
+    @Query("SELECT heartbeat_counter FROM installation_state WHERE installation_id = :installationId")
+    suspend fun heartbeatCounter(installationId: String): Long?
+
+    @Query(
+        "UPDATE installation_state SET heartbeat_counter = :counter " +
+            "WHERE installation_id = :installationId",
+    )
+    suspend fun setHeartbeatCounter(installationId: String, counter: Long): Int
+
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertEvent(row: PendingPartnerEvent)
 

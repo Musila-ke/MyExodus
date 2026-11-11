@@ -56,6 +56,31 @@ class ServiceEventOutbox(
         }
 
     /**
+     * §6.3: the contact's strictly increasing counter, allocated and persisted in one
+     * transaction so two workers racing cannot both sign the same value. Null when there is no
+     * installation or the counter is exhausted — the caller then skips, never reuses.
+     */
+    suspend fun allocateHeartbeatCounter(installationId: String): Long? = db.withWriteTransaction {
+        val current = dao.heartbeatCounter(installationId) ?: return@withWriteTransaction null
+        if (current >= DeviceContactProtocol.MAX_COUNTER) return@withWriteTransaction null
+        val next = current + 1
+        dao.setHeartbeatCounter(installationId, next)
+        next
+    }
+
+    /** A STALE reply means the server already holds a higher counter; adopt it so the next
+     *  contact is above anything the server has seen. Never lowers the local value. */
+    suspend fun alignHeartbeatCounter(installationId: String, serverCounter: Long) {
+        if (serverCounter <= 0 || serverCounter > DeviceContactProtocol.MAX_COUNTER) return
+        db.withWriteTransaction {
+            val current = dao.heartbeatCounter(installationId)
+            if (current != null && serverCounter > current) {
+                dao.setHeartbeatCounter(installationId, serverCounter)
+            }
+        }
+    }
+
+    /**
      * §8.1: sequence allocation and the row insert are one transaction — the event exists only
      * after it commits. Capacity is checked in the same transaction, and hitting it records a
      * persistent incident instead of silently overwriting an unacknowledged row.

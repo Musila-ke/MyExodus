@@ -51,6 +51,14 @@ const {
   NOTICE_STATE_SUPERSEDED,
   PARTNER_PUSH_AFTER_MS,
 } = require('./dms-logic');
+const {
+  LIVENESS_COLLECTION,
+  NOTICE_DEVICE_UNAVAILABLE,
+  NOTICE_DEVICE_RECONNECTED,
+  NOTICE_ENFORCEMENT_DEGRADED,
+  NOTICE_ENFORCEMENT_RESTORED,
+  isLivenessNoticeType,
+} = require('./device-liveness-logic');
 
 const REGION = 'us-central1';
 const DMS_CONFIG_DOC = 'config/dms';
@@ -71,6 +79,10 @@ const PUSH_TITLE = 'Partner check-in';
 // accusation otherwise. Still identity-free and whole-content (no fetch needed to interpret).
 const PUSH_BODY_SILENT = 'A paired device has not checked in recently. This is not proof the app was removed or blocking was turned off.';
 const PUSH_BODY_RECOVERED = 'A paired device has checked in again.';
+// Phase 6 enforcement copy. Deliberately generic: which protection is missing is shown in the
+// app, never on a lock screen (§8.7 "generic copy incl. server receipt time").
+const PUSH_BODY_DEGRADED = 'A paired device reports that a required protection is turned off. Open the app to review it.';
+const PUSH_BODY_RESTORED = 'A paired device reports that its required protection is back on.';
 const PUSH_TTL_MS = 60 * 60 * 1000;
 
 // The monitored device's own silent liveness probe. Data-only, NO notification block: the
@@ -88,9 +100,30 @@ const PROBE_COLLAPSE_KEY = 'liveness-probe';
  *  relation identity is all that distinguishes two pairs; hashed because a raw relationship
  *  id must never appear in provider metadata (§8.12). Latest notice for the pair wins, which
  *  is exactly the desired behavior when a recovery supersedes a queued silence notice. */
-function availabilityCollapseKey(relationshipId) {
+function availabilityCollapseKey(relationshipId, family = 'avail') {
   const digest = crypto.createHash('sha256').update(String(relationshipId)).digest('hex');
-  return `avail-${digest.slice(0, 16)}`;
+  return `${family}-${digest.slice(0, 16)}`;
+}
+
+/** Availability and enforcement notices collapse within their own family, so a queued
+ *  silence notice never cancels a tamper notice (or the reverse). */
+function noticeFamily(noticeType) {
+  return noticeType === NOTICE_ENFORCEMENT_DEGRADED ||
+    noticeType === NOTICE_ENFORCEMENT_RESTORED ? 'enforce' : 'avail';
+}
+
+function noticeBody(noticeType) {
+  switch (noticeType) {
+    case NOTICE_RECOVERY:
+    case NOTICE_DEVICE_RECONNECTED:
+      return PUSH_BODY_RECOVERED;
+    case NOTICE_ENFORCEMENT_DEGRADED:
+      return PUSH_BODY_DEGRADED;
+    case NOTICE_ENFORCEMENT_RESTORED:
+      return PUSH_BODY_RESTORED;
+    default:
+      return PUSH_BODY_SILENT;
+  }
 }
 
 function errorCodeOf(error) {
@@ -437,9 +470,12 @@ async function claimNotice(db, rowDoc, nowMs) {
       return { skip: true };
     }
 
+    const stateCollection = isLivenessNoticeType(row.notice_type)
+      ? LIVENESS_COLLECTION
+      : 'dms_install_state';
     const [pairSnap, stateSnap] = await Promise.all([
       tx.get(db.doc(`pairings/${row.relationship_id}`)),
-      tx.get(db.doc(`dms_install_state/${row.state_doc_id}`)),
+      tx.get(db.doc(`${stateCollection}/${row.state_doc_id}`)),
     ]);
     const pairing = pairSnap.exists ? pairSnap.data() : null;
     const reason = suppressionReason({
@@ -503,13 +539,13 @@ function buildDmsMessage(row, tokens) {
     tokens,
     notification: {
       title: PUSH_TITLE,
-      body: row.notice_type === NOTICE_RECOVERY ? PUSH_BODY_RECOVERED : PUSH_BODY_SILENT,
+      body: noticeBody(row.notice_type),
     },
     data: { v: '1', type: 'SYNC_AVAILABLE' },
     android: {
       priority: 'high',
       ttl: PUSH_TTL_MS,
-      collapseKey: availabilityCollapseKey(row.relationship_id),
+      collapseKey: availabilityCollapseKey(row.relationship_id, noticeFamily(row.notice_type)),
       restrictedPackageName: ANDROID_PACKAGE,
       notification: { channelId: CHANNEL_AVAILABILITY },
     },
@@ -678,6 +714,13 @@ function createDmsWorkerHandler({
       log.info('dms worker disabled: partner accountability switched off');
       return { disabled: 'PARTNER_ACCOUNTABILITY' };
     }
+    // §8.7 rollout: deviceLivenessWorker owns evaluation AND dispatch once the flag is on.
+    // Two schedulers dispatching the same outbox would double-send, so this one stands down
+    // completely rather than only skipping its own transition pass.
+    if (features.device_liveness_alerts_v1_enabled === true) {
+      log.info('dms worker disabled: device liveness v1 enabled');
+      return { disabled: 'LIVENESS_V1_ENABLED' };
+    }
 
     const openOutageId = await findOpenIngestionOutage(db);
     if (openOutageId) {
@@ -821,6 +864,11 @@ exports.dmsDeadlineWorker = onSchedule(
   deferWhileIndexBuilds((event) => createDmsWorkerHandler({ db: getFirestore() })(event)),
 );
 
+// Shared with the Phase 6 liveness worker: one outbox, one dispatcher (§8.7 "no second
+// parallel heartbeat system").
+exports.dispatchOutbox = dispatchOutbox;
+exports.requeueExpiredClaims = requeueExpiredClaims;
+exports.sendDmsPush = sendDmsPush;
 exports._createDmsWorkerHandler = createDmsWorkerHandler;
 exports._processDueRow = processDueRow;
 exports._processProbeRow = processProbeRow;

@@ -146,6 +146,15 @@ Phase 6 **extends this system**: adds a signed, latest-wins counter and
 `EnforcementHealthSnapshot` in the same documents/heartbeat contract (AC15). Do not
 create a second heartbeat pipeline.
 
+**As shipped (2026-11-12, phase log §Phase 6):** the signed contact is a separate
+stateless/latest-wins path — endpoint `submitDeviceContact`, its own counter column
+(`installation_state.heartbeat_counter`), one `partnerDeviceLiveness` document per
+installation — not a second DMS pipeline. Accepted contacts bridge into the legacy
+`dms_install_state` liveness fields (never its counter), liveness notices ride the one
+`dms_notification_outbox` + dispatcher, and the legacy `dmsDeadlineWorker` stands down
+entirely while `config/features.device_liveness_alerts_v1_enabled` is on. The old
+unsigned heartbeat and the new contact path never run side by side as alert authorities.
+
 ## 5. Recipient registry and fanout (§16.5)
 
 - Registry is local-only today: `enrollments` (see §0). Server-side `pairings` proofs

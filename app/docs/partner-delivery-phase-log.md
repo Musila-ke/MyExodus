@@ -736,3 +736,172 @@ notification permission handling and mailbox retrieval independent of FCM), §8.
 3. Phase 4 carries 2–4 remain open (>24 h diagnostics, producer switch, `.107` re-pair).
 
 **Next:** Phase 6 — liveness integration.
+
+---
+
+## Phase 6 — Liveness integration (2026-11-12)
+
+**Status: PASSED (client + backend), deployed with the rollout flag OFF.** The separate
+signed, latest-wins contact path ships end to end: device signing/contact scheduling, the
+`submitDeviceContact` callable, the five-minute evaluator, and permission-aware notices on
+the existing outbox/dispatcher. Nothing changes for users until
+`config/features.device_liveness_alerts_v1_enabled` is set — the legacy DMS worker remains
+in charge while the flag is unset, and the liveness worker stays inert.
+
+**Scope:** plan §7 Phase 6 (verbatim: use the existing heartbeat plumbing "where present;
+implement a **separate stateless/latest-wins signed heartbeat** and required-enforcement
+health state, server 5-minute evaluator, 90-minute probe threshold, 20-minute probe window,
+conservative 240-minute alert grace (360 in configured sleep windows), outage episodes,
+automated incident suppression/recovery, permission-aware partner alerts and dashboard
+diagnostics. No second parallel heartbeat system"), §6.3 and §8.7.
+
+**Touched files**
+
+Backend (new):
+- `functions/device-liveness-logic.js` — pure decisions: `validateContact` +
+  `contactMessage` (JCS-signed shape), `evaluationDecision` (90-min stale → episode +
+  one probe; 20-min window; 240-min grace constant, 360-min sleep constant; 6-h probe rate
+  cap), statuses `ACTIVE`/`CONTACT_STALE`/`UNAVAILABLE`/`MONITORING_UNAVAILABLE`,
+  enforcement `HEALTHY`/`DEGRADED`, notice types, `livenessDocId`.
+- `functions/device-contact.js` — `submitDeviceContact` callable (Auth + App Check, P-256
+  signature over the canonical contact, transactional strictly-increasing counter accept,
+  probe echo, enforcement transition, legacy DMS bridge) and `deviceLivenessWorker`
+  (five-minute evaluator: stale detection, episode/probe allocation, bounded wake probe,
+  grace alert, atomic recovery, fleet-incident suppression).
+Backend (modified):
+- `functions/index.js` — exports `submitDeviceContact`, `deviceLivenessWorker` and the
+  emulator seams.
+- `functions/dms-logic.js` — liveness notice types share the one outbox;
+  `suppressionReason` routes liveness rows to `partnerDeviceLiveness` and suppresses
+  `MONITORING_PAUSED`/`RECOVERED_BEFORE_DISPATCH`/`SUPERSEDED`.
+- `functions/dms-processor.js` — dispatcher selects the state collection by notice family,
+  family-scoped collapse keys, enforcement notice copy, shared `dispatchOutbox`/
+  `requeueExpiredClaims`/`sendDmsPush` exports, and the legacy worker stands down entirely
+  when the v1 flag is on (two schedulers must never dispatch the same outbox).
+- `functions/partner-registration.js` — exports `p256Spki` for contact signature checks.
+- `functions/package.json` — `test:liveness` script.
+
+Client (new):
+- `app/src/main/java/com/example/myexodus/accountability/delivery/DeviceContactProtocol.kt`
+  — v1 wire types; canonical JCS bytes; `submitPayload` = flat contact + `contactSignature`
+  (base64url, 64–128 chars); reply mapping (`ACCEPTED` / `STALE`+counter /
+  `INVALID_PROBE`); probe regex mirror; `MAX_COUNTER = 9_007_199_254_740_991`.
+- `.../delivery/DeviceContactClient.kt` — the §6.3 sender: owner → installation →
+  active registration + key-id match → health snapshot → counter allocation → sign →
+  `submitDeviceContact`. Every pre-send miss is `Skipped`; a STALE reply aligns the local
+  counter forward; nothing is persisted for replay.
+- `.../delivery/DeviceContactWorker.kt` — one fresh contact per run; probe input validated
+  against the server regex before sending; bounded retry (`MAX_RETRIES = 2`) only for
+  send failures/STALE; 15-minute periodic (`UPDATE`, CONNECTED), immediate now (`KEEP`),
+  probe request expedited only on API 31+.
+Client (modified):
+- `.../delivery/ServiceEventOutboxDao.kt` / `ServiceEventOutbox.kt` — `heartbeatCounter`
+  read/write plus transactional `allocateHeartbeatCounter` (cap-checked) and
+  `alignHeartbeatCounter` (only raises). No schema change: `installation_state.heartbeat_counter`
+  already existed at v15; the database stays at v18.
+- `.../sync/PartnerPushParser.kt` — `LivenessProbe(probeId?)`; a malformed probe id is
+  ignored, never repaired; an id-less legacy probe still routes.
+- `.../sync/PartnerMessagingService.kt` — a signed probe posts the silent user-visible
+  status entry and enqueues the signed contact; the id-less legacy probe keeps the forced
+  heartbeat path until Phase 7.
+- `.../sync/PartnerNotifications.kt` + `res/values/strings.xml` — LOW-importance
+  `device_status_v1` channel, id 2006, generic "My Exodus is checking its connection" copy.
+- `di/PartnerDeliveryModule.kt` — `DeviceContactClient` provider: capability truth from
+  `BlockerAccessibilityService.connected`, `DnsSinkholeVpnService.state`, `false` for
+  device admin (none implemented), `NotificationAccess.canPost`; required mask from
+  `getActiveRules()` filtered `isEnabled && !isExpiredAt` (ACCESSIBILITY) and
+  `hasLiveWebsiteRule` (VPN); any unreadable store returns a null snapshot so the contact
+  is skipped rather than fabricated.
+- `MyExodusApp.kt` — cadence + immediate contact on process start, a contact on every
+  foreground transition, and a process-lifetime connectivity-recovery callback
+  (`NET_CAPABILITY_INTERNET`) sending a contact when the first network returns; all
+  session-gated.
+- `.../delivery/PartnerEventBootReceiver.kt` — permitted restart re-arms the cadence and
+  sends immediately.
+
+**Tests**
+
+- JVM: full `:app:testDebugUnitTest` — 2774 tests, 0 failures, 0 errors, 0 skipped (292
+  classes). Phase 6 additions: `DeviceContactProtocolTest` (6 — two full server-produced
+  golden canonical strings, probe presence/absence, submit payload, reply mapping, counter
+  ceiling, probe regex) and `PartnerPushParserTest` (11 — probe id routing and malformed-id
+  rejection).
+- Backend unit: `npm test` — 265/265 PASSED (23 new).
+- Backend emulator: `npm run test:liveness` — 13/13 PASSED (real callable + evaluator,
+  independent hand-written JCS rebuild of the signed bytes, rollout-flag handover,
+  MONITORING_UNAVAILABLE pause).
+- Release build: `:app:assembleRelease` — BUILD SUCCESSFUL.
+
+**Deploy evidence (production, 2026-11-12)**
+
+`firebase deploy` of `submitDeviceContact`, `deviceLivenessWorker` and the updated
+`dmsDeadlineWorker` to `myexodus-53804` — exit 0; functions created/updated. Evaluator
+remains inert while `config/features.device_liveness_alerts_v1_enabled` is unset.
+
+**Requirements verified (§6.3 / §8.7)**
+
+| Requirement | How |
+|---|---|
+| Separate stateless/latest-wins heartbeat, own counter | Own column namespace + own callable; never touches `pending_partner_events`, event ids, sequence, mailbox or notification outbox |
+| Do not retain/replay offline heartbeat calls | Nothing persisted for sending; each opportunity allocates a fresh counter (a crash burns the counter, never reuses it) |
+| Versioned JCS contact signed with the registered background key | `DeviceContactProtocolTest` pins the server's own canonical strings; `submitPayload` adds `contactSignature` |
+| Required mask derives from the active policy | ACCESSIBILITY iff an enabled, unexpired rule exists; VPN iff `hasLiveWebsiteRule`; no device-admin surface |
+| 15-minute periodic + foreground/restart/connectivity opportunities | `enqueueDeviceContact` (UPDATE) + now-contact at process start, every foreground transition, boot, and first reachable network |
+| Probe: silent, user-visible status entry first | `notifyLivenessProbe` (LOW channel) then the probe work request |
+| Expedited only API 31+, normal below | `Build.VERSION.SDK_INT >= S` gate in `deviceContactProbeRequest` |
+| Probe answered only by signed contact with current probe id + newer counter | `probeId` echoed in the signed bytes; server validates window/id/counter transactionally |
+| Unknown/undeliverable heartbeat is unavailable, never proof | Null snapshot skips the contact; silence only feeds the server's uncertainty path |
+| Permission-aware probes and notices | `notificationPermissionGranted` reported; client skips the local post when denied but still answers; server uses notice/suppression state for dispatch |
+| One outbox/dispatcher, no second heartbeat system | Liveness notices ride the existing DMS outbox; the legacy worker stands down when the v1 flag is on |
+
+**Deviations from the plan (each deliberate)**
+
+1. **Monitoring-enrollment state is not a wire field.** §6.3's contact description ends
+   with "and current monitoring-enrollment state", but §8.7's protocol v1 (and the
+   deployed `validateContact`) allowlist exactly `{v, ownerUid, installationId, keyId,
+   heartbeatCounter, deviceReportedAtMs, enforcement{...}, probeId?}`. Enrollment and
+   partner consent are checked server-side at decision and dispatch time (§8.7), so the
+   client does not invent a field the server rejects.
+2. **A failed contact retries at most twice** (`MAX_RETRIES = 2`, standard WorkManager
+   backoff) instead of literally one call per opportunity. Each attempt allocates a fresh
+   counter and re-signs, so this is not replay; the bound exists because the probe answer
+   window is only 20 minutes.
+3. **No sleep-window configuration exists in this build**, so the evaluator always uses the
+   240-minute default grace; the 360-minute constant is defined and ready for a configured
+   schedule (§8.7 defers tuning to server configuration).
+4. **The legacy id-less DMS probe path stays alive** (forced heartbeat via the existing
+   partner-sync worker) until Phase 7 retires the legacy worker; the rollout flag keeps
+   production on the legacy path, so removing it early would go silent.
+5. **Connectivity recovery is a process-lifetime `NetworkCallback`, foreground/boot are
+   WorkManager enqueues** — outside a live process the CONNECTED constraint on the
+   periodic request is the recovery mechanism; the callback only shortens the common
+   in-process case.
+6. **The contact is bridged into the legacy DMS state** (`dms_install_state`) by the
+   callable so an accepted signed contact also satisfies the legacy partner-notice path
+   while both systems coexist (Phase 6 backend; no client coupling).
+
+**Carries**
+
+1. **Device validation is BLOCKED** on the Phase 8 two-device matrix: real FCM probe →
+   notification → expedited contact latency, Doze/overnight behavior, denied-permission
+   probe, and end-to-end `DEVICE_UNAVAILABLE`/`DEVICE_RECONNECTED` copy. This entry claims
+   JVM + backend-emulator evidence only.
+2. **Rollout flag flip is an owner decision** after hardware evidence — the evaluator is
+   deployed but inert.
+3. **Phase 7** retires the legacy DMS probe/worker and switches producers to
+   `PartnerEventRecorder`; until then both notice families share the one outbox.
+4. **No dashboard diagnostics surface yet** — server state is persisted
+   (`partnerDeviceLiveness`); the in-app diagnostics view remains §8.7 dashboard work.
+5. **Only `device_liveness_alerts_v1_enabled` exists.** §8.7's other three rollout
+   controls (`delivery_ingest_v1_enabled`, `delivery_client_sync_v1_enabled`,
+   `partner_notify_v1_enabled`) belong to Phase 7's staged-flag work; none of them are
+   implemented yet, so their pause semantics are unproven.
+6. **App Lock + liveness interaction risk (unshipped feature).** When App Lock lands, a
+   locked vault makes `AppRulesStoreFactory.open()` throw `VaultLockedException`; the
+   capability provider turns that into a null snapshot and the contact is skipped. A vault
+   left locked past 90 minutes leaves the probe unanswered, and past the 240-minute grace
+   the partner can receive `DEVICE_UNAVAILABLE` for a device that is actually running.
+   Revisit when App Lock ships (task #149): either exempt the liveness snapshot from vault
+   gating or record a bounded "monitoring unavailable" state instead of silence.
+
+**Next:** Phase 7 — legacy migration, lifecycle and rollout.

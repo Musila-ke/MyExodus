@@ -348,6 +348,19 @@ exports.recordIngestionOutage = recordIngestionOutage;
 const { dmsDeadlineWorker } = require('./dms-processor');
 exports.dmsDeadlineWorker = dmsDeadlineWorker;
 
+// Plan §7 Phase 6 / §8.7: the signed liveness contact + five-minute evaluator. `_create*Handler`
+// are the emulator suite's seams.
+const {
+  createSubmitDeviceContact,
+  createSubmitDeviceContactHandler,
+  createDeviceLivenessWorkerHandler,
+  deviceLivenessWorker,
+} = require('./device-contact');
+exports.submitDeviceContact = createSubmitDeviceContact({ db });
+exports.deviceLivenessWorker = deviceLivenessWorker;
+exports._createSubmitDeviceContactHandler = createSubmitDeviceContactHandler;
+exports._createDeviceLivenessWorkerHandler = createDeviceLivenessWorkerHandler;
+
 // Account plan §7 Release 0 step 2 / §8.8: `appendUserEvent` is the only user-event write
 // path once the rules stop allowing direct mailbox creates. `_createAppendUserEventHandler`
 // is the emulator suite's seam (injected db + clock).

@@ -7,6 +7,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.example.myexodus.accountability.delivery.enqueueDeviceContactProbe
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
@@ -78,12 +79,21 @@ class PartnerMessagingService : FirebaseMessagingService() {
                 }
                 enqueueSync(wake.messageId)
             }
-            // §4/§8.9: the server saw no accepted beat for 45 minutes and woke this app
-            // silently. Force the check-in: the normal 15-minute floor must not suppress the
-            // reply the server is waiting for.
-            PartnerPushWake.LivenessProbe -> {
-                Log.i(TAG, "liveness probe — forcing a heartbeat")
-                enqueueHeartbeatProbe()
+            // §8.7: the evaluator saw no accepted signed contact and woke this app. The
+            // id-less payload is the legacy DMS probe (45-minute beat) — still answered the
+            // old way until Phase 7 retires that worker. An id means the signed-contact
+            // evaluator: post the silent, user-visible status entry that justifies the
+            // high-priority wake, then send the answering contact inside the probe window.
+            is PartnerPushWake.LivenessProbe -> {
+                val probeId = wake.probeId
+                if (probeId != null) {
+                    Log.i(TAG, "signed liveness probe — checking connection")
+                    PartnerNotifications.notifyLivenessProbe(this)
+                    enqueueDeviceContactProbe(this, probeId)
+                } else {
+                    Log.i(TAG, "liveness probe — forcing a heartbeat")
+                    enqueueHeartbeatProbe()
+                }
             }
             PartnerPushWake.Ignored ->
                 Log.i(TAG, "ignoring unrecognized push (from ${message.from})")

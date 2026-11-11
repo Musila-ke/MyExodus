@@ -34,7 +34,27 @@ const CONNECTION_NO_DATA = 'NO_DATA';
 // told about the silence and about the return without either suppressing the other (§4).
 const NOTICE_AVAILABILITY = 'AVAILABILITY_6H';
 const NOTICE_RECOVERY = 'RECOVERY';
-const NOTICE_TYPES = [NOTICE_AVAILABILITY, NOTICE_RECOVERY];
+
+// Phase 6 liveness notice types share this outbox and dispatcher. Their rows carry the
+// `partnerDeviceLiveness` doc id in `state_doc_id`, so dispatch-time revalidation reads that
+// state instead of `dms_install_state` (see suppressionReason + claimNotice).
+const {
+  STATUS_MONITORING_UNAVAILABLE,
+  ENFORCEMENT_HEALTHY,
+  ENFORCEMENT_DEGRADED,
+  LIVENESS_NOTICE_TYPES,
+  NOTICE_DEVICE_UNAVAILABLE,
+  NOTICE_DEVICE_RECONNECTED,
+  NOTICE_ENFORCEMENT_DEGRADED,
+  NOTICE_ENFORCEMENT_RESTORED,
+  isLivenessNoticeType,
+} = require('./device-liveness-logic');
+
+const NOTICE_TYPES = [
+  NOTICE_AVAILABILITY,
+  NOTICE_RECOVERY,
+  ...LIVENESS_NOTICE_TYPES,
+];
 
 // A state row whose installation really is gone, but whose user still has a live device: it
 // must never notify (availability is read user-level) and never probe again. Any accepted
@@ -233,15 +253,36 @@ function livenessProbeDecision({ state, expectedGeneration = null, expectedLastR
 
 /**
  * Dispatch-time revalidation, in the order the outbox row is checked: the authoritative
- * relationship, the monitored member's current consent, then the DMS state the row was
- * created from. Returns a suppression reason or null when the send may proceed. A stale row
- * is never sent — an old queue message is not authority (§4 consent, §8.10).
+ * relationship, the monitored member's current consent, then the state the row was created
+ * from. Returns a suppression reason or null when the send may proceed. A stale row is never
+ * sent — an old queue message is not authority (§4 consent, §8.10).
+ *
+ * `state` is `dms_install_state` for the legacy six-hour notices and `partnerDeviceLiveness`
+ * for the Phase 6 liveness notices; the caller routes by notice type.
  */
 function suppressionReason({ pairing, monitoredUid, row, state }) {
   const recipientUid = activePartner(pairing, monitoredUid);
   if (!recipientUid || recipientUid !== row.recipient_uid) return 'RELATIONSHIP_CLOSED';
   if (!consentEnabled(pairing, monitoredUid)) return 'CONSENT_REVOKED';
   if (!state) return 'STALE';
+  if (isLivenessNoticeType(row.notice_type)) {
+    if (state.status === STATUS_MONITORING_UNAVAILABLE) return 'MONITORING_PAUSED';
+    if (row.notice_type === NOTICE_DEVICE_UNAVAILABLE) {
+      // Only an episode that is still open and was actually alerted may page the partner.
+      if (!state.alertedAtMs) return 'RECOVERED_BEFORE_DISPATCH';
+      if (state.outageEpisodeId !== row.outage_generation) return 'SUPERSEDED';
+      return null;
+    }
+    if (row.notice_type === NOTICE_DEVICE_RECONNECTED) {
+      // The row exists only because an alerted episode was closed; it reports that past
+      // transition even if a newer episode has since opened.
+      return null;
+    }
+    if (row.notice_type === NOTICE_ENFORCEMENT_DEGRADED) {
+      return state.enforcementState === ENFORCEMENT_DEGRADED ? null : 'RECOVERED_BEFORE_DISPATCH';
+    }
+    return state.enforcementState === ENFORCEMENT_HEALTHY ? null : 'SUPERSEDED';
+  }
   if (row.notice_type === NOTICE_AVAILABILITY) {
     if (state.notice_state !== 'NOTIFIED') return 'RECOVERED_BEFORE_DISPATCH';
     if (Number(state.last_notified_generation) !== Number(row.expected_notified_generation)) {

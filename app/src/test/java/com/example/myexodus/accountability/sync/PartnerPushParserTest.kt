@@ -82,10 +82,30 @@ class PartnerPushParserTest {
 
     @Test
     fun checkinReminder_hasNothingToPull() {
+        // Legacy DMS probe carries no probeId; the signed-contact evaluator's probe does.
         assertEquals(
-            PartnerPushWake.LivenessProbe,
+            PartnerPushWake.LivenessProbe(null),
             PartnerPushParser.parse(mapOf("v" to "1", "type" to "LIVENESS_PROBE")),
         )
+        assertEquals(
+            PartnerPushWake.LivenessProbe(PROBE_ID),
+            PartnerPushParser.parse(
+                mapOf("v" to "1", "type" to "LIVENESS_PROBE", "probeId" to PROBE_ID),
+            ),
+        )
+    }
+
+    @Test
+    fun malformedProbeId_isIgnored_neverRepaired() {
+        for (id in listOf("short", "has space", "has/slash", "a".repeat(161), "ümlaut")) {
+            assertEquals(
+                "id=$id",
+                PartnerPushWake.Ignored,
+                PartnerPushParser.parse(
+                    mapOf("v" to "1", "type" to "LIVENESS_PROBE", "probeId" to id),
+                ),
+            )
+        }
     }
 
     @Test
@@ -120,5 +140,6 @@ class PartnerPushParserTest {
 
     private companion object {
         const val MESSAGE_ID = "3f0a2f0e-9a51-4f4d-8c3e-2c9b0a6d1e77"
+        const val PROBE_ID = "probe-ep-3f0a2f0e9a514f4d8c3e2c9b0a6d1e77"
     }
 }

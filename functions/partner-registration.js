@@ -428,6 +428,7 @@ function createRegisterOrRotateDevice({
   );
 }
 
+exports.p256Spki = p256Spki;
 exports.createRegisterDeviceChallenge = createRegisterDeviceChallenge;
 exports.createRegisterDeviceChallengeHandler = createRegisterDeviceChallengeHandler;
 exports.createRegisterOrRotateDevice = createRegisterOrRotateDevice;

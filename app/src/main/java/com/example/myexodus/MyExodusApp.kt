@@ -7,6 +7,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.os.Bundle
 import android.os.Looper
@@ -25,6 +29,8 @@ import com.example.myexodus.account.LegacyCachePurge
 import com.example.myexodus.account.LocalSessionManager
 import com.example.myexodus.account.ScopeRecoveryImporter
 import com.example.myexodus.accountability.delivery.PartnerDeliveryCoordinator
+import com.example.myexodus.accountability.delivery.enqueueDeviceContact
+import com.example.myexodus.accountability.delivery.enqueueDeviceContactNow
 import com.example.myexodus.accountability.delivery.enqueuePartnerEventSync
 import com.example.myexodus.accountability.state.LocalWipeDetector
 import com.example.myexodus.accountability.sync.AppCheckInstaller
@@ -337,6 +343,11 @@ class MyExodusApp : Application(), Configuration.Provider {
                 // Partner delivery plan §4.1/§6.1 step 4: the 15-minute backstop plus the
                 // startup reconciliation for rows a crash left without scheduled work.
                 enqueuePartnerEventSync(this)
+                // Phase 6 §6.3: the 15-minute signed-contact cadence plus an immediate
+                // contact on this foreground opportunity.
+                enqueueDeviceContact(this)
+                enqueueDeviceContactNow(this)
+                registerContactOnConnectivityRecovery()
                 applicationScope.launch { partnerDelivery.get().reconcileOnStart() }
             }
             enqueueDailyMaintenance(this)
@@ -537,6 +548,25 @@ class MyExodusApp : Application(), Configuration.Provider {
         }
     }
 
+    /** §6.3 connectivity-recovery opportunity: the first reachable network after a loss sends
+     *  a fresh signed contact instead of waiting for the next 15-minute slot. Process-lifetime
+     *  registration — the system drops it on process death. */
+    private fun registerContactOnConnectivityRecovery() {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                if (localSessionManager.get().current() != null) {
+                    enqueueDeviceContactNow(this@MyExodusApp)
+                }
+            }
+        }
+        runCatching { cm.registerNetworkCallback(request, callback) }
+            .onFailure { Log.w(TAG, "contact connectivity listener not registered", it) }
+    }
+
     /** Plan §7 step 20's one-time upgrade purge. Instrumented suites own Firestore/DB state
      *  (the same reason [underInstrumentation] skips the migration below). */
     private fun purgeLegacyCacheIfUnlocked() {
@@ -564,6 +594,11 @@ class MyExodusApp : Application(), Configuration.Provider {
                 partnerDelivery.get().drainInProcess(
                     appLockCoordinator.get().state.value.allowsVaultAccess,
                 )
+            }
+            // §6.3: every foreground transition is also a signed-contact opportunity; the
+            // worker itself skips when signed out or unregistered.
+            if (localSessionManager.get().current() != null) {
+                enqueueDeviceContactNow(this@MyExodusApp)
             }
         }
 

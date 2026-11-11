@@ -5,7 +5,8 @@ package com.example.myexodus.accountability.sync
  * generic synchronization trigger — never content — so the only decisions are "run the sync
  * pass, optionally handling this message first", "force a heartbeat", and "nothing to do".
  * The server's partner DMS notice uses the same `type` vocabulary and is rendered by the OS
- * from its `notification` block; the liveness probe is data-only and never shown.
+ * from its `notification` block; the liveness probe is data-only — the service posts its own
+ * silent status entry, never anything from the payload.
  *
  * A missing `messageId` is a valid generic wake (§8.12's own example has none): the pass then
  * reconciles the whole mailbox. A present id must look like the Firestore document id the
@@ -16,8 +17,10 @@ internal sealed interface PartnerPushWake {
     /** [messageId] is null for a whole-mailbox reconcile. */
     data class Sync(val messageId: String?) : PartnerPushWake
 
-    /** Silent server wake for a missed heartbeat: force one check-in, nothing to show. */
-    object LivenessProbe : PartnerPushWake
+    /** Silent server wake for a missed heartbeat. [probeId] is present once the server runs
+     *  the signed-contact evaluator; null is the legacy DMS probe (no id, forced heartbeat),
+     *  still accepted until Phase 7 retires that worker. */
+    data class LivenessProbe(val probeId: String?) : PartnerPushWake
 
     /** Not ours, an unknown schema version, or a malformed id. */
     object Ignored : PartnerPushWake
@@ -28,6 +31,7 @@ internal object PartnerPushParser {
     const val KEY_VERSION = "v"
     const val KEY_TYPE = "type"
     const val KEY_MESSAGE_ID = "messageId"
+    const val KEY_PROBE_ID = "probeId"
 
     const val VERSION = "1"
     const val TYPE_SYNC_AVAILABLE = "SYNC_AVAILABLE"
@@ -40,6 +44,10 @@ internal object PartnerPushParser {
     const val TYPE_PARTNER_EVENT = "PARTNER_EVENT"
 
     private val MESSAGE_ID = Regex("^[A-Za-z0-9_-]{1,128}$")
+
+    /** Mirror of the server's PROBE_ID; an absent id is the legacy probe, a malformed one is
+     *  ignored (never repaired into a contact the server would reject). */
+    private val PROBE_ID = Regex("^[A-Za-z0-9_-]{8,160}$")
 
     fun parse(data: Map<String, String>): PartnerPushWake {
         // Absent is the pre-versioning relay payload; a different version is a schema this
@@ -61,7 +69,14 @@ internal object PartnerPushParser {
                 val id = data[KEY_MESSAGE_ID]
                 if (id != null && MESSAGE_ID.matches(id)) PartnerPushWake.Sync(id) else PartnerPushWake.Ignored
             }
-            TYPE_LIVENESS_PROBE -> PartnerPushWake.LivenessProbe
+            TYPE_LIVENESS_PROBE -> {
+                val probeId = data[KEY_PROBE_ID]
+                when {
+                    probeId == null -> PartnerPushWake.LivenessProbe(null)
+                    PROBE_ID.matches(probeId) -> PartnerPushWake.LivenessProbe(probeId)
+                    else -> PartnerPushWake.Ignored
+                }
+            }
             TYPE_PARTNER_EVENT -> PartnerPushWake.Sync(null)
             else -> PartnerPushWake.Ignored
         }

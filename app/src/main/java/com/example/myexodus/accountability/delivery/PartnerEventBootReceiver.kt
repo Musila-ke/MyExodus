@@ -20,5 +20,8 @@ class PartnerEventBootReceiver : BroadcastReceiver() {
         if (FirebaseAuth.getInstance().currentUser == null) return
         enqueuePartnerEventSync(context)
         enqueuePartnerEventSyncNow(context)
+        // §6.3: a permitted restart is a contact opportunity — re-arm the cadence and send now.
+        enqueueDeviceContact(context)
+        enqueueDeviceContactNow(context)
     }
 }

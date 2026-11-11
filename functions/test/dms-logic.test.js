@@ -346,6 +346,68 @@ test('suppressionReason: recovery is sent once, and only for its own outage gene
   );
 });
 
+test('suppressionReason: liveness notices revalidate against the liveness document', () => {
+  const {
+    NOTICE_DEVICE_UNAVAILABLE,
+    NOTICE_DEVICE_RECONNECTED,
+    NOTICE_ENFORCEMENT_DEGRADED,
+    NOTICE_ENFORCEMENT_RESTORED,
+  } = require('../device-liveness-logic');
+  const row = (noticeType, generation = 'ep-1') => ({
+    recipient_uid: 'watcher',
+    notice_type: noticeType,
+    outage_generation: generation,
+  });
+  const open = { status: 'UNAVAILABLE', alertedAtMs: 5, outageEpisodeId: 'ep-1', enforcementState: 'DEGRADED' };
+  const check = (noticeType, state, generation = 'ep-1') => suppressionReason({
+    pairing: pairing(),
+    monitoredUid: 'mon',
+    row: row(noticeType, generation),
+    state,
+  });
+
+  assert.strictEqual(check(NOTICE_DEVICE_UNAVAILABLE, open), null);
+  assert.strictEqual(
+    check(NOTICE_DEVICE_UNAVAILABLE, { status: 'ACTIVE', alertedAtMs: null, outageEpisodeId: null }),
+    'RECOVERED_BEFORE_DISPATCH',
+  );
+  assert.strictEqual(
+    check(NOTICE_DEVICE_UNAVAILABLE, { ...open, outageEpisodeId: 'ep-2' }),
+    'SUPERSEDED',
+  );
+  assert.strictEqual(check(NOTICE_DEVICE_RECONNECTED, { status: 'ACTIVE', enforcementState: 'HEALTHY' }), null);
+  assert.strictEqual(
+    check(NOTICE_ENFORCEMENT_DEGRADED, open, 7),
+    null,
+  );
+  assert.strictEqual(
+    check(NOTICE_ENFORCEMENT_DEGRADED, { ...open, enforcementState: 'HEALTHY' }, 7),
+    'RECOVERED_BEFORE_DISPATCH',
+  );
+  assert.strictEqual(
+    check(NOTICE_ENFORCEMENT_RESTORED, { ...open, enforcementState: 'HEALTHY' }, 7),
+    null,
+  );
+  assert.strictEqual(
+    check(NOTICE_ENFORCEMENT_RESTORED, open, 7),
+    'SUPERSEDED',
+  );
+  assert.strictEqual(
+    check(NOTICE_DEVICE_UNAVAILABLE, { ...open, status: 'MONITORING_UNAVAILABLE' }),
+    'MONITORING_PAUSED',
+  );
+  // Consent revocation outranks any liveness state — a paused relationship never notifies.
+  assert.strictEqual(
+    suppressionReason({
+      pairing: pairing({ availabilityConsent: { mon: { enabled: false } } }),
+      monitoredUid: 'mon',
+      row: row(NOTICE_DEVICE_UNAVAILABLE),
+      state: open,
+    }),
+    'CONSENT_REVOKED',
+  );
+});
+
 test('circuit breaker trips at the configured burst threshold', () => {
   assert.strictEqual(circuitBreakerTripped(49, 50), false);
   assert.strictEqual(circuitBreakerTripped(50, 50), true);
