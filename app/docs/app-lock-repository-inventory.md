@@ -218,3 +218,111 @@ existing PIN remains functional."
 injectable standalone DAOs; existing SQLCipher key only (route 1); stale collectors and background
 entry points must not read a closed vault. Entry requires this section's unit evidence to remain
 green.
+
+## 12. Phase 3 status — vault provider and lease gate
+
+Plan gate (§7 Phase 3): "Lock/unlock with **existing key only**; stale collectors and background
+entry points cannot read closed vault." Plan §8.3 names the target class `VaultDatabaseProvider`.
+
+**Design**
+
+- `AppRulesStoreFactory` remains the sole runtime opener of the rules SQLCipher store and now
+  owns the §8.3 gate. The rename to `VaultDatabaseProvider` was **not** performed: it would touch
+  289 source references for zero behavioral change; the existing class is the provider.
+- `open()` throws the new typed `VaultLockedException` unless the app-lock state is DISABLED or
+  UNLOCKED (`AppLockState.showsProtectedUi`). `DatabaseModule` supplies that predicate as
+  `{ appLock.get().state.value.showsProtectedUi }` with `dagger.Lazy` so the coordinator (which
+  reads credential-encrypted prefs) is never constructed in a locked-boot process.
+- `withVault(block)` is the operation-scoped lease: admission and lease counting happen under the
+  gate monitor, release happens in `finally`. A lease admitted before a lock starts completes;
+  admission is refused once the lock transition begins.
+- `lockVault(timeoutMs = 2000)` sets `closing`, increments `sessionGeneration`, waits for leases
+  with a monotonic `System.nanoTime` deadline (Robolectric freezes `SystemClock.uptimeMillis`),
+  then closes Room under the open-path monitor and re-admits. On timeout it returns false and the
+  gate **stays closed**; a later call retries. It never force-closes under an active lease.
+- Also gated: `checkpoint()` (silent no-op while closed), `resetAndReopen`, `stageRestoreCopy`,
+  `verifyRestoreStaging`, `swapInRestore`, `openRecoveryCopy`. `ActivityLogStore` stays ungated
+  per D5: it has no reader or writer, and `checkpoint()` returns before opening when no handle
+  exists, so it cannot read the vault while locked.
+- Lock ordering: `withVault` takes the gate monitor then the open monitor; `lockVault` releases
+  the gate monitor before taking the open monitor, so no inversion exists.
+
+**Files changed**
+
+- `data/db/AppRulesStoreFactory.kt` — gate fields, `withVault`, `lockVault`, gated entry points.
+- `data/db/VaultLockedException.kt` (new).
+- `di/DatabaseModule.kt` — coordinator-backed predicate via `Lazy`.
+- `test/.../data/db/VaultGateTest.kt` (new).
+
+**Evidence**
+
+- `VaultGateTest`: 7 tests, 0 failures, 0 errors (Robolectric, sdk 34). Covers disabled access;
+  closed gate refusing `open`/`withVault`; block-result passthrough; checkpoint no-op; held-lease
+  drain then close (generation +2, fresh handle afterwards); an undrained lock staying closed
+  until a retry succeeds; and 6-thread × 25-iteration concurrent lease churn interleaved with 5
+  lock/reopen cycles — only `VaultLockedException` observed, reads completed, final lock and
+  reopen succeeded.
+- `AppLockCoordinatorTest`: 15/15 unchanged.
+- Full unit suite: 278 classes / 2,634 tests, 0 failures, 0 errors, 0 skipped (Robolectric, sdk
+  34), including both App Lock suites above.
+- `:app:lintDebug` alone (ADR #208): 0 errors, 2 warnings — both pre-existing and in files this
+  change set does not touch (`ui/rules/BatchEditor.kt:102` ModifierParameter,
+  `res/values/strings.xml:305` PluralsCandidate).
+- Physical X6532 (.106), signed release build `install -r` (installed `base.apk` md5 matched the
+  local artifact): cold launch renders the full protected UI and the vault opens normally while
+  the feature is DISABLED; logcat shows no `VaultLockedException`, no `FATAL`, and the process
+  stays resumed on `MainActivity`.
+- Emulator-5556 (debug build of this change set; required because seeding the CE prefs needs
+  `run-as`), `app_lock_status` seeded `feature_status=enabled` +
+  `migration_journal=first_unlock_verified`, then cold start: the gate refused the vault —
+  `VaultLockedException` thrown at `AppRulesStoreFactory.requireVaultAccess`
+  (`AppRulesStoreFactory.kt:153`) from `MyExodusApp.kt:272`, `data_app_crash` recorded, splash
+  dropped back to the launcher. This proves the DI predicate reads the real coordinator state and
+  no protected content or vault handle is reachable while LOCKED; it also upgrades the Phase 6
+  startup gap below from inference to verified behavior. The seeded prefs were deleted afterwards
+  and a normal launch was re-verified.
+
+**Gate accounting (honest split)**
+
+- PASSED (unit): every runtime vault entry point refuses access while closed; leases drain before
+  close; undrained locks keep the gate closed; concurrent lock/reopen churn is safe.
+- PASSED (source, "existing key only"): the store still opens with its existing random DEK via
+  `RulesStoreEncryption`; no new key derivation or wrapping was introduced in this phase.
+- PASSED (source, single opener): the factory is the only runtime rules-store opener. Remaining
+  direct SQLite openers are one-time startup migrations (`DatabaseMigration`,
+  `LocalDatabaseMigration`, `PlaintextToEncryptedMigration`, `SqlCipherRawKey`) plus
+  `ActivityLogStore`, all recorded in §2/§5 and owned by Phase 5. No Hilt module provides a
+  rules-store DAO; `AccountabilityModule`'s DAO providers belong to the plain accountability DB
+  (D2).
+- DEFERRED to Phase 6 with the lock trigger: no production caller invokes `lockVault`, and
+  `AppLockCoordinator.publishUnlocked` has no caller until the Phase 5 enrollment writer exists.
+  The feature is therefore dormant for every current user and the close step cannot be exercised
+  on a device yet. The predicate half **is** wired now: the moment any state other than
+  DISABLED/UNLOCKED exists, every background `open()` throws.
+- DEFERRED to Phase 6: §8.3.5 session-flow machinery (`StateFlow<VaultSession?>` + `flatMapLatest`
+  + generation-owned scope). Verified there is no background or shared vault Flow collector to
+  scope: the only live Room Flow collectors are seven composition-scoped
+  `collectAsStateWithLifecycle` sites in `HomeScreen`/`RulesScreen`, disposed when the gate hides
+  the tree, and `RulesRepository.observeRules` has no consumer. Shipping unwired session-flow
+  plumbing now would be unverifiable dead code; it lands with the first session-shared collector
+  and the Phase 6 lock trigger.
+- RENAME DEVIATION (recorded): `VaultDatabaseProvider` is a rename of the existing factory, not a
+  second class. Deferred as pure churn; §8.3 semantics are implemented in place.
+- REMAINING RISK for Phase 6: direct `storeFactory.open()` call sites obtain a handle without a
+  lease. Once the lock trigger is wired, an in-flight direct caller can have Room closed
+  underneath it after the drain; the read then fails (Room's closed-object error — fail-closed,
+  no plaintext exposure) instead of draining cleanly. Multi-statement execution paths must move
+  to `withVault` before the trigger ships.
+- PHASE 6 GAP (verified on emulator-5556, dormant today): `MyExodusApp.onCreate` launches startup
+  maintenance that calls `rulesStoreFactory.open()` and `recoverySessions.interruptStale`
+  unconditionally. With a locked state seeded, that launch threw `VaultLockedException`
+  (`MyExodusApp.kt:272`) and the process died on the splash before the shell could render; §8.9
+  deferral/retry (gate the maintenance behind the coordinator, defer while locked, run on unlock)
+  must be wired before the feature can be enabled. It cannot fire for any current user because
+  the only reachable startup state is DISABLED until the Phase 5 enrollment writer exists.
+
+**Next phase entry conditions (§7 Phase 4)**
+
+Disposable test database; API 30+ per-use `CryptoObject` key; API 26-29 legacy time-bound key;
+envelope with generated IV and AAD; wrap+verify prompts; an invalid tag must never open the test
+DB; real-device crypto tests for both API tiers. This section's unit evidence must stay green.

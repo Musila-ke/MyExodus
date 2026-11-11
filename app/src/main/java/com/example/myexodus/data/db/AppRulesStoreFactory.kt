@@ -31,6 +31,12 @@ class AppRulesStoreFactory(
     private val recoveryManager: RecoveryManager,
     private val healthStore: DatabaseHealthStore,
     private val encryption: RulesStoreEncryption? = null,
+    /**
+     * Plan §8.3 gate: true only while the app-lock state permits vault access
+     * (DISABLED/UNLOCKED). Manual test constructions default to open; DI supplies the
+     * coordinator-backed predicate.
+     */
+    private val vaultAccessAllowed: () -> Boolean = { true },
 ) {
     @Volatile private var database: AppRulesStore? = null
 
@@ -47,14 +53,104 @@ class AppRulesStoreFactory(
     @Volatile private var stagingActive = false
     private val lock = Any()
 
-    /** Thread-safe; returns null when the open failed into a defined recovery state. */
+    /** §8.3 gate monitor: serializes lease admission against the lock/drain transition. */
+    private val gateLock = Any()
+    private var activeLeases = 0
+
+    /** True from the moment a lock starts until the Room handle is closed. */
+    @Volatile private var closing = false
+
+    /**
+     * §8.3: incremented by every lock attempt. Leases are drained rather than generation-tagged,
+     * so no lease can span two generations; this counter distinguishes vault sessions for callers.
+     */
+    @Volatile var sessionGeneration = 0L
+        private set
+
+    /**
+     * Thread-safe; returns null when the open failed into a defined recovery state.
+     * Throws [VaultLockedException] while the app-lock gate is closed (§8.3).
+     */
     fun open(): AppRulesStore? = synchronized(lock) {
+        requireVaultAccess()
         if (swapping) return@synchronized null
         database ?: openInternal()?.also {
             // Fresh open only — a cached hit is silent (ADR #153 cold-start attribution).
             database = it
             Log.i(TAG, "Rules store opened fresh thread=${Thread.currentThread().name}")
         }
+    }
+
+    /**
+     * §8.3 generation-bound operation: refuses new access outside the gate, counts the
+     * operation so [lockVault] can drain it before closing Room, and releases the count in
+     * every path. Returns null when the store is unavailable for a non-lock reason, matching
+     * [open].
+     */
+    fun <T> withVault(block: (AppRulesStore) -> T): T? {
+        beginLease()
+        try {
+            val store = open() ?: return null
+            return block(store)
+        } finally {
+            endLease()
+        }
+    }
+
+    /**
+     * §8.3: closes the gate, refuses new leases, waits up to [timeoutMs] for in-flight ones
+     * to finish, then closes Room so the next access constructs a fresh instance. Returns
+     * false when a lease did not drain: the gate stays closed and a later call retries —
+     * never force-close underneath an executing operation.
+     */
+    fun lockVault(timeoutMs: Long = 2_000L): Boolean {
+        synchronized(gateLock) {
+            closing = true
+            sessionGeneration++
+            // Monotonic wall-clock source: Robolectric freezes SystemClock.uptimeMillis().
+            val deadline = System.nanoTime() / 1_000_000 + timeoutMs
+            while (activeLeases > 0) {
+                val remaining = deadline - System.nanoTime() / 1_000_000
+                if (remaining <= 0) {
+                    Log.w(TAG, "Vault lock deferred: $activeLeases lease(s) still active")
+                    return false
+                }
+                try {
+                    (gateLock as Object).wait(remaining)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return false
+                }
+            }
+        }
+        synchronized(lock) {
+            database?.close()
+            database = null
+        }
+        synchronized(gateLock) {
+            closing = false
+            (gateLock as Object).notifyAll()
+        }
+        Log.i(TAG, "Vault closed generation=$sessionGeneration")
+        return true
+    }
+
+    private fun beginLease() {
+        synchronized(gateLock) {
+            requireVaultAccess()
+            activeLeases++
+        }
+    }
+
+    private fun endLease() {
+        synchronized(gateLock) {
+            activeLeases--
+            (gateLock as Object).notifyAll()
+        }
+    }
+
+    private fun requireVaultAccess() {
+        if (closing || !vaultAccessAllowed()) throw VaultLockedException()
     }
 
     /**
@@ -67,6 +163,7 @@ class AppRulesStoreFactory(
     /** WAL growth bound: PASSIVE checkpoint, safe against reset races. */
     fun checkpoint() {
         synchronized(lock) {
+            if (closing || !vaultAccessAllowed()) return
             if (database == null) return
             try {
                 currentDriver().open(dbPath()).use { conn ->
@@ -80,6 +177,7 @@ class AppRulesStoreFactory(
 
     /** User-confirmed reset: destroys all data + key material, then reopens a fresh database. */
     fun resetAndReopen(): AppRulesStore? = synchronized(lock) {
+        requireVaultAccess()
         database?.close()
         database = null
         recoveryManager.resetAllData()
@@ -228,6 +326,7 @@ class AppRulesStoreFactory(
      * after any abort the caller reopens the untouched file with [open].
      */
     fun stageRestoreCopy(): AppRulesStore = synchronized(lock) {
+        requireVaultAccess()
         val active = appContext.getDatabasePath(LocalDatabaseMigration.rulesDbName(appContext))
         val store = database ?: openInternal()
             ?: throw IllegalStateException("active rules database is unavailable")
@@ -250,6 +349,7 @@ class AppRulesStoreFactory(
 
     /** §6.6 item 7: the staged file must open cleanly and pass both integrity checks. */
     fun verifyRestoreStaging(): Boolean = runCatching {
+        requireVaultAccess()
         integrityAndForeignKeysOk(appContext.getDatabasePath(restoreDbName()).absolutePath)
     }.getOrDefault(false)
 
@@ -259,6 +359,7 @@ class AppRulesStoreFactory(
      * [recoverInterruptedSwap] on the next start.
      */
     fun swapInRestore(): Boolean = synchronized(lock) {
+        requireVaultAccess()
         val active = appContext.getDatabasePath(LocalDatabaseMigration.rulesDbName(appContext))
         val previous = appContext.getDatabasePath(previousDbName())
         val staging = appContext.getDatabasePath(restoreDbName())
@@ -388,13 +489,15 @@ class AppRulesStoreFactory(
      * the one-time import of a retained scope. Never cached, never reported into
      * [DatabaseHealth], never touches the singleton handle — the caller closes it.
      */
-    fun openRecoveryCopy(fileName: String, dekProvider: () -> ByteArray): AppRulesStore =
-        Room.databaseBuilder(appContext, AppRulesStore::class.java, fileName)
+    fun openRecoveryCopy(fileName: String, dekProvider: () -> ByteArray): AppRulesStore {
+        requireVaultAccess()
+        return Room.databaseBuilder(appContext, AppRulesStore::class.java, fileName)
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
             .setSingleConnectionPool()
             .setDriver(KeyFetchingSQLCipherDriver(dekProvider))
             .addMigrations(*ALL_MIGRATIONS)
             .build()
+    }
 
     /**
      * Brings a pre-encryption plaintext file up to the current schema before conversion:
