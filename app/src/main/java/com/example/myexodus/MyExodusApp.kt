@@ -34,6 +34,9 @@ import com.example.myexodus.accountability.sync.PushInstallationRegistrar
 import com.example.myexodus.accountability.sync.enqueuePartnerSync
 import com.example.myexodus.accountability.sync.runPartnerSyncPass
 import com.example.myexodus.applock.AppLockCoordinator
+import com.example.myexodus.applock.AppLockState
+import com.example.myexodus.applock.VaultDekSource
+import com.example.myexodus.applock.VaultMigration
 import com.example.myexodus.backup.BackupStagingSweeper
 import com.example.myexodus.blocking.BootReconciliationStore
 import com.example.myexodus.blocking.EnforcementForegroundService
@@ -65,6 +68,10 @@ import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 @HiltAndroidApp
@@ -114,6 +121,10 @@ class MyExodusApp : Application(), Configuration.Provider {
     // §8.8: process-scope screen-off revocation must not depend on MainActivity being alive.
     // Lazy because a locked-boot process cannot read the CE feature status this constructs.
     @Inject lateinit var appLockCoordinator: dagger.Lazy<AppLockCoordinator>
+    // §8.3: the session DEKs the coordinator publishes on unlock and this app zeroes on lock.
+    @Inject lateinit var vaultDekSource: VaultDekSource
+    // §8.12: startup journal reconciliation runs before the gate's first frame.
+    @Inject lateinit var vaultMigration: VaultMigration
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -214,6 +225,8 @@ class MyExodusApp : Application(), Configuration.Provider {
         // so a locked-boot process defers this to USER_UNLOCKED).
         val unlocked = getSystemService(UserManager::class.java).isUserUnlocked
         if (unlocked) {
+            // §8.12: the durable journal decides the gate's first state before any frame.
+            reconcileAppLockJournal()
             localSessionManager.onAppStart(applicationScope)
             // §6.4 item 14: the journal names the one object an active operation still needs;
             // everything else in staging is stale by construction. CE storage → post-unlock only.
@@ -264,22 +277,16 @@ class MyExodusApp : Application(), Configuration.Provider {
             // launch after the update copies three files, later launches read one pref.
             runCatching { LocalDatabaseMigration.start(this) }
                 .onFailure { Log.w(TAG, "local DB scope migration failed; legacy paths stay active", it) }
-            applicationScope.launch {
-                if (unlocked) {
-                    runCatching { deletionLocalData.finishPendingPurge() }
-                        .onFailure { Log.w(TAG, "pending deletion local-state purge failed", it) }
+            // §8.9: with App Lock enabled the vault is closed until a real in-app unlock, so
+            // this upkeep must wait for UNLOCKED instead of throwing VaultLockedException at
+            // startup (verified crash on emulator-5556, inventory §12).
+            if (unlocked && appLockCoordinator.get().state.value != AppLockState.DISABLED) {
+                applicationScope.launch {
+                    appLockCoordinator.get().state.first { it == AppLockState.UNLOCKED }
+                    runStartupVaultMaintenance(unlocked)
                 }
-                rulesStoreFactory.open()
-                databaseMigration.runOnceIfNeeded()
-                // ADR #240: a bound retained scope restores itself; only a conflict, the
-                // portable-preferences opt-in, an unreadable copy, or an unbound offer waits.
-                if (unlocked && scopeRecoveryImporter.stageIfOffered()) {
-                    guestImportCoordinator.refresh()
-                }
-                // W7 session recovery (v2 M2.4 adapted): urge sessions a process death left
-                // STARTED past the 15-minute bound close as INTERRUPTED, once per launch.
-                runCatching { recoverySessions.interruptStale(System.currentTimeMillis()) }
-                    .onFailure { Log.w(TAG, "stale recovery-session sweep failed", it) }
+            } else {
+                applicationScope.launch { runStartupVaultMaintenance(unlocked) }
             }
         }
         startupTrace.lap("launches+open")
@@ -342,6 +349,39 @@ class MyExodusApp : Application(), Configuration.Provider {
             // §8 Step 9: this boot's deferred reconciliation, if any (cold-start BOOT_COUNT
             // check + the locked-boot receiver's pending mark).
             reconcileBootIfNeeded()
+            // §8.3/§8.8 lock trigger: whenever the coordinator leaves the vault-access states
+            // (manual lock, screen-off, host stop, stale unlock), zero the session DEKs and
+            // close both vault stores so the next access reconstructs fresh. Edge-triggered on
+            // `allowsVaultAccess`: LOCKED→PREFLIGHT→AUTHENTICATING→OPENING must not re-clear
+            // the DEKs an unlock attempt just adopted, and OPENING owns the forced open.
+            applicationScope.launch {
+                appLockCoordinator.get().state
+                    .map { it.allowsVaultAccess }
+                    .distinctUntilChanged()
+                    .collect { allowed ->
+                        if (allowed) return@collect
+                        vaultDekSource.clear()
+                        var closed = false
+                        var attempts = 0
+                        // §8.3 item 4: never force-close underneath an executing lease — retry
+                        // safe cleanup while the UI stays locked, and stop if a session returns.
+                        while (!closed && attempts++ < 20 &&
+                            !appLockCoordinator.get().state.value.allowsVaultAccess
+                        ) {
+                            closed = runCatching { rulesStoreFactory.lockVault() }
+                                .onFailure { Log.w(TAG, "vault lock: rules store close failed", it) }
+                                .getOrDefault(false)
+                            if (!closed) delay(500)
+                        }
+                        // A session that started while cleanup was retrying owns the stores now.
+                        if (appLockCoordinator.get().state.value.allowsVaultAccess) {
+                            Log.i(TAG, "vault lock superseded by a new session")
+                            return@collect
+                        }
+                        activityLogStore.close()
+                        if (!closed) Log.w(TAG, "vault lock: rules store close deferred")
+                    }
+            }
             // §8 Step 17 (AD-22, NFR7): app-start wipe check — clears orphaned pair data and
             // reports the §14 trigger metric. Recovery is deliberately not attempted; the
             // Partner screen names SAS/QR re-enrollment as the only route forward.
@@ -353,6 +393,42 @@ class MyExodusApp : Application(), Configuration.Provider {
         getSystemService(AccessibilityManager::class.java)
             .addAccessibilityStateChangeListener(accessibilityStateListener)
         startupTrace.lap("done")
+    }
+
+    /**
+     * §4.2 rule 3 / §8.12: inspect the durable migration journal before the ordinary store is
+     * constructed. Idempotent; a missing envelope under an enabled status becomes
+     * RECOVERY_REQUIRED, never a fresh database.
+     */
+    private fun reconcileAppLockJournal() {
+        runCatching {
+            appLockCoordinator.get().adoptRecoveredState(vaultMigration.recoverInterrupted())
+        }.onFailure { Log.w(TAG, "App Lock journal recovery failed", it) }
+    }
+
+    /**
+     * §8.9 startup upkeep that needs the protected stores: eager open, legacy DB split, scope
+     * recovery import and the stale-session sweep. Runs at once while App Lock is off and on
+     * the first verified unlock while it is on. A lock landing between the unlock and any step
+     * below fails closed; it must not take the process down from a background coroutine.
+     */
+    private suspend fun runStartupVaultMaintenance(osUnlocked: Boolean) {
+        if (osUnlocked) {
+            runCatching { deletionLocalData.finishPendingPurge() }
+                .onFailure { Log.w(TAG, "pending deletion local-state purge failed", it) }
+        }
+        runCatching { rulesStoreFactory.open() }
+            .onFailure { Log.w(TAG, "rules store startup open refused", it) }
+        databaseMigration.runOnceIfNeeded()
+        // ADR #240: a bound retained scope restores itself; only a conflict, the
+        // portable-preferences opt-in, an unreadable copy, or an unbound offer waits.
+        if (osUnlocked && scopeRecoveryImporter.stageIfOffered()) {
+            guestImportCoordinator.refresh()
+        }
+        // W7 session recovery (v2 M2.4 adapted): urge sessions a process death left
+        // STARTED past the 15-minute bound close as INTERRUPTED, once per launch.
+        runCatching { recoverySessions.interruptStale(System.currentTimeMillis()) }
+            .onFailure { Log.w(TAG, "stale recovery-session sweep failed", it) }
     }
 
     private fun enqueueHealthCheck() {
@@ -372,7 +448,14 @@ class MyExodusApp : Application(), Configuration.Provider {
     private fun reconcileBootIfNeeded() {
         applicationScope.launch {
             bootReconciliation.reconcileOnce(systemBootCount(this@MyExodusApp)) {
-                if (!underInstrumentation) rulesStoreFactory.open()
+                // §8.3/§8.9: a locked vault refuses the open; the deferred startup pass runs
+                // it on the next verified unlock. The boot claim itself needs no vault data.
+                if (!underInstrumentation &&
+                    appLockCoordinator.get().state.value.showsProtectedUi
+                ) {
+                    runCatching { rulesStoreFactory.open() }
+                        .onFailure { Log.w(TAG, "boot reconcile store open refused", it) }
+                }
                 statusMonitor.refresh()
                 enqueueDailyMaintenance(this@MyExodusApp)
             }
@@ -389,6 +472,7 @@ class MyExodusApp : Application(), Configuration.Provider {
             // order: purge first (no Firestore op may precede it), then the fence's scope
             // adoption, then the migration, before the store open that reconcile triggers.
             purgeLegacyCacheIfUnlocked()
+            reconcileAppLockJournal()
             localSessionManager.onAppStart(applicationScope)
             if (!underInstrumentation) {
                 runCatching { deletionLocalData.purgePendingFiles() }

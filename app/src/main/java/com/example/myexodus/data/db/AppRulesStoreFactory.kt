@@ -33,10 +33,16 @@ class AppRulesStoreFactory(
     private val encryption: RulesStoreEncryption? = null,
     /**
      * Plan §8.3 gate: true only while the app-lock state permits vault access
-     * (DISABLED/UNLOCKED). Manual test constructions default to open; DI supplies the
-     * coordinator-backed predicate.
+     * (DISABLED/UNLOCKED/OPENING). Manual test constructions default to open; DI supplies
+     * the coordinator-backed predicate.
      */
     private val vaultAccessAllowed: () -> Boolean = { true },
+    /**
+     * True whenever the app-lock feature owns the SQLCipher keys (plan §9). Open failures in
+     * that mode must never rename, recreate, or revert to the plaintext source — the DB may be
+     * intact and one wrong key away from opening, or the user may need RECOVERY_REQUIRED.
+     */
+    private val vaultManaged: () -> Boolean = { false },
 ) {
     @Volatile private var database: AppRulesStore? = null
 
@@ -99,6 +105,17 @@ class AppRulesStoreFactory(
      * [open].
      */
     fun <T> withVault(block: (AppRulesStore) -> T): T? {
+        beginLease()
+        try {
+            val store = open() ?: return null
+            return block(store)
+        } finally {
+            endLease()
+        }
+    }
+
+    /** Suspend variant of [withVault]: the lease spans the suspended operation so a lock drains it. */
+    suspend fun <T> withVaultSuspend(block: suspend (AppRulesStore) -> T): T? {
         beginLease()
         try {
             val store = open() ?: return null
@@ -204,6 +221,14 @@ class AppRulesStoreFactory(
         // Resolve the UID scope before any name is captured: components constructed during Hilt
         // injection publish before MyExodusApp.onCreate reaches LocalDatabaseMigration.start.
         LocalDatabaseMigration.start(appContext)
+        // Plan §9: with App Lock on, a missing store is data loss or a partial restore — never
+        // a fresh installation. Creating an empty encrypted DB here would silently discard the
+        // user's history; fail into recovery instead.
+        if (vaultManaged() && !File(dbPath()).exists()) {
+            Log.e(TAG, "Rules store missing while App Lock owns the keys; refusing a fresh install")
+            healthStore.set(DatabaseHealth.DatabaseIssue)
+            return null
+        }
         recoverInterruptedSwap()
         recoveryManager.checkOrphanedCorruptFiles()
 
@@ -250,6 +275,7 @@ class AppRulesStoreFactory(
                 }
             }
         } catch (e: SQLiteDatabaseCorruptException) {
+            if (keepVaultOnFailure(e)) return null
             if (usePreRestoreCopy(scope.rulesName)) return openInMode(encrypted, pendingUpgrade)
             if (restorePlaintextIfPossible()) return openPlaintextAfterRestore()
             Log.w(TAG, "Rules DB open classified ConfirmedCorruption; recreating fresh", e)
@@ -270,18 +296,31 @@ class AppRulesStoreFactory(
                 null
             }
         } catch (e: SQLiteException) {
+            if (keepVaultOnFailure(e)) return null
             if (usePreRestoreCopy(scope.rulesName)) return openInMode(encrypted, pendingUpgrade)
             if (restorePlaintextIfPossible()) return openPlaintextAfterRestore()
             Log.e(TAG, "Rules DB open failed with SQLiteException", e)
             healthStore.set(healthFor(e))
             null
         } catch (e: Throwable) {
+            if (keepVaultOnFailure(e)) return null
             if (usePreRestoreCopy(scope.rulesName)) return openInMode(encrypted, pendingUpgrade)
             if (restorePlaintextIfPossible()) return openPlaintextAfterRestore()
             Log.e(TAG, "Rules DB open failed", e)
             healthStore.set(healthFor(e))
             null
         }
+    }
+
+    /**
+     * Plan §9: under App Lock no catch path may rename, recreate or plaintext-restore the
+     * store. Classify the failure for the health banner only; the caller surfaces recovery.
+     */
+    private fun keepVaultOnFailure(e: Throwable): Boolean {
+        if (!vaultManaged()) return false
+        Log.e(TAG, "Rules DB open failed under App Lock; preserving DB and all copies", e)
+        healthStore.set(healthFor(e))
+        return true
     }
 
     /**

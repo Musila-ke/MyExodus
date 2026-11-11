@@ -23,7 +23,13 @@ internal class SqlCipherVaultKeys(private val appContext: Context) : VaultStoreK
 
     override fun adoptLegacy(database: VaultDatabase, dek: ByteArray) = delegate(database).adoptKey(dek)
 
-    override fun deleteLegacyMaterial(database: VaultDatabase) = delegate(database).deleteKeyMaterial()
+    /*
+     * §6.1 step 8: enrollment wraps whichever variant is live at that moment — unscoped on a
+     * fresh install — and the account migration can adopt another mid-unlock (device-caught
+     * 2026-11-11), so retiring one suffix leaves an unwrappable legacy DEK behind.
+     */
+    override fun deleteLegacyMaterial(database: VaultDatabase) =
+        legacySuffixes().forEach { suffix -> delegate(database, suffix).deleteKeyMaterial() }
 
     override fun verify(database: VaultDatabase, dek: ByteArray): Boolean {
         val file = databaseFile(database)
@@ -47,8 +53,17 @@ internal class SqlCipherVaultKeys(private val appContext: Context) : VaultStoreK
         }
     }
 
-    private fun delegate(database: VaultDatabase): KeystoreWrappedDekManager {
-        val suffix = LocalDatabaseMigration.keySuffix()
+    private fun legacySuffixes(): Set<String> = buildSet {
+        add("")
+        add(LocalDatabaseMigration.keySuffix())
+        LocalDatabaseMigration.activeScopeHash(appContext)?.let { add("_$it") }
+        LocalDatabaseMigration.effectiveScopeHash(appContext)?.let { add("_$it") }
+    }
+
+    private fun delegate(
+        database: VaultDatabase,
+        suffix: String = LocalDatabaseMigration.keySuffix(),
+    ): KeystoreWrappedDekManager {
         return when (database) {
             VaultDatabase.RULES -> KeystoreWrappedDekManager(
                 appContext,

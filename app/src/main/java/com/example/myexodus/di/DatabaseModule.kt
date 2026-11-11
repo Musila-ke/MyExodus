@@ -3,6 +3,8 @@ package com.example.myexodus.di
 import android.content.Context
 import com.example.myexodus.accountability.sync.enqueuePartnerSyncNow
 import com.example.myexodus.applock.AppLockCoordinator
+import com.example.myexodus.applock.VaultDatabase
+import com.example.myexodus.applock.VaultDekSource
 import com.example.myexodus.applock.VaultStoreKeys
 import com.example.myexodus.applock.crypto.VaultEnvelopeStore
 import com.example.myexodus.applock.crypto.VaultKeyManager
@@ -62,7 +64,13 @@ object DatabaseModule {
     fun provideRulesStoreEncryption(
         rulesStoreKeyManager: RulesStoreKeyManager,
         recoveryManager: RecoveryManager,
-    ): RulesStoreEncryption = RulesStoreEncryption(rulesStoreKeyManager, recoveryManager)
+        vaultDekSource: VaultDekSource,
+    ): RulesStoreEncryption = RulesStoreEncryption(
+        rulesStoreKeyManager,
+        recoveryManager,
+        vaultDek = { vaultDekSource.dek(VaultDatabase.RULES) },
+        vaultManaged = { vaultDekSource.isEnabled() },
+    )
 
     @Provides @Singleton
     fun provideAppRulesStoreFactory(
@@ -71,6 +79,7 @@ object DatabaseModule {
         healthStore: DatabaseHealthStore,
         encryption: RulesStoreEncryption,
         appLock: Lazy<AppLockCoordinator>,
+        vaultDekSource: VaultDekSource,
     ): AppRulesStoreFactory = AppRulesStoreFactory(
         context,
         recoveryManager,
@@ -78,14 +87,24 @@ object DatabaseModule {
         encryption,
         // §8.3 gate. Lazy: the coordinator reads credential-encrypted prefs, which are
         // unreadable in a locked-boot process that never touches the vault anyway.
-        vaultAccessAllowed = { appLock.get().state.value.showsProtectedUi },
+        // OPENING also admits access: §8.3 item 6 forces the real open and verification
+        // before UNLOCKED is published.
+        vaultAccessAllowed = { appLock.get().state.value.allowsVaultAccess },
+        // §9: while the vault owns the keys, a failed open is a key/format mismatch or
+        // corruption to diagnose — never a reason to rename, recreate, or revert to plaintext.
+        vaultManaged = { vaultDekSource.isEnabled() },
     )
 
     @Provides @Singleton
     fun provideActivityLogStore(
         @ApplicationContext context: Context,
         keyManager: ActivityLogKeyManager,
-    ): ActivityLogStore = ActivityLogStore(context, keyManager)
+        vaultDekSource: VaultDekSource,
+    ): ActivityLogStore = ActivityLogStore(
+        context,
+        keyManager,
+        vaultDek = { vaultDekSource.dek(VaultDatabase.ACTIVITY) },
+    )
 
     /** Auth-bound vault wrapping key and envelope store (§8.4); no-backup, Keystore-backed. */
     @Provides @Singleton

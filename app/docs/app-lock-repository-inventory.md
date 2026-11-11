@@ -527,3 +527,47 @@ Wire enrollment/disable to `VaultMigration` with an `AppLockAuthenticator`-backe
 defer it while locked (the Phase 3 crash proved this gap); reconcile `LocalDatabaseMigration`
 scope switching with the vault-enabled DEK source; backup compatibility and lock triggers. The
 §12-§14 evidence above must stay green.
+
+**Phase 6 enrollment/unlock/disable flows (2026-11-11, task #161)**
+
+Device-caught defects fixed while wiring the real UI:
+
+- `AppLockController.enroll` materializes the activity log under the legacy DEK before wrapping.
+  A device that had never written an activity row had no file; the first unlock's verified open
+  creates stores under the vault and refuses to recreate one, so enrollment landed in
+  RECOVERY_REQUIRED. Device-proven fixed: activity DB created pre-wrap, first unlock logged
+  `Vault verified: sessions=0 log_rows=0`.
+- `SqlCipherVaultKeys.deleteLegacyMaterial` retires every legacy wrap variant, not only the
+  live suffix: `""` (enrollment before any account scope existed), the live `keySuffix()`, and
+  the active/effective scope hashes from the migration journal. Timeline: enrollment wrapped
+  the unscoped DEK at 17:16; the account migration activated scope `81155f64…` mid-unlock at
+  17:18:19 and adopted a scoped wrap; the one-suffix delete removed the scoped material and
+  left the unscoped wrap and legacy KEK aliases alive — the §6.1 step 8 "old wrapping material",
+  a post-lock DB bypass. Regression: `SqlCipherVaultKeysTest` seeds both variants, asserts every
+  `dek_iv`/`dek_blob` is gone, and calls the delete twice to prove idempotence.
+
+Device evidence (emulator-5558, API 34, debug build; physical devices untouched):
+
+- PASSED: Settings → App Lock → gate disclosure → two prompt-authorized operations (PIN 1234 on
+  the system sheet; the second confirmation was required in this run) → `enabled` +
+  `active_pending_first_unlock` → gate shows LOCKED (§6.1 step 7).
+- PASSED: First unlock → forced Room open + known read → `first_unlock_verified`; all four legacy
+  key pref files (rules/activity × unscoped/scoped) empty afterwards (§6.1 step 8).
+- PASSED: Settings → Lock now → LOCKED immediately (§5 behavior 3).
+- PASSED: Cold start while enabled → LOCKED; no protected tree, and the vault-verified log
+  appears only after the unlock tap + authentication.
+- PASSED: Home (app switch) then relaunch → LOCKED.
+- PASSED: Disable → confirm dialog → OS prompt → `disabled`/`none`; rules store reopened under
+  the legacy KEK (`Rules store opened fresh in 476ms`); Home data intact. The
+  `Keystore security-level probe failed` warning during re-wrap is the emulator Keystore lacking
+  AES `KeyFactory` for `KeyInfo` — logged, non-fatal.
+- PASSED: FLAG_SECURE — `adb exec-out screencap` returns 0 bytes while protected UI is shown.
+- BLOCKED: biometric (fingerprint) authorization — the AVD has no fingerprint enrolled, so the
+  sheet fell back to the PIN path; owner physical-device run does the biometric leg.
+- BLOCKED: API 26-29 tier (no such device in the rig).
+
+Baseline: full JVM suite green; `:app:lintDebug` alone — 0 errors, same 2 pre-existing warnings.
+
+Phase 6 gate (§7 line 216) status: enrollment/unlock/disable and the no-post-lock-bypass legs
+pass as above; background entry points, backup compatibility and expected-external activities
+remain (task #160) before the gate can be declared.

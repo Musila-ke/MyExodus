@@ -74,6 +74,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.R
+import com.example.myexodus.applock.AppLockController
 import com.example.myexodus.blocking.AttemptRecorder
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.ProtectionAuthority
@@ -186,6 +187,9 @@ fun AppShell(
     degradation: ProtectionDegradation?,
     authority: ProtectionAuthority? = null,
     onReenable: () -> Unit,
+    /** App Lock plan §5: Settings' enable/disable surface; the root gate owns the prompt. */
+    appLockEnabled: Boolean,
+    appLockController: AppLockController,
     streaks: StreaksViewModel,
     /** Owner task #22: the Insights spoke's on-demand read model. */
     insights: InsightsViewModel,
@@ -660,6 +664,8 @@ fun AppShell(
                         // degradation Home's banner does.
                         degradation = degradation,
                         onReenable = onReenable,
+                        appLockEnabled = appLockEnabled,
+                        appLockController = appLockController,
                         // SOS §8.19 (Step 11): the block switch's state + refresh/write paths.
                         partnerBlock = partnerBlock,
                         onPartnerBlockRefresh = nudgeSettings::refresh,

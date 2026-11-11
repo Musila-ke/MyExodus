@@ -43,6 +43,13 @@ class AppLockCoordinatorTest {
 
     private fun coordinator() = AppLockCoordinator(AppLockStatusStore(context))
 
+    /** §4.2: UNLOCKED is published only from OPENING, so tests take the real path. */
+    private fun enterUnlocked(lock: AppLockCoordinator) {
+        lock.publish(AppLockState.OPENING)
+        lock.publishUnlocked()
+        assertEquals(AppLockState.UNLOCKED, lock.state.value)
+    }
+
     private fun reader(feature: String?, journal: String?) = { key: String ->
         when (key) {
             AppLockStatusStore.KEY_FEATURE_STATUS -> feature
@@ -104,7 +111,7 @@ class AppLockCoordinatorTest {
     fun `screen off revokes an unlocked session`() {
         enroll()
         val lock = coordinator()
-        lock.publishUnlocked()
+        enterUnlocked(lock)
         val generation = lock.sessionGeneration
         lock.onScreenOff()
         assertEquals(AppLockState.LOCKED, lock.state.value)
@@ -115,7 +122,7 @@ class AppLockCoordinatorTest {
     fun `configuration change keeps the session`() {
         enroll()
         val lock = coordinator()
-        lock.publishUnlocked()
+        enterUnlocked(lock)
         lock.onHostStopped(changingConfigurations = true)
         assertEquals(AppLockState.UNLOCKED, lock.state.value)
     }
@@ -124,7 +131,7 @@ class AppLockCoordinatorTest {
     fun `ordinary app switch revokes the session`() {
         enroll()
         val lock = coordinator()
-        lock.publishUnlocked()
+        enterUnlocked(lock)
         lock.onHostStopped(changingConfigurations = false)
         assertEquals(AppLockState.LOCKED, lock.state.value)
     }
@@ -133,7 +140,7 @@ class AppLockCoordinatorTest {
     fun `expected external operation survives a stop once and is single use`() {
         enroll()
         val lock = coordinator()
-        lock.publishUnlocked()
+        enterUnlocked(lock)
         lock.beginExpectedExternalOperation("screen-lock-settings")
         lock.onHostStopped(changingConfigurations = false)
         assertEquals(AppLockState.UNLOCKED, lock.state.value)
@@ -147,7 +154,7 @@ class AppLockCoordinatorTest {
     fun `external token expires after sixty seconds`() {
         enroll()
         val lock = coordinator()
-        lock.publishUnlocked()
+        enterUnlocked(lock)
         lock.beginExpectedExternalOperation("installer")
         ShadowSystemClock.advanceBy(Duration.ofSeconds(61))
         lock.onHostStopped(changingConfigurations = false)
@@ -158,7 +165,7 @@ class AppLockCoordinatorTest {
     fun `manual lock defeats a live external token`() {
         enroll()
         val lock = coordinator()
-        lock.publishUnlocked()
+        enterUnlocked(lock)
         lock.beginExpectedExternalOperation("picker")
         lock.lockManually()
         lock.onHostStopped(changingConfigurations = false)
@@ -170,7 +177,7 @@ class AppLockCoordinatorTest {
     fun `screen off defeats a live external token`() {
         enroll()
         val lock = coordinator()
-        lock.publishUnlocked()
+        enterUnlocked(lock)
         lock.beginExpectedExternalOperation("picker")
         lock.onScreenOff()
         lock.onHostStopped(changingConfigurations = false)
@@ -189,8 +196,73 @@ class AppLockCoordinatorTest {
     @Test
     fun `unlock never survives a new process`() {
         enroll()
-        coordinator().publishUnlocked()
+        enterUnlocked(coordinator())
         assertEquals(AppLockState.LOCKED, coordinator().state.value)
+    }
+
+    @Test
+    fun `credential challenge keeps the unlock attempt across the keyguard stop once`() {
+        enroll()
+        val lock = coordinator()
+        lock.publish(AppLockState.AUTHENTICATING)
+        val attempt = lock.beginAttempt()
+        lock.beginCredentialChallenge()
+        lock.onHostStopped(changingConfigurations = false)
+        assertEquals(AppLockState.AUTHENTICATING, lock.state.value)
+        assertTrue(lock.isAttemptCurrent(attempt))
+        assertTrue(lock.onHostResumed())
+        assertEquals(AppLockState.AUTHENTICATING, lock.state.value)
+        lock.onHostStopped(changingConfigurations = false)
+        assertEquals(AppLockState.LOCKED, lock.state.value)
+    }
+
+    @Test
+    fun `credential challenge covers a disable prompt from an unlocked session`() {
+        enroll()
+        val lock = coordinator()
+        enterUnlocked(lock)
+        lock.beginAttempt()
+        lock.beginCredentialChallenge()
+        lock.onHostStopped(changingConfigurations = false)
+        assertEquals(AppLockState.UNLOCKED, lock.state.value)
+        assertTrue(lock.onHostResumed())
+        assertEquals(AppLockState.UNLOCKED, lock.state.value)
+    }
+
+    @Test
+    fun `credential challenge expires after sixty seconds`() {
+        enroll()
+        val lock = coordinator()
+        lock.publish(AppLockState.AUTHENTICATING)
+        lock.beginAttempt()
+        lock.beginCredentialChallenge()
+        ShadowSystemClock.advanceBy(Duration.ofSeconds(61))
+        lock.onHostStopped(changingConfigurations = false)
+        assertEquals(AppLockState.LOCKED, lock.state.value)
+    }
+
+    @Test
+    fun `concluded attempt voids the credential challenge`() {
+        enroll()
+        val lock = coordinator()
+        lock.publish(AppLockState.AUTHENTICATING)
+        val attempt = lock.beginAttempt()
+        lock.beginCredentialChallenge()
+        lock.concludeAttempt(AppLockState.LOCKED)
+        assertFalse(lock.isAttemptCurrent(attempt))
+        assertFalse(lock.onHostResumed())
+        assertEquals(AppLockState.LOCKED, lock.state.value)
+    }
+
+    @Test
+    fun `screen off defeats a live credential challenge`() {
+        enroll()
+        val lock = coordinator()
+        lock.publish(AppLockState.AUTHENTICATING)
+        lock.beginAttempt()
+        lock.beginCredentialChallenge()
+        lock.onScreenOff()
+        assertEquals(AppLockState.LOCKED, lock.state.value)
     }
 
     @Test

@@ -15,6 +15,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Shield
@@ -49,6 +50,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.R
 import com.example.myexodus.account.AuthState
+import com.example.myexodus.applock.AppLockController
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.ProtectionDegradation
 import com.example.myexodus.blocking.usage.AccountingOutage
@@ -96,6 +98,9 @@ fun SettingsScreen(
      *  and the index row agree with Home instead of implying all is well. */
     degradation: ProtectionDegradation?,
     onReenable: () -> Unit,
+    /** App Lock plan §5: the feature's current on/off state and its enable/disable driver. */
+    appLockEnabled: Boolean,
+    appLockController: AppLockController,
     /** SOS §8.19 (Step 11): the recipient's block switch — null hides the row (no partner). */
     modifier: Modifier = Modifier,
     partnerBlock: NudgeSettingsViewModel.UiState? = null,
@@ -181,11 +186,18 @@ fun SettingsScreen(
             onBack = { pane = PANE_ACCOUNT },
             modifier = modifier,
         )
+        PANE_APP_LOCK -> AppLockPane(
+            enabled = appLockEnabled,
+            controller = appLockController,
+            onBack = { pane = null },
+            modifier = modifier,
+        )
         else -> SettingsIndex(
             modifier = modifier,
             serviceEnabled = serviceEnabled,
             degradation = degradation,
             checks = loaded,
+            appLockEnabled = appLockEnabled,
             account = account,
             update = update,
             monitor = monitor,
@@ -207,12 +219,14 @@ private const val PANE_PROTECTION = "protection"
 private const val PANE_ABOUT = "about"
 private const val PANE_ACCOUNT = "account"
 private const val PANE_BACKUP_KEY = "backup_key"
+private const val PANE_APP_LOCK = "app_lock"
 
 @Composable
 private fun SettingsIndex(
     serviceEnabled: Boolean,
     degradation: ProtectionDegradation?,
     checks: ProtectionChecks?,
+    appLockEnabled: Boolean,
     account: AccountViewModel,
     update: UpdateViewModel,
     monitor: EnhancedModeHealthMonitor,
@@ -309,6 +323,18 @@ private fun SettingsIndex(
                         else -> StatusTone.ATTENTION
                     },
                     onClick = { onOpenPane(PANE_PROTECTION) },
+                )
+
+                RowDivider()
+                IndexRow(
+                    icon = Icons.Outlined.Lock,
+                    title = stringResource(R.string.settings_app_lock_title),
+                    subtitle = stringResource(
+                        if (appLockEnabled) R.string.settings_app_lock_summary_on
+                        else R.string.settings_app_lock_summary_off,
+                    ),
+                    tone = if (appLockEnabled) StatusTone.GOOD else null,
+                    onClick = { onOpenPane(PANE_APP_LOCK) },
                 )
 
                 RowDivider()

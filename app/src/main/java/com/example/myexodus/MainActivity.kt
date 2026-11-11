@@ -52,6 +52,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.example.myexodus.applock.AppLockController
 import com.example.myexodus.applock.AppLockCoordinator
 import com.example.myexodus.applock.AppLockRootGate
 import com.example.myexodus.applock.AppLockState
@@ -206,6 +207,9 @@ class MainActivity : FragmentActivity() {
 
     /** Plan §4.1: process-local App Lock state (Phase 2 shell; auth/provider phases follow). */
     @Inject lateinit var appLockCoordinator: AppLockCoordinator
+
+    /** Plan §4.2: the three exclusive operations behind the gate and Settings' pane. */
+    @Inject lateinit var appLockController: AppLockController
 
     /** Bridges the screen-lock confirm flow's RESULT_OK back into the signing coroutine. */
     private var credentialContinuation: CancellableContinuation<Boolean>? = null
@@ -606,7 +610,7 @@ class MainActivity : FragmentActivity() {
             MyExodusTheme(darkTheme = rememberDarkTheme(themeMode)) {
                 // §8.2: sole parent of the protected tree. While the state is neither DISABLED
                 // nor UNLOCKED, no app navigation, sheet, dialog or screen below exists.
-                AppLockRootGate(state = appLockState) {
+                AppLockRootGate(state = appLockState, controller = appLockController) {
                 // Plan §8.10: new clients read the server-published minimum version at startup
                 // and show the update-required message below it. This is a UX signal only —
                 // rules and callables enforce independently, so a failed read is not a bypass.
@@ -677,16 +681,18 @@ class MainActivity : FragmentActivity() {
                 // W6/INV-11: any composed secure surface turns on FLAG_SECURE for the shared
                 // window (the recovery tab, session history, coaching editor each declare it).
                 val secureSurfaces by SecureSurfaces.composed.collectAsStateWithLifecycle()
-                LaunchedEffect(secureSurfaces > 0) {
-                    val secure = secureSurfaces > 0
-                    if (secure) {
+                // FR-12: while App Lock is enabled the whole window stays protected in every
+                // state, so a secure surface's dispose never re-exposes the app.
+                val secureWindow = secureSurfaces > 0 || appLockState != AppLockState.DISABLED
+                LaunchedEffect(secureWindow) {
+                    if (secureWindow) {
                         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
                     } else {
                         window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                     }
                     // API 33+: the recents thumbnail bypasses FLAG_SECURE on some OEMs.
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        setRecentsScreenshotEnabled(!secure)
+                        setRecentsScreenshotEnabled(!secureWindow)
                     }
                 }
                 // The shell's store handle resolves OFF Main and is re-resolved per health
@@ -933,6 +939,10 @@ class MainActivity : FragmentActivity() {
                             // clears the banner in the same frame.
                             protectionStatusMonitor.refresh()
                         },
+                        // The gate only composes AppShell for DISABLED/UNLOCKED, so this is
+                        // exactly the feature's durable on/off answer at the call site.
+                        appLockEnabled = appLockState != AppLockState.DISABLED,
+                        appLockController = appLockController,
                     )
                 } else {
                     Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->

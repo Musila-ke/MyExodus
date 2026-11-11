@@ -23,6 +23,12 @@ import java.util.Arrays
 class ActivityLogStore(
     private val appContext: Context,
     private val keyManager: ActivityLogKeyManager,
+    /**
+     * App Lock seam (§8.3/§8.9): the envelope-held DEK while the feature is enabled, null when
+     * it is off. A locked vault throws instead of falling through to [keyManager], whose
+     * missing-blob path would mint a fresh DEK for a file the envelope still owns.
+     */
+    private val vaultDek: () -> ByteArray? = { null },
 ) {
     @Volatile private var db: SQLiteDatabase? = null
     private var rawKey: ByteArray? = null
@@ -41,9 +47,25 @@ class ActivityLogStore(
      */
     fun open(): Boolean = synchronized(lock) {
         if (db != null) return true
+        // Resolve the key source before any file work: a locked vault defers the open without
+        // touching key material, and a vault-owned file never falls through to the legacy
+        // manager (whose missing-blob path would mint an unrelated DEK).
+        val vaultKey = try {
+            vaultDek()
+        } catch (e: VaultLockedException) {
+            Log.i(TAG, "Activity log open deferred: vault locked")
+            return false
+        }
+        val vaultEnabled = vaultKey != null
         val path = appContext.getDatabasePath(
             LocalDatabaseMigration.activityDbName(appContext),
         )
+        // Plan §9: with App Lock on, a missing log is data loss or a partial restore — never a
+        // fresh installation. SQLCipher would otherwise create an empty one in its place.
+        if (vaultEnabled && !path.exists()) {
+            Log.e(TAG, "Activity log missing while App Lock owns the keys; not recreating")
+            return false
+        }
         return try {
             // Self-contained like every other SQLCipher consumer (finding #66): without this,
             // the store's first open in a process that has not yet touched the rules DB dies
@@ -51,7 +73,7 @@ class ActivityLogStore(
             // false on the fail-open path (device-caught 2026-10-17).
             System.loadLibrary("sqlcipher")
             val t0 = SystemClock.uptimeMillis()
-            val key = keyManager.getOrCreateKey()
+            val key = vaultKey ?: keyManager.getOrCreateKey()
             val t1 = SystemClock.uptimeMillis()
             var raw: ByteArray? = null
             // Owned until the store takes it: a throw from the pragma/schema steps must not
@@ -91,6 +113,10 @@ class ActivityLogStore(
         } catch (e: Throwable) {
             val failure = keyManager.classifyFailure(e) // classify once (2026-08-28 review)
             Log.e(TAG, "Activity log open failed: $failure", e)
+            // The envelope is the only key authority while the feature is on: never rename the
+            // file or reset key material under a fresh legacy DEK (that would silently orphan
+            // the vault's copy). Fail closed; the next unlock retries.
+            if (vaultEnabled) return false
             when (failure) {
                 KeyFailure.ConfirmedCorruption -> {
                     renameCorrupt(path)

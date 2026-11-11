@@ -22,12 +22,20 @@ enum class ConversionOutcome {
 class RulesStoreEncryption(
     private val keyManager: RulesStoreKeyManager,
     private val recoveryManager: RecoveryManager,
+    /**
+     * App Lock seam (plan §8.3): the envelope-held DEK while the feature is enabled, null when
+     * it is off. A locked vault throws instead of falling through to [keyManager], which would
+     * mint a fresh DEK for a file the envelope still owns.
+     */
+    private val vaultDek: () -> ByteArray? = { null },
+    /** True while App Lock owns the keys: no plaintext restore or conversion may run (§8.12). */
+    private val vaultManaged: () -> Boolean = { false },
 ) {
     private val migration = PlaintextToEncryptedMigration(keyManager, recoveryManager)
     private var backupPresentAtStart = false
 
     fun newDriver(keySuffix: String = LocalDatabaseMigration.keySuffix()): SQLiteDriver =
-        KeyFetchingSQLCipherDriver { keyManager.getOrCreateDek(keySuffix) }
+        KeyFetchingSQLCipherDriver { vaultDek() ?: keyManager.getOrCreateDek(keySuffix) }
 
     fun classifyFailure(e: Throwable): KeyFailure = keyManager.classifyFailure(e)
 
@@ -40,6 +48,10 @@ class RulesStoreEncryption(
         migrateSource: () -> Unit = {},
         buildDestination: (File) -> Unit,
     ): ConversionOutcome {
+        // Plan §8.12/§9: once the vault owns the keys, a plaintext file at the rules path can
+        // only be a restore artifact. Never convert or swap it in; open as-is and let the
+        // vault-mode failure guard preserve every copy for recovery.
+        if (vaultManaged()) return ConversionOutcome.Encrypted
         backupPresentAtStart = recoveryManager.hasConversionBackup()
         val rules = recoveryManager.rulesDbFile
 
@@ -63,6 +75,12 @@ class RulesStoreEncryption(
 
     /** Called once the encrypted store has opened and answered a query. */
     fun onOpenedSuccessfully() {
+        // Under the vault, a successful open proves the pre-feature conversion is obsolete:
+        // enrollment cannot commit without such an open, and a lingering .bak is plaintext.
+        if (vaultManaged()) {
+            if (recoveryManager.hasConversionBackup()) recoveryManager.confirmConversionBackup()
+            return
+        }
         // Two-launch confirmation (plan §8 Step 0): only a launch that started with the backup
         // already on disk may delete it — on the conversion launch it was created mid-launch.
         if (backupPresentAtStart) recoveryManager.confirmConversionBackup()
