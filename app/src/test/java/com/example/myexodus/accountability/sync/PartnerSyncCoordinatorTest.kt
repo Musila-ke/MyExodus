@@ -141,7 +141,7 @@ class PartnerSyncCoordinatorTest {
         )
         recovery.resetAllData()
         factory = AppRulesStoreFactory(context, recovery, healthStore)
-        recorder = AttemptRecorder(factory)
+        recorder = AttemptRecorder(factory, context)
         coordinator = coordinator(warmSigner())
     }
 

@@ -3,6 +3,7 @@ package com.example.myexodus.blocking
 import android.content.Context
 import android.util.Log
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.VaultLockedException
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
@@ -102,7 +103,14 @@ class RulesSnapshotPublisher(
 
     private suspend fun buildAndPublish() {
         try {
-            val store = storeFactory.open()
+            val store = try {
+                storeFactory.open()
+            } catch (e: VaultLockedException) {
+                // §8.9: the App Lock vault closing is a deferral, not a degradation — the
+                // fast-path/DE snapshot keeps deciding until the next unlocked rebuild.
+                Log.i(TAG, "Authoritative snapshot load deferred: vault locked")
+                return
+            }
             if (store == null) {
                 degrade("rules store unavailable")
                 return

@@ -568,6 +568,142 @@ Device evidence (emulator-5558, API 34, debug build; physical devices untouched)
 
 Baseline: full JVM suite green; `:app:lintDebug` alone — 0 errors, same 2 pre-existing warnings.
 
-Phase 6 gate (§7 line 216) status: enrollment/unlock/disable and the no-post-lock-bypass legs
-pass as above; background entry points, backup compatibility and expected-external activities
-remain (task #160) before the gate can be declared.
+Phase 6 gate (§7 line 216) status: declared. Enrollment/unlock/disable, background entry
+points, backup compatibility, expected-external activities and the no-post-lock-bypass legs all
+pass as recorded in §15; only the owner-gated physical-device and API 26-29 legs remain blocked.
+
+## 15. Phase 6 status — operational continuity and integration
+
+**Operational allowlist (plan §8.9)**
+
+- The one operational store this work adds is the attempt outbox in `blocking/AttemptRecorder.kt`:
+  CE `SharedPreferences` `myexodus_attempt_outbox`, each entry = rule id, blocked target and the
+  original wall time; the newest 50 survive (`OUTBOX_CAP = 50`); never event text or user
+  content. A block seen while `storeFactory.open()` throws `VaultLockedException` enqueues
+  instead of writing; `flushPending()` drains after every live write and from startup upkeep,
+  re-applying the live 30 s dedupe against the vault; a failed flush requeues. Bounded loss past
+  the cap is the documented trade-off, never unbounded growth.
+- No other protected store is replicated: the accountability DB, partner journals and message
+  bodies stay vault-only, and `VaultDekSource` throws `VaultLockedException` rather than caching
+  a DEK.
+- Locked quota verdict (`blocking/usage/UsageAccountingEngine.kt`, `lockedVerdict` /
+  `lockedRemainingBudgetMs`): daily-limit enforcement still decides while locked from the
+  published rules snapshot (fast-path/DE copy) plus the platform usage total, both readable
+  without the vault. It never returns a warning tier, because delivery confirmation would need
+  a tracker write the locked vault refuses (plan §8.9, Decision 14); the enforcement service's
+  credit-edge reconciliation credits the whole locked window after reopen (ADR #160).
+- `RulesSnapshotPublisher.buildAndPublish` treats a closed vault as a deferral, not a
+  degradation ("Authoritative snapshot load deferred: vault locked"); the published snapshot
+  keeps deciding and the next unlocked rebuild republishes from Room.
+- Workers: `DailyMaintenanceWorker` and `PartnerSyncWorker` catch `VaultLockedException` and
+  return `Result.retry()`, so WorkManager's backoff defers the pass to an unlocked process while
+  the existing activity kicks and periodic cadences still cover delivery.
+- Startup (`MyExodusApp.kt:421` `runStartupVaultMaintenance`): with App Lock enabled the whole
+  upkeep waits for `AppLockState.UNLOCKED`, then opens the store, runs the DB migration, sweeps
+  stale recovery sessions, drains the attempt outbox and calls
+  `milestoneScheduler.reconcileAll()`. This closes the Phase 3 startup crash (eager open while
+  the vault was closed). The wait is one-shot per process: a later lock/unlock cycle in the same
+  process does not re-run it, so an outbox entry held by a later lock drains on the next live
+  block write while unlocked or the next process restart (plan line 410's accepted restart
+  path). The scope-recovery staging inside it is wrapped in `runCatching` (`:450-456`): an
+  unreadable guest-import offer behind the unlock must not take the process down from this
+  background coroutine.
+- Boot receivers keep their existing semantics untouched: `BootReceiver` and
+  `MilestoneBootReceiver` are post-unlock CE consumers; `LockedBootReceiver` is
+  `directBootAware` and publishes the DE snapshot pre-unlock (manifest `:106-218`). Nothing was
+  moved into device-protected storage, and the vault stays CE.
+
+**Expected-external token (§8.8)**
+
+- `applock/ExpectedExternal.kt` — `Context.startExpectedExternal(intent, reason)` marks then
+  launches; `Context.markExpectedExternal(reason)` covers `ActivityResultLauncher.launch` paths.
+  Both resolve the singleton `AppLockCoordinator` through a Hilt `@EntryPoint` (same precedent
+  as `WidgetTelemetry`).
+- `AppLockCoordinator.beginExpectedExternalOperation` issues only from `UNLOCKED` and replaces
+  any earlier token (`AppLockCoordinator.kt:105`). The token holds reason, `elapsedRealtime`
+  start and session generation; `onHostStopped` keeps the session only for a live token,
+  `onHostResumed` consumes it single-use, and screen-off, manual lock or revocation clear it.
+  Window: `EXPECTED_EXTERNAL_WINDOW_MS = 60_000`.
+- Wired launch sites, all inside the protected tree:
+  - `ui/settings/ProtectionScreen.kt` — notification-settings banner, accessibility row, usage
+    row, battery direct-ask, OEM settings (+ app-info fallback), overlay row.
+  - `ui/home/HomeScreen.kt` — limited-fix accessibility/usage/overlay actions, VPN consent
+    (`markExpectedExternal` + launcher), notification banner, accessibility attention item,
+    overlay fix, usage fix, battery fix.
+  - `settings/ProtectionChecks.kt` — battery-exemption direct ask (+ battery-settings fallback)
+    and biometric-enrollment settings (+ security-settings fallback).
+  - `ui/rules/RulesScreen.kt` — VPN consent launcher.
+  - `ui/partner/PairingCeremonyScreen.kt` — share chooser.
+  - `MainActivity.kt` — notification channel/settings launches (`:829`, `:841`).
+  - `ui/settings/UpdateViewModel.kt` — `continueInstall` (direct-APK installer);
+    `update/UpdateInstaller.kt` — unknown-sources permission settings.
+- Deliberate exclusions, recorded so they are not "fixed" later as omissions: onboarding and
+  guest-import pickers (App Lock is DISABLED there, and the coordinator refuses to issue from
+  any non-UNLOCKED state regardless), crisis dialer/browser links and the release-page browser
+  tap (not in §8.8's enumerated scope), and route-home hand-back (an app switch, not an
+  external OS activity). The token is destination-blind for its window by design (§8.8): any
+  path started while it is live — settings, installer, share chooser — keeps the session on a
+  return within 60 s on the same generation. It is single-use, so a second external switch
+  after consumption, or any switch after expiry, locks; screen-off and manual lock clear it.
+
+**Backup compatibility (§8.12)**
+
+- Platform rules unchanged: `fullBackupContent`/`dataExtractionRules` keep the pre-feature
+  baseline (database, sharedprefs, rules_snapshot.json and datastore excluded); the vault
+  envelope, staging copy and migration journal live in `noBackupFilesDir/vault`
+  (`VaultEnvelopeStore`), so no auth-bound or migration material is ever transferred.
+- Non-enrolled users keep their existing cloud-backup and device-transfer paths untouched:
+  static XML cannot branch on enrollment and nothing in this change set edits those rules.
+- Restore with the wrong or absent Keystore wrap: `recoverInterrupted` requires the active
+  envelope for LOCKED status and maps a missing one to RECOVERY_REQUIRED without deleting
+  ciphertext or creating a blank DB (inventory §14; `VaultMigrationTest` cases).
+- The app's own encrypted backup is still reachable only from unlocked protected UI
+  (`BackupSnapshotReader` via `storeFactory.open()`, `BackupKeyViewModel`), and restore writes
+  the snapshot in a single `withWriteTransaction`, so a mid-lock failure rolls back atomically.
+  No automatic/debounced backup worker exists yet (queued as its own task under the owner's
+  automatic-backup ruling), so there is no locked-path backup writer to guard today.
+
+**Navigation (§8.10 / Phase 6 row)**
+
+- The only activity entry to protected UI is `MainActivity`; `AppLockRootGate` composes the lock
+  shell instead of the whole protected tree for any state other than DISABLED/UNLOCKED, so
+  notification and widget extras (`EXTRA_START_TAB`, `EXTRA_OPEN_PLAN`, `EXTRA_START_HABIT`, …)
+  cannot compose a destination before authentication.
+- There is no external deep-link scheme to sanitize: the only exported activity filter is
+  MAIN/LAUNCHER (inventory §1). The exported receivers/services are the boot receivers, the
+  widget receiver and the system-bound VPN service, none of which reach protected UI.
+
+**Vault-access sweep (background entry points)**
+
+- All 16 manifest components were audited for a protected-store read before an unlocked state
+  exists. The VPN/domain-usage path is fail-open by design: `UsagePersistence` catches every
+  failure, retries startup load every 10 s, degrades flush after 3 consecutive failures and
+  counts `deleteOlderThan` as failure, and `DomainUsageEngine.persistRollover` waits with
+  `RETRY_MS` instead of hot-looping, so `dao = { storeFactory.open()?.ruleUsageDao() }` never
+  crashes the FGS while locked. `BlockerActivity.openRecovery` and the widget receiver only use
+  non-vaulted DataStore and `runCatching`; every worker and publisher defers per §8.9. No
+  post-lock DB bypass found.
+
+**Gate accounting (§7 Phase 6)**
+
+- PASSED (source + unit): startup deferral/flush/reconcile, locked quota verdict, publisher
+  deferral, worker retry, outbox cap/dedupe/requeue (`AttemptLogTest`, including
+  `lockedVault_holdsAttemptsAndFlushesExactlyOnce`), expected-external token semantics
+  (`AppLockCoordinatorTest`), backup non-destructiveness (`VaultMigrationTest`). Full JVM suite:
+  282 test classes, BUILD SUCCESSFUL in 10m 7s (exit 0). `:app:lintDebug` runs alone per ADR
+  #208.
+- PASSED (device, emulator-5558, App Lock enabled, PIN 1234): expected-external return within
+  the window, unrelated app switch (gate on return), expiry past 70 s (gate), screen-off during
+  the token (gate), process death via `am force-stop` (gate on cold start, vault locked at
+  startup logged). Locked enforcement: Clock's 1-minute daily limit over quota, host stop
+  relocks the vault, relaunching Clock showed "Clock is done for today" and
+  `MyExodusAttempts: block held for flush` wrote the CE outbox entry (vault closed at
+  `recordBlocked`). Process-restart drain: force-stop → cold start → gate → unlock produced
+  `attempt outbox flushed 1/1` and `entries":"[]"`. Startup guard: rebuilt APK installed, gate →
+  unlock → Home with no staging failure. All legs were driven on the emulator; no physical
+  device was touched.
+- Backup (line 409): no backup config, manifest or codec change in the 26-file set;
+  `allowBackup="false"`, `fullBackupContent` and `dataExtractionRules` match the pre-feature
+  baseline (see Backup compatibility above).
+- BLOCKED (unchanged): biometric and physical-device release-build legs (owner), API 26-29
+  tier (§12.2 release blocker).

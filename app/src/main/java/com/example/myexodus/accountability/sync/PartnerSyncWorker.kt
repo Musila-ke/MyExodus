@@ -14,6 +14,7 @@ import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.example.myexodus.data.db.VaultLockedException
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.concurrent.TimeUnit
@@ -34,13 +35,20 @@ class PartnerSyncWorker @AssistedInject constructor(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
-        val report = runPartnerSyncPass(
-            registrar,
-            rollout,
-            coordinator,
-            wakeMessageId = inputData.getString(PARTNER_WAKE_MESSAGE_ID),
-            forceHeartbeat = inputData.getBoolean(PARTNER_FORCE_HEARTBEAT, false),
-        )
+        val report = try {
+            runPartnerSyncPass(
+                registrar,
+                rollout,
+                coordinator,
+                wakeMessageId = inputData.getString(PARTNER_WAKE_MESSAGE_ID),
+                forceHeartbeat = inputData.getBoolean(PARTNER_FORCE_HEARTBEAT, false),
+            )
+        } catch (e: VaultLockedException) {
+            // §8.9: a locked App Lock vault defers the pass — WorkManager's backoff retries it
+            // once the vault is open; the activity kick and periodic cadence also cover it.
+            Log.i(TAG, "sync deferred: vault locked")
+            return Result.retry()
+        }
         Log.i(TAG, "sync: $report")
         runCatching { telemetry.afterPass(report) }
             .onFailure { Log.w(TAG, "telemetry report failed", it) }

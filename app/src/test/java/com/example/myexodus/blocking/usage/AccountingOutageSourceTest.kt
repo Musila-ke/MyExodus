@@ -86,6 +86,27 @@ class AccountingOutageSourceTest {
     }
 
     @Test
+    fun lockedVault_defersTheRead_insteadOfCrashing() = runBlocking {
+        // App Lock (§8.9): while the vault is locked the ledger is unreachable; the surfaces
+        // must see "no report now", never a VaultLockedException in an uncaught UI scope.
+        appendGap(wallClockMs = now - 60_000L, fromElapsedMs = 1_000L, toElapsedMs = 301_000L)
+        assertNotNull(source.current(now))
+
+        val lockedFactory = AppRulesStoreFactory(
+            context, recovery, DatabaseHealthStore(), vaultAccessAllowed = { false },
+        )
+        val lockedSource = AccountingOutageSource(
+            context,
+            UsageLedgerRepository(
+                lockedFactory, Dispatchers.IO.limitedParallelism(1), CrashReporting(context),
+            ),
+            state,
+        )
+
+        assertNull(lockedSource.current(now))
+    }
+
+    @Test
     fun unansweredGaps_areReported_withDaySplitSiblingsMerged() = runBlocking {
         // One detection written across midnight: two rows sharing its wall clock.
         appendGap(wallClockMs = now - 60_000L, fromElapsedMs = 1_000L, toElapsedMs = 61_000L)

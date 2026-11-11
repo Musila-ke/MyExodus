@@ -62,11 +62,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.R
+import com.example.myexodus.applock.markExpectedExternal
 import com.example.myexodus.blocking.RulesRepository
 import com.example.myexodus.blocking.RulesetLimitException
 import com.example.myexodus.blocking.usage.PlatformUsageReader
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.data.db.AppRulesStore
+import com.example.myexodus.data.db.vaultClosedFlow
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.hasLiveWebsiteRule
 import com.example.myexodus.data.db.entity.isExpiredAt
@@ -130,14 +132,15 @@ fun RulesScreen(
     openRuleId: String? = null,
     onOpenRuleConsumed: () -> Unit = {},
 ) {
-    val profile by store.userProfileDao().observeActive().collectAsStateWithLifecycle(initialValue = null)
+    val profile by vaultClosedFlow { store.userProfileDao().observeActive() }
+        .collectAsStateWithLifecycle(initialValue = null)
     val profileId = profile?.userId
     // Owner directive 2026-10-21: the list owns an explicit loading / loaded / failed state.
     // A failed local read must render as a state with a retry, never as "no blocks" or a crash.
     var loadRetry by remember { mutableIntStateOf(0) }
     val loadState by remember(profileId, loadRetry) {
-        profileId?.let {
-            store.restrictionRuleDao().observeByProfile(it)
+        profileId?.let { id ->
+            vaultClosedFlow { store.restrictionRuleDao().observeByProfile(id) }
                 .map<List<RestrictionRule>, RulesLoad> { RulesLoad.Loaded(it) }
                 .catch { failure ->
                     Log.e(TAG, "Rules load failed", failure)
@@ -205,7 +208,8 @@ fun RulesScreen(
     // row must show today's usage. The accounting ledger is what the engine blocks on. Rows
     // anchored to another day or zone are skipped, never shown as this morning's zero.
     val usageRows by remember(profileId) {
-        profileId?.let { store.dailyUsageTrackerDao().observeForProfile(it) } ?: flowOf(emptyList())
+        profileId?.let { id -> vaultClosedFlow { store.dailyUsageTrackerDao().observeForProfile(id) } }
+            ?: flowOf(emptyList())
     }.collectAsStateWithLifecycle(initialValue = emptyList())
     val usageByPackage = remember(usageRows, nowMillis) {
         val today = LocalDate.now().toString()
@@ -323,8 +327,10 @@ fun RulesScreen(
     ) { VpnLifecycle.ensure(context, hasRules = true) }
     val enableWebsiteEngine: () -> Unit = remember(context, consentLauncher) {
         {
-            VpnLifecycle.consentIntent(context)?.let(consentLauncher::launch)
-                ?: VpnLifecycle.ensure(context, hasRules = true)
+            VpnLifecycle.consentIntent(context)?.let { consent ->
+                context.markExpectedExternal("vpn_consent")
+                consentLauncher.launch(consent)
+            } ?: VpnLifecycle.ensure(context, hasRules = true)
         }
     }
 

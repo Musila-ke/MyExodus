@@ -3,9 +3,12 @@ package com.example.myexodus.blocking.usage
 import android.content.Context
 import android.util.Log
 import androidx.room3.withWriteTransaction
+import com.example.myexodus.blocking.RulesSnapshot
 import com.example.myexodus.blocking.dayScopeCoversToday
 import com.example.myexodus.blocking.systemBootCount
+import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.VaultLockedException
 import com.example.myexodus.data.db.entity.DailyUsageTracker
 import com.example.myexodus.data.db.entity.UsageLedgerKind
 import com.example.myexodus.data.db.entity.UsageLedgerSource
@@ -75,6 +78,12 @@ class UsageAccountingEngine(
     private val crashReporting: CrashReporting,
     private val ledger: UsageLedgerRepository,
     context: Context,
+    /** §8.9 locked-vault fallback: while the vault is closed the published snapshot (fast path
+     *  / Direct-Boot cache) is the only rule authority, and the platform's own foreground total
+     *  (already OPD #28(a)'s source of truth) is the only usage read. Both default to
+     *  "nothing readable", which keeps every non-lock caller and test at today's behavior. */
+    private val snapshotProvider: () -> RulesSnapshot = { RulesSnapshot.EMPTY },
+    private val platformUsageMs: (String) -> Long? = { null },
     /** Wall clock (§8.5's day attribution). Every `nowWallClockMs`/`today` below reads this one
      *  seam, so a test can pin the local day at any hour — reading the real clock made the
      *  day-split race real midnight and flaked the suite (found 2026-09-28). */
@@ -105,7 +114,11 @@ class UsageAccountingEngine(
         nowElapsedRealtimeMs: Long,
         source: String,
     ): EnforcementAction = withContext(dispatcher) {
-        val db = storeFactory.open() ?: return@withContext EnforcementAction.NoAction
+        val db = try {
+            storeFactory.open()
+        } catch (e: VaultLockedException) {
+            return@withContext lockedVerdict(packageName)
+        } ?: return@withContext EnforcementAction.NoAction
         // §14 telemetry is emitted after the transaction commits, never inside it; the
         // entry-transition flag survives out of the withWriteTransaction block.
         var enteredPendingLevel: Int? = null
@@ -208,7 +221,7 @@ class UsageAccountingEngine(
      * confirmation after a rollover or warning reset is a no-op, never a fabricated delivery.
      */
     suspend fun markWarningDelivered(packageName: String, level: Int) = withContext(dispatcher) {
-        val db = storeFactory.open() ?: return@withContext
+        val db = openIfAllowed() ?: return@withContext
         val delivered = db.withWriteTransaction {
             val profile = db.userProfileDao().getActive() ?: return@withWriteTransaction false
             val trackerDao = db.dailyUsageTrackerDao()
@@ -238,7 +251,7 @@ class UsageAccountingEngine(
      * row yet means today has no usage; nothing to reset.
      */
     suspend fun onDailyLimitChanged(packageName: String) = withContext(dispatcher) {
-        val db = storeFactory.open() ?: return@withContext
+        val db = openIfAllowed() ?: return@withContext
         db.withWriteTransaction {
             val profile = db.userProfileDao().getActive() ?: return@withWriteTransaction
             val rule = db.restrictionRuleDao()
@@ -271,7 +284,7 @@ class UsageAccountingEngine(
      */
     suspend fun reconcileWithPlatform(packageName: String, platformMs: Long?) = withContext(dispatcher) {
         if (platformMs == null || platformMs <= 0L) return@withContext
-        val db = storeFactory.open() ?: return@withContext
+        val db = openIfAllowed() ?: return@withContext
         db.withWriteTransaction {
             val profile = db.userProfileDao().getActive() ?: return@withWriteTransaction
             val nowWallClockMs = wallClockNowMs()
@@ -373,7 +386,7 @@ class UsageAccountingEngine(
     ): Long = withContext(dispatcher) {
         val span = windowToElapsedMs - windowFromElapsedMs
         if (span <= 0L || foregroundMs <= 0L) return@withContext 0L
-        val db = storeFactory.open() ?: return@withContext 0L
+        val db = openIfAllowed() ?: return@withContext 0L
         var enteredPendingLevel: Int? = null
         val credited = db.withWriteTransaction {
             val profile = db.userProfileDao().getActive() ?: return@withWriteTransaction 0L
@@ -476,7 +489,7 @@ class UsageAccountingEngine(
         packageNames: Collection<String>,
         sinceWallClockMs: Long,
     ): Map<String, Long> = withContext(dispatcher) {
-        val db = storeFactory.open() ?: return@withContext emptyMap()
+        val db = openIfAllowed() ?: return@withContext emptyMap()
         db.usageLedgerDao()
             .creditEdges(packageNames, CREDIT_EDGE_KINDS, sinceWallClockMs)
             .associate { it.packageName to it.creditWallMs }
@@ -553,7 +566,11 @@ class UsageAccountingEngine(
      * and on the same dispatcher as the writes, so it can never observe a half-written cycle.
      */
     suspend fun remainingBudgetMs(packageName: String): Long? = withContext(dispatcher) {
-        val db = storeFactory.open() ?: return@withContext null
+        val db = try {
+            storeFactory.open()
+        } catch (e: VaultLockedException) {
+            return@withContext lockedRemainingBudgetMs(packageName)
+        } ?: return@withContext null
         val profile = db.userProfileDao().getActive() ?: return@withContext null
         val nowWallClockMs = wallClockNowMs()
         val rule = db.restrictionRuleDao()
@@ -571,6 +588,40 @@ class UsageAccountingEngine(
     }
 
     /**
+     * §8.9: while the vault is locked, daily-limit enforcement is still a critical enforcement
+     * path and cannot wait for a UI prompt — decide from the published snapshot plus the
+     * platform's own foreground total (OPD #28(a)), which needs no vault access. Never a
+     * warning: delivery confirmation writes the tracker row the locked vault refuses, so a
+     * returned warning could never be marked DELIVERED and would repeat forever (Decision 14).
+     * The uncredited tick is not lost — the enforcement service's credit-edge reconciliation
+     * covers the whole locked window once the vault reopens (ADR #160).
+     */
+    private fun lockedVerdict(packageName: String): EnforcementAction {
+        val snapshot = snapshotProvider()
+        if (!snapshot.isLimitTracked(packageName)) return EnforcementAction.NoAction
+        val limitMs = snapshot.appRules[packageName]?.dailyLimitMs ?: return EnforcementAction.NoAction
+        val usedMs = platformUsageMs(packageName) ?: return EnforcementAction.NoAction
+        return if (usedMs >= limitMs) EnforcementAction.Block else EnforcementAction.NoAction
+    }
+
+    /** The locked form of [remainingBudgetMs] — advisory tick cadence, same two reads. */
+    private fun lockedRemainingBudgetMs(packageName: String): Long? {
+        val snapshot = snapshotProvider()
+        if (!snapshot.isLimitTracked(packageName)) return null
+        val limitMs = snapshot.appRules[packageName]?.dailyLimitMs ?: return null
+        val usedMs = platformUsageMs(packageName) ?: return null
+        return (limitMs - usedMs).coerceAtLeast(0)
+    }
+
+    /** §8.9: for every path except the live quota verdict, a locked vault is the same no-op
+     *  as an unavailable store — the caller's next unlocked cycle retries. */
+    private fun openIfAllowed(): AppRulesStore? = try {
+        storeFactory.open()
+    } catch (e: VaultLockedException) {
+        null
+    }
+
+    /**
      * Daily-maintenance sweep (§8 Step 8): rolls every tracker row whose stored anchor no
      * longer matches the current local date, so a day with no tracked-app launch still clears
      * stale `blockedToday`/warning state. Shares the exact Decision 20 transformation with
@@ -578,7 +629,7 @@ class UsageAccountingEngine(
      * number of rows rolled (0 when the profile/database is unavailable).
      */
     suspend fun rolloverStaleDays(): Int = withContext(dispatcher) {
-        val db = storeFactory.open() ?: return@withContext 0
+        val db = openIfAllowed() ?: return@withContext 0
         db.withWriteTransaction {
             val profile = db.userProfileDao().getActive() ?: return@withWriteTransaction 0
             val trackerDao = db.dailyUsageTrackerDao()

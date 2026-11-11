@@ -1,6 +1,7 @@
 package com.example.myexodus.blocking.usage
 
 import android.content.Context
+import com.example.myexodus.data.db.VaultLockedException
 import com.example.myexodus.settings.isBatteryExempt
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -35,8 +36,13 @@ class AccountingOutageSource @Inject constructor(
      *  silence is one interruption. */
     suspend fun current(nowWallClockMs: Long = System.currentTimeMillis()): AccountingOutage? {
         val since = nowWallClockMs - AccountingDiagnosticsState.ELIGIBILITY_FRESHNESS_MS
-        val unresolved = ledger.measuredOutagesSince(since)
-            .filter { it.wallClockTsMs > state.gapsResolvedThroughMs }
+        val unresolved = try {
+            ledger.measuredOutagesSince(since)
+        } catch (e: VaultLockedException) {
+            // §8.9: a locked vault is a deferral, not a degradation — the surfaces re-query
+            // on the next unlocked entry.
+            return null
+        }.filter { it.wallClockTsMs > state.gapsResolvedThroughMs }
         val exempt = isBatteryExempt(context)
         val stage = OutageStage.stage(
             newestMeasuredOutageAtMs = unresolved.maxOfOrNull { it.wallClockTsMs } ?: 0L,

@@ -79,12 +79,15 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.R
 import com.example.myexodus.accountability.sos.NudgeInboxRepository
+import com.example.myexodus.applock.markExpectedExternal
+import com.example.myexodus.applock.startExpectedExternal
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.ProtectionAuthority
 import com.example.myexodus.blocking.ProtectionDegradation
 import com.example.myexodus.blocking.usage.AccountingOutage
 import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.data.db.AppRulesStore
+import com.example.myexodus.data.db.vaultClosedFlow
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.hasLiveWebsiteRule
 import com.example.myexodus.settings.HomeSettings
@@ -173,12 +176,14 @@ fun HomeScreen(
 ) {
     val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
     val serviceEnabled by monitor.enabled.collectAsStateWithLifecycle()
-    val profile by store.userProfileDao().observeActive().collectAsStateWithLifecycle(initialValue = null)
+    val profile by vaultClosedFlow { store.userProfileDao().observeActive() }
+        .collectAsStateWithLifecycle(initialValue = null)
     val profileId = profile?.userId
     // null until the first emission: a cold start must not flash "No blocks yet" at a user
     // who has blocks (streak card's own loading rule, applied to the list).
     val rules by remember(profileId) {
-        profileId?.let { store.restrictionRuleDao().observeByProfile(it) } ?: emptyFlow()
+        profileId?.let { id -> vaultClosedFlow { store.restrictionRuleDao().observeByProfile(id) } }
+            ?: emptyFlow()
     }.collectAsStateWithLifecycle(initialValue = null)
     // Owner ruling 2026-11-01: an uninstalled app's block is hidden from the list and the
     // counts, but stored and still active — it returns with the app.
@@ -190,7 +195,7 @@ fun HomeScreen(
     ReportDrawnWhen { streakResolved && rules != null }
     // null until the first emission, like [rules]: the stat tiles show their skeleton rather
     // than a "0 blocked" that a moment later jumps to the real count.
-    val attemptCounts by store.attemptLogDao().observeBlockedCounts()
+    val attemptCounts by vaultClosedFlow { store.attemptLogDao().observeBlockedCounts() }
         .collectAsStateWithLifecycle(initialValue = null)
     val countsByTarget = remember(attemptCounts) {
         attemptCounts?.associate { it.target to it.count }.orEmpty()
@@ -206,7 +211,7 @@ fun HomeScreen(
     // Req 15 / #12: every partner's newest pinned message, newest first, as a Flow — a message
     // delivered by a background sync pass must reach a card that is already on screen, and the
     // card pages across senders. Names arrive from the shell (one roster read per Home entry).
-    val pinnedRows by store.partnerActivityDao().observePinnedMessages()
+    val pinnedRows by vaultClosedFlow { store.partnerActivityDao().observePinnedMessages() }
         .collectAsStateWithLifecycle(initialValue = null)
     var pinnedIndex by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(pinnedRows?.size) {
@@ -293,24 +298,26 @@ fun HomeScreen(
         }
     }
     val requestWebsiteTunnel: () -> Unit = {
-        VpnLifecycle.consentIntent(labelContext)?.let(vpnConsentLauncher::launch)
-            ?: VpnLifecycle.ensure(labelContext.applicationContext, hasRules = true)
+        VpnLifecycle.consentIntent(labelContext)?.let { consent ->
+            labelContext.markExpectedExternal("vpn_consent")
+            vpnConsentLauncher.launch(consent)
+        } ?: VpnLifecycle.ensure(labelContext.applicationContext, hasRules = true)
     }
     // LIMITED can now mean any of four gaps; the chip opens the gap that is actually down.
     // Polling-only names accessibility as its defining gap; otherwise the missing grant is
     // checked in consequence order, with accessibility last as the remaining cause.
     val limitedFix: () -> Unit = when {
         authority == ProtectionAuthority.DEGRADED_POLLING_ONLY -> {
-            { labelContext.startActivity(accessibilitySettingsIntent()) }
+            { labelContext.startExpectedExternal(accessibilitySettingsIntent(), "settings") }
         }
         readiness?.usageAccess == false -> {
-            { labelContext.startActivity(usageAccessSettingsIntent()) }
+            { labelContext.startExpectedExternal(usageAccessSettingsIntent(), "settings") }
         }
         readiness?.overlayGranted == false -> {
-            { labelContext.startActivity(overlaySettingsIntent(labelContext)) }
+            { labelContext.startExpectedExternal(overlaySettingsIntent(labelContext), "settings") }
         }
         readiness?.websiteConsentMissing == true -> requestWebsiteTunnel
-        else -> { { labelContext.startActivity(accessibilitySettingsIntent()) } }
+        else -> { { labelContext.startExpectedExternal(accessibilitySettingsIntent(), "settings") } }
     }
 
     val streakDays = habit?.let { daysFree(it.currentStreakElapsedMs) }
@@ -1231,9 +1238,10 @@ private fun AttentionSection(
                             body = stringResource(R.string.protection_notif_off_banner_text),
                             actionLabel = stringResource(R.string.protection_notif_off_banner_action),
                             onAction = {
-                                context.startActivity(
+                                context.startExpectedExternal(
                                     Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
                                         .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName),
+                                    reason = "settings",
                                 )
                             },
                         )
@@ -1248,7 +1256,7 @@ private fun AttentionSection(
                     title = stringResource(R.string.protection_limited_title),
                     body = stringResource(R.string.protection_limited_card_text),
                     actionLabel = stringResource(R.string.protection_stopped_action),
-                    onAction = { context.startActivity(accessibilitySettingsIntent()) },
+                    onAction = { context.startExpectedExternal(accessibilitySettingsIntent(), "settings") },
                 ),
             )
         }
@@ -1262,7 +1270,7 @@ private fun AttentionSection(
                     title = stringResource(R.string.protection_overlay_off_title),
                     body = stringResource(R.string.protection_overlay_off_text),
                     actionLabel = stringResource(R.string.protection_limited_action),
-                    onAction = { context.startActivity(overlaySettingsIntent(context)) },
+                    onAction = { context.startExpectedExternal(overlaySettingsIntent(context), "settings") },
                 ),
             )
         }
@@ -1273,7 +1281,7 @@ private fun AttentionSection(
                     title = stringResource(R.string.protection_usage_off_title),
                     body = stringResource(R.string.protection_usage_off_text),
                     actionLabel = stringResource(R.string.protection_limited_action),
-                    onAction = { context.startActivity(usageAccessSettingsIntent()) },
+                    onAction = { context.startExpectedExternal(usageAccessSettingsIntent(), "settings") },
                 ),
             )
         }
@@ -1298,7 +1306,7 @@ private fun AttentionSection(
                     title = stringResource(R.string.home_battery_title),
                     body = stringResource(R.string.home_battery_body),
                     actionLabel = stringResource(R.string.settings_action_fix),
-                    onAction = { context.startActivity(batteryOptimizationSettingsIntent()) },
+                    onAction = { context.startExpectedExternal(batteryOptimizationSettingsIntent(), "settings") },
                 ),
             )
         }

@@ -9,6 +9,7 @@ import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.myexodus.R
+import com.example.myexodus.applock.startExpectedExternal
 import com.example.myexodus.update.AttemptError
 import com.example.myexodus.update.AttemptState
 import com.example.myexodus.update.AvailablePrompt
@@ -196,7 +197,7 @@ class UpdateViewModel @Inject constructor(
 
     fun continueInstall(context: Context) {
         coordinator.continueInstallIntent()?.let {
-            runCatching { context.startActivity(it) }
+            runCatching { context.startExpectedExternal(it, "installer") }
         }
     }
 

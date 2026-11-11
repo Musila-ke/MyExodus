@@ -78,6 +78,7 @@ import com.example.myexodus.accountability.enrollment.PairingFlow
 import com.example.myexodus.accountability.enrollment.PairingToken
 import com.example.myexodus.accountability.enrollment.PartnerLabel
 import com.example.myexodus.accountability.sync.PartnerAlertHealth
+import com.example.myexodus.applock.startExpectedExternal
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.WindowWidth
 import com.example.myexodus.ui.rememberWindowWidth
@@ -758,7 +759,7 @@ private fun ShowingCode(
                     val send = Intent(Intent.ACTION_SEND)
                         .setType("text/plain")
                         .putExtra(Intent.EXTRA_TEXT, shareText)
-                    runCatching { context.startActivity(Intent.createChooser(send, null)) }
+                    runCatching { context.startExpectedExternal(Intent.createChooser(send, null), "share_picker") }
                 },
                 modifier = Modifier.weight(1f),
             ) {

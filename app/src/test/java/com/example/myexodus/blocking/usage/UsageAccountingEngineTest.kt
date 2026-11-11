@@ -758,6 +758,43 @@ class UsageAccountingEngineTest {
         )
     }
 
+    /**
+     * §8.9: a locked vault must not stop the daily-limit decision — the verdict comes from the
+     * published snapshot plus the platform's own foreground total, and never emits a warning
+     * (delivery confirmation cannot write the tracker row while locked, so it would repeat
+     * forever). Unreadable platform usage fails open: the always-on snapshot paths still block.
+     */
+    @Test
+    fun lockedVault_decidesFromSnapshotAndPlatformUsage_withoutWarnings() = runTest {
+        val gated = AppRulesStoreFactory(
+            context, recovery, DatabaseHealthStore(),
+            vaultAccessAllowed = { false },
+        )
+        val dispatcher = Dispatchers.IO.limitedParallelism(1)
+        val crashReporting = com.example.myexodus.telemetry.CrashReporting(context)
+        val rule = db.restrictionRuleDao().getById(RULE_ID)!!
+        val snapshot = com.example.myexodus.blocking.RulesSnapshot.build(listOf(rule), 1L, wallNowMs)
+        var platformMs: Long? = 29 * MIN
+        val lockedEngine = UsageAccountingEngine(
+            gated, dispatcher, crashReporting, UsageLedgerRepository(gated, dispatcher, crashReporting),
+            context,
+            snapshotProvider = { snapshot },
+            platformUsageMs = { platformMs },
+            wallClockNowMs = { engineNowMs },
+        )
+
+        assertEquals(1 * MIN, lockedEngine.remainingBudgetMs(PKG))
+        assertEquals(NoAction, lockedEngine.processUsageObservation(PKG, 1 * MIN, 1_000L, UsageLedgerSource.PATH_B))
+
+        platformMs = 31 * MIN
+        assertEquals(EnforcementAction.Block, lockedEngine.processUsageObservation(PKG, 1 * MIN, 2_000L, UsageLedgerSource.PATH_B))
+        assertEquals(0L, lockedEngine.remainingBudgetMs(PKG))
+
+        platformMs = null
+        assertEquals(NoAction, lockedEngine.processUsageObservation(PKG, 1 * MIN, 3_000L, UsageLedgerSource.PATH_B))
+        assertNull("untracked package", lockedEngine.remainingBudgetMs("com.other"))
+    }
+
     private suspend fun setLimit(limitMs: Long) {
         val rule = db.restrictionRuleDao().getById(RULE_ID)!!
         db.restrictionRuleDao().update(rule.copy(dailyLimitMs = limitMs))

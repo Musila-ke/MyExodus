@@ -49,12 +49,45 @@ class AttemptLogTest {
         )
         recovery.resetAllData()
         factory = AppRulesStoreFactory(context, recovery, healthStore)
-        recorder = AttemptRecorder(factory)
+        recorder = AttemptRecorder(factory, context)
     }
 
     @After
     fun tearDown() {
         recovery.resetAllData()
+    }
+
+    /**
+     * §8.9: with the App Lock vault closed the attempt log is unreachable, so the block waits
+     * in the bounded outbox and lands exactly once on the first opened flush — the replay is
+     * idempotent through the same 30 s dedupe the live path uses.
+     */
+    @Test
+    fun lockedVault_holdsAttemptsAndFlushesExactlyOnce() = runTest {
+        context.getSharedPreferences("myexodus_attempt_outbox", Context.MODE_PRIVATE)
+            .edit().clear().commit()
+        val allowed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val gated = AppRulesStoreFactory(
+            context, recovery, DatabaseHealthStore(), vaultAccessAllowed = { allowed.get() },
+        )
+        val gatedRecorder = AttemptRecorder(gated, context)
+
+        gatedRecorder.recordBlocked("r-1", "com.locked")
+        assertEquals("the locked block must be held, not dropped", 1, outboxCount())
+
+        allowed.set(true)
+        gatedRecorder.flushPending()
+        gatedRecorder.flushPending()
+
+        val rows = gated.open()!!.attemptLogDao().recent(10)
+        assertEquals(1, rows.count { it.blockedTarget == "com.locked" })
+        assertEquals("the outbox drains", 0, outboxCount())
+    }
+
+    private fun outboxCount(): Int {
+        val raw = context.getSharedPreferences("myexodus_attempt_outbox", Context.MODE_PRIVATE)
+            .getString("entries", null) ?: return 0
+        return org.json.JSONArray(raw).length()
     }
 
     @Test

@@ -38,6 +38,7 @@ import com.example.myexodus.applock.AppLockState
 import com.example.myexodus.applock.VaultDekSource
 import com.example.myexodus.applock.VaultMigration
 import com.example.myexodus.backup.BackupStagingSweeper
+import com.example.myexodus.blocking.AttemptRecorder
 import com.example.myexodus.blocking.BootReconciliationStore
 import com.example.myexodus.blocking.EnforcementForegroundService
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
@@ -56,6 +57,7 @@ import com.example.myexodus.data.db.DatabaseMigration
 import com.example.myexodus.data.db.LocalDatabaseMigration
 import com.example.myexodus.domainusage.AndroidDomainUsageHost
 import com.example.myexodus.recovery.RecoverySessionRepository
+import com.example.myexodus.streaks.MilestoneScheduler
 import com.example.myexodus.streaks.StreakNotifications
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.telemetry.StartupTrace
@@ -102,22 +104,27 @@ class MyExodusApp : Application(), Configuration.Provider {
     @Inject lateinit var protectionSnapshotWriter: ProtectionSnapshotWriter
     // Account plan §6.2: a prepared guest transition finalizes as soon as the target session
     // exists, even if the Account pane was closed or the process restarted mid-flow.
-    @Inject lateinit var guestTransitionCoordinator: GuestTransitionCoordinator
+    // Lazy: this graph reaches FirebaseAuth and CE preferences, which throw before first
+    // unlock — eager construction killed the LOCKED_BOOT_COMPLETED process (§8.9 Direct Boot).
+    @Inject lateinit var guestTransitionCoordinator: dagger.Lazy<GuestTransitionCoordinator>
     // Account plan §8.4: the post-switch import previews itself as soon as a bound quarantine
     // exists, so the import is never silently skipped after a restart.
-    @Inject lateinit var guestImportCoordinator: GuestImportCoordinator
+    @Inject lateinit var guestImportCoordinator: dagger.Lazy<GuestImportCoordinator>
     // ADR #240: a bound retained scope is staged at start and imported without a tap.
-    @Inject lateinit var scopeRecoveryImporter: ScopeRecoveryImporter
+    @Inject lateinit var scopeRecoveryImporter: dagger.Lazy<ScopeRecoveryImporter>
     // Account plan §7 step 10 / §12.4: the one session fence every remote operation consults.
-    @Inject lateinit var localSessionManager: LocalSessionManager
+    @Inject lateinit var localSessionManager: dagger.Lazy<LocalSessionManager>
     // Account plan §6.4 item 14: stale plaintext/compressed staging never survives a start.
-    @Inject lateinit var backupStagingSweeper: BackupStagingSweeper
+    // Lazy: its upload-session store builds the Tink secrets keyset from CE prefs at
+    // construction — unreadable in a locked-boot process (§8.9 Direct Boot).
+    @Inject lateinit var backupStagingSweeper: dagger.Lazy<BackupStagingSweeper>
     // Account plan §6.8/§6.9.3: a deletion accepted before the last restart erases local data
     // before any store of that identity opens.
     @Inject lateinit var deletionLocalData: DeletionLocalData
     // Plan §8.3/§8.6: the updater's durable record has one main-process owner; this startup
     // touch reconciles it after process death and after package replacement.
-    @Inject lateinit var updateCoordinator: UpdateCoordinator
+    // Lazy: its state/diagnostics stores open CE prefs at construction (§8.9 Direct Boot).
+    @Inject lateinit var updateCoordinator: dagger.Lazy<UpdateCoordinator>
     // §8.8: process-scope screen-off revocation must not depend on MainActivity being alive.
     // Lazy because a locked-boot process cannot read the CE feature status this constructs.
     @Inject lateinit var appLockCoordinator: dagger.Lazy<AppLockCoordinator>
@@ -125,6 +132,11 @@ class MyExodusApp : Application(), Configuration.Provider {
     @Inject lateinit var vaultDekSource: VaultDekSource
     // §8.12: startup journal reconciliation runs before the gate's first frame.
     @Inject lateinit var vaultMigration: VaultMigration
+    // §8.9: while the vault was locked, blocked attempts wait in a bounded outbox and boot
+    // reconciliation cannot re-arm milestone alarms — both land on the first unlocked start.
+    // Lazy: the outbox's prefs are CE and throw when constructed pre-unlock (§8.9).
+    @Inject lateinit var attemptRecorder: dagger.Lazy<AttemptRecorder>
+    @Inject lateinit var milestoneScheduler: MilestoneScheduler
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -190,10 +202,6 @@ class MyExodusApp : Application(), Configuration.Provider {
         // responder, drain) — app-startup install covers paths that never route through drainOutbox.
         AppCheckInstaller.install(this)
         startupTrace.lap("appcheck")
-        // Account plan §6.2/§8.4: app-scoped, so finalization survives a closed pane and a
-        // process death between target sign-in and finalize (the encrypted journal persists).
-        guestTransitionCoordinator.attach(applicationScope)
-        guestImportCoordinator.attach(applicationScope)
         // Plan §8 Step 16's sync_status channel: debug-only (never user-visible in release).
         PartnerNotifications.ensureSyncStatusChannel(this)
         // SOS §8.14: the partner_nudges_v3 channel exists from startup — the §8.12 pushEligible
@@ -227,11 +235,12 @@ class MyExodusApp : Application(), Configuration.Provider {
         if (unlocked) {
             // §8.12: the durable journal decides the gate's first state before any frame.
             reconcileAppLockJournal()
-            localSessionManager.onAppStart(applicationScope)
+            attachAccountCollectors()
+            localSessionManager.get().onAppStart(applicationScope)
             // §6.4 item 14: the journal names the one object an active operation still needs;
             // everything else in staging is stale by construction. CE storage → post-unlock only.
             applicationScope.launch {
-                runCatching { backupStagingSweeper.sweep() }
+                runCatching { backupStagingSweeper.get().sweep() }
                     .onFailure { Log.w(TAG, "backup staging sweep failed", it) }
             }
         }
@@ -283,11 +292,13 @@ class MyExodusApp : Application(), Configuration.Provider {
             if (unlocked && appLockCoordinator.get().state.value != AppLockState.DISABLED) {
                 applicationScope.launch {
                     appLockCoordinator.get().state.first { it == AppLockState.UNLOCKED }
-                    runStartupVaultMaintenance(unlocked)
+                    runStartupVaultMaintenance(true)
                 }
-            } else {
-                applicationScope.launch { runStartupVaultMaintenance(unlocked) }
+            } else if (unlocked) {
+                applicationScope.launch { runStartupVaultMaintenance(true) }
             }
+            // Pre-unlock: the stores and the app-lock status are both CE, so the whole pass is
+            // deferred — userUnlockedReceiver runs it once the user unlocks (§8.9).
         }
         startupTrace.lap("launches+open")
         registerActivityLifecycleCallbacks(backgroundCheckpointer)
@@ -316,13 +327,13 @@ class MyExodusApp : Application(), Configuration.Provider {
             // Plan §7 step 10: no sync work under a signed-out or transitioning session —
             // the worker would only no-op against the fence, and a signed-out account has no
             // pairs to serve. Anonymous sessions are fenced-active and keep syncing (ADR #125).
-            if (localSessionManager.current() != null) enqueuePartnerSync(this)
+            if (localSessionManager.get().current() != null) enqueuePartnerSync(this)
             enqueueDailyMaintenance(this)
             UpdateCheckWorker.enqueue(this)
             UpdateCheckWorker.enqueueForegroundIfDue(this)
             // Off the main thread: the sweep, the installer query, and the cached-envelope
             // signature check are all disk or crypto work (plan §11).
-            applicationScope.launch { updateCoordinator.onMainProcessStart() }
+            applicationScope.launch { updateCoordinator.get().onMainProcessStart() }
             startupTrace.lap("wm-rest")
             // Owner report 2026-10-15 (ADR #152): XOS kills the FGS-hosting process ("prcp
             // FGS" cgroup kill, X6532 15:31:40) and ignores START_STICKY — the old re-arm
@@ -395,6 +406,20 @@ class MyExodusApp : Application(), Configuration.Provider {
         startupTrace.lap("done")
     }
 
+    private var accountCollectorsAttached = false
+
+    /**
+     * Account plan §6.2/§8.4: app-scoped collectors so finalization and import survive a
+     * closed pane or a process death. Post-unlock only, from both unlock paths; once per
+     * process (the graph constructs FirebaseAuth and CE prefs — §8.9 Direct Boot).
+     */
+    private fun attachAccountCollectors() {
+        if (accountCollectorsAttached) return
+        accountCollectorsAttached = true
+        guestTransitionCoordinator.get().attach(applicationScope)
+        guestImportCoordinator.get().attach(applicationScope)
+    }
+
     /**
      * §4.2 rule 3 / §8.12: inspect the durable migration journal before the ordinary store is
      * constructed. Idempotent; a missing envelope under an enabled status becomes
@@ -422,13 +447,22 @@ class MyExodusApp : Application(), Configuration.Provider {
         databaseMigration.runOnceIfNeeded()
         // ADR #240: a bound retained scope restores itself; only a conflict, the
         // portable-preferences opt-in, an unreadable copy, or an unbound offer waits.
-        if (osUnlocked && scopeRecoveryImporter.stageIfOffered()) {
-            guestImportCoordinator.refresh()
+        if (osUnlocked) {
+            runCatching {
+                if (scopeRecoveryImporter.get().stageIfOffered()) {
+                    guestImportCoordinator.get().refresh()
+                }
+            }.onFailure { Log.w(TAG, "scope recovery staging failed", it) }
         }
         // W7 session recovery (v2 M2.4 adapted): urge sessions a process death left
         // STARTED past the 15-minute bound close as INTERRUPTED, once per launch.
         runCatching { recoverySessions.interruptStale(System.currentTimeMillis()) }
             .onFailure { Log.w(TAG, "stale recovery-session sweep failed", it) }
+        // §8.9: the first authenticated vault generation drains what the locked one held back.
+        runCatching { attemptRecorder.get().flushPending() }
+            .onFailure { Log.w(TAG, "attempt outbox flush failed", it) }
+        runCatching { milestoneScheduler.reconcileAll() }
+            .onFailure { Log.w(TAG, "milestone reconcile failed", it) }
     }
 
     private fun enqueueHealthCheck() {
@@ -473,14 +507,19 @@ class MyExodusApp : Application(), Configuration.Provider {
             // adoption, then the migration, before the store open that reconcile triggers.
             purgeLegacyCacheIfUnlocked()
             reconcileAppLockJournal()
-            localSessionManager.onAppStart(applicationScope)
+            attachAccountCollectors()
+            localSessionManager.get().onAppStart(applicationScope)
             if (!underInstrumentation) {
                 runCatching { deletionLocalData.purgePendingFiles() }
                     .onFailure { Log.w(TAG, "pending local-data purge failed", it) }
                 LocalDatabaseMigration.start(context)
                 applicationScope.launch {
-                    runCatching { deletionLocalData.finishPendingPurge() }
-                        .onFailure { Log.w(TAG, "pending deletion local-state purge failed", it) }
+                    // §8.9: the lock status is readable now; with the feature on, the pass waits
+                    // for the first verified in-app unlock like the cold-start path.
+                    if (appLockCoordinator.get().state.value != AppLockState.DISABLED) {
+                        appLockCoordinator.get().state.first { it == AppLockState.UNLOCKED }
+                    }
+                    runStartupVaultMaintenance(true)
                 }
             }
             reconcileBootIfNeeded()

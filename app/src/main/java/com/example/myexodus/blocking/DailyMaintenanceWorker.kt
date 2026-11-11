@@ -7,6 +7,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.example.myexodus.data.db.VaultLockedException
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.time.ZoneId
@@ -29,7 +30,14 @@ class DailyMaintenanceWorker @AssistedInject constructor(
 ) : CoroutineWorker(appContext, params) {
     /** Unconditional — the scheduled daily cadence is this trigger's own guard. */
     override suspend fun doWork(): Result {
-        pass.run()
+        try {
+            pass.run()
+        } catch (e: VaultLockedException) {
+            // §8.9: the App Lock vault is the deferral — WorkManager's backoff re-runs this
+            // after the user has unlocked; the service-side trigger covers devices WorkManager
+            // never dispatches to (ADR #27).
+            return Result.retry()
+        }
         return Result.success()
     }
 }

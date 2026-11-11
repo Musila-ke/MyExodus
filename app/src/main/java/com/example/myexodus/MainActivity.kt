@@ -110,6 +110,7 @@ import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.DatabaseHealth
 import com.example.myexodus.data.db.DatabaseHealthStore
 import com.example.myexodus.data.db.RecoveryManager
+import com.example.myexodus.applock.startExpectedExternal
 import com.example.myexodus.settings.biometricEnrollSettingsIntent
 import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.HomeSettings
@@ -825,18 +826,19 @@ class MainActivity : FragmentActivity() {
                             when (alertHealth) {
                                 // The channel has its own switch; app-level settings would
                                 // bury it one screen deeper.
-                                PartnerAlertHealth.State.CHANNEL_OFF -> startActivity(
+                                PartnerAlertHealth.State.CHANNEL_OFF -> startExpectedExternal(
                                     Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
                                         .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
                                         .putExtra(
                                             Settings.EXTRA_CHANNEL_ID,
                                             PartnerNotifications.CHANNEL_ACCOUNTABILITY_EVENTS,
                                         ),
+                                    reason = "settings",
                                 )
                                 else -> if (canRequestNotifications) {
                                     notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                 } else {
-                                    startActivity(notificationSettingsIntent(this@MainActivity))
+                                    startExpectedExternal(notificationSettingsIntent(this@MainActivity), "settings")
                                 }
                             }
                         },

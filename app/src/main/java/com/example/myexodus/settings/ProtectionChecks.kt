@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import com.example.myexodus.accountability.crypto.AccountabilityKeyStore
+import com.example.myexodus.applock.startExpectedExternal
 import com.example.myexodus.blocking.BlockerAccessibilityService
 import com.example.myexodus.blocking.OverlayController
 import com.example.myexodus.blocking.hasUsageAccess
@@ -141,8 +142,8 @@ fun requestBatteryExemption(context: Context) {
         Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
         packageUri(context),
     )
-    runCatching { context.startActivity(direct) }
-        .onFailure { context.startActivity(batteryOptimizationSettingsIntent()) }
+    runCatching { context.startExpectedExternal(direct, "settings") }
+        .onFailure { context.startExpectedExternal(batteryOptimizationSettingsIntent(), "settings") }
 }
 
 fun overlaySettingsIntent(context: Context): Intent =
@@ -167,8 +168,8 @@ fun biometricEnrollSettingsIntent(context: Context) {
     } else {
         Intent(Settings.ACTION_SECURITY_SETTINGS)
     }
-    runCatching { context.startActivity(direct) }
-        .onFailure { context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) }
+    runCatching { context.startExpectedExternal(direct, "settings") }
+        .onFailure { context.startExpectedExternal(Intent(Settings.ACTION_SECURITY_SETTINGS), "settings") }
 }
 
 /**

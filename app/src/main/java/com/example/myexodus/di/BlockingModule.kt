@@ -62,8 +62,19 @@ object BlockingModule {
         crashReporting: CrashReporting,
         ledger: UsageLedgerRepository,
         @ApplicationContext context: Context,
+        publisher: RulesSnapshotPublisher,
+        platformUsageReader: PlatformUsageReader,
     ): UsageAccountingEngine =
-        UsageAccountingEngine(storeFactory, dispatcher, crashReporting, ledger, context, System::currentTimeMillis)
+        UsageAccountingEngine(
+            storeFactory,
+            dispatcher,
+            crashReporting,
+            ledger,
+            context,
+            snapshotProvider = publisher::snapshot,
+            platformUsageMs = { packageName -> platformUsageReader.todayForegroundMs(packageName) },
+            wallClockNowMs = System::currentTimeMillis,
+        )
 
     /** §8.7's prompt-eligibility status (SharedPreferences) — one instance, one source. */
     @Provides @Singleton

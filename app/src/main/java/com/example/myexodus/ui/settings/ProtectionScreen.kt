@@ -25,6 +25,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
+import com.example.myexodus.applock.startExpectedExternal
 import com.example.myexodus.blocking.ProtectionDegradation
 import com.example.myexodus.blocking.usage.BatteryPromptRoute
 import com.example.myexodus.settings.IntegrityStatus
@@ -88,9 +89,10 @@ internal fun ProtectionScreen(
                     body = stringResource(R.string.protection_notif_off_banner_text),
                     actionLabel = stringResource(R.string.protection_notif_off_banner_action),
                     onAction = {
-                        context.startActivity(
+                        context.startExpectedExternal(
                             Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
                                 .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName),
+                            reason = "settings",
                         )
                     },
                 )
@@ -112,7 +114,7 @@ internal fun ProtectionScreen(
                         actionLabel = stringResource(
                             if (serviceEnabled) R.string.settings_action_open else R.string.settings_action_fix,
                         ),
-                        onAction = { context.startActivity(accessibilitySettingsIntent()) },
+                        onAction = { context.startExpectedExternal(accessibilitySettingsIntent(), "settings") },
                     )
 
                     RowDivider()
@@ -125,7 +127,7 @@ internal fun ProtectionScreen(
                         actionLabel = stringResource(
                             if (checks.usageAccess) R.string.settings_action_open else R.string.settings_action_fix,
                         ),
-                        onAction = { context.startActivity(usageAccessSettingsIntent()) },
+                        onAction = { context.startExpectedExternal(usageAccessSettingsIntent(), "settings") },
                     )
 
                     RowDivider()
@@ -148,7 +150,7 @@ internal fun ProtectionScreen(
                         ),
                         onAction = {
                             if (directAsk) onRequestExemption()
-                            else context.startActivity(batteryOptimizationSettingsIntent())
+                            else context.startExpectedExternal(batteryOptimizationSettingsIntent(), "settings")
                         },
                     )
 
@@ -162,8 +164,10 @@ internal fun ProtectionScreen(
                             val intent = oemRestrictionSettingsIntent(context)
                             // Known OEM screens move between builds; a dead deep link lands on
                             // App info rather than nowhere.
-                            runCatching { context.startActivity(intent) }
-                                .onFailure { context.startActivity(appInfoSettingsIntent(context)) }
+                            runCatching { context.startExpectedExternal(intent, "settings") }
+                                .onFailure {
+                                    context.startExpectedExternal(appInfoSettingsIntent(context), "settings")
+                                }
                         },
                     )
 
@@ -177,7 +181,7 @@ internal fun ProtectionScreen(
                         actionLabel = stringResource(
                             if (checks.overlayGranted) R.string.settings_action_open else R.string.settings_action_fix,
                         ),
-                        onAction = { context.startActivity(overlaySettingsIntent(context)) },
+                        onAction = { context.startExpectedExternal(overlaySettingsIntent(context), "settings") },
                     )
 
                     RowDivider()
