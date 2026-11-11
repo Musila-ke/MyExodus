@@ -12,8 +12,14 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { verifyAttestation, validateChain, trustAnchors } = require('../attestation');
-const { makePki, keyDescription, buildCert, newKey } = require('./helpers/der-pki');
+const {
+  verifyAttestation, validateChain, trustAnchors, fetchRevocationEntries,
+  PROVISIONING_INFO_OID,
+} = require('../attestation');
+const {
+  makePki, keyDescription, buildCert, newKey,
+  applicationId, rootOfTrust, provisioningInfo,
+} = require('./helpers/der-pki');
 
 const FIXTURES = path.join(__dirname, 'fixtures', 'attestation');
 const loadCert = (name) => new crypto.X509Certificate(fs.readFileSync(path.join(FIXTURES, name)));
@@ -137,7 +143,7 @@ test('structural garbage is rejected cleanly', () => {
   assert.strictEqual(verifyAttestation({}).reason, 'MALFORMED');
   assert.strictEqual(verifyAttestation({ ...pki.proof, attestationChain: [] }).reason, 'MALFORMED');
   assert.strictEqual(
-    verifyAttestation({ ...pki.proof, attestationChain: Array(5).fill(pki.proof.attestationChain[0]) }).reason,
+    verifyAttestation({ ...pki.proof, attestationChain: Array(9).fill(pki.proof.attestationChain[0]) }).reason,
     'MALFORMED',
   );
   assert.strictEqual(
@@ -147,13 +153,15 @@ test('structural garbage is rejected cleanly', () => {
   assert.strictEqual(verifyAttestation({ ...pki.proof, attestationChallenge: '' }).reason, 'MALFORMED');
 });
 
-test('the two pinned anchors are the Google hardware attestation roots', () => {
+test('the two pinned anchors are the current official Google roots (RSA + RKP ECDSA)', () => {
   const anchors = trustAnchors();
   assert.strictEqual(anchors.length, 2);
   assert.deepStrictEqual(
     new Set(anchors.map((a) => a.serialNumber)),
-    new Set(['E8FA196314D2FA18', '3505A0A2FDCC51E4']),
+    new Set(['F1C172A699EAF51D', '84A9D0297B0EB58AE7FF0E80DE760605']),
   );
+  assert.ok(anchors.some((a) => a.subject.includes('f92009e853b6b045')));
+  assert.ok(anchors.some((a) => a.subject.includes('Key Attestation CA1')));
 });
 
 test('the repo PEM fixtures validate identically to the Kotlin suite', () => {
@@ -167,4 +175,173 @@ test('the repo PEM fixtures validate identically to the Kotlin suite', () => {
 
 test('validateChain rejects an empty chain', () => {
   assert.strictEqual(validateChain([], trustAnchors()), false);
+});
+
+// --- Phase 2 (§8.3.5/§10.4): application binding, verified boot, revocation, RKP selection ---
+
+const PACKAGE = 'com.example.myexodus';
+const SIGNING_DIGEST = Buffer.alloc(32, 7);
+
+test('application binding accepts the expected package and certificate digest', () => {
+  const pki = makePki({
+    applicationIdDer: applicationId({ packageName: PACKAGE, signatureDigests: [SIGNING_DIGEST] }),
+  });
+  const options = {
+    applicationId: { packageName: PACKAGE, signatureDigestSha256: SIGNING_DIGEST.toString('hex') },
+  };
+  assert.deepStrictEqual(verifyAttestation(pki.proof, [pki.rootCert], Date.now(), options),
+    { ok: true, securityLevel: 1 });
+});
+
+test('a foreign package, foreign signing certificate, or absent application id is rejected', () => {
+  const pki = makePki({
+    applicationIdDer: applicationId({ packageName: PACKAGE, signatureDigests: [SIGNING_DIGEST] }),
+  });
+  const expected = { packageName: PACKAGE, signatureDigestSha256: SIGNING_DIGEST.toString('hex') };
+  assert.strictEqual(
+    verifyAttestation(pki.proof, [pki.rootCert], Date.now(),
+      { applicationId: { ...expected, packageName: 'com.example.other' } }).reason,
+    'APPLICATION_ID_MISMATCH',
+  );
+  assert.strictEqual(
+    verifyAttestation(pki.proof, [pki.rootCert], Date.now(),
+      { applicationId: { ...expected, signatureDigestSha256: Buffer.alloc(32, 9).toString('hex') } }).reason,
+    'APPLICATION_ID_MISMATCH',
+  );
+  const bare = makePki();
+  assert.strictEqual(
+    verifyAttestation(bare.proof, [bare.rootCert], Date.now(), { applicationId: expected }).reason,
+    'APPLICATION_ID_MISSING',
+  );
+});
+
+test('verified boot is required only when asked, and only state Verified passes', () => {
+  const verified = makePki({ rootOfTrustDer: rootOfTrust({ verifiedBootState: 0 }) });
+  assert.deepStrictEqual(
+    verifyAttestation(verified.proof, [verified.rootCert], Date.now(), { requireVerifiedBoot: true }),
+    { ok: true, securityLevel: 1 },
+  );
+  const unlocked = makePki({ rootOfTrustDer: rootOfTrust({ verifiedBootState: 2, deviceLocked: false }) });
+  assert.strictEqual(
+    verifyAttestation(unlocked.proof, [unlocked.rootCert], Date.now(), { requireVerifiedBoot: true }).reason,
+    'VERIFIED_BOOT_STATE_INVALID',
+  );
+  const absent = makePki();
+  assert.strictEqual(
+    verifyAttestation(absent.proof, [absent.rootCert], Date.now(), { requireVerifiedBoot: true }).reason,
+    'ROOT_OF_TRUST_MISSING',
+  );
+  // The pairing path passes no options, so presence alone never changes its behavior.
+  assert.strictEqual(verifyAttestation(unlocked.proof, [unlocked.rootCert]).ok, true);
+});
+
+test('revoked and suspended chain certificates are rejected; expired entries are ignored', () => {
+  const pki = makePki();
+  const leaf = new crypto.X509Certificate(Buffer.from(pki.proof.attestationChain[0], 'base64'));
+  const serial = leaf.serialNumber.toLowerCase();
+  const now = Date.now();
+  assert.strictEqual(
+    verifyAttestation(pki.proof, [pki.rootCert], now,
+      { revocationEntries: { [serial]: { status: 'REVOKED', expires: null } } }).reason,
+    'CERTIFICATE_REVOKED',
+  );
+  assert.strictEqual(
+    verifyAttestation(pki.proof, [pki.rootCert], now,
+      { revocationEntries: { [serial]: { status: 'SUSPENDED', expires: null } } }).reason,
+    'CERTIFICATE_REVOKED',
+  );
+  assert.deepStrictEqual(
+    verifyAttestation(pki.proof, [pki.rootCert], now,
+      { revocationEntries: { [serial]: { status: 'REVOKED', expires: new Date(now - 1000).toISOString() } } }),
+    { ok: true, securityLevel: 1 },
+  );
+});
+
+test('revocation status list parses official entries and fails closed without a cache', async () => {
+  const body = {
+    entries: {
+      ABC123: { status: 'REVOKED' },
+      DEF456: { status: 'SUSPENDED', expires: '2020-01-01T00:00:00Z' },
+      GHI789: { status: 'UNKNOWN_STATUS' },
+    },
+  };
+  await assert.rejects(
+    fetchRevocationEntries({
+      useCache: false,
+      fetchImpl: async () => { throw new Error('offline'); },
+    }),
+  );
+  const entries = await fetchRevocationEntries({
+    useCache: false,
+    now: Date.now(),
+    fetchImpl: async () => ({ ok: true, json: async () => body }),
+  });
+  assert.deepStrictEqual(entries.abc123, { status: 'REVOKED', expires: null });
+  assert.deepStrictEqual(entries.def456, { status: 'SUSPENDED', expires: '2020-01-01T00:00:00Z' });
+  assert.deepStrictEqual(entries.ghi789, { status: 'UNKNOWN_STATUS', expires: null });
+});
+
+test('RKP: the attestation extension nearest the root is selected, not the leaf', () => {
+  const rootKeys = newKey();
+  const keyKeys = newKey();
+  const decoyKeys = newKey();
+  const challenge = crypto.randomBytes(32);
+  const now = Date.now();
+  const root = buildCert({
+    subjectCn: 'RKP Root', issuerCn: 'RKP Root',
+    publicKey: rootKeys.publicKey, signingKey: rootKeys.privateKey,
+    notBefore: new Date(now - 86400000), notAfter: new Date(now + 31536000000), ca: true,
+    extraExtensions: [{ oid: PROVISIONING_INFO_OID, valueDer: provisioningInfo() }],
+  });
+  // The RKP-issued key certificate carries the genuine KeyDescription; the leaf below it
+  // carries an attacker-appended one that must be ignored.
+  const keyCert = buildCert({
+    subjectCn: 'RKP Device Key', issuerCn: 'RKP Root',
+    publicKey: keyKeys.publicKey, signingKey: rootKeys.privateKey,
+    notBefore: new Date(now - 86400000), notAfter: new Date(now + 31536000000), ca: true,
+    keyDescription: keyDescription({ challenge }),
+  });
+  const decoyLeaf = buildCert({
+    subjectCn: 'Decoy', issuerCn: 'RKP Device Key',
+    publicKey: decoyKeys.publicKey, signingKey: keyKeys.privateKey,
+    notBefore: new Date(now - 86400000), notAfter: new Date(now + 31536000000),
+    keyDescription: keyDescription({ challenge: crypto.randomBytes(32) }),
+  });
+  const rootCert = new crypto.X509Certificate(root);
+  const proof = {
+    signingPublicKey: keyKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
+    attestationChain: [decoyLeaf, keyCert, root].map((der) => der.toString('base64')),
+    attestationChallenge: challenge.toString('base64'),
+  };
+  assert.deepStrictEqual(verifyAttestation(proof, [rootCert]), { ok: true, securityLevel: 1 });
+});
+
+test('RKP: a provisioning-information extension in the wrong position is rejected', () => {
+  const rootKeys = newKey();
+  const keyKeys = newKey();
+  const challenge = crypto.randomBytes(32);
+  const now = Date.now();
+  const root = buildCert({
+    subjectCn: 'RKP Root', issuerCn: 'RKP Root',
+    publicKey: rootKeys.publicKey, signingKey: rootKeys.privateKey,
+    notBefore: new Date(now - 86400000), notAfter: new Date(now + 31536000000), ca: true,
+  });
+  // Provisioning info sits in the same certificate as the KeyDescription: the attestation
+  // extension must instead be immediately toward the leaf of it.
+  const keyCert = buildCert({
+    subjectCn: 'RKP Device Key', issuerCn: 'RKP Root',
+    publicKey: keyKeys.publicKey, signingKey: rootKeys.privateKey,
+    notBefore: new Date(now - 86400000), notAfter: new Date(now + 31536000000),
+    keyDescription: keyDescription({ challenge }),
+    extraExtensions: [{ oid: PROVISIONING_INFO_OID, valueDer: provisioningInfo() }],
+  });
+  const proof = {
+    signingPublicKey: keyKeys.publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
+    attestationChain: [keyCert, root].map((der) => der.toString('base64')),
+    attestationChallenge: challenge.toString('base64'),
+  };
+  assert.strictEqual(
+    verifyAttestation(proof, [new crypto.X509Certificate(root)]).reason,
+    'PROVISIONING_SEQUENCE_INVALID',
+  );
 });

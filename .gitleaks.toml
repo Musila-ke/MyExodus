@@ -17,3 +17,8 @@ paths = [
   '''app/google-services.json''',
   '''.cache/''',
 ]
+# firebase-tools' public OAuth client secret (installed-app clients are not
+# confidential; the value is a hard-coded default in firebase-tools lib/api.js).
+regexes = [
+  '''j9iVZfS8kkCEFUPaAeJV0sAi''',
+]

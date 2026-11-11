@@ -14,6 +14,7 @@ const { logger } = require('firebase-functions');
 
 const { verifyProof } = require('./proof');
 const { verifyAttestation } = require('./attestation');
+const { pairIdOf } = require('./pair-ids');
 const {
   IDEMPOTENCY_RETENTION_MS,
   isValidRequestId,
@@ -27,15 +28,6 @@ const db = getFirestore();
 
 const REGION = 'us-central1';
 const PAIRING_WINDOW_MS = 5 * 60 * 1000;
-
-/**
- * AD-02: pairId = min(uidA, uidB) + "_" + max(uidA, uidB). Computed here — never trusted
- * from the client — so both devices address the same pairing document by construction.
- */
-function pairIdOf(uidA, uidB) {
-  const [min, max] = uidA < uidB ? [uidA, uidB] : [uidB, uidA];
-  return `${min}_${max}`;
-}
 
 /**
  * §8 Step 3 / AD-02: the authoritative pairing record. Client writes are denied by rules;
@@ -265,6 +257,27 @@ exports._createRegisterPairing = createRegisterPairing;
 
 // Exported for the function test suite once Step 20 wires the Functions emulator.
 exports._pairIdOf = pairIdOf;
+
+// Partner event delivery §8.3/§8.4 (Phase 2): device registration/rotation and event
+// ingress. The local rig has the same attestation problem as pairing above, so the stub
+// swaps the verifier AND the revocation source (the emulator rig has no network contract
+// with Google's status endpoint; the verifier itself is covered by its own unit suite and
+// the real-device leg).
+const {
+  createRegisterDeviceChallenge,
+  createRegisterOrRotateDevice,
+} = require('./partner-registration');
+const { createIngestPartnerEvents } = require('./partner-ingest');
+
+const deviceAttestationOptions = attestationStub
+  ? { attestationVerifier: () => ({ ok: true, securityLevel: 2 }), revocationSource: async () => ({}) }
+  : {};
+exports.registerDeviceChallenge = createRegisterDeviceChallenge();
+exports.registerOrRotateDevice = createRegisterOrRotateDevice(deviceAttestationOptions);
+exports.ingestPartnerEvents = createIngestPartnerEvents();
+exports._createRegisterDeviceChallenge = createRegisterDeviceChallenge;
+exports._createRegisterOrRotateDevice = createRegisterOrRotateDevice;
+exports._createIngestPartnerEvents = createIngestPartnerEvents;
 
 // §8 Step 5 / AD-10: mailbox-create trigger → validation, pairing re-check, rate limits,
 // per-installation push dispatch. Re-exported so the deploy unit sees it at the root.

@@ -19,7 +19,9 @@
     "test:backup-key": "firebase emulators:exec --only firestore --project demo-myexodus-backup-key \"node --test emulator-test/backup-key.emulator.js\"",
     "test:backup-upload": "firebase emulators:exec --config ../firebase.json --only firestore,storage --project demo-myexodus-backup-upload \"node --test emulator-test/backup-manifest.emulator.js\"",
     "test:storage-rules": "firebase emulators:exec --config ../firebase.json --only firestore,storage --project demo-myexodus-backup-rules \"node --test emulator-test/storage-rules.emulator.js\"",
-    "test:deletion": "firebase emulators:exec --config ../firebase.json --only firestore,storage --project demo-myexodus-deletion \"node --test emulator-test/account-deletion.emulator.js\""
+    "test:deletion": "firebase emulators:exec --config ../firebase.json --only firestore,storage --project demo-myexodus-deletion \"node --test emulator-test/account-deletion.emulator.js\"",
+    "test:partner-registration": "firebase emulators:exec --only firestore --project demo-myexodus-partner-registration \"node --test emulator-test/partner-registration.emulator.js\"",
+    "test:partner-ingest": "firebase emulators:exec --only firestore --project demo-myexodus-partner-ingest \"node --test emulator-test/partner-ingest.emulator.js\""
   },
   "dependencies": {
     "firebase-admin": "14.4.0",

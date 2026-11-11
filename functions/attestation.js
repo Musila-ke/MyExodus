@@ -1,24 +1,25 @@
 'use strict';
 // Server-side Android Key Attestation verification (pairing plan §19.4 item 2, owner directive
-// 2026-09-28 — overrides the build's earlier device-to-device-only ruling). Port of the client
-// verifier (`AttestationVerifier.kt`): PKIX to the pinned Google attestation roots, KeyDescription
-// (origin GENERATED, purpose SIGN, securityLevel >= TEE), challenge equality — plus two
-// server-specific bindings the client gets structurally:
-//   - the chain's LEAF KEY must equal the proof's `signingPublicKey` (the client uses
-//     chain[0].publicKey as the key that must verify the transcript signature; here the
-//     same identity is asserted byte-for-byte against the proof field), and
-//   - because the attestation rides inside the registerPairing proof — a signature over the
-//     session transcript (sessionId + both keys) — the attestation evidence is bound to the
-//     pairing session through the proof signature. Stated precisely: a long-term signing key
-//     is generated once at first launch (before any session exists), so no fresh server
-//     challenge can be embedded in it; challenge equality proves the presented challenge
-//     matches the cert's KeyDescription, and the session binding is the proof signature.
+// 2026-09-28; upgraded for the partner event-delivery plan §8.3.5 / §10.4 on 2026-11-11).
+// PKIX to the pinned Google attestation roots, KeyDescription (origin GENERATED, purpose SIGN,
+// securityLevel >= TEE), challenge equality — plus the partner-delivery bindings:
+//   - RKP-aware selection: the attestation extension used is the first occurrence found
+//     walking from the trust anchor toward the leaf, never blindly the leaf. When a
+//     provisioning-information extension (OID 1.3.6.1.4.1.11129.2.1.30) is present, the
+//     attestation extension must be in the certificate immediately toward the leaf of it.
+//     Later (leaf-ward) attacker-appended extensions are ignored.
+//   - revocation status from the official status list,
+//   - application binding (package + APK signing-certificate digest),
+//   - verified-boot state.
+//   - the attested key must equal the proof's `signingPublicKey` (the pairing path also binds
+//     the attestation to the session through the transcript signature).
 // Pure node:crypto — no firebase imports, so this module is unit-testable without the
 // Functions SDK and without a Firestore emulator (same pattern as proof.js).
 
 const crypto = require('node:crypto');
 
 const KEY_DESCRIPTION_OID = '1.3.6.1.4.1.11129.2.1.17';
+const PROVISIONING_INFO_OID = '1.3.6.1.4.1.11129.2.1.30';
 const ORIGIN_GENERATED = 0;
 const PURPOSE_SIGN = 2;
 
@@ -26,12 +27,22 @@ const SECURITY_LEVEL_SOFTWARE = 0;
 const SECURITY_LEVEL_TEE = 1;
 const SECURITY_LEVEL_STRONGBOX = 2;
 
-// Android key attestation chains are leaf -> [intermediates] -> root; 3 is the common shape.
-// The cap bounds per-call parsing cost for a hostile caller.
-const MAX_CHAIN_LENGTH = 4;
+// KeyDescription AuthorizationList tags (§8.3.5).
+const APPLICATION_ID_TAG = 709;
+const ROOT_OF_TRUST_TAG = 704;
+const VERIFIED_BOOT_STATE_VERIFIED = 0;
+
+// Android attestation chains are leaf -> [intermediates] -> root. RKP chains are longer than
+// the classic root->intermediate->leaf shape, so the cap is 8. The cap bounds per-call
+// parsing cost for a hostile caller.
+const MAX_CHAIN_LENGTH = 8;
+
+const REVOCATION_STATUS_URL = 'https://android.googleapis.com/attestation/status';
+const REVOCATION_CACHE_MS = 60 * 60 * 1000;
 
 // --- minimal DER reader (certificate walk + KeyDescription) ---
 
+const TAG_BOOLEAN = 1;
 const TAG_SEQUENCE = 16;
 const TAG_SET = 17;
 const TAG_INTEGER = 2;
@@ -71,7 +82,7 @@ function readTlv(buf, pos) {
     i += n;
   }
   if (i + len > buf.length) return null;
-  return { cls, constructed, tagNo, start: i, end: i + len };
+  return { cls, constructed, tagNo, pos, start: i, end: i + len };
 }
 
 /** Every TLV in [start, end), or null if the region doesn't parse exactly. */
@@ -110,11 +121,10 @@ function oidToString(buf, start, end) {
 }
 
 /**
- * Extracts the KeyDescription extension bytes from a certificate's DER: walks
- * TBSCertificate -> [3] extensions -> Extension whose extnID is the attestation OID, and
- * returns the extnValue OCTET STRING's contents (= the DER KeyDescription itself).
+ * Returns the extnValue contents of the first extension with `oid` in a certificate's DER,
+ * or null. Walks TBSCertificate -> [3] extensions -> Extension.
  */
-function keyDescriptionBytesOf(certDer) {
+function extensionValueOf(certDer, oid) {
   const cert = readTlv(certDer, 0);
   if (!cert || cert.cls !== 0 || cert.tagNo !== TAG_SEQUENCE) return null;
   const certKids = children(certDer, cert.start, cert.end);
@@ -136,9 +146,9 @@ function keyDescriptionBytesOf(certDer) {
   for (const ext of extList) {
     const kids = children(certDer, ext.start, ext.end);
     if (!kids || kids.length < 2) continue;
-    const oid = kids[0];
-    if (oid.cls !== 0 || oid.tagNo !== TAG_OID) continue;
-    if (oidToString(certDer, oid.start, oid.end) !== KEY_DESCRIPTION_OID) continue;
+    const id = kids[0];
+    if (id.cls !== 0 || id.tagNo !== TAG_OID) continue;
+    if (oidToString(certDer, id.start, id.end) !== oid) continue;
     const value = kids.find((k) => k.cls === 0 && k.tagNo === TAG_OCTET_STRING);
     return value ? certDer.subarray(value.start, value.end) : null;
   }
@@ -160,6 +170,31 @@ function taggedIntInLists(buf, lists, tagNo) {
       }
       // IMPLICIT: content is the raw value bytes.
       return intFromContent(buf, kid.start, kid.end);
+    }
+  }
+  return null;
+}
+
+/**
+ * Raw value of an EXPLICIT-or-IMPLICIT tagged field. For a wrapped OCTET STRING (the
+ * application-id shape) returns the string's contents; for a wrapped constructed value
+ * (rootOfTrust's SEQUENCE) returns the full inner TLV.
+ */
+function taggedRawInLists(buf, lists, tagNo) {
+  for (const list of lists) {
+    if (!list || list.cls !== 0 || list.tagNo !== TAG_SEQUENCE) continue;
+    const kids = children(buf, list.start, list.end);
+    if (!kids) continue;
+    for (const kid of kids) {
+      if (kid.cls !== CLASS_CONTEXT || kid.tagNo !== tagNo) continue;
+      if (!kid.constructed) return buf.subarray(kid.start, kid.end);
+      const inner = children(buf, kid.start, kid.end);
+      if (!inner || inner.length !== 1) return null;
+      const value = inner[0];
+      if (value.cls === 0 && value.tagNo === TAG_OCTET_STRING) {
+        return buf.subarray(value.start, value.end);
+      }
+      return buf.subarray(value.pos, value.end);
     }
   }
   return null;
@@ -211,12 +246,91 @@ function parseKeyDescription(der) {
   const teeList = items[7];
   if (level.cls !== 0 || level.tagNo !== TAG_ENUMERATED) return null;
   if (challenge.cls !== 0 || challenge.tagNo !== TAG_OCTET_STRING) return null;
+  const lists = [softwareList, teeList];
   return {
     securityLevel: intFromContent(der, level.start, level.end),
     challenge: der.subarray(challenge.start, challenge.end),
-    origin: taggedIntInLists(der, [softwareList, teeList], 702),
-    purposes: purposesInLists(der, [softwareList, teeList]),
+    origin: taggedIntInLists(der, lists, 702),
+    purposes: purposesInLists(der, lists),
+    applicationId: taggedRawInLists(der, lists, APPLICATION_ID_TAG),
+    rootOfTrust: taggedRawInLists(der, lists, ROOT_OF_TRUST_TAG),
   };
+}
+
+/** AttestationApplicationId: SEQUENCE { SET OF packageInfo, SET OF digest }. */
+function parseAttestationApplicationId(der) {
+  const seq = readTlv(der, 0);
+  if (!seq || seq.cls !== 0 || seq.tagNo !== TAG_SEQUENCE) return null;
+  const items = children(der, seq.start, seq.end);
+  if (!items || items.length < 2) return null;
+  const packageSet = items[0];
+  const digestSet = items[1];
+  if (packageSet.cls !== 0 || packageSet.tagNo !== TAG_SET) return null;
+  if (digestSet.cls !== 0 || digestSet.tagNo !== TAG_SET) return null;
+
+  const packageNames = [];
+  for (const info of children(der, packageSet.start, packageSet.end) || []) {
+    if (info.cls !== 0 || info.tagNo !== TAG_SEQUENCE) continue;
+    const fields = children(der, info.start, info.end);
+    if (!fields || fields.length < 1) continue;
+    const name = fields[0];
+    if (name.cls !== 0 || name.tagNo !== TAG_OCTET_STRING) continue;
+    packageNames.push(der.subarray(name.start, name.end).toString('utf8'));
+  }
+  const signatureDigests = [];
+  for (const digest of children(der, digestSet.start, digestSet.end) || []) {
+    if (digest.cls !== 0 || digest.tagNo !== TAG_OCTET_STRING) continue;
+    signatureDigests.push(der.subarray(digest.start, digest.end).toString('hex'));
+  }
+  return { packageNames, signatureDigests };
+}
+
+/** RootOfTrust: SEQUENCE { OCTET STRING key, BOOLEAN locked, ENUMERATED state, ... }. */
+function parseRootOfTrust(der) {
+  const seq = readTlv(der, 0);
+  if (!seq || seq.cls !== 0 || seq.tagNo !== TAG_SEQUENCE) return null;
+  const items = children(der, seq.start, seq.end);
+  if (!items || items.length < 3) return null;
+  const locked = items[1];
+  const state = items[2];
+  if (locked.cls !== 0 || locked.tagNo !== TAG_BOOLEAN) return null;
+  if (state.cls !== 0 || state.tagNo !== TAG_ENUMERATED) return null;
+  return {
+    deviceLocked: der[locked.start] !== 0,
+    verifiedBootState: intFromContent(der, state.start, state.end),
+  };
+}
+
+/**
+ * Selects the KeyDescription nearest the trusted root (RKP rule, §8.3.5/§10.4). A
+ * provisioning-information extension binds the attestation extension to the certificate
+ * immediately toward the leaf of it; any other position is a forged/appended chain.
+ */
+function selectKeyDescription(chain) {
+  let index = -1;
+  let bytes = null;
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const value = extensionValueOf(chain[i].raw, KEY_DESCRIPTION_OID);
+    if (value) {
+      index = i;
+      bytes = value;
+      break;
+    }
+  }
+  if (index < 0) return { error: 'ATTESTATION_MISSING' };
+
+  const provisioningIndices = [];
+  for (let i = 0; i < chain.length; i++) {
+    if (extensionValueOf(chain[i].raw, PROVISIONING_INFO_OID)) provisioningIndices.push(i);
+  }
+  if (provisioningIndices.length > 1) return { error: 'PROVISIONING_SEQUENCE_INVALID' };
+  if (provisioningIndices.length === 1 && provisioningIndices[0] - 1 !== index) {
+    return { error: 'PROVISIONING_SEQUENCE_INVALID' };
+  }
+
+  const desc = parseKeyDescription(bytes);
+  if (!desc) return { error: 'ATTESTATION_MISSING' };
+  return { index, desc };
 }
 
 // --- PKIX path validation (pinned anchors) ---
@@ -227,12 +341,15 @@ function withinValidity(cert, now) {
   return from instanceof Date && to instanceof Date && now >= from.getTime() && now <= to.getTime();
 }
 
+// The factory root key is re-issued with extended validity; the expired re-issue shares both
+// key and subject serial. Only this key gets the expired-top exemption.
+const FACTORY_ROOT_SERIAL = 'f92009e853b6b045';
+
 /**
  * Manual PKIX walk over the built-in X509Certificate primitives: signature linkage
  * (checkIssued + verify), issuer CA flag, and validity windows on every cert that is not
- * itself an anchor (JDK PKIX exempts anchors from expiry — Root 1 expired 2026-05-24 and
- * must keep validating). `anchors` is a parameter so tests can inject synthetic roots; the
- * production default is the pinned Google pair.
+ * itself an anchor (JDK PKIX exempts anchors from expiry). `anchors` is a parameter so tests
+ * can inject synthetic roots; the production default is the official Google pair.
  */
 function validateChain(chain, anchors, now = Date.now()) {
   if (!Array.isArray(chain) || chain.length === 0) return false;
@@ -244,67 +361,63 @@ function validateChain(chain, anchors, now = Date.now()) {
   }
   const top = chain[chain.length - 1];
   if (anchors.some((a) => a.raw.equals(top.raw))) return true;
-  if (!withinValidity(top, now)) return false;
-  return anchors.some((a) => a.ca && top.checkIssued(a) && top.verify(a.publicKey));
+  const sameKeyFallback = anchors.some((a) => a.ca && top.checkIssued(a) && top.verify(a.publicKey));
+  if (!sameKeyFallback) return false;
+  if (withinValidity(top, now)) return true;
+  return top.subject.toLowerCase().includes(FACTORY_ROOT_SERIAL);
 }
 
-// --- pinned Google Hardware Attestation roots (byte-identical to the client's pins;
-// AttestationVerifierTest pins the same serials on the Kotlin side) ---
+// --- official Google Hardware Attestation roots (fetched from
+// https://android.googleapis.com/attestation/root on 2026-11-11; the plan §8.3.5/§10.4
+// requires both currently trusted roots, including the 2026 ECDSA root for RKP) ---
 
 const GOOGLE_ATTESTATION_ROOT_PEMS = [
+  // RSA root, serial F1C172A699EAF51D, subject f92009e853b6b045, valid 2022-03-20..2042-03-15.
   `-----BEGIN CERTIFICATE-----
-MIIFYDCCA0igAwIBAgIJAOj6GWMU0voYMA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNVBAUTEGY5MjAw
-OWU4NTNiNmIwNDUwHhcNMTYwNTI2MTYyODUyWhcNMjYwNTI0MTYyODUyWjAbMRkwFwYDVQQFExBm
-OTIwMDllODUzYjZiMDQ1MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAr7bHgiuxpwHs
-K7Qui8xUFmOr75gvMsd/dTEDDJdSSxtf6An7xyqpRR90PL2abxM1dEqlXnf2tqw1Ne4Xwl5jlRfd
-nJLmN0pTy/4lj4/7tv0Sk3iiKkypnEUtR6WfMgH0QZfKHM1+di+y9TFRtv6y//0rb+T+W8a9nsNL
-/ggjnar86461qO0rOs2cXjp3kOG1FEJ5MVmFmBGtnrKpa73XpXyTqRxB/M0n1n/W9nGqC4FSYa04
-T6N5RIZGBN2z2MT5IKGbFlbC8UrW0DxW7AYImQQcHtGl/m00QLVWutHQoVJYnFPlXTcHYvASLu+R
-hhsbDmxMgJJ0mcDpvsC4PjvB+TxywElgS70vE0XmLD+OJtvsBslHZvPBKCOdT0MS+tgSOIfga+z1
-Z1g7+DVagf7quvmag8jfPioyKvxnK/EgsTUVi2ghzq8wm27ud/mIM7AY2qEORR8Go3TVB4HzWQgp
-Zrt3i5MIlCaY504LzSRiigHCzAPlHws+W0rB5N+er5/2pJKnfBSDiCiFAVtCLOZ7gLiMm0jhO2B6
-tUXHI/+MRPjy02i59lINMRRev56GKtcd9qO/0kUJWdZTdA2XoS82ixPvZtXQpUpuL12ab+9EaDK8
-Z4RHJYYfCT3Q5vNAXaiWQ+8PTWm2QgBR/bkwSWc+NpUFgNPN9PvQi8WEg5UmAGMCAwEAAaOBpjCB
-ozAdBgNVHQ4EFgQUNmHhAHyIBQlRi0RsR/8aTMnqTxIwHwYDVR0jBBgwFoAUNmHhAHyIBQlRi0Rs
-R/8aTMnqTxIwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAYYwQAYDVR0fBDkwNzA1oDOg
-MYYvaHR0cHM6Ly9hbmRyb2lkLmdvb2dsZWFwaXMuY29tL2F0dGVzdGF0aW9uL2NybC8wDQYJKoZI
-hvcNAQELBQADggIBACDIw41L3KlXG0aMiS//cqrG+EShHUGo8HNsw30W1kJtjn6UBwRM6jnmiwfB
-Pb8VA91chb2vssAtX2zbTvqBJ9+LBPGCdw/E53Rbf86qhxKaiAHOjpvAy5Y3m00mqC0w/Zwvju1t
-wb4vhLaJ5NkUJYsUS7rmJKHHBnETLi8GFqiEsqTWpG/6ibYCv7rYDBJDcR9W62BW9jfIoBQcxUCU
-JouMPH25lLNcDc1ssqvC2v7iUgI9LeoM1sNovqPmQUiG9rHli1vXxzCyaMTjwftkJLkf6724DFhu
-Kug2jITV0QkXvaJWF4nUaHOTNA4uJU9WDvZLI1j83A+/xnAJUucIv/zGJ1AMH2boHqF8CY16LpsY
-gBt6tKxxWH00XcyDCdW2KlBCeqbQPcsFmWyWugxdcekhYsAWyoSf818NUsZdBWBaR/OukXrNLfkQ
-79IyZohZbvabO/X+MVT3rriAoKc8oE2Uws6DF+60PV7/WIPjNvXySdqspImSN78mflxDqwLqRBYk
-A3I75qppLGG9rp7UCdRjxMl8ZDBld+7yvHVgt1cVzJx9xnyGCC23UaicMDSXYrB4I4WHXPGjxhZu
-CuPBLTdOLU8YRvMYdEvYebWHMpvwGCF6bAx3JBpIeOQ1wDB5y0USicV3YgYGmi+NZfhA4URSh77Y
-d6uuJOJENRaNVTzk
+MIIFHDCCAwSgAwIBAgIJAPHBcqaZ6vUdMA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNV
+BAUTEGY5MjAwOWU4NTNiNmIwNDUwHhcNMjIwMzIwMTgwNzQ4WhcNNDIwMzE1MTgw
+NzQ4WjAbMRkwFwYDVQQFExBmOTIwMDllODUzYjZiMDQ1MIICIjANBgkqhkiG9w0B
+AQEFAAOCAg8AMIICCgKCAgEAr7bHgiuxpwHsK7Qui8xUFmOr75gvMsd/dTEDDJdS
+Sxtf6An7xyqpRR90PL2abxM1dEqlXnf2tqw1Ne4Xwl5jlRfdnJLmN0pTy/4lj4/7
+tv0Sk3iiKkypnEUtR6WfMgH0QZfKHM1+di+y9TFRtv6y//0rb+T+W8a9nsNL/ggj
+nar86461qO0rOs2cXjp3kOG1FEJ5MVmFmBGtnrKpa73XpXyTqRxB/M0n1n/W9nGq
+C4FSYa04T6N5RIZGBN2z2MT5IKGbFlbC8UrW0DxW7AYImQQcHtGl/m00QLVWutHQ
+oVJYnFPlXTcHYvASLu+RhhsbDmxMgJJ0mcDpvsC4PjvB+TxywElgS70vE0XmLD+O
+JtvsBslHZvPBKCOdT0MS+tgSOIfga+z1Z1g7+DVagf7quvmag8jfPioyKvxnK/Eg
+sTUVi2ghzq8wm27ud/mIM7AY2qEORR8Go3TVB4HzWQgpZrt3i5MIlCaY504LzSRi
+igHCzAPlHws+W0rB5N+er5/2pJKnfBSDiCiFAVtCLOZ7gLiMm0jhO2B6tUXHI/+M
+RPjy02i59lINMRRev56GKtcd9qO/0kUJWdZTdA2XoS82ixPvZtXQpUpuL12ab+9E
+aDK8Z4RHJYYfCT3Q5vNAXaiWQ+8PTWm2QgBR/bkwSWc+NpUFgNPN9PvQi8WEg5Um
+AGMCAwEAAaNjMGEwHQYDVR0OBBYEFDZh4QB8iAUJUYtEbEf/GkzJ6k8SMB8GA1Ud
+IwQYMBaAFDZh4QB8iAUJUYtEbEf/GkzJ6k8SMA8GA1UdEwEB/wQFMAMBAf8wDgYD
+VR0PAQH/BAQDAgIEMA0GCSqGSIb3DQEBCwUAA4ICAQB8cMqTllHc8U+qCrOlg3H7
+174lmaCsbo/bJ0C17JEgMLb4kvrqsXZs01U3mB/qABg/1t5Pd5AORHARs1hhqGIC
+W/nKMav574f9rZN4PC2ZlufGXb7sIdJpGiO9ctRhiLuYuly10JccUZGEHpHSYM2G
+tkgYbZba6lsCPYAAP83cyDV+1aOkTf1RCp/lM0PKvmxYN10RYsK631jrleGdcdkx
+oSK//mSQbgcWnmAEZrzHoF1/0gso1HZgIn0YLzVhLSA/iXCX4QT2h3J5z3znluKG
+1nv8NQdxei2DIIhASWfu804CA96cQKTTlaae2fweqXjdN1/v2nqOhngNyz1361mF
+mr4XmaKH/ItTwOe72NI9ZcwS1lVaCvsIkTDCEXdm9rCNPAY10iTunIHFXRh+7KPz
+lHGewCq/8TOohBRn0/NNfh7uRslOSZ/xKbN9tMBtw37Z8d2vvnXq/YWdsm1+JLVw
+n6yYD/yacNJBlwpddla8eaVMjsF6nBnIgQOf9zKSe06nSTqvgwUHosgOECZJZ1Eu
+zbH4yswbt02tKtKEFhx+v+OTge/06V+jGsqTWLsfrOCNLuA8H++z+pUENmpqnnHo
+vaI47gC+TNpkgYGkkBT6B/m/U01BuOBBTzhIlMEZq9qkDWuM2cA5kW5V3FJUcfHn
+w1IdYIg2Wxg7yHcQZemFQg==
 -----END CERTIFICATE-----`,
+  // ECDSA root for Remote Key Provisioning, serial 84A9D0297B0EB58AE7FF0E80DE760605,
+  // CN=Key Attestation CA1, valid 2025-07-17..2035-07-15.
   `-----BEGIN CERTIFICATE-----
-MIIFXzCCA0egAwIBAgIINQWgov3MUeQwDQYJKoZIhvcNAQELBQAwGzEZMBcGA1UEBRMQZTM1ZDM4
-YzY4OTdkNDdlODAeFw0xODAzMjEwMzU1MDFaFw0yODAzMTgwMzU1MDFaMBsxGTAXBgNVBAUTEGUz
-NWQzOGM2ODk3ZDQ3ZTgwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQCoQi070/6PH9BA
-uJiBcTp8j5R2/Fj6kXFaSxsvUjJKRdi/FCOwUFBJfyhHiWJhga2iguIjAJuhZx5XlMj0pSY7buJi
-sPqFknZhKdvfoi4C54j54D+XxCky1APVjD5uc203H+hrRlhh6x4/LTzSXWvb0YLjfOK07HvSddSR
-CyKnPydI5bhyCb5QMtVKHzC4Axgx+BihwG1B4UQjOpZpXBHIFZ6EK/XBFeJX0tgrx0MCczkc1X0O
-hNFKAYumCKcKyh4q2cGh7UwTRJIT4beIJVrOKDVwo3Fc50k3ICpOAc1zRGzRwupIKKGtW455KW1O
-IyAtTJ4NqfIwrkQy5EJ9w/zDzjqFiDNdgTXaMtsz52jHUndfO3lzfvVdBjt2FWLRkWrFmd1tjQ6L
-QQFPrSvUHo0XN5kIiOYdNlAyIwBZ51Zn/clU9he78UYAmXHdjfh04DXWgf+GGIFFdmg9tbiHwdqi
-8yEcakKHL2TYNylmFJuKOkvLIS5iqEMu29OQyv+BJ1NNQtyn8o1D5f3K2a5qyoUcrL0Je2w28ByL
-1JeFURO7wbzkXx9FWwH0stCs/dYq4JKJ8GxKN8aBOl/51atA1cdZAyI55B9ueAYwPevteORGDhEf
-cKRaGiWJpSzIFLDmbL9uSpCAw5uqx5h1IRAX1OLi56EsVaFUedt8IqUaCkUcMQIDAQABo4GmMIGj
-MB0GA1UdDgQWBBRTDkUbExXTrVzqjui8W7YUis0d6DAfBgNVHSMEGDAWgBRTDkUbExXTrVzqjui8
-W7YUis0d6DAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwICBDBABgNVHR8EOTA3MDWgM6Ax
-hi9odHRwczovL2FuZHJvaWQuZ29vZ2xlYXBpcy5jb20vYXR0ZXN0YXRpb24vY3JsLzANBgkqhkiG
-9w0BAQsFAAOCAgEACHPElcXZEY6jItn3SnVn6gdOCvuFIrhB4J4fhxa6OlDCbxsylHHAbpyoOSJD
-0R5dIBTRvz49ElfCpI9yp4l5tUOjWj2K3tMfQjhKN277jApdxbZ6MNac2u+Z3dwS+34YiiCJLVKh
-VzWanXk/+9rmVnBzm7qvgan90j2SmH1oYIA3GowJL+1OWSjj6cBH1VrU7guVd7q+aCEQPhTesfbm
-UkdUbM/TjUMyhf5SZ7WB8A28MnyYQcFttmGDsE1HZx4fTz8iXxjaph33alasmFUWGtG7KyzvbYUw
-wUOmpPd32eT8ocx3B0Z3g+Vo2Cv2LzRRNp15FOf/Ag5HWloyIv3xrsBA2fa4xzOm3/t1Aq0ZViXL
-LerKKmU/EJKo7t5gE0wtNebicNhUJaX2C+vShjfleBBwhs33a8b7dBFX/JMwU5+09N83WHRPZjCr
-YuK3Uu4qANfJ+f1k+weqh6MpRxAZ6TT0OQt1XQz7rDAlq7AopfXRXI74OCNJf8d+2CPNVW8i5IHN
-FjvyEz8ms1ETdw5n3uRbYIgYuCV2Pud3MCwaMTv2E0dLAqg8uJo0JYlhH7wbqidMm2ODRL5FaqWb
-b2pfW0vbpCyGfyw0RQGTJAE7xVdvzfdun9HATDm6TbJFcejBdJImfwpZmDOBtDPIbsg5+QVE3lLF
-6Licq13i5tIg5yQ=
+MIICIjCCAaigAwIBAgIRAISp0Cl7DrWK5/8OgN52BgUwCgYIKoZIzj0EAwMwUjEc
+MBoGA1UEAwwTS2V5IEF0dGVzdGF0aW9uIENBMTEQMA4GA1UECwwHQW5kcm9pZDET
+MBEGA1UECgwKR29vZ2xlIExMQzELMAkGA1UEBhMCVVMwHhcNMjUwNzE3MjIzMjE4
+WhcNMzUwNzE1MjIzMjE4WjBSMRwwGgYDVQQDDBNLZXkgQXR0ZXN0YXRpb24gQ0Ex
+MRAwDgYDVQQLDAdBbmRyb2lkMRMwEQYDVQQKDApHb29nbGUgTExDMQswCQYDVQQG
+EwJVUzB2MBAGByqGSM49AgEGBSuBBAAiA2IABCPaI3FO3z5bBQo8cuiEas4HjqCt
+G/mLFfRT0MsIssPBEEU5Cfbt6sH5yOAxqEi5QagpU1yX4HwnGb7OtBYpDTB57uH5
+Eczm34A5FNijV3s0/f0UPl7zbJcTx6xwqMIRq6NCMEAwDwYDVR0TAQH/BAUwAwEB
+/zAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFFIyuyz7RkOb3NaBqQ5lZuA0QepA
+MAoGCCqGSM49BAMDA2gAMGUCMETfjPO/HwqReR2CS7p0ZWoD/LHs6hDi422opifH
+EUaYLxwGlT9SLdjkVpz0UUOR5wIxAIoGyxGKRHVTpqpGRFiJtQEOOTp/+s1GcxeY
+uR2zh/80lQyu9vAFCj6E4AXc+osmRg==
 -----END CERTIFICATE-----`,
 ];
 
@@ -318,11 +431,54 @@ function trustAnchors() {
 }
 
 /**
+ * Official revocation status list, cached for an hour. A network failure serves the last
+ * cached list when one exists; with no cache the caller must fail closed (retry later).
+ */
+let revocationCache = null;
+
+async function fetchRevocationEntries({ fetchImpl = globalThis.fetch, now = Date.now(), useCache = true } = {}) {
+  if (useCache && revocationCache && now - revocationCache.fetchedAt < REVOCATION_CACHE_MS) {
+    return revocationCache.entries;
+  }
+  try {
+    const response = await fetchImpl(REVOCATION_STATUS_URL, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error(`revocation status HTTP ${response.status}`);
+    const body = await response.json();
+    const entries = {};
+    for (const [serial, entry] of Object.entries((body && body.entries) || {})) {
+      if (!entry || typeof entry.status !== 'string') continue;
+      entries[serial.toLowerCase()] = {
+        status: entry.status,
+        expires: typeof entry.expires === 'string' ? entry.expires : null,
+      };
+    }
+    revocationCache = { entries, fetchedAt: now };
+    return entries;
+  } catch (error) {
+    if (useCache && revocationCache) return revocationCache.entries;
+    throw error;
+  }
+}
+
+function isRevoked(entries, serial, now) {
+  const entry = entries[serial.toLowerCase()];
+  if (!entry) return false;
+  if (entry.expires && Date.parse(entry.expires) <= now) return false;
+  return entry.status === 'REVOKED' || entry.status === 'SUSPENDED';
+}
+
+/**
  * Verifies one proof's attestation evidence. Returns { ok: true, securityLevel } or
  * { ok: false, reason } — stable codes, never echoed payload content (plan §10).
  * `anchors` is a test seam; production callers omit it (pinned Google roots).
+ * `options.applicationId` = { packageName, signatureDigestSha256 }; when given, the attested
+ * application must match. `options.requireVerifiedBoot` demands a Verified boot state.
+ * `options.revocationEntries` = lowercase-serial -> { status, expires }.
  */
-function verifyAttestation(proof, anchors = trustAnchors(), now = Date.now()) {
+function verifyAttestation(proof, anchors = trustAnchors(), now = Date.now(), options = {}) {
   if (proof === null || typeof proof !== 'object') return { ok: false, reason: 'MALFORMED' };
   const { attestationChain, attestationChallenge, signingPublicKey } = proof;
   if (!Array.isArray(attestationChain) || attestationChain.length === 0 ||
@@ -344,9 +500,9 @@ function verifyAttestation(proof, anchors = trustAnchors(), now = Date.now()) {
     }
   }
 
-  const descBytes = keyDescriptionBytesOf(chain[0].raw);
-  const desc = descBytes ? parseKeyDescription(descBytes) : null;
-  if (!desc) return { ok: false, reason: 'ATTESTATION_MISSING' };
+  const selection = selectKeyDescription(chain);
+  if (selection.error) return { ok: false, reason: selection.error };
+  const { index, desc } = selection;
   if (desc.securityLevel === SECURITY_LEVEL_SOFTWARE) return { ok: false, reason: 'KEY_SOFTWARE' };
   if (desc.securityLevel !== SECURITY_LEVEL_TEE && desc.securityLevel !== SECURITY_LEVEL_STRONGBOX) {
     return { ok: false, reason: 'KEY_LEVEL_UNKNOWN' };
@@ -357,16 +513,42 @@ function verifyAttestation(proof, anchors = trustAnchors(), now = Date.now()) {
   if (desc.origin !== ORIGIN_GENERATED) return { ok: false, reason: 'ORIGIN_NOT_GENERATED' };
   if (!desc.purposes.includes(PURPOSE_SIGN)) return { ok: false, reason: 'PURPOSE_MISSING_SIGN' };
 
-  // The attested key IS the pairing signing key — same identity the client enforces by
-  // verifying the transcript signature under chain[0].publicKey.
-  let leafSpki;
+  if (options.applicationId) {
+    if (!desc.applicationId) return { ok: false, reason: 'APPLICATION_ID_MISSING' };
+    const application = parseAttestationApplicationId(desc.applicationId);
+    if (!application) return { ok: false, reason: 'APPLICATION_ID_MISSING' };
+    const expectedDigest = String(options.applicationId.signatureDigestSha256 || '').toLowerCase();
+    if (!application.packageNames.includes(options.applicationId.packageName) ||
+        !application.signatureDigests.includes(expectedDigest)) {
+      return { ok: false, reason: 'APPLICATION_ID_MISMATCH' };
+    }
+  }
+
+  if (options.requireVerifiedBoot) {
+    const rootOfTrust = desc.rootOfTrust ? parseRootOfTrust(desc.rootOfTrust) : null;
+    if (!rootOfTrust) return { ok: false, reason: 'ROOT_OF_TRUST_MISSING' };
+    if (rootOfTrust.verifiedBootState !== VERIFIED_BOOT_STATE_VERIFIED) {
+      return { ok: false, reason: 'VERIFIED_BOOT_STATE_INVALID' };
+    }
+  }
+
+  // The attested key IS the proof's signing key.
+  let attestedSpki;
   try {
-    leafSpki = chain[0].publicKey.export({ type: 'spki', format: 'der' });
+    attestedSpki = chain[index].publicKey.export({ type: 'spki', format: 'der' });
   } catch (e) {
     return { ok: false, reason: 'MALFORMED' };
   }
-  if (!leafSpki.equals(Buffer.from(signingPublicKey, 'base64'))) {
+  if (!attestedSpki.equals(Buffer.from(signingPublicKey, 'base64'))) {
     return { ok: false, reason: 'KEY_CHAIN_MISMATCH' };
+  }
+
+  if (options.revocationEntries) {
+    for (const cert of chain) {
+      if (isRevoked(options.revocationEntries, cert.serialNumber, now)) {
+        return { ok: false, reason: 'CERTIFICATE_REVOKED' };
+      }
+    }
   }
 
   if (!validateChain(chain, anchors, now)) return { ok: false, reason: 'CHAIN_UNTRUSTED' };
@@ -375,10 +557,12 @@ function verifyAttestation(proof, anchors = trustAnchors(), now = Date.now()) {
 
 module.exports = {
   KEY_DESCRIPTION_OID,
+  PROVISIONING_INFO_OID,
   MAX_CHAIN_LENGTH,
   SECURITY_LEVEL_TEE,
   SECURITY_LEVEL_STRONGBOX,
   trustAnchors,
   validateChain,
   verifyAttestation,
+  fetchRevocationEntries,
 };

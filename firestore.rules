@@ -89,6 +89,28 @@ service cloud.firestore {
       }
     }
 
+    // Partner event delivery v1 (partner event-delivery plan §7 Phase 1, §10.10). Accepted
+    // events, notification jobs, device liveness, one-time registration challenges and the
+    // signing/recipient key registry are Admin SDK only in both directions: a client can
+    // never create, alter, reroute or read another account's delivery state.
+    match /partnerDeviceSigningRegistrations/{document=**} { allow read, write: if false; }
+    match /partnerDeviceChallenges/{document=**} { allow read, write: if false; }
+    match /partnerRecipientKeys/{document=**} { allow read, write: if false; }
+    match /partnerEvents/{document=**} { allow read, write: if false; }
+    match /partnerNotificationOutbox/{document=**} { allow read, write: if false; }
+    match /partnerFanoutTasks/{document=**} { allow read, write: if false; }
+    match /partnerDeviceLiveness/{document=**} { allow read, write: if false; }
+
+    // The one client-readable surface: a recipient reads its own encrypted mailbox (E2EE
+    // ciphertext only, useless without the partner's private key). Ingestion is server-only
+    // — no client writes. Same deletion-tombstone gate as the shipped mailbox rule.
+    match /partnerMailboxes/{recipientUid}/messages/{messageId} {
+      allow read: if request.auth != null
+        && request.auth.uid == recipientUid
+        && !exists(/databases/$(database)/documents/deletionJobs/$(recipientUid));
+      allow create, update, delete: if false;
+    }
+
     // Partner SOS — Reach Out nudge (V1 Req 35, plan §8.2). Nudge documents are written
     // exclusively by the sendNudge callable (Admin SDK bypasses rules); the recipient device
     // is the only client reader, and its one write is the acknowledgment. The read carries

@@ -289,3 +289,40 @@ test('only an ACTIVE profile is readable, even without a deletion job', async ()
   await assertSucceeds(getDoc(doc(alice, 'users/alice')));
   await assertFails(getDoc(doc(bob, 'users/alice')));
 });
+
+// Partner event delivery v1 (partner event-delivery plan §7 Phase 1 / §10.10).
+test('partner mailboxes are recipient-read-only', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'partnerMailboxes/bob/messages/evt-1'), {
+      ownerUid: 'alice',
+      eventId: 'evt-1',
+      encoding: 'existing-e2ee',
+      payload: 'opaque ciphertext',
+    });
+  });
+  await assertSucceeds(getDoc(doc(bob, 'partnerMailboxes/bob/messages/evt-1')));
+  await assertFails(getDoc(doc(alice, 'partnerMailboxes/bob/messages/evt-1')));
+  await assertFails(getDoc(doc(anonymous, 'partnerMailboxes/bob/messages/evt-1')));
+  await assertFails(getDocs(collection(bob, 'partnerMailboxes/alice/messages')));
+
+  const { deleteDoc, updateDoc } = require('firebase/firestore');
+  await assertFails(setDoc(doc(bob, 'partnerMailboxes/bob/messages/evt-2'), { payload: 'x' }));
+  await assertFails(updateDoc(doc(bob, 'partnerMailboxes/bob/messages/evt-1'), { payload: 'y' }));
+  await assertFails(deleteDoc(doc(bob, 'partnerMailboxes/bob/messages/evt-1')));
+});
+
+test('partner delivery registry, ledger, job and liveness documents are server-only', async () => {
+  const paths = [
+    'partnerDeviceSigningRegistrations/alice:inst',
+    'partnerDeviceChallenges/ch-1',
+    'partnerRecipientKeys/key-1',
+    'partnerEvents/alice/installations/inst/events/evt-1',
+    'partnerNotificationOutbox/evt-1__inst',
+    'partnerFanoutTasks/evt-1',
+    'partnerDeviceLiveness/inst',
+  ];
+  for (const path of paths) {
+    await assertFails(getDoc(doc(bob, path)));
+    await assertFails(setDoc(doc(bob, path), { anything: true }));
+  }
+});

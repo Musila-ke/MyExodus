@@ -6,6 +6,10 @@ import androidx.room3.Room
 import androidx.room3.RoomDatabase
 import androidx.room3.migration.Migration
 import androidx.sqlite.SQLiteConnection
+import com.example.myexodus.accountability.delivery.InstallationState
+import com.example.myexodus.accountability.delivery.PendingPartnerEvent
+import com.example.myexodus.accountability.delivery.ServiceEventOutboxDao
+import com.example.myexodus.accountability.delivery.ServiceOutboxHealth
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 
@@ -22,10 +26,13 @@ import com.example.myexodus.accountability.enrollment.EnrollmentRecord
         EnrollmentRecord::class,
         IdentityEpoch::class,
         Outbox::class,
+        PendingPartnerEvent::class,
+        InstallationState::class,
+        ServiceOutboxHealth::class,
         ProcessedEvent::class,
         UnpairState::class,
     ],
-    version = 14,
+    version = 15,
     exportSchema = false,
 )
 abstract class AccountabilityDatabase : RoomDatabase() {
@@ -37,6 +44,7 @@ abstract class AccountabilityDatabase : RoomDatabase() {
     abstract fun identityEpochDao(): IdentityEpochDao
     abstract fun outboxDao(): OutboxDao
     abstract fun processedEventDao(): ProcessedEventDao
+    abstract fun serviceEventOutboxDao(): ServiceEventOutboxDao
     abstract fun unpairStateDao(): UnpairStateDao
 
     companion object {
@@ -360,6 +368,91 @@ abstract class AccountabilityDatabase : RoomDatabase() {
         }
 
         /**
+         * v15 adds partner delivery plan §8.1's owner-bound service outbox: per-account
+         * installation state, the durable pending-event queue, and the singleton capacity
+         * incident row. New tables only — no existing row is touched.
+         */
+        internal val MIGRATION_14_15 = object : Migration(14, 15) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS `installation_state` (" +
+                        "`installation_id` TEXT NOT NULL, " +
+                        "`owner_uid` TEXT NOT NULL, " +
+                        "`current_sequence` INTEGER NOT NULL, " +
+                        "`heartbeat_counter` INTEGER NOT NULL DEFAULT 0, " +
+                        "`active_key_id` TEXT, " +
+                        "`registration_state` TEXT, " +
+                        "`schema_version` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`installation_id`))",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_installation_state_owner_uid` " +
+                        "ON `installation_state` (`owner_uid`)",
+                ).use { it.step() }
+
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS `pending_partner_events` (" +
+                        "`event_id` TEXT NOT NULL, " +
+                        "`installation_id` TEXT NOT NULL, " +
+                        "`owner_uid` TEXT NOT NULL, " +
+                        "`sequence` INTEGER NOT NULL, " +
+                        "`schema_version` INTEGER NOT NULL, " +
+                        "`kind` TEXT NOT NULL, " +
+                        "`safe_metadata_json` TEXT NOT NULL, " +
+                        "`recipient_envelopes_blob` BLOB, " +
+                        "`temporary_local_ciphertext` BLOB, " +
+                        "`device_occurred_at_ms` INTEGER NOT NULL, " +
+                        "`elapsed_realtime_at_capture_ms` INTEGER, " +
+                        "`signed_envelope` BLOB, " +
+                        "`signing_key_id` TEXT, " +
+                        "`status` TEXT NOT NULL, " +
+                        "`recipient_key_revision` INTEGER, " +
+                        "`attempted_wire_digest` TEXT, " +
+                        "`wire_outcome` TEXT NOT NULL DEFAULT 'NOT_SENT', " +
+                        "`attempts` INTEGER NOT NULL DEFAULT 0, " +
+                        "`next_attempt_at_ms` INTEGER, " +
+                        "`lease_until_ms` INTEGER, " +
+                        "`last_error_code` TEXT, " +
+                        "`created_local_at_ms` INTEGER NOT NULL, " +
+                        "`acked_server_at_ms` INTEGER, " +
+                        "PRIMARY KEY(`event_id`))",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS " +
+                        "`index_pending_partner_events_installation_id_sequence` " +
+                        "ON `pending_partner_events` (`installation_id`, `sequence`)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS " +
+                        "`index_pending_partner_events_owner_uid_status_next_attempt_at_ms` " +
+                        "ON `pending_partner_events` (`owner_uid`, `status`, `next_attempt_at_ms`)",
+                ).use { it.step() }
+
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS `service_outbox_health` (" +
+                        "`id` INTEGER NOT NULL, " +
+                        "`incident_code` TEXT NOT NULL, " +
+                        "`raised_at_ms` INTEGER NOT NULL, " +
+                        "`pending_row_count` INTEGER NOT NULL, " +
+                        "`pending_byte_count` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`id`))",
+                ).use { it.step() }
+            }
+        }
+
+        /**
+         * v15 rollback (D-33): the three delivery tables are new in v15, so a downgrade drops
+         * them whole. Every pre-v15 table and row is untouched.
+         */
+        internal val MIGRATION_15_14 = object : Migration(15, 14) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("DROP TABLE IF EXISTS `service_outbox_health`").use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS `pending_partner_events`").use { it.step() }
+                connection.prepare("DROP TABLE IF EXISTS `installation_state`").use { it.step() }
+            }
+        }
+
+        /**
          * Every migration, oldest schema to current, plus the one downgrade step (D-33) that
          * Room selects by `(from, to)` — the one list every builder registers.
          * Hand-maintained copies have silently diverged twice (7→8, ADR #50; 9→10, ADR #58),
@@ -370,6 +463,7 @@ abstract class AccountabilityDatabase : RoomDatabase() {
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
             MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
             MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_12, MIGRATION_13_14, MIGRATION_14_13,
+            MIGRATION_14_15, MIGRATION_15_14,
         )
 
         @Volatile private var instance: AccountabilityDatabase? = null

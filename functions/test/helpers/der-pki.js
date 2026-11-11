@@ -82,15 +82,34 @@ const nameOf = (cn) => seq(set(seq(oid('2.5.4.3'), utf8(cn))));
 
 const SIG_ALG_ECDSA_SHA256 = seq(oid('1.2.840.10045.4.3.2'));
 
+/** AttestationApplicationId DER: SEQUENCE { SET OF packageInfo, SET OF digest }. */
+function applicationId({ packageName, version = 1, signatureDigests = [] }) {
+  return seq(
+    set(seq(octetString(Buffer.from(packageName, 'utf8')), int(version))),
+    set(...signatureDigests.map((digest) => octetString(digest))),
+  );
+}
+
+/** RootOfTrust DER: SEQUENCE { OCTET STRING key, BOOLEAN locked, ENUMERATED state }. */
+function rootOfTrust({ verifiedBootKey = Buffer.alloc(32), deviceLocked = true, verifiedBootState = 0 }) {
+  return seq(octetString(verifiedBootKey), boolean(deviceLocked), enumerated(verifiedBootState));
+}
+
 /**
  * Android KeyDescription. `purposeEncoding: 'explicit-set'` is the Keymaster wire shape
  * (caught on the X6532 2026-08-30); `'implicit'` is the plain single-value form.
  */
-function keyDescription({ level = 1, challenge, origin = 0, purposes = [2], purposeEncoding = 'explicit-set' }) {
+function keyDescription({ level = 1, challenge, origin = 0, purposes = [2], purposeEncoding = 'explicit-set',
+  applicationIdDer = null, rootOfTrustDer = null }) {
   const purposeTag = purposeEncoding === 'explicit-set'
     ? ctx(1, true, set(...purposes.map(int)))
     : ctx(1, false, Buffer.from([purposes[0]]));
   const originTag = ctx(702, true, int(origin));
+  const softwareFields = [purposeTag, originTag];
+  // [709] EXPLICIT OCTET STRING wrapping the AttestationApplicationId DER.
+  if (applicationIdDer) softwareFields.push(ctx(709, true, octetString(applicationIdDer)));
+  // [704] EXPLICIT RootOfTrust SEQUENCE.
+  if (rootOfTrustDer) softwareFields.push(ctx(704, true, rootOfTrustDer));
   return seq(
     int(3), // attestationVersion
     enumerated(level), // attestationSecurityLevel
@@ -98,22 +117,27 @@ function keyDescription({ level = 1, challenge, origin = 0, purposes = [2], purp
     enumerated(1), // keymasterSecurityLevel
     octetString(challenge),
     octetString(Buffer.alloc(0)), // uniqueId
-    seq(purposeTag, originTag), // softwareEnforced
+    seq(...softwareFields), // softwareEnforced
     seq(), // teeEnforced
   );
 }
 
 /**
  * Builds a DER certificate. When `keyDescription` is provided it is attached under the
- * Android attestation OID. `ca: true` adds basicConstraints CA:TRUE.
+ * Android attestation OID; `extraExtensions` = [{ oid, valueDer }] attaches arbitrary
+ * extensions (RKP provisioning info, synthetic tests). `ca: true` adds basicConstraints.
  */
-function buildCert({ subjectCn, issuerCn, publicKey, signingKey, notBefore, notAfter, ca = false, keyDescription: kd }) {
+function buildCert({ subjectCn, issuerCn, publicKey, signingKey, notBefore, notAfter, ca = false,
+  keyDescription: kd, extraExtensions = [] }) {
   const extensions = [];
   if (ca) {
     extensions.push(seq(oid('2.5.29.19'), boolean(true), octetString(seq(boolean(true)))));
   }
   if (kd) {
     extensions.push(seq(oid('1.3.6.1.4.1.11129.2.1.17'), octetString(kd)));
+  }
+  for (const extension of extraExtensions) {
+    extensions.push(seq(oid(extension.oid), octetString(extension.valueDer)));
   }
   const tbsParts = [
     ctx(0, true, int(2)), // version v3
@@ -134,13 +158,20 @@ function newKey() {
   return crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
 }
 
+/** Provisioning information extension value (never parsed by the verifier, only detected). */
+function provisioningInfo(challenge = crypto.randomBytes(32)) {
+  return seq(octetString(challenge), int(Date.now()));
+}
+
 /**
  * Standard synthetic PKI: returns DER buffers + keys. Leaf carries a KeyDescription for
- * `challenge` unless `leafKeyDescription` is false.
+ * `challenge` unless `leafKeyDescription` is false. Chain = [leaf, int], anchor = root.
  */
 function makePki({ leafChallenge = crypto.randomBytes(32), leafKeyDescription = true, level = 1,
   origin = 0, purposes = [2], purposeEncoding = 'explicit-set', caIntermediate = true,
-  leafNotBefore = new Date(Date.now() - 86400000), leafNotAfter = new Date(Date.now() + 86400000) } = {}) {
+  leafNotBefore = new Date(Date.now() - 86400000), leafNotAfter = new Date(Date.now() + 86400000),
+  applicationIdDer = null, rootOfTrustDer = null, leafExtraExtensions = [],
+  intExtraExtensions = [] } = {}) {
   const rootKeys = newKey();
   const intKeys = newKey();
   const leafKeys = newKey();
@@ -152,14 +183,19 @@ function makePki({ leafChallenge = crypto.randomBytes(32), leafKeyDescription = 
   const int = buildCert({
     subjectCn: 'Test Device Issuer', issuerCn: 'Test Attestation Root',
     publicKey: intKeys.publicKey, signingKey: rootKeys.privateKey,
-    notBefore: new Date(Date.now() - 86400000), notAfter: new Date(Date.now() + 31536000000), ca: caIntermediate,
+    notBefore: new Date(Date.now() - 86400000), notAfter: new Date(Date.now() + 31536000000),
+    ca: caIntermediate, extraExtensions: intExtraExtensions,
   });
   const leaf = buildCert({
     subjectCn: 'Test Device Key', issuerCn: 'Test Device Issuer',
     publicKey: leafKeys.publicKey, signingKey: intKeys.privateKey,
     notBefore: leafNotBefore, notAfter: leafNotAfter,
+    extraExtensions: leafExtraExtensions,
     keyDescription: leafKeyDescription
-      ? keyDescription({ level, challenge: leafChallenge, origin, purposes, purposeEncoding })
+      ? keyDescription({
+        level, challenge: leafChallenge, origin, purposes, purposeEncoding,
+        applicationIdDer, rootOfTrustDer,
+      })
       : null,
   });
   return {
@@ -174,4 +210,7 @@ function makePki({ leafChallenge = crypto.randomBytes(32), leafKeyDescription = 
   };
 }
 
-module.exports = { makePki, keyDescription, buildCert, newKey };
+module.exports = {
+  makePki, keyDescription, buildCert, newKey,
+  applicationId, rootOfTrust, provisioningInfo,
+};

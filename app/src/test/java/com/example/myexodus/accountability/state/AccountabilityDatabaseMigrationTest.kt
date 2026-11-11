@@ -7,6 +7,11 @@ import androidx.room3.Room
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.driver.AndroidSQLiteDriver
 import androidx.test.core.app.ApplicationProvider
+import com.example.myexodus.accountability.delivery.InstallationState
+import com.example.myexodus.accountability.delivery.PartnerEventKind
+import com.example.myexodus.accountability.delivery.PartnerEventProtocol
+import com.example.myexodus.accountability.delivery.PendingPartnerEvent
+import com.example.myexodus.accountability.delivery.ServiceOutboxHealth
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -867,6 +872,139 @@ class AccountabilityDatabaseMigrationTest {
                 assertEquals(1L, s.getLong(4))
                 assertEquals(12L, s.getLong(5))
             }
+        }
+    }
+
+    /**
+     * Partner-delivery Phase 3 (v14→v15): the three service-outbox tables appear and Room's
+     * post-migration validation accepts them. Existing chain data survives untouched, and every
+     * new DAO path — sequence bump, insert, due query, health incident — is live on the
+     * upgraded file.
+     */
+    @Test
+    fun migration14to15_addsTheServiceOutbox_andRoomAcceptsTheSchema() {
+        val dbPath = context.getDatabasePath(AccountabilityDatabase.DB_NAME).absolutePath
+
+        AndroidSQLiteDriver().open(dbPath).use { conn ->
+            V12_DDL.forEach { ddl -> conn.prepare(ddl).use { it.step() } }
+            conn.prepare(
+                "INSERT INTO events (pair_id, sender_key_id, epoch, sequence, previous_event_hash, " +
+                    "event_hash, envelope, direction, created_at, sync_state) " +
+                    "VALUES ('pair-a', 'k1', 0, 1, NULL, x'01', x'02', 'OUT', 5, 'PENDING')",
+            ).use { it.step() }
+            runBlocking {
+                AccountabilityDatabase.MIGRATION_12_13.migrate(conn)
+                AccountabilityDatabase.MIGRATION_13_14.migrate(conn)
+            }
+            conn.prepare("PRAGMA user_version = 14").use { it.step() }
+        }
+
+        val db = Room.databaseBuilder(
+            context,
+            AccountabilityDatabase::class.java,
+            AccountabilityDatabase.DB_NAME,
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
+        runBlocking {
+            val dao = db.serviceEventOutboxDao()
+            dao.insertInstallation(InstallationState("inst-1", "uid-1", 0))
+            dao.bumpSequence("inst-1")
+            assertEquals(1L, dao.currentSequence("inst-1"))
+            dao.insertEvent(
+                PendingPartnerEvent(
+                    eventId = "e-1",
+                    installationId = "inst-1",
+                    ownerUid = "uid-1",
+                    sequence = 1,
+                    schemaVersion = PartnerEventProtocol.VERSION,
+                    kind = PartnerEventKind.BLOCK_ATTEMPT.wire,
+                    safeMetadataJson = "{}",
+                    deviceOccurredAtMs = 10,
+                    status = PendingPartnerEvent.STATUS_PENDING,
+                    createdLocalAtMs = 10,
+                ),
+            )
+            val row = checkNotNull(dao.event("e-1"))
+            assertEquals("v15 defaults are in force", PendingPartnerEvent.WIRE_NOT_SENT, row.wireOutcome)
+            assertEquals(0, row.attempts)
+            assertEquals(1, dao.dueRows("uid-1", 20, 10).size)
+            dao.upsertHealth(
+                ServiceOutboxHealth(
+                    incidentCode = ServiceOutboxHealth.QUEUE_CAPACITY_EXCEEDED,
+                    raisedAtMs = 20,
+                    pendingRowCount = 1,
+                    pendingByteCount = 2,
+                ),
+            )
+            assertEquals(ServiceOutboxHealth.QUEUE_CAPACITY_EXCEEDED, dao.health()?.incidentCode)
+
+            assertEquals("the pre-v15 chain row survives", 1L, db.chainEventDao().chainFor("pair-a").single().sequence)
+        }
+        db.close()
+    }
+
+    /**
+     * v15 rollback (D-33): the three delivery tables are dropped whole and every pre-v15 table
+     * and row remains. Nothing under them existed before v15, so the downgrade loses only
+     * delivery queue state, never accountability history.
+     */
+    @Test
+    fun migration15to14_dropsTheServiceTables_leavingOlderDataUntouched() {
+        val dbPath = context.getDatabasePath(AccountabilityDatabase.DB_NAME).absolutePath
+
+        AndroidSQLiteDriver().open(dbPath).use { conn ->
+            V12_DDL.forEach { ddl -> conn.prepare(ddl).use { it.step() } }
+            conn.prepare(
+                "INSERT INTO events (pair_id, sender_key_id, epoch, sequence, previous_event_hash, " +
+                    "event_hash, envelope, direction, created_at, sync_state) " +
+                    "VALUES ('pair-a', 'k1', 0, 1, NULL, x'01', x'02', 'OUT', 5, 'PENDING')",
+            ).use { it.step() }
+            conn.prepare("PRAGMA user_version = 12").use { it.step() }
+        }
+
+        // Forward through Room's real path (12→13→14→15), then write rows into every new table.
+        val db = Room.databaseBuilder(
+            context,
+            AccountabilityDatabase::class.java,
+            AccountabilityDatabase.DB_NAME,
+        ).addMigrations(*AccountabilityDatabase.ALL_MIGRATIONS).build()
+        runBlocking {
+            db.serviceEventOutboxDao().insertInstallation(InstallationState("inst-1", "uid-1", 0))
+            db.serviceEventOutboxDao().insertEvent(
+                PendingPartnerEvent(
+                    eventId = "e-1",
+                    installationId = "inst-1",
+                    ownerUid = "uid-1",
+                    sequence = 1,
+                    schemaVersion = PartnerEventProtocol.VERSION,
+                    kind = PartnerEventKind.CHECK_IN.wire,
+                    safeMetadataJson = "{}",
+                    deviceOccurredAtMs = 10,
+                    status = PendingPartnerEvent.STATUS_WAITING_FOR_RECIPIENT_KEY,
+                    createdLocalAtMs = 10,
+                ),
+            )
+            db.serviceEventOutboxDao().upsertHealth(
+                ServiceOutboxHealth(
+                    incidentCode = ServiceOutboxHealth.QUEUE_CAPACITY_EXCEEDED,
+                    raisedAtMs = 20,
+                    pendingRowCount = 1,
+                    pendingByteCount = 2,
+                ),
+            )
+        }
+        db.close()
+
+        AndroidSQLiteDriver().open(dbPath).use { conn ->
+            runBlocking { AccountabilityDatabase.MIGRATION_15_14.migrate(conn) }
+
+            assertTrue("installation_state is gone", columnNames(conn, "installation_state").isEmpty())
+            assertTrue("pending_partner_events is gone", columnNames(conn, "pending_partner_events").isEmpty())
+            assertTrue("service_outbox_health is gone", columnNames(conn, "service_outbox_health").isEmpty())
+            conn.prepare("SELECT COUNT(*) FROM events").use { s ->
+                s.step()
+                assertEquals("the accountability row survives the downgrade", 1, s.getLong(0))
+            }
+            assertTrue("chain_heads survives", columnNames(conn, "chain_heads").isNotEmpty())
         }
     }
 

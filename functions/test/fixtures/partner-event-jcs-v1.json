@@ -1,0 +1,590 @@
+{
+  "version": 1,
+  "note": "Golden vectors for the partner event v1 protocol. Read by functions/test/partner-events.test.js and app/src/test/java/com/example/myexodus/accountability/delivery/PartnerEventProtocolTest.kt. Regenerate only when the protocol changes: generate via node:crypto and validate every vector before writing.",
+  "events": [
+    {
+      "name": "block-attempt-app-two-recipients",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "category": "BLOCKED_APP_ATTEMPT"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          },
+          {
+            "recipientEncryptionKeyId": "9Spt3zub-uwZU5mEf9m8ufzxu2x5-3Kpp2_e2g2E58g",
+            "version": 2,
+            "encoding": "existing-e2ee",
+            "payload": "c6rGlVmk0kHYyFCALOr4DLSlhtswUrKz6ATtqBHtV2k"
+          }
+        ]
+      },
+      "canonical": "{\"deviceOccurredAtMs\":1790000000000,\"eventId\":\"3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b\",\"installationId\":\"7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d\",\"kind\":\"BLOCK_ATTEMPT\",\"metadata\":{\"category\":\"BLOCKED_APP_ATTEMPT\"},\"ownerUid\":\"firebaseUid_123-ABC\",\"recipientEnvelopes\":[{\"encoding\":\"existing-e2ee\",\"payload\":\"OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE\",\"recipientEncryptionKeyId\":\"8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g\",\"version\":1},{\"encoding\":\"existing-e2ee\",\"payload\":\"c6rGlVmk0kHYyFCALOr4DLSlhtswUrKz6ATtqBHtV2k\",\"recipientEncryptionKeyId\":\"9Spt3zub-uwZU5mEf9m8ufzxu2x5-3Kpp2_e2g2E58g\",\"version\":2}],\"sequence\":12,\"v\":1}",
+      "sha256": "cf829fc5751f3657e66a97819fa91a4c39f5f6103e6e3d25fdf91faaf862bb5c"
+    },
+    {
+      "name": "block-attempt-domain-first-sequence",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 1,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "category": "BLOCKED_DOMAIN_ATTEMPT"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      },
+      "canonical": "{\"deviceOccurredAtMs\":1790000000000,\"eventId\":\"3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b\",\"installationId\":\"7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d\",\"kind\":\"BLOCK_ATTEMPT\",\"metadata\":{\"category\":\"BLOCKED_DOMAIN_ATTEMPT\"},\"ownerUid\":\"firebaseUid_123-ABC\",\"recipientEnvelopes\":[{\"encoding\":\"existing-e2ee\",\"payload\":\"OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE\",\"recipientEncryptionKeyId\":\"8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g\",\"version\":1}],\"sequence\":1,\"v\":1}",
+      "sha256": "04c626331a885248a8a64d1850c5fb7c1d9fdc82363bd1a5e268558ddcf66ab5"
+    },
+    {
+      "name": "check-in-empty-metadata",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 4,
+        "kind": "CHECK_IN",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {},
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      },
+      "canonical": "{\"deviceOccurredAtMs\":1790000000000,\"eventId\":\"3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b\",\"installationId\":\"7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d\",\"kind\":\"CHECK_IN\",\"metadata\":{},\"ownerUid\":\"firebaseUid_123-ABC\",\"recipientEnvelopes\":[{\"encoding\":\"existing-e2ee\",\"payload\":\"OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE\",\"recipientEncryptionKeyId\":\"8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g\",\"version\":1}],\"sequence\":4,\"v\":1}",
+      "sha256": "79d65678ad772a9edc075c385fa144f847c1ca92b2cccd22bf5ec702e97dacca"
+    },
+    {
+      "name": "rule-change-attempt-expired",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 9,
+        "kind": "RULE_CHANGE_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "ruleChange": "EXPIRED"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      },
+      "canonical": "{\"deviceOccurredAtMs\":1790000000000,\"eventId\":\"3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b\",\"installationId\":\"7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d\",\"kind\":\"RULE_CHANGE_ATTEMPT\",\"metadata\":{\"ruleChange\":\"EXPIRED\"},\"ownerUid\":\"firebaseUid_123-ABC\",\"recipientEnvelopes\":[{\"encoding\":\"existing-e2ee\",\"payload\":\"OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE\",\"recipientEncryptionKeyId\":\"8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g\",\"version\":1}],\"sequence\":9,\"v\":1}",
+      "sha256": "2f0e277bb439d788018ab7c5b486b6e00a65416860f0246451fff4280340e0b9"
+    }
+  ],
+  "jcs": [
+    {
+      "name": "nested-and-escapes",
+      "value": {
+        "z": [
+          true,
+          false,
+          null,
+          12,
+          -5
+        ],
+        "a": "quote\" backslash\\ newline\n tab\t ctrl\u0001 del",
+        "B": 9007199254740991,
+        "é": "café",
+        "😀": "emoji 😀"
+      },
+      "canonical": "{\"B\":9007199254740991,\"a\":\"quote\\\" backslash\\\\ newline\\n tab\\t ctrl\\u0001 del\",\"z\":[true,false,null,12,-5],\"é\":\"café\",\"😀\":\"emoji 😀\"}"
+    },
+    {
+      "name": "key-order-utf16",
+      "value": {
+        "aa": 1,
+        "a": 2,
+        "B": 3
+      },
+      "canonical": "{\"B\":3,\"a\":2,\"aa\":1}"
+    },
+    {
+      "name": "empty-containers",
+      "value": {
+        "m": {},
+        "l": []
+      },
+      "canonical": "{\"l\":[],\"m\":{}}"
+    },
+    {
+      "name": "multibyte-literal",
+      "value": {
+        "k": "𝄞"
+      },
+      "canonical": "{\"k\":\"𝄞\"}"
+    }
+  ],
+  "invalidEvents": [
+    {
+      "name": "version-2",
+      "issue": "VERSION_UNSUPPORTED",
+      "event": {
+        "v": 2,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "category": "BLOCKED_APP_ATTEMPT"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      }
+    },
+    {
+      "name": "event-id-not-v4",
+      "issue": "EVENT_ID_NOT_UUID_V4",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-1e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "category": "BLOCKED_APP_ATTEMPT"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      }
+    },
+    {
+      "name": "installation-id-not-v4",
+      "issue": "INSTALLATION_ID_NOT_UUID_V4",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-1a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "category": "BLOCKED_APP_ATTEMPT"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      }
+    },
+    {
+      "name": "owner-uid-path-like",
+      "issue": "OWNER_UID_INVALID",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "a/b",
+        "sequence": 12,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "category": "BLOCKED_APP_ATTEMPT"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      }
+    },
+    {
+      "name": "sequence-zero",
+      "issue": "SEQUENCE_INVALID",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 0,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "category": "BLOCKED_APP_ATTEMPT"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      }
+    },
+    {
+      "name": "occurred-at-zero",
+      "issue": "OCCURRED_AT_INVALID",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 0,
+        "metadata": {
+          "category": "BLOCKED_APP_ATTEMPT"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown-metadata-key",
+      "issue": "METADATA_INVALID",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "CHECK_IN",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "note": "x"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      }
+    },
+    {
+      "name": "free-text-category",
+      "issue": "METADATA_INVALID",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "category": "Pornhub"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      }
+    },
+    {
+      "name": "block-missing-category",
+      "issue": "METADATA_INVALID",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {},
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      }
+    },
+    {
+      "name": "check-in-with-category",
+      "issue": "METADATA_INVALID",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "CHECK_IN",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "category": "BLOCKED_APP_ATTEMPT"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      }
+    },
+    {
+      "name": "rule-change-missing-ruleChange",
+      "issue": "METADATA_INVALID",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "RULE_CHANGE_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {},
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      }
+    },
+    {
+      "name": "recipients-empty",
+      "issue": "RECIPIENTS_INVALID",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "category": "BLOCKED_APP_ATTEMPT"
+        },
+        "recipientEnvelopes": []
+      }
+    },
+    {
+      "name": "recipients-duplicate-key",
+      "issue": "RECIPIENTS_INVALID",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "category": "BLOCKED_APP_ATTEMPT"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          },
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "c6rGlVmk0kHYyFCALOr4DLSlhtswUrKz6ATtqBHtV2k"
+          }
+        ]
+      }
+    },
+    {
+      "name": "recipients-bad-encoding",
+      "issue": "RECIPIENTS_INVALID",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "category": "BLOCKED_APP_ATTEMPT"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "cbor",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      }
+    },
+    {
+      "name": "recipients-padded-payload",
+      "issue": "RECIPIENTS_INVALID",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "category": "BLOCKED_APP_ATTEMPT"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE="
+          }
+        ]
+      }
+    },
+    {
+      "name": "recipients-bad-key-length",
+      "issue": "RECIPIENTS_INVALID",
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "category": "BLOCKED_APP_ATTEMPT"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown-event-field",
+      "issue": "SUBMISSION_INVALID",
+      "kotlin": false,
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "BLOCK_ATTEMPT",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {
+          "category": "BLOCKED_APP_ATTEMPT"
+        },
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ],
+        "extra": 1
+      }
+    },
+    {
+      "name": "kind-unsupported",
+      "issue": "KIND_UNSUPPORTED",
+      "kotlin": false,
+      "event": {
+        "v": 1,
+        "eventId": "3f2b8c4e-1d2a-4e6f-9a7b-5c8d0e1f2a3b",
+        "installationId": "7a1c2e3d-4b5f-4a6b-8c9d-0e1f2a3b4c5d",
+        "ownerUid": "firebaseUid_123-ABC",
+        "sequence": 12,
+        "kind": "RULE_CHANGE_APPLIED",
+        "deviceOccurredAtMs": 1790000000000,
+        "metadata": {},
+        "recipientEnvelopes": [
+          {
+            "recipientEncryptionKeyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+            "version": 1,
+            "encoding": "existing-e2ee",
+            "payload": "OHhUUTU-lEusOLIFf7XNLxYhDECVWuvE"
+          }
+        ]
+      }
+    }
+  ],
+  "signature": {
+    "name": "p256-sha256-der-over-jcs",
+    "eventName": "block-attempt-app-two-recipients",
+    "keyId": "8yaikmWBM4M8KydK73XMoVIoEdrSK0WGvWT7scE3i8g",
+    "publicKeySpkiBase64Url": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEocdmCZhJahcZsue9ZYLfMpANM8HFBByh9M3sqKMf2VSHjzdQgTkH1T9q71Z0FNxM3T1hzRAhlJtMRPzni3jbUQ",
+    "signatureBase64Url": "MEUCIQDadzL-v9xrSydgCkrfJUedhGc2GKPhYmK89TZC7h8xLQIgXAQhsX5KswlnRltPIcBq_U-O98GIDYJi0NyVQKV8-_8"
+  }
+}
