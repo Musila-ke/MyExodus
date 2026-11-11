@@ -343,3 +343,91 @@ cached hits so log-based cold-start attribution keeps working.
 Disposable test database; API 30+ per-use `CryptoObject` key; API 26-29 legacy time-bound key;
 envelope with generated IV and AAD; wrap+verify prompts; an invalid tag must never open the test
 DB; real-device crypto tests for both API tiers. This section's unit evidence must stay green.
+
+## 13. Phase 4 status — envelope and authentication-bound wrapping
+
+Plan gate (§7 Phase 4): "Crypto on disposable test DB | API 30+ per-use key; API 26–29 single
+time-bound key; envelope with generated IV, AAD, wrap+verify prompts | Real-device crypto tests
+for both APIs; invalid tag never opens test DB."
+
+**Design**
+
+- `applock/crypto/VaultEnvelope` — versioned binary envelope, pure JVM. Header `"MXVE"` +
+  format version 1, then tagged records (tag `u8`, length `u16`, big-endian, any order):
+  key version `u32`, kind `u8` (1 = rules SQLCipher DEK), IV exactly 12 bytes, ciphertext
+  including the 128-bit GCM tag with a 16-byte minimum. Strict parse rejects bad magic/version,
+  unknown tags, duplicate tags, wrong record lengths, truncation, and any trailing bytes — every
+  rejection is a `VaultEnvelopeException` and no partial envelope is returned.
+- Canonical AAD (§8.4): domain string + format version + key version + kind + length-prefixed
+  application ID + length-prefixed database ID, serialized with `DataOutputStream` (fixed
+  big-endian, explicit UTF-8 lengths). No `.toString()` anywhere in the binding.
+- `applock/crypto/VaultKeyManager` — AES-256/GCM/NoPadding Android Keystore key,
+  `PURPOSE_ENCRYPT | PURPOSE_DECRYPT`, `setUserAuthenticationRequired(true)`. API 30+:
+  `setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG | AUTH_DEVICE_CREDENTIAL)` (per-use).
+  API 26-29: `setUserAuthenticationValidityDurationSeconds(30)` (single time-bound key, §8.6).
+  Alias is versioned (`myexodus_vault_kek_v1`); an unknown envelope key version is refused before
+  any cipher is created.
+- `seal(cipher, …)` — the caller hands in the `Cipher` from `encryptionCipher()`; init happened
+  with **no IV parameters**, so the Keystore generates it. The operation captures `cipher.iv`,
+  requires 12 bytes, applies the AAD, calls `doFinal`, and encodes the envelope. `open(encoded, …)`
+  parses strictly first, derives the AAD from the envelope's own stored key version/kind, then
+  initializes `DECRYPT_MODE` with `GCMParameterSpec(128, iv)` and authenticates before releasing
+  plaintext.
+- `applock/AppLockAuthenticator` — capability preflight (`isDeviceSecure` + combined
+  `canAuthenticate` on API 30+, `isDeviceSecure` on 26-29, which the Keyguard confirmation
+  authorizes); API 30+ `authenticateCrypto()` hands the cipher to
+  `BiometricPrompt.CryptoObject` with `setAllowedAuthenticators(BIOMETRIC_STRONG |
+  DEVICE_CREDENTIAL)`, `setConfirmationRequired(true)` and no negative button, returns **only**
+  the callback's cipher, and re-checks the caller's attempt predicate at the callback boundary;
+  a 120-second timeout prevents a dropped OEM sheet from wedging later prompts (the X6532C wedge
+  class). API 26-29 `legacyConfirmationIntent()` returns the Keyguard confirmation intent or
+  null; the Phase 5 caller must use the cipher immediately on `RESULT_OK`.
+- Verified against the pinned `androidx.biometric:biometric:1.1.0` bytecode: `build()` permits
+  confirmation + combined authenticators, and forbids a negative button when device credential
+  is allowed — the implementation follows exactly that contract (§8.5).
+- Two authentication-bound operations are possible through the API; the enrollment flow (Phase 5)
+  is what performs encrypt-auth + independent decrypt-verify. No new crypto library was added.
+
+**Files**
+
+- `applock/crypto/VaultEnvelope.kt` (new).
+- `applock/crypto/VaultKeyManager.kt` (new).
+- `applock/AppLockAuthenticator.kt` (new).
+- `test/.../applock/crypto/VaultEnvelopeTest.kt` (new).
+
+**Evidence (unit)**
+
+- `VaultEnvelopeTest`: 11/11 green. Round-trip with generated 12-byte IV; fresh IV per seal;
+  tampered ciphertext, tag and IV each fail closed (`AEADBadTagException`); wrong application ID
+  and wrong database ID fail closed; canonical AAD changes with every bound field and length
+  prefixes separate adjacent fields; malformed envelopes (empty, bad magic, bad version,
+  truncation, trailing record) rejected; duplicate and unknown records rejected; wrong lengths /
+  unknown kind / unsupported key version rejected; unwrapped secret is exactly 32 bytes.
+- Full unit suite: 279 classes / 2,645 tests, 0 failures, 0 errors, 0 skipped.
+- `:app:lintDebug` alone (ADR #208): 0 errors, same 2 pre-existing warnings (`BatchEditor.kt:102`,
+  `res/values/strings.xml:305`); no new warnings from this change set.
+- Robolectric **cannot** stand in for the Keystore: this project's Robolectric runtime has no
+  `AndroidKeyStore` provider (`KeyStoreException: AndroidKeyStore not found`), so no fake
+  key-store test is shipped. Key generation and auth enforcement are device-verified only.
+
+**Gate accounting (honest split)**
+
+- PASSED (unit): envelope/AAD/tamper semantics above — the "invalid tag never releases the
+  secret" property at the boundary that produces the SQLCipher key. The vault open path receives
+  a secret only from `open()`; any tag/parse failure throws before a key exists, so no database
+  can be opened with it.
+- NOT YET EXECUTABLE (carried to Phase 5): "real-device crypto tests for both APIs". The wrap
+  and verify prompts are only reachable through the enrollment flow that Phase 5 builds; there is
+  no production caller of `seal`/`open` yet. Emulator (API 34/37) verification with PIN 1234 and
+  `adb emu finger touch` is the sanctioned vehicle for the CryptoObject legs; the physical X6532
+  (owner) verifies the real prompt later.
+- UNRESOLVED RELEASE BLOCKER (§12.2): there is **no physical API 26-29 handset** available. The
+  legacy time-bound branch is code-complete but cannot be claimed as release-tested; per plan
+  §12.2 it is recorded as an unresolved release blocker, not as coverage.
+
+**Next phase entry conditions (§7 Phase 5)**
+
+WAL-aware staged migration or wrap-only migration (the Phase 1 inventory selected wrap-only for
+an install whose rules DB already has an independent random DEK); atomic staging/active envelope
+persistence and migration journal in no-backup storage; enrollment encrypt-auth + decrypt-verify;
+first-real-unlock cleanup; disable/recovery. The §12/§13 evidence above must stay green.
