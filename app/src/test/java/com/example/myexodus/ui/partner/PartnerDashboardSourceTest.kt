@@ -2,6 +2,7 @@ package com.example.myexodus.ui.partner
 
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.MonitoringCapability
 import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.state.ApprovalRequest
@@ -10,6 +11,7 @@ import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.accountability.state.UnpairPhase
 import com.example.myexodus.accountability.state.UnpairState
 import com.example.myexodus.data.db.entity.PartnerMonitoringSnapshot
+import com.example.myexodus.data.db.entity.PartnerProtectionGap
 import com.example.myexodus.data.db.entity.PartnerRuleChange
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -119,6 +121,8 @@ class PartnerDashboardSourceTest {
         monitoring: (String) -> PartnerMonitoringSnapshot? = { null },
         /** §8.4 RULE_CONTROL: the receiver's stored rule-lifecycle rows for this pair. */
         ruleChangeRows: List<PartnerRuleChange> = emptyList(),
+        /** Owner directive 2026-11-10: stored permission-loss rows for this pair. */
+        gapRows: List<PartnerProtectionGap> = emptyList(),
     ): RecordingSource {
         val sinceArgs = mutableListOf<Long>()
         val sincePairIds = mutableListOf<String>()
@@ -159,6 +163,7 @@ class PartnerDashboardSourceTest {
             },
             monitoring = { pairId -> monitoring(pairId) },
             ruleChanges = { ruleChangeRows },
+            protectionGaps = { gapRows },
         )
         return RecordingSource(source, sinceArgs, sincePairIds, headPairIds, approvalPairIds, rejectionPairIds)
     }
@@ -202,6 +207,25 @@ class PartnerDashboardSourceTest {
             ),
             paired.ruleHistory,
         )
+    }
+
+    /** Owner directive 2026-11-10: a stored permission loss feeds both the week preview and
+     *  the Rules & blocks history, exactly like a lifecycle row. */
+    @Test
+    fun protectionGaps_feedTheAlertsAndRuleHistory() = runTest {
+        val gap = PartnerProtectionGap(
+            pairId = "pair-1", eventId = "evt-1", capability = "A11Y",
+            ruleNames = PartnerProtectionGap.encodeRuleNames(listOf("Watched by John Maingi")),
+            occurredAtMs = now - 60_000L, expiresAtMs = now + 86_400_000L,
+        )
+        val paired = source(gapRows = listOf(gap)).source.load(now) as PartnerDashboardUi.Paired
+        val expected = PartnerAlert.PermissionLost(
+            MonitoringCapability.ACCESSIBILITY,
+            listOf("Watched by John Maingi"),
+            now - 60_000L,
+        )
+        assertEquals(expected, paired.alerts.recent.single())
+        assertEquals(listOf(expected), paired.ruleHistory)
     }
 
     private fun journalRow(pairId: String = "pair-1", requestedAt: Long = 500L) = UnpairState(

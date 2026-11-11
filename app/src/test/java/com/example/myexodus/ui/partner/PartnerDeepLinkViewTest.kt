@@ -29,6 +29,8 @@ class PartnerDeepLinkViewTest {
         assertEquals(VIEW_ACTIVITY, pairDeepLinkView(requestedPlanId = null, requestedViewId = VIEW_ACTIVITY))
         assertEquals(VIEW_RULES, pairDeepLinkView(requestedPlanId = null, requestedViewId = VIEW_RULES))
         assertEquals(VIEW_REQUESTS, pairDeepLinkView(requestedPlanId = null, requestedViewId = VIEW_REQUESTS))
+        // Owner ruling 2026-11-10: the permission-lost tap lands on the phone report.
+        assertEquals(VIEW_CHECKINS, pairDeepLinkView(requestedPlanId = null, requestedViewId = VIEW_CHECKINS))
     }
 
     /** A plan outranks the subpage extra: both ride the plan notification's tap. */

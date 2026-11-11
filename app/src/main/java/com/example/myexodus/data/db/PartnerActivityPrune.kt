@@ -17,5 +17,6 @@ suspend fun AppRulesStore.prunePartnerActivity(pairIds: List<String>) {
     partnerPlanDao().deleteForPairs(pairIds)
     partnerMonitoringSnapshotDao().deleteFor(pairIds)
     partnerRuleChangeDao().deleteFor(pairIds)
+    partnerProtectionGapDao().deleteFor(pairIds)
     partnerEventJournalDao().deleteRuleRowsFor(pairIds)
 }

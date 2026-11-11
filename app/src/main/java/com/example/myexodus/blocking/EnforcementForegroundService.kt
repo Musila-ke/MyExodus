@@ -766,6 +766,14 @@ class EnforcementForegroundService : Service() {
                     runCatching { heartbeat.checkIn(force = true) }
                         .onFailure { Log.w(TAG, "heartbeat check-in failed", it) }
                 }
+            } else {
+                // A grant can vanish without moving authority (usage/overlay under a live
+                // accessibility service), so capabilities are sampled every permission
+                // check too — non-forced, so the recorder's own debounce still decides.
+                scope.launch {
+                    runCatching { snapshotRecorder.record() }
+                        .onFailure { Log.w(TAG, "monitoring snapshot record failed", it) }
+                }
             }
         }
         if (tickNumber % HEARTBEAT_TICKS == 0L) {

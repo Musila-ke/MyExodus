@@ -293,6 +293,16 @@
         <item quantity="one">The %1$s batch ended. Its set duration ran out (%2$d item).</item>
         <item quantity="other">The %1$s batch ended. Its set duration ran out (%2$d items).</item>
     </plurals>
+    <!-- Owner directive 2026-11-10: the other phone lost a grant a rule assigned to this
+         partner needs. Each lost grant gets one line — its real effect plus the affected
+         rules. Unlocked copy only; the lockscreen keeps the partner_event_* plain forms. -->
+    <string name="partner_permission_lost_title_named">Protection gap on %1$s’s phone</string>
+    <string name="partner_permission_lost_line">%1$s · %2$s</string>
+    <string name="partner_permission_lost_accessibility">Accessibility is off, so app blocks start late</string>
+    <string name="partner_permission_lost_usage">Usage access is off, so app blocking and limits run on weaker checks</string>
+    <string name="partner_permission_lost_overlay">Display over other apps is off, so the block screen can’t cover a blocked app</string>
+    <string name="partner_permission_lost_vpn">The website filter is off, so website rules aren’t enforced</string>
+    <string name="partner_permission_lost_more">%1$s and %2$d more</string>
     <!-- Owner mandate 2026-10-04: a relapse/milestone alert states which streak and when,
          using the wire-v2 fields (ADR #134). Unlocked copy only — the plain forms above stay
          the lockscreen public version (FR-13). Pre-v2 bodies lack the fields and degrade to
@@ -451,6 +461,9 @@
     <string name="batch_remove_item">Remove %1$s</string>
     <string name="batch_save">Create batch</string>
     <string name="batch_saving">Creating…</string>
+    <string name="batch_edit_title">Edit batch</string>
+    <string name="batch_update">Save changes</string>
+    <string name="batch_updating">Saving…</string>
     <string name="batch_partner_hint">They’re told about this batch and any attempts it blocks.</string>
     <plurals name="batch_item_count">
         <item quantity="one">%1$d item</item>
@@ -459,6 +472,8 @@
     <string name="rules_batch_pause">Pause %1$s</string>
     <string name="rules_batch_resume">Resume %1$s</string>
     <string name="rules_batch_remove_partner">Remove partner</string>
+    <string name="rules_batch_add_partner">Add a partner</string>
+    <string name="rules_batch_add_partner_title">Share “%1$s” with a partner</string>
     <string name="rules_batch_delete">Delete batch</string>
     <string name="rules_batch_delete_title">Delete this batch?</string>
     <plurals name="rules_batch_delete_body">

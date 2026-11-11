@@ -22,4 +22,6 @@ data class PartnerMonitoringSnapshot(
     @ColumnInfo(name = "snapshot_event_sequence") val snapshotEventSequence: Long,
     @ColumnInfo(name = "occurred_at_minute") val occurredAtMinute: Long,
     @ColumnInfo(name = "received_at_ms") val receivedAtMs: Long,
+    /** Grants the sender held when this snapshot was taken (v3); null from a pre-v3 sender. */
+    @ColumnInfo(name = "capabilities") val capabilities: String? = null,
 )

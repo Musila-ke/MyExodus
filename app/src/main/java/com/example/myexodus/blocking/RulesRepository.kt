@@ -217,6 +217,57 @@ class RulesRepository(
         journaled(journal)
     }
 
+    /** Gives an existing batch its partner in one write plus one batch-level ASSIGNED row
+     *  (owner report 2026-11-11: a batch could lose a partner but never gain one — the
+     *  editor exists only at creation). A mixed batch, reachable only by row mutation, first
+     *  tells each old pair it lost its members. */
+    suspend fun assignBatchPartner(batchId: String, pairId: String) {
+        val db = store()
+        val dao = db.restrictionRuleDao()
+        val members = dao.getByBatch(batchId)
+        val changed = members.filter { it.assignedPairId != pairId }.map { it.copy(assignedPairId = pairId) }
+        if (changed.isEmpty()) return
+        val lost = members.filter { it.assignedPairId != null && it.assignedPairId != pairId }
+        val journal = batchJournalRows(lost, RuleChange.UNASSIGNED) +
+            batchJournalRows(changed, RuleChange.ASSIGNED)
+        dao.updateBatchAndBump(changed, db.policyVersionDao(), db.partnerEventJournalDao(), journal)
+        publisher.loadFromDb()
+        ensureCheckInsShared(pairId)
+        journaled(journal)
+    }
+
+    /** Edits an existing batch — name, members, block settings, partner — in one transaction.
+     *  The partner still sees the batch as one entity (ADR #249): one UPDATED row when its
+     *  pair is unchanged, UNASSIGNED to a pair that loses it, ASSIGNED to the pair that gains
+     *  it. Callers pass the full desired member list; ids kept mean "same member". */
+    suspend fun updateBatch(batchId: String, rules: List<RestrictionRule>) {
+        require(rules.isNotEmpty()) { "A batch needs at least one rule" }
+        require(rules.all { it.batchId == batchId }) { "Batch members must share one batch_id" }
+        val db = store()
+        val dao = db.restrictionRuleDao()
+        val existing = dao.getByBatch(batchId)
+        if (existing.isEmpty()) return
+        val existingById = existing.associateBy { it.ruleId }
+        val keptIds = rules.map { it.ruleId }.toSet()
+        val removed = existing.filter { it.ruleId !in keptIds }
+        val kept = rules.filter { it.ruleId in existingById }
+        val added = rules.filter { it.ruleId !in existingById }
+        added.groupingBy { it.targetType }.eachCount().forEach { (type, count) ->
+            requireCapacity(dao, rules.first().profileId, type, adding = count.toLong())
+        }
+        val newPair = rules.firstNotNullOfOrNull { it.assignedPairId }
+        val journal = batchJournalRows(existing.filter { it.assignedPairId != newPair }, RuleChange.UNASSIGNED) +
+            when {
+                newPair == null -> emptyList()
+                existing.all { it.assignedPairId == newPair } -> batchJournalRows(rules, RuleChange.UPDATED)
+                else -> batchJournalRows(rules, RuleChange.ASSIGNED)
+            }
+        dao.editBatchAndBump(removed, kept, added, db.policyVersionDao(), db.partnerEventJournalDao(), journal)
+        publisher.loadFromDb()
+        ensureCheckInsShared(newPair)
+        journaled(journal)
+    }
+
     /** Deletes every member with one batch-level DELETED row, so the partner sees the batch
      *  disappear as one event instead of N deletions. */
     suspend fun deleteBatch(batchId: String) {

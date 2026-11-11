@@ -138,6 +138,24 @@ abstract class RestrictionRuleDao {
         journal.forEach { journalDao.insert(it) }
     }
 
+    /** A batch edit: members that left, members that stayed (already carrying the new
+     *  fields), members that joined, and the batch-level journal row — one transaction. */
+    @Transaction
+    open suspend fun editBatchAndBump(
+        removed: List<RestrictionRule>,
+        updated: List<RestrictionRule>,
+        added: List<RestrictionRule>,
+        versionDao: PolicyVersionDao,
+        journalDao: PartnerEventJournalDao,
+        journal: List<PartnerEventJournal>,
+    ) {
+        removed.forEach { delete(it) }
+        updated.forEach { update(it) }
+        added.forEach { insert(it) }
+        versionDao.bump()
+        journal.forEach { journalDao.insert(it) }
+    }
+
     private suspend fun <T> translate(block: suspend () -> T): T = try {
         block()
     } catch (e: SQLiteConstraintException) {

@@ -68,6 +68,7 @@ import com.example.myexodus.blocking.usage.PlatformUsageReader
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.entity.RestrictionRule
+import com.example.myexodus.data.db.entity.hasLiveWebsiteRule
 import com.example.myexodus.data.db.entity.isExpiredAt
 import com.example.myexodus.data.db.entity.isStaleFor
 import com.example.myexodus.domainusage.DomainUsageEngine
@@ -152,6 +153,7 @@ fun RulesScreen(
 
     var route by rememberSaveable { mutableStateOf(ROUTE_LIST) }
     var editRuleId by rememberSaveable { mutableStateOf<String?>(null) }
+    var editBatchId by rememberSaveable { mutableStateOf<String?>(null) }
     // System back exits the editor the way its BackRow does; at the list the shell takes over.
     BackHandler(enabled = route != ROUTE_LIST) { route = ROUTE_LIST }
     var editTarget by rememberSaveable { mutableStateOf<String?>(null) }
@@ -424,7 +426,10 @@ fun RulesScreen(
                 modifier = modifier,
             )
             rules == null -> RulesLoading(modifier = modifier)
+            editBatchId != null && rules.orEmpty().none { it.batchId == editBatchId } ->
+                EditorUnavailable(onBack = { route = ROUTE_LIST }, modifier = modifier)
             else -> BatchEditorScreen(
+                initial = editBatchId?.let { id -> rules.orEmpty().filter { it.batchId == id } },
                 existingRules = rules.orEmpty(),
                 partners = partners,
                 repository = repository,
@@ -499,7 +504,11 @@ fun RulesScreen(
                         }
                     },
                     onCleanup = { confirmCleanup = true },
-                    onAddBatch = { route = ROUTE_BATCH },
+                    onAddBatch = { editBatchId = null; route = ROUTE_BATCH },
+                    onEditBatch = { batchId ->
+                        editBatchId = batchId
+                        route = ROUTE_BATCH
+                    },
                     pendingBatchPause = pendingBatchPause,
                     onToggleBatch = { batchId, enable ->
                         val members = rules.orEmpty().filter { it.batchId == batchId }
@@ -530,6 +539,12 @@ fun RulesScreen(
                     onRemoveBatchPartner = { batchId ->
                         scope.launch(Dispatchers.IO) {
                             runCatching { repository.removeBatchPartner(batchId) }
+                                .onFailure { errorMessage = notSavedMessage(it, context) }
+                        }
+                    },
+                    onAssignBatchPartner = { batchId, pairId ->
+                        scope.launch(Dispatchers.IO) {
+                            runCatching { repository.assignBatchPartner(batchId, pairId) }
                                 .onFailure { errorMessage = notSavedMessage(it, context) }
                         }
                     },
@@ -693,16 +708,6 @@ internal fun hasLimitedSiteRule(rules: List<RestrictionRule>, nowMillis: Long): 
     }
 
 /**
- * #26: "the tunnel has something to do" — any website rule the publisher would publish
- * (enabled, unexpired), limit or block-only. One predicate per purpose: the limited variant
- * above still gates the engine's own status surfaces.
- */
-internal fun hasLiveWebsiteRule(rules: List<RestrictionRule>, nowMillis: Long): Boolean =
-    rules.any {
-        it.targetType == "WEBSITE" && it.isEnabled && !it.isExpiredAt(nowMillis)
-    }
-
-/**
  * #18 resume semantics (owner ruling 2026-10-04): "on" after a lapsed end date means "on
  * again, no end date" — keeping the old expiry would make the toggle dead (the engine treats
  * the rule as expired and the sweep would flip it right back off). A future expiry is the
@@ -772,9 +777,11 @@ private fun RulesList(
     onTogglePause: (RestrictionRule, Boolean) -> Unit,
     onCleanup: () -> Unit,
     onAddBatch: () -> Unit,
+    onEditBatch: (batchId: String) -> Unit,
     pendingBatchPause: Map<String, Boolean>,
     onToggleBatch: (batchId: String, enable: Boolean) -> Unit,
     onRemoveBatchPartner: (batchId: String) -> Unit,
+    onAssignBatchPartner: (batchId: String, pairId: String) -> Unit,
     onDeleteBatch: (BatchGroup) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -888,7 +895,9 @@ private fun RulesList(
                     nowMillis = nowMillis,
                     usageByPackage = usageByPackage,
                     onToggle = { onToggleBatch(batch.batchId, it) },
+                    onEdit = { onEditBatch(batch.batchId) },
                     onRemovePartner = { onRemoveBatchPartner(batch.batchId) },
+                    onAssignPartner = { onAssignBatchPartner(batch.batchId, it) },
                     onDelete = { onDeleteBatch(batch) },
                 )
             }
@@ -1031,9 +1040,12 @@ private fun BatchCard(
     nowMillis: Long,
     usageByPackage: Map<String, Long>,
     onToggle: (Boolean) -> Unit,
+    onEdit: () -> Unit,
     onRemovePartner: () -> Unit,
+    onAssignPartner: (String) -> Unit,
     onDelete: () -> Unit,
 ) {
+    var assignPickerOpen by remember { mutableStateOf(false) }
     val supervisor = partners.firstOrNull { it.pairId == batch.assignedPairId }
     val unsupervised = batch.assignedPairId != null && supervisor == null
     val pauseLabel = stringResource(R.string.rules_batch_pause, batch.name)
@@ -1048,7 +1060,12 @@ private fun BatchCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .clickable(onClick = onEdit),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
                     Text(
                         batch.name,
                         style = MaterialTheme.typography.titleMedium,
@@ -1117,6 +1134,10 @@ private fun BatchCard(
                     TextButton(onClick = onRemovePartner) {
                         Text(stringResource(R.string.rules_batch_remove_partner))
                     }
+                } else if (partners.isNotEmpty()) {
+                    TextButton(onClick = { assignPickerOpen = true }) {
+                        Text(stringResource(R.string.rules_batch_add_partner))
+                    }
                 }
                 TextButton(onClick = onDelete) {
                     Text(
@@ -1126,6 +1147,32 @@ private fun BatchCard(
                 }
             }
         }
+    }
+    if (assignPickerOpen) {
+        AlertDialog(
+            onDismissRequest = { assignPickerOpen = false },
+            title = { Text(stringResource(R.string.rules_batch_add_partner_title, batch.name)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    partners.forEach { partner ->
+                        TextButton(
+                            onClick = {
+                                assignPickerOpen = false
+                                onAssignPartner(partner.pairId)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(partner.name, modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { assignPickerOpen = false }) {
+                    Text(stringResource(R.string.rules_cancel))
+                }
+            },
+        )
     }
 }
 

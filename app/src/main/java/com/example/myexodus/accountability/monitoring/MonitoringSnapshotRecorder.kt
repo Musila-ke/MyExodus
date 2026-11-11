@@ -3,13 +3,16 @@ package com.example.myexodus.accountability.monitoring
 import android.util.Log
 import com.example.myexodus.accountability.serialization.AccountabilityEventCategory
 import com.example.myexodus.accountability.serialization.AccountabilityEventWire
+import com.example.myexodus.accountability.serialization.MonitoringCapability
 import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.serialization.OutboxAgeBucket
 import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.accountability.state.AccountabilityDatabase
 import com.example.myexodus.blocking.ProtectionAuthority
+import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.PartnerEventJournal
+import com.example.myexodus.data.db.entity.hasLiveWebsiteRule
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -56,20 +59,30 @@ class MonitoringSnapshotRecorder(
     private val storeFactory: AppRulesStoreFactory,
     private val outbox: AccountabilityDatabase,
     private val liveness: () -> MonitoringLiveness,
+    /** Grants held right now; null when any probe failed (the snapshot then claims nothing). */
+    private val capabilities: () -> Set<MonitoringCapability>?,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
     private val mutex = Mutex()
+
+    /** Last observed grant set — the change-detection base (guarded by [mutex]). */
+    private var lastCapabilities: Set<MonitoringCapability>? = null
 
     /** True when a journal row was written. */
     suspend fun record(force: Boolean = false): Boolean = mutex.withLock {
         val store = storeFactory.open() ?: return@withLock false
         val dao = store.partnerLivenessDao()
         val previous = dao.checkin()
-        val state = liveness().monitoringState()
+        val reading = liveness()
+        // Grants are only claimed from a confirmed live reading; an absent or stale service
+        // says nothing about permissions, and must not read as "all revoked".
+        val caps = if (reading is MonitoringLiveness.Confirmed) capabilities() else null
         val nowMs = now()
+        val state = protectionState(reading, caps, store, nowMs)
         val changed = previous?.lastState != state.wire
+        val capsChanged = caps != null && caps != lastCapabilities
         val due = nowMs - (previous?.lastRecordedAtMs ?: 0L) >= SNAPSHOT_INTERVAL_MILLIS
-        if (!force && previous != null && !changed && !due) return@withLock false
+        if (!force && previous != null && !changed && !capsChanged && !due) return@withLock false
 
         val consented = runCatching {
             store.pairSharingDao().profileAll().any { it.shareAvailability }
@@ -80,16 +93,20 @@ class MonitoringSnapshotRecorder(
                 store.partnerEventJournalDao().insert(
                     PartnerEventJournal.forEvent(
                         eventId = AccountabilityEventWire.newEventId(),
-                        category = categoryFor(previous?.lastState, state),
+                        category = categoryFor(previous?.lastState, state, capsLost(caps)),
                         occurredAtMinute = AccountabilityEventWire.minuteOf(nowMs),
                         createdAtMs = nowMs,
                         monitoringState = state,
                         outboxAgeBucket = outboxAgeBucket(nowMs),
+                        capabilities = caps,
                     ),
                 )
             }.onFailure { Log.w(TAG, "monitoring snapshot journal failed", it) }
                 .isSuccess
         }
+        // The observation base advances with the debounce even without consent (or on a
+        // failed insert): otherwise every later tick replays the same grant change.
+        if (caps != null) lastCapabilities = caps
         // Owner 2026-11-02: a journaled snapshot is partner-visible — deliver it now, not on
         // the next 15-min pass. Same kick as every other shared write.
         if (journaled) PartnerSyncSignals.activityEmitted.tryEmit(Unit)
@@ -101,6 +118,35 @@ class MonitoringSnapshotRecorder(
         }.onFailure { Log.w(TAG, "monitoring check-in row update failed", it) }
         journaled
     }
+
+    /**
+     * Owner 2026-11-11: the partner pill reports protection quality, not only detection
+     * authority. Accessibility alive holds authority FULL, but a missing essential grant
+     * (usage, overlay, or VPN consent while a website rule is live) leaves blocking partial —
+     * the same verdict the user side computes in BlockingReadiness.limitedBeyondAuthority.
+     */
+    private suspend fun protectionState(
+        reading: MonitoringLiveness,
+        caps: Set<MonitoringCapability>?,
+        store: AppRulesStore,
+        nowMs: Long,
+    ): MonitoringState {
+        val base = reading.monitoringState()
+        if (base != MonitoringState.ACTIVE || caps == null) return base
+        val essentialGap = MonitoringCapability.USAGE_ACCESS !in caps ||
+            MonitoringCapability.OVERLAY !in caps ||
+            (MonitoringCapability.WEBSITE_FILTER !in caps && hasLiveWebsiteRuleAt(store, nowMs))
+        return if (essentialGap) MonitoringState.DEGRADED else base
+    }
+
+    /** An unreadable rules table claims nothing: a VPN gap degrades only when a website rule
+     *  is known to need the tunnel. */
+    private suspend fun hasLiveWebsiteRuleAt(
+        store: AppRulesStore,
+        nowMs: Long,
+    ): Boolean = runCatching {
+        hasLiveWebsiteRule(store.restrictionRuleDao().getActiveRules(), nowMs)
+    }.getOrDefault(false)
 
     /** A null oldest pending row means nothing is owed — the freshest possible outbox. */
     private suspend fun outboxAgeBucket(nowMs: Long): OutboxAgeBucket {
@@ -119,14 +165,24 @@ class MonitoringSnapshotRecorder(
         }
     }
 
+    private fun capsLost(current: Set<MonitoringCapability>?): Boolean {
+        val previous = lastCapabilities ?: return false
+        return current != null && previous - current != emptySet<MonitoringCapability>()
+    }
+
     /**
      * The category coarse-labels *why* this snapshot exists: the first or a steady periodic
-     * one is device status; a transition into ACTIVE is a permission/component change that
-     * restored coverage, a transition out of it is something becoming unavailable. Receivers
-     * render the state field; the category is the notification-copy hint for later steps.
+     * one is device status; a transition into ACTIVE is a permission/component change, and a
+     * grant disappearing under an unchanged authority is the same kind of change. Receivers
+     * render the state field; the category is the notification-copy hint.
      */
-    private fun categoryFor(previousState: String?, state: MonitoringState): AccountabilityEventCategory =
+    private fun categoryFor(
+        previousState: String?,
+        state: MonitoringState,
+        capsLost: Boolean,
+    ): AccountabilityEventCategory =
         when {
+            capsLost -> AccountabilityEventCategory.MONITORING_PERMISSION_CHANGED
             previousState == null -> AccountabilityEventCategory.DEVICE_STATUS_CHANGED
             previousState == state.wire -> AccountabilityEventCategory.DEVICE_STATUS_CHANGED
             state == MonitoringState.ACTIVE -> AccountabilityEventCategory.MONITORING_PERMISSION_CHANGED

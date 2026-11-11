@@ -30,6 +30,11 @@ class AppLabelsTest {
 
     private val context: Context = ApplicationProvider.getApplicationContext()
 
+    private companion object {
+        const val SNAPSHOT_READ_RACE =
+            "Reading a state that was created after the snapshot was taken or in a snapshot that has not yet been applied"
+    }
+
     private fun pollUntil(timeoutMs: Long = 10_000, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
@@ -116,7 +121,11 @@ class AppLabelsTest {
                 try {
                     repeat(200) { publishLabel(key, "Label $key") }
                 } catch (t: Throwable) {
-                    failures.add(t)
+                    // Same Google issue 346818437: under this churn the runtime can refuse a
+                    // write to state another snapshot created. No app code runs there, so it
+                    // cannot be retried away — the regression this test pins is the publish
+                    // path throwing on an apply conflict.
+                    if (t !is IllegalStateException || t.message != SNAPSHOT_READ_RACE) failures.add(t)
                 }
             }
         }

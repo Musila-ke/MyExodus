@@ -6,6 +6,7 @@ import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.serialization.OutboxAgeBucket
 import com.example.myexodus.data.db.entity.PartnerMonitoringSnapshot
+import com.example.myexodus.data.db.entity.PartnerProtectionGap
 import com.example.myexodus.data.db.entity.PartnerRuleChange
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.sync.displayNameOf
@@ -75,6 +76,9 @@ class PartnerDashboardSource(
     /** §8.4 RULE_CONTROL: received rule-lifecycle rows, newest first — the feed's rule half.
      *  Contract bodies never reach [decoderFor], so the receiver's rows are the only source. */
     private val ruleChanges: suspend (pairId: String) -> List<PartnerRuleChange> = { emptyList() },
+    /** Owner ask 2026-11-10: grants the partner's phone lost while a live shared rule needed
+     *  them — the feed/Rules half of the permission-lost notification, newest first. */
+    private val protectionGaps: suspend (pairId: String) -> List<PartnerProtectionGap> = { emptyList() },
 ) {
 
     /**
@@ -122,12 +126,13 @@ class PartnerDashboardSource(
         // the screen on Loading — it degrades to "no decodable rows", the honest reading.
         val decode = runCatching { decoderFor(enrollment) }.getOrElse { { _: ByteArray -> null } }
         val ruleRows = runCatching { ruleChanges(enrollment.pairId) }.getOrElse { emptyList() }
+        val gapRows = runCatching { protectionGaps(enrollment.pairId) }.getOrElse { emptyList() }
         val receivedAlerts = rows.mapNotNull { row ->
             runCatching { decode(row.envelope) }
                 .getOrNull()
                 ?.let { alertOf(it, row.createdAtEpochMillis) }
         }
-        val ruleAlerts = ruleRows.mapNotNull(::ruleChangeAlert)
+        val ruleAlerts = ruleRows.mapNotNull(::ruleChangeAlert) + gapRows.mapNotNull(::protectionGapAlert)
         val alerts = receivedAlerts + ruleAlerts
             .filter { it.atEpochMillis >= nowMillis - WEEK_MILLIS }
         val chainHead = head(enrollment.pairId, enrollment.partnerSigningKeyId)

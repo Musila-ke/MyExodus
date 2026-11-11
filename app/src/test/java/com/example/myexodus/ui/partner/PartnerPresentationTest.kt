@@ -1,9 +1,11 @@
 package com.example.myexodus.ui.partner
 
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.MonitoringCapability
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainHead
+import com.example.myexodus.data.db.entity.PartnerProtectionGap
 import com.example.myexodus.data.db.entity.PartnerRuleChange
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.recovery.RecoveryMirror
@@ -152,6 +154,32 @@ class PartnerPresentationTest {
             occurredAtMinute = 1, receivedAtMs = now, expiresAtMs = now,
         )
         assertNull(ruleChangeAlert(row))
+    }
+
+    @Test
+    fun protectionGap_rowsCarryTheLostGrantAndTheAffectedRuleNames() {
+        val row = PartnerProtectionGap(
+            pairId = "pair", eventId = "evt", capability = "A11Y",
+            ruleNames = PartnerProtectionGap.encodeRuleNames(listOf("Instagram", "YouTube Music")),
+            occurredAtMs = now, expiresAtMs = now,
+        )
+        assertEquals(
+            PartnerAlert.PermissionLost(
+                MonitoringCapability.ACCESSIBILITY,
+                listOf("Instagram", "YouTube Music"),
+                now,
+            ),
+            protectionGapAlert(row),
+        )
+    }
+
+    @Test
+    fun protectionGap_unknownTokenIsDropped_notShownAsAnotherGrant() {
+        val row = PartnerProtectionGap(
+            pairId = "pair", eventId = "evt", capability = "NOTIFICATIONS",
+            ruleNames = "Instagram", occurredAtMs = now, expiresAtMs = now,
+        )
+        assertNull(protectionGapAlert(row))
     }
 
     @Test

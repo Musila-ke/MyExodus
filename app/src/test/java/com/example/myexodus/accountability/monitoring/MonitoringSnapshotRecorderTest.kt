@@ -5,6 +5,8 @@ import android.content.Context
 import androidx.room3.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.accountability.serialization.AccountabilityEventCategory
+import com.example.myexodus.accountability.serialization.AccountabilityEventWire
+import com.example.myexodus.accountability.serialization.MonitoringCapability
 import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.serialization.OutboxAgeBucket
 import com.example.myexodus.accountability.state.AccountabilityDatabase
@@ -18,6 +20,8 @@ import com.example.myexodus.data.db.KeyFailure
 import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.data.db.RulesStoreKeyManager
 import com.example.myexodus.data.db.entity.PairProfileSharing
+import com.example.myexodus.data.db.entity.RestrictionRule
+import com.example.myexodus.data.db.entity.UserProfile
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -45,6 +49,7 @@ class MonitoringSnapshotRecorderTest {
 
     private var nowMs = START
     private var liveness: MonitoringLiveness = MonitoringLiveness.Confirmed(ProtectionAuthority.FULL)
+    private var capabilities: Set<MonitoringCapability>? = MonitoringCapability.entries.toSet()
 
     @Before
     fun setUp() {
@@ -69,6 +74,7 @@ class MonitoringSnapshotRecorderTest {
         storeFactory = factory,
         outbox = db,
         liveness = { liveness },
+        capabilities = { capabilities },
         now = { nowMs },
     )
 
@@ -82,6 +88,25 @@ class MonitoringSnapshotRecorderTest {
         factory.open()!!.partnerEventJournalDao().dueForDelivery(0, nowMs, 10)
 
     private suspend fun lastState() = factory.open()!!.partnerLivenessDao().checkin()?.lastState
+
+    private suspend fun seedProfile() {
+        factory.open()!!.userProfileDao().insert(
+            UserProfile(
+                userId = "p-1", name = "Test", email = "t@example.com", phoneNumber = null,
+                dateOfBirth = 0L, hasAccessibilityPermission = false,
+                hasUsageStatsPermission = false, hasVpnPermission = false,
+                hasNotificationPermission = false, hasDeviceAdminPermission = false,
+                devicePublicKey = null, recoveryEscrowKey = null, isActive = true,
+            ),
+        )
+    }
+
+    private fun urlRule() = RestrictionRule(
+        ruleId = "r-url", profileId = "p-1", blockedPackage = "example.com",
+        targetType = "WEBSITE", isAlwaysOn = true, dailyLimitMs = 0L,
+        timeRangeStart = null, timeRangeEnd = null, activeDaysOfWeek = "1111111",
+        blockExpiresAt = 0L, severityLevel = "HIGH",
+    )
 
     @Test
     fun firstRecord_journalsTheObservedState() = runTest {
@@ -174,6 +199,50 @@ class MonitoringSnapshotRecorderTest {
         assertEquals(MonitoringState.UNKNOWN.wire, journalRows().single().monitoringState)
     }
 
+    /** Owner directive 2026-11-10: a revoke under an unchanged authority is still journaled
+     *  now, carries the new grant set, and is labelled a permission change. */
+    @Test
+    fun capabilityLoss_underUnchangedAuthority_journalsImmediately() = runTest {
+        consent()
+        val recorder = recorder()
+        recorder.record()
+
+        capabilities = setOf(MonitoringCapability.ACCESSIBILITY)
+        nowMs += 1_000
+        assertTrue("a grant loss does not wait for the hour", recorder.record())
+
+        val row = journalRows().first {
+            it.category == AccountabilityEventCategory.MONITORING_PERMISSION_CHANGED.wire
+        }
+        assertEquals(setOf(MonitoringCapability.ACCESSIBILITY), row.capabilitiesOrNull())
+        assertEquals(AccountabilityEventWire.SCHEMA_VERSION, row.schemaVersion)
+    }
+
+    /** An unverifiable reading states no grants at all — the journal must not assert an
+     *  empty set, so the body degrades to the pre-grant wire version. */
+    @Test
+    fun unverifiableLiveness_journalsNoGrantClaim() = runTest {
+        consent()
+        liveness = MonitoringLiveness.Unverifiable
+
+        recorder().record()
+
+        val row = journalRows().single()
+        assertEquals(null, row.capabilitiesOrNull())
+        assertEquals(2, row.schemaVersion)
+    }
+
+    @Test
+    fun steadyGrants_withinTheInterval_doNotRetrigger() = runTest {
+        consent()
+        val recorder = recorder()
+        recorder.record()
+
+        nowMs += 1_000
+        assertFalse(recorder.record())
+        assertEquals(1, journalRows().size)
+    }
+
     @Test
     fun degradedAuthorities_mapToDegradedAndUnavailable() = runTest {
         consent()
@@ -187,6 +256,60 @@ class MonitoringSnapshotRecorderTest {
         assertEquals(
             MonitoringState.UNAVAILABLE.wire,
             journalRows().first { it.monitoringState == MonitoringState.UNAVAILABLE.wire }.monitoringState,
+        )
+    }
+
+    /** Owner ruling 2026-11-11: accessibility alive keeps authority FULL, but a missing usage
+     *  or overlay grant means blocking is partial — the partner pill must say DEGRADED, the
+     *  same Limited verdict the user side derives from BlockingReadiness. */
+    @Test
+    fun usageOrOverlayGap_underFullAuthority_isJournaledAsDegraded_andRestoreIsActive() = runTest {
+        consent()
+        val recorder = recorder()
+        recorder.record()
+
+        for (lost in listOf(MonitoringCapability.USAGE_ACCESS, MonitoringCapability.OVERLAY)) {
+            capabilities = MonitoringCapability.entries.toSet() - lost
+            nowMs += 1_000
+            assertTrue("$lost loss journals immediately", recorder.record())
+            assertTrue(
+                "the journaled row carries DEGRADED",
+                journalRows().any {
+                    it.monitoringState == MonitoringState.DEGRADED.wire &&
+                        it.category == AccountabilityEventCategory.MONITORING_PERMISSION_CHANGED.wire
+                },
+            )
+
+            capabilities = MonitoringCapability.entries.toSet()
+            nowMs += 1_000
+            assertTrue("restoring $lost journals the return", recorder.record())
+            assertEquals(MonitoringState.ACTIVE.wire, lastState())
+        }
+    }
+
+    /** The VPN grant only matters while a website rule is live — same rule as the user-side
+     *  readiness chip (RestrictionRule.hasLiveWebsiteRule). */
+    @Test
+    fun vpnGap_degradesOnlyWhileAWebsiteRuleIsLive() = runTest {
+        consent()
+        seedProfile()
+        capabilities = MonitoringCapability.entries.toSet() - MonitoringCapability.WEBSITE_FILTER
+        val recorder = recorder()
+        recorder.record()
+
+        assertEquals(
+            "no website rule: VPN consent is irrelevant",
+            MonitoringState.ACTIVE.wire,
+            journalRows().single().monitoringState,
+        )
+
+        factory.open()!!.restrictionRuleDao().insert(urlRule())
+        nowMs += 1_000
+        assertTrue(recorder.record())
+        assertEquals(
+            "a live website rule needs the tunnel",
+            MonitoringState.DEGRADED.wire,
+            journalRows().first { it.monitoringState == MonitoringState.DEGRADED.wire }.monitoringState,
         )
     }
 

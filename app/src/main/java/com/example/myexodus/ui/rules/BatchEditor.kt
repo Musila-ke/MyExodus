@@ -76,15 +76,19 @@ private const val BATCH_NAME_MAX = 64
 private const val TAG = "BatchEditor"
 
 /**
- * Batch creation (owner mandate 2026-10-31): several apps and websites named and blocked
- * together under one partner. Every member shares the batch id/name, the block settings, and
- * the assignment; [RulesRepository.insertBatch] commits them and ONE batch-level journal row
- * in a single transaction, so the partner learns about "Social media" as a whole and can
- * never see half of it. Validation reuses the single-rule editor's own helpers, so a batch
- * member is exactly the rule that editor would have produced.
+ * Batch creation and editing (owner mandate 2026-10-31; edit mode 2026-11-11 — the editor
+ * existed only at creation): several apps and websites named and blocked together under one
+ * partner. Every member shares the batch id/name, the block settings, and the assignment;
+ * [RulesRepository.insertBatch]/[RulesRepository.updateBatch] commit them and ONE batch-level
+ * journal row in a single transaction, so the partner learns about "Social media" as a whole
+ * and can never see half of it. Validation reuses the single-rule editor's own helpers, so a
+ * batch member is exactly the rule that editor would have produced. [initial] non-null edits
+ * that batch in place: kept members keep their rule id and enabled state, dropped members are
+ * deleted, new targets join with fresh ids.
  */
 @Composable
 fun BatchEditorScreen(
+    initial: List<RestrictionRule>? = null,
     existingRules: List<RestrictionRule>,
     partners: List<ReachOutTarget>,
     repository: RulesRepository,
@@ -100,29 +104,48 @@ fun BatchEditorScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val deviceZone = remember { ZoneId.systemDefault().id }
+    val editingBatchId = initial?.firstOrNull()?.batchId
+    val base = initial?.firstOrNull()
 
-    var name by rememberSaveable { mutableStateOf("") }
+    var name by rememberSaveable { mutableStateOf(base?.batchName.orEmpty()) }
     var apps by rememberSaveable(
         stateSaver = listSaver(save = { it }, restore = { it }),
-    ) { mutableStateOf(emptyList<String>()) }
+    ) {
+        mutableStateOf(initial.orEmpty().filter { it.targetType == "APP" }.map { it.blockedPackage })
+    }
     var websites by rememberSaveable(
         stateSaver = listSaver(save = { it }, restore = { it }),
-    ) { mutableStateOf(emptyList<String>()) }
+    ) {
+        mutableStateOf(initial.orEmpty().filter { it.targetType == "WEBSITE" }.map { it.blockedPackage })
+    }
     var hostDraft by rememberSaveable { mutableStateOf("") }
     var showAppPicker by rememberSaveable { mutableStateOf(false) }
     var presetCategoryId by rememberSaveable { mutableStateOf<String?>(null) }
 
     // Same defaults and stored shape as a preset rule: a batch means "block these now".
-    var alwaysOn by rememberSaveable { mutableStateOf(true) }
-    var windowEnabled by rememberSaveable { mutableStateOf(false) }
-    var limitEnabled by rememberSaveable { mutableStateOf(false) }
-    var limitHours by rememberSaveable { mutableStateOf("") }
-    var limitMinutes by rememberSaveable { mutableStateOf("") }
-    var startMinutes by rememberSaveable { mutableLongStateOf(DEFAULT_START_MINUTES) }
-    var endMinutes by rememberSaveable { mutableLongStateOf(DEFAULT_END_MINUTES) }
-    var days by rememberSaveable { mutableStateOf("1111111") }
-    var expiresAt by rememberSaveable { mutableLongStateOf(0L) }
-    var assignedPairId by rememberSaveable { mutableStateOf<String?>(null) }
+    var alwaysOn by rememberSaveable { mutableStateOf(base?.isAlwaysOn ?: true) }
+    var windowEnabled by rememberSaveable {
+        mutableStateOf(base?.timeRangeStart != null && base?.timeRangeEnd != null)
+    }
+    var limitEnabled by rememberSaveable { mutableStateOf((base?.dailyLimitMs ?: 0L) > 0L) }
+    // Same prefill rule as the single-rule editor: only the non-zero half is shown.
+    var limitHours by rememberSaveable {
+        mutableStateOf(
+            base?.dailyLimitMs?.takeIf { it > 0L }?.div(60 * MINUTE_MS)?.takeIf { it > 0L }
+                ?.toString().orEmpty(),
+        )
+    }
+    var limitMinutes by rememberSaveable {
+        mutableStateOf(
+            base?.dailyLimitMs?.takeIf { it > 0L }?.div(MINUTE_MS)?.rem(60)?.takeIf { it > 0L }
+                ?.toString().orEmpty(),
+        )
+    }
+    var startMinutes by rememberSaveable { mutableLongStateOf(base?.timeRangeStart ?: DEFAULT_START_MINUTES) }
+    var endMinutes by rememberSaveable { mutableLongStateOf(base?.timeRangeEnd ?: DEFAULT_END_MINUTES) }
+    var days by rememberSaveable { mutableStateOf(base?.activeDaysOfWeek ?: "1111111") }
+    var expiresAt by rememberSaveable { mutableLongStateOf(base?.blockExpiresAt ?: 0L) }
+    var assignedPairId by rememberSaveable { mutableStateOf(base?.assignedPairId) }
 
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -133,12 +156,16 @@ fun BatchEditorScreen(
 
     LaunchedEffect(error, saveAttempt) { if (error != null) scrollState.animateScrollTo(0) }
 
-    val existingAppKeys = remember(existingRules) {
-        existingRules.filter { it.targetType == "APP" }
+    // In edit mode the batch's own members are not duplicates of themselves.
+    val otherRules = remember(existingRules, editingBatchId) {
+        if (editingBatchId == null) existingRules else existingRules.filter { it.batchId != editingBatchId }
+    }
+    val existingAppKeys = remember(otherRules) {
+        otherRules.filter { it.targetType == "APP" }
             .map { targetKey(it.blockedPackage, "APP") }.toSet()
     }
-    val existingWebsiteKeys = remember(existingRules) {
-        existingRules.filter { it.targetType == "WEBSITE" }
+    val existingWebsiteKeys = remember(otherRules) {
+        otherRules.filter { it.targetType == "WEBSITE" }
             .map { targetKey(it.blockedPackage, "WEBSITE") }.toSet()
     }
 
@@ -210,7 +237,7 @@ fun BatchEditorScreen(
         }
         var storedWebsites = websites
         if (limitOn) {
-            val patterns = siteLimitPatternsOf(existingRules, psl, excludeRuleId = null)
+            val patterns = siteLimitPatternsOf(otherRules, psl, excludeRuleId = null)
             for (host in websites) {
                 when (val check = siteLimitTarget(host, psl, patterns)) {
                     is SiteLimitCheck.Ok -> storedWebsites = storedWebsites - host + check.host
@@ -249,10 +276,12 @@ fun BatchEditorScreen(
         scope.launch(Dispatchers.IO) {
             runCatching {
                 val profileId = repository.ensureActiveProfile().userId
-                val batchId = UUID.randomUUID().toString()
+                val batchId = editingBatchId ?: UUID.randomUUID().toString()
+                val priorByTarget = initial.orEmpty().associateBy { targetKey(it.blockedPackage, it.targetType) }
                 val targets = apps.map { it to "APP" } + storedWebsites.map { it to "WEBSITE" }
                 val rules = targets.map { (target, type) ->
-                    RestrictionRule(
+                    // A kept member keeps its id and enabled state; a new target is born here.
+                    val baseRule = priorByTarget[targetKey(target, type)] ?: RestrictionRule(
                         ruleId = UUID.randomUUID().toString(),
                         profileId = profileId,
                         blockedPackage = target,
@@ -268,9 +297,25 @@ fun BatchEditorScreen(
                         assignedPairId = assignedPairId,
                         batchId = batchId,
                         batchName = batchName,
+                        // A member joining a paused batch joins it paused.
+                        isEnabled = base?.isEnabled ?: true,
+                    )
+                    baseRule.copy(
+                        blockedPackage = target,
+                        targetType = type,
+                        isAlwaysOn = fields.isAlwaysOn,
+                        dailyLimitMs = clampStoredLimitMs(fields.dailyLimitMs),
+                        timeRangeStart = fields.timeRangeStart,
+                        timeRangeEnd = fields.timeRangeEnd,
+                        activeDaysOfWeek = fields.activeDaysOfWeek,
+                        timezone = deviceZone,
+                        blockExpiresAt = expiresAt,
+                        assignedPairId = assignedPairId,
+                        batchId = batchId,
+                        batchName = batchName,
                     )
                 }
-                repository.insertBatch(rules)
+                if (editingBatchId == null) repository.insertBatch(rules) else repository.updateBatch(batchId, rules)
                 rules.filter { it.targetType == "APP" && it.dailyLimitMs > 0L }.forEach { rule ->
                     runCatching {
                         usageAccountingEngine.reconcileWithPlatform(
@@ -292,7 +337,12 @@ fun BatchEditorScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        BackRow(label = stringResource(R.string.batch_new_title), onBack = onDone)
+        BackRow(
+            label = stringResource(
+                if (editingBatchId == null) R.string.batch_new_title else R.string.batch_edit_title,
+            ),
+            onBack = onDone,
+        )
 
         error?.let { message ->
             ErrorBanner(message = message, onDismiss = { error = null })
@@ -592,7 +642,16 @@ fun BatchEditorScreen(
             enabled = !saving,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(stringResource(if (saving) R.string.batch_saving else R.string.batch_save))
+            Text(
+                stringResource(
+                    when {
+                        editingBatchId != null && saving -> R.string.batch_updating
+                        editingBatchId != null -> R.string.batch_update
+                        saving -> R.string.batch_saving
+                        else -> R.string.batch_save
+                    },
+                ),
+            )
         }
     }
 

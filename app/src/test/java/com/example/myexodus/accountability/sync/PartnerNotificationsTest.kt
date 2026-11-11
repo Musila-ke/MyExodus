@@ -11,12 +11,14 @@ import com.example.myexodus.MainActivity
 import com.example.myexodus.R
 import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.MonitoringCapability
 import com.example.myexodus.accountability.serialization.PlanBody
 import com.example.myexodus.accountability.serialization.PlanWire
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleIdentity
 import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.ui.partner.VIEW_ACTIVITY
+import com.example.myexodus.ui.partner.VIEW_CHECKINS
 import com.example.myexodus.ui.partner.VIEW_REQUESTS
 import com.example.myexodus.ui.partner.VIEW_RULES
 import java.text.DateFormat
@@ -166,6 +168,51 @@ class PartnerNotificationsTest {
             "the lockscreen copy stays generic (FR-13)",
             context.getString(R.string.partner_event_title),
             publicVersion!!.extras.getString(Notification.EXTRA_TITLE),
+        )
+    }
+
+    /** ADR #299 (owner directive 2026-11-10): a lost grant names the partner, each lost grant's
+     *  real effect and the affected rules — three rules then "N more" — while the lockscreen
+     *  keeps the generic copy (FR-13). */
+    @Test
+    fun permissionLost_namesPartnerEffectsAndRules_lockscreenStaysGeneric() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyPermissionLost(
+            context,
+            PAIR_ID,
+            PARTNER_NAME,
+            mapOf(
+                MonitoringCapability.ACCESSIBILITY to listOf("YouTube", "Games", "Bank", "Mail"),
+                MonitoringCapability.WEBSITE_FILTER to listOf("Adult sites"),
+            ),
+        )
+
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_permission_lost_title_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        val text = notification.extras.getString(Notification.EXTRA_TEXT)!!
+        assertTrue(text.contains(context.getString(R.string.partner_permission_lost_accessibility)))
+        assertTrue(
+            text.contains(
+                context.getString(
+                    R.string.partner_permission_lost_more, "YouTube, Games, Bank", 1,
+                ),
+            ),
+        )
+        assertTrue(text.contains(context.getString(R.string.partner_permission_lost_vpn)))
+        assertTrue(text.contains("Adult sites"))
+        // Owner ruling 2026-11-10: the tap lands on Their phone, not Rules & blocks.
+        val tap = shadowOf(notification.contentIntent).savedIntent
+        assertEquals(VIEW_CHECKINS, tap.getStringExtra(MainActivity.EXTRA_OPEN_PARTNER_VIEW))
+        assertEquals(PAIR_ID, tap.getStringExtra(MainActivity.EXTRA_OPEN_PARTNER))
+        assertEquals(Notification.VISIBILITY_PRIVATE, notification.visibility)
+        assertEquals(
+            "the lockscreen copy stays generic (FR-13)",
+            context.getString(R.string.partner_event_title),
+            notification.publicVersion!!.extras.getString(Notification.EXTRA_TITLE),
         )
     }
 

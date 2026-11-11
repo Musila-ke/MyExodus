@@ -246,6 +246,154 @@ class BatchRuleLifecycleTest {
     }
 
     @Test
+    fun assignPartner_givesAnUnassignedBatchOneAssignedRow_andSharesCheckIns() = runBlocking {
+        seedProfile()
+        var clock = BASE_MS
+        val repository = RulesRepository(factory, RulesSnapshotPublisher(context, factory), now = { clock })
+        val store = factory.open()!!
+        val batchId = UUID.randomUUID().toString()
+
+        repository.insertBatch(
+            listOf(
+                appRule("com.example.one", batchId, "Social media", assignedPairId = null),
+                appRule("com.example.two", batchId, "Social media", assignedPairId = null),
+            ),
+        )
+        clock += STEP_MS
+        repository.assignBatchPartner(batchId, PAIR_A)
+
+        assertTrue(
+            "every member carries the new partner",
+            store.restrictionRuleDao().getByBatch(batchId).all { it.assignedPairId == PAIR_A },
+        )
+        val rows = store.partnerEventJournalDao().dueRuleChangesForPair(PAIR_A, 0L, clock, LIMIT)
+        assertEquals("one batch-level row, not two member rows", 1, rows.size)
+        assertEquals(RuleChange.ASSIGNED.wire, rows.single().ruleChange)
+        assertEquals("the wire rule id is the batch id", batchId, rows.single().ruleId)
+        val identity = requireNotNull(rows.single().ruleIdentityOrNull())
+        assertEquals(RuleTargetType.BATCH, identity.targetType)
+        assertEquals(2L, identity.itemCount)
+        assertEquals(
+            "assignment switches this pair's check-ins on (owner ruling 2026-11-10)",
+            true,
+            store.pairSharingDao().profileFor(PAIR_A)?.shareCheckins,
+        )
+
+        clock += STEP_MS
+        repository.assignBatchPartner(batchId, PAIR_A)
+        assertEquals(
+            "re-assigning the same pair journals nothing",
+            1,
+            store.partnerEventJournalDao().dueRuleChangesForPair(PAIR_A, 0L, clock, LIMIT).size,
+        )
+    }
+
+    @Test
+    fun assignPartner_switchingPair_tellsTheOldPairAndTheNewPair() = runBlocking {
+        seedProfile()
+        var clock = BASE_MS
+        val repository = RulesRepository(factory, RulesSnapshotPublisher(context, factory), now = { clock })
+        val store = factory.open()!!
+        val batchId = UUID.randomUUID().toString()
+
+        repository.insertBatch(listOf(appRule("com.example.one", batchId, "Social media", PAIR_A)))
+        clock += STEP_MS
+        repository.assignBatchPartner(batchId, PAIR_B)
+
+        val aRows = store.partnerEventJournalDao().dueRuleChangesForPair(PAIR_A, 0L, clock, LIMIT)
+            .filter { it.ruleChange == RuleChange.UNASSIGNED.wire }
+        val bRows = store.partnerEventJournalDao().dueRuleChangesForPair(PAIR_B, 0L, clock, LIMIT)
+            .filter { it.ruleChange == RuleChange.ASSIGNED.wire }
+        assertEquals("the old pair is told it left", 1, aRows.size)
+        assertEquals("the new pair is told it joined", 1, bRows.size)
+        assertTrue(
+            "both are batch identities",
+            (aRows + bRows).all { it.ruleIdentityOrNull()?.targetType == RuleTargetType.BATCH },
+        )
+    }
+
+    @Test
+    fun updateBatch_renamesRekembers_journalsOneUpdatedRow_andKeepsMemberIds() = runBlocking {
+        seedProfile()
+        var clock = BASE_MS
+        val repository = RulesRepository(factory, RulesSnapshotPublisher(context, factory), now = { clock })
+        val store = factory.open()!!
+        val batchId = UUID.randomUUID().toString()
+
+        val kept = appRule("com.example.keep", batchId, "Social media", PAIR_A)
+        repository.insertBatch(listOf(kept, websiteRule("drop.com", batchId, "Social media", PAIR_A)))
+        clock += STEP_MS
+        repository.setBatchEnabled(batchId, false)
+        clock += STEP_MS
+
+        val paused = store.restrictionRuleDao().getByBatch(batchId)
+        val keptPaused = paused.first { it.ruleId == kept.ruleId }
+        repository.updateBatch(
+            batchId,
+            listOf(
+                keptPaused.copy(batchName = "Focus"),
+                appRule("com.example.new", batchId, "Focus", PAIR_A).copy(isEnabled = false),
+            ),
+        )
+
+        val stored = store.restrictionRuleDao().getByBatch(batchId)
+        assertEquals("dropped one member, added one", 2, stored.size)
+        assertTrue("the rename reached every member", stored.all { it.batchName == "Focus" })
+        assertTrue("the new target joined", stored.any { it.blockedPackage == "com.example.new" })
+        assertTrue("the dropped target left", stored.none { it.blockedPackage == "drop.com" })
+        assertEquals("the kept member kept its id", 1, stored.count { it.ruleId == kept.ruleId })
+        assertTrue("a paused batch stays paused through an edit", stored.none { it.isEnabled })
+
+        val rows = store.partnerEventJournalDao().dueRuleChangesForPair(PAIR_A, 0L, clock, LIMIT)
+            .filter { it.ruleChange == RuleChange.UPDATED.wire }
+        assertEquals("one batch-level UPDATED row for the edit", 1, rows.size)
+        assertEquals(batchId, rows.single().ruleId)
+        val identity = requireNotNull(rows.single().ruleIdentityOrNull())
+        assertEquals(RuleTargetType.BATCH, identity.targetType)
+        assertEquals("Focus", identity.label)
+        assertEquals("the told size is the batch's new size", 2L, identity.itemCount)
+    }
+
+    @Test
+    fun updateBatch_switchingPair_journalsUnassignedToTheOldAndAssignedToTheNew() = runBlocking {
+        seedProfile()
+        var clock = BASE_MS
+        val repository = RulesRepository(factory, RulesSnapshotPublisher(context, factory), now = { clock })
+        val store = factory.open()!!
+        val batchId = UUID.randomUUID().toString()
+
+        repository.insertBatch(
+            listOf(
+                appRule("com.example.one", batchId, "Social media", PAIR_A),
+                appRule("com.example.two", batchId, "Social media", PAIR_A),
+            ),
+        )
+        clock += STEP_MS
+        val current = store.restrictionRuleDao().getByBatch(batchId)
+        repository.updateBatch(batchId, current.map { it.copy(assignedPairId = PAIR_B) })
+
+        assertTrue(
+            "every member moved to the new pair",
+            store.restrictionRuleDao().getByBatch(batchId).all { it.assignedPairId == PAIR_B },
+        )
+        val aRows = store.partnerEventJournalDao().dueRuleChangesForPair(PAIR_A, 0L, clock, LIMIT)
+            .filter { it.ruleChange == RuleChange.UNASSIGNED.wire }
+        val bRows = store.partnerEventJournalDao().dueRuleChangesForPair(PAIR_B, 0L, clock, LIMIT)
+            .filter { it.ruleChange == RuleChange.ASSIGNED.wire }
+        assertEquals(1, aRows.size)
+        assertEquals(1, bRows.size)
+        assertTrue(
+            "both are batch identities",
+            (aRows + bRows).all { it.ruleIdentityOrNull()?.targetType == RuleTargetType.BATCH },
+        )
+        assertEquals(
+            "the new pair's check-ins switch on too",
+            true,
+            store.pairSharingDao().profileFor(PAIR_B)?.shareCheckins,
+        )
+    }
+
+    @Test
     fun sweepExpired_tellsAWholeLapsedBatchOnce_butApartialLapseNamesItsMembers() = runBlocking {
         seedProfile()
         var clock = BASE_MS

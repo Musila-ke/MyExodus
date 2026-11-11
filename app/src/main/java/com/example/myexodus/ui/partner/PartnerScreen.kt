@@ -93,6 +93,7 @@ import com.example.myexodus.accountability.monitoring.PartnerConnectionBucket
 import com.example.myexodus.accountability.monitoring.PartnerStatus
 import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.MonitoringCapability
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.accountability.state.ApprovalRequest
@@ -142,8 +143,9 @@ enum class UnpairOutcome { UNPAIRED, CANCELLED, FAILED }
 internal const val VIEW_REQUESTS = "requests"
 internal const val VIEW_ACTIVITY = "activity"
 /** Owner directive 2026-11-01: the partner's device signals (monitoring + connection
- *  check-ins) get their own named destination instead of two equal-weight hub cards. */
-private const val VIEW_CHECKINS = "checkins"
+ *  check-ins) get their own named destination instead of two equal-weight hub cards.
+ *  Internal since 2026-11-10: the permission-lost notification lands here. */
+internal const val VIEW_CHECKINS = "checkins"
 /** Owner ask 2026-10-21: partner sharing moved out of Settings and onto this tab — the
  *  consent surface belongs beside the partners it names. */
 private const val VIEW_SHARING = "sharing"
@@ -1289,7 +1291,18 @@ private fun CheckinsView(state: PartnerDashboardUi.Paired, status: PartnerStatus
             body = stringResource(R.string.partner_checkins_empty_body),
         )
     }
-    state.monitoring?.let { PartnerMonitoringCard(it) }
+    // Owner directive 2026-11-10: when the report says Limited, the newest recorded
+    // protection gap explains why — shown only in that state, so a recovered grant never
+    // leaves a stale gap line under a healthy card.
+    val latestGap = state.ruleHistory
+        .filterIsInstance<PartnerAlert.PermissionLost>()
+        .maxByOrNull { it.atEpochMillis }
+    state.monitoring?.let { monitoring ->
+        PartnerMonitoringCard(
+            monitoring = monitoring,
+            gap = if (monitoring.state == MonitoringState.DEGRADED) latestGap else null,
+        )
+    }
     status?.let { PartnerConnectionCard(it) }
 }
 
@@ -1301,7 +1314,7 @@ private fun CheckinsView(state: PartnerDashboardUi.Paired, status: PartnerStatus
  * ACTIVE: it becomes UNKNOWN ([PartnerMonitoringUi.stale]).
  */
 @Composable
-private fun PartnerMonitoringCard(monitoring: PartnerMonitoringUi) {
+private fun PartnerMonitoringCard(monitoring: PartnerMonitoringUi, gap: PartnerAlert.PermissionLost?) {
     PartnerSurface(spacing = 6.dp) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -1318,8 +1331,11 @@ private fun PartnerMonitoringCard(monitoring: PartnerMonitoringUi) {
                         MonitoringState.UNKNOWN -> R.string.partner_monitoring_state_unknown
                     },
                 ),
+                // Owner directive 2026-11-10: a Limited report is a real risk state, not a
+                // quiet footnote — it carries the same urgency as Off.
                 tone = when (monitoring.state) {
                     MonitoringState.ACTIVE -> PillTone.POSITIVE
+                    MonitoringState.DEGRADED -> PillTone.NEGATIVE
                     MonitoringState.UNAVAILABLE -> PillTone.NEGATIVE
                     else -> PillTone.QUIET
                 },
@@ -1337,6 +1353,22 @@ private fun PartnerMonitoringCard(monitoring: PartnerMonitoringUi) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (gap != null) {
+            Text(
+                stringResource(
+                    R.string.partner_permission_lost_line,
+                    stringResource(permissionEffectRes(gap.capability)),
+                    gapRuleNames(gap.ruleNames) ?: stringResource(R.string.partner_alert_rule),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Text(
+                relativeTimeText(System.currentTimeMillis(), gap.atEpochMillis),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
         Text(
             stringResource(
                 if (monitoring.stale) {
@@ -1376,11 +1408,13 @@ private fun connectionStateTextRes(status: PartnerStatus): Int =
         }
     }
 
-/** LATE is deliberately INFO, not ATTENTION: 45-90 quiet minutes can be completely normal
- *  (doze, WorkManager deferral), and a status dot would read as a fault. */
+/** Owner directive 2026-11-10: a missed check-in window is worth attention, not a quiet dot —
+ *  the timing warning stays in the card body (doze, WorkManager deferral), but the state
+ *  itself no longer reads as "all fine". */
 private fun connectionStateTone(status: PartnerStatus): StatusTone = when {
     !status.consent -> StatusTone.INFO
     status.connection == PartnerConnection.CHECKING_IN -> StatusTone.GOOD
+    status.connection == PartnerConnection.LATE -> StatusTone.ATTENTION
     status.connection == PartnerConnection.NOT_CHECKING_IN -> StatusTone.ATTENTION
     else -> StatusTone.INFO
 }
@@ -1388,8 +1422,8 @@ private fun connectionStateTone(status: PartnerStatus): StatusTone = when {
 /**
  * Plan Step 8 / §4/§8.13: the partner's server-derived connection signal. Coarse buckets only —
  * the screen never shows a check-in timestamp. `consent == false` is its own state ("not
- * shared"), not "not checking in": nothing is shared, so nothing can be concluded. LATE is shown
- * quietly because it can be completely normal (doze, WorkManager deferral).
+ * shared"), not "not checking in": nothing is shared, so nothing can be concluded. LATE carries
+ * attention weight (owner directive 2026-11-10); the body still says it can be normal.
  */
 @Composable
 private fun PartnerConnectionCard(status: PartnerStatus) {
@@ -1407,8 +1441,9 @@ private fun PartnerConnectionCard(status: PartnerStatus) {
                 } else {
                     when (status.connection) {
                         PartnerConnection.CHECKING_IN -> PillTone.POSITIVE
+                        PartnerConnection.LATE -> PillTone.NEGATIVE
                         PartnerConnection.NOT_CHECKING_IN -> PillTone.NEGATIVE
-                        else -> PillTone.QUIET
+                        PartnerConnection.NO_DATA -> PillTone.QUIET
                     }
                 },
             )
@@ -2542,6 +2577,23 @@ private fun ruleChangeLabel(change: RuleChange): Int = when (change) {
     RuleChange.EXPIRED -> R.string.partner_rule_expired
 }
 
+/** Up to three rule names plus an "and N more" tail — the same cap the notification body uses. */
+@Composable
+private fun gapRuleNames(ruleNames: List<String>): String? {
+    if (ruleNames.isEmpty()) return null
+    val shown = ruleNames.take(3).joinToString(", ")
+    val extra = ruleNames.size - 3
+    return if (extra > 0) stringResource(R.string.partner_permission_lost_more, shown, extra) else shown
+}
+
+@StringRes
+private fun permissionEffectRes(capability: MonitoringCapability): Int = when (capability) {
+    MonitoringCapability.ACCESSIBILITY -> R.string.partner_permission_lost_accessibility
+    MonitoringCapability.USAGE_ACCESS -> R.string.partner_permission_lost_usage
+    MonitoringCapability.OVERLAY -> R.string.partner_permission_lost_overlay
+    MonitoringCapability.WEBSITE_FILTER -> R.string.partner_permission_lost_vpn
+}
+
 /**
  * One shared event. The leading mark is the real subject of the row — the app's own icon when
  * this device has it installed, a generic glyph when it doesn't (the partner's phone may block
@@ -2568,6 +2620,8 @@ private fun AlertRow(alert: PartnerAlert) {
             ?: stringResource(R.string.partner_alert_streak_unnamed)
         is PartnerAlert.RuleChanged -> alert.identity?.label
             ?: stringResource(R.string.partner_alert_rule)
+        is PartnerAlert.PermissionLost -> gapRuleNames(alert.ruleNames)
+            ?: stringResource(R.string.partner_alert_rule)
     }
     val kind = when (alert) {
         is PartnerAlert.AppActivity ->
@@ -2590,6 +2644,7 @@ private fun AlertRow(alert: PartnerAlert) {
                 else -> verb
             }
         }
+        is PartnerAlert.PermissionLost -> stringResource(permissionEffectRes(alert.capability))
     }
     Row(
         Modifier.fillMaxWidth(),
@@ -2624,6 +2679,11 @@ private fun AlertRow(alert: PartnerAlert) {
                 } else {
                     Icons.Outlined.Tune
                 },
+                size = 28.dp,
+            )
+            is PartnerAlert.PermissionLost -> AppMark(
+                packageName = null,
+                fallback = Icons.Outlined.GppBad,
                 size = 28.dp,
             )
         }

@@ -1,6 +1,7 @@
 package com.example.myexodus.ui.rules
 
 import com.example.myexodus.data.db.entity.RestrictionRule
+import com.example.myexodus.data.db.entity.hasLiveWebsiteRule
 import com.example.myexodus.domainusage.PublicSuffixList
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

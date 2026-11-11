@@ -64,6 +64,9 @@ class AccountabilityEventContractTest {
                 entries += "ms" to CanonicalCbor.text(MonitoringState.ACTIVE.wire)
                 entries += "ob" to CanonicalCbor.text(OutboxAgeBucket.UNDER_1H.wire)
                 entries += "ls" to CanonicalCbor.int(9)
+                entries += "caps" to CanonicalCbor.text(
+                    MonitoringCapability.encodeSet(setOf(MonitoringCapability.ACCESSIBILITY)),
+                )
             }
 
             AccountabilityEventKind.GAP_MARKER -> {
@@ -323,6 +326,80 @@ class AccountabilityEventContractTest {
             ),
         )
         assertNotNull(AccountabilityEventWire.decodeOrNull(raw(*blockEntries.toTypedArray())))
+    }
+
+    /** v3 adds the held-grant set to monitoring bodies; every gate around it is closed. */
+    @Test
+    fun capabilitiesRideOnlyOnV3MonitoringBodies() {
+        val withCaps = AccountabilityEventWire.monitoring(
+            eventId = id,
+            sequence = 7,
+            category = AccountabilityEventCategory.DEVICE_STATUS_CHANGED,
+            occurredAtMillis = now,
+            state = MonitoringState.ACTIVE,
+            outboxAge = OutboxAgeBucket.UNDER_1H,
+            latestSequence = 9,
+            capabilities = setOf(MonitoringCapability.ACCESSIBILITY, MonitoringCapability.WEBSITE_FILTER),
+        )
+        assertEquals(3, withCaps.schemaVersion)
+        assertEquals(withCaps, AccountabilityEventWire.decodeOrNull(AccountabilityEventWire.encode(withCaps)))
+
+        val entries = validEntries(
+            AccountabilityEventKind.MONITORING_STATUS,
+            AccountabilityEventCategory.DEVICE_STATUS_CHANGED,
+        )
+        assertNull(
+            "a v3 monitoring body must state its grants",
+            AccountabilityEventWire.decodeOrNull(
+                raw(*entries.filterNot { it.first == "caps" }.toTypedArray()),
+            ),
+        )
+        assertNull(
+            "a v2 body may not carry grants",
+            AccountabilityEventWire.decodeOrNull(
+                raw(*entries.map { if (it.first == "v") "v" to CanonicalCbor.int(2) else it }.toTypedArray()),
+            ),
+        )
+        assertNull(
+            "an unknown grant token poisons the whole set",
+            AccountabilityEventWire.decodeOrNull(
+                raw(
+                    *entries.map {
+                        if (it.first == "caps") "caps" to CanonicalCbor.text("A11Y,ROOT") else it
+                    }.toTypedArray(),
+                ),
+            ),
+        )
+        assertNull(
+            "only monitoring snapshots carry grants",
+            AccountabilityEventWire.decodeOrNull(
+                raw(
+                    *validEntries(AccountabilityEventKind.ACCOUNTABILITY_EVENT, AccountabilityEventCategory.BLOCKED_APP_ATTEMPT)
+                        .toTypedArray(),
+                    "caps" to CanonicalCbor.text("A11Y"),
+                ),
+            ),
+        )
+    }
+
+    /** An unverifiable reading states no grants: it must encode as v2, never as v3-with-empty. */
+    @Test
+    fun unverifiableSnapshotDegradesToV2() {
+        val unverifiable = AccountabilityEventWire.monitoring(
+            eventId = id,
+            sequence = 7,
+            category = AccountabilityEventCategory.DEVICE_STATUS_CHANGED,
+            occurredAtMillis = now,
+            state = MonitoringState.UNKNOWN,
+            outboxAge = OutboxAgeBucket.UNDER_1H,
+            latestSequence = 9,
+        )
+        assertEquals(2, unverifiable.schemaVersion)
+        assertNull(unverifiable.capabilities)
+
+        val decoded = AccountabilityEventWire.decodeOrNull(AccountabilityEventWire.encode(unverifiable))!!
+        assertEquals(2, decoded.schemaVersion)
+        assertNull(decoded.capabilities)
     }
 
     @Test

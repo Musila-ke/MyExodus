@@ -56,3 +56,12 @@ data class RestrictionRule(
  */
 fun RestrictionRule.isExpiredAt(nowEpochMillis: Long): Boolean =
     blockExpiresAt > 0 && nowEpochMillis > blockExpiresAt
+
+/** "The tunnel has something to do" — any website rule the publisher would publish (enabled,
+ *  unexpired), limit or block-only. Shared by the Home/Rules readiness surfaces and the
+ *  monitoring snapshot's state: a missing VPN consent only degrades protection while one of
+ *  these exists. */
+fun hasLiveWebsiteRule(rules: List<RestrictionRule>, nowEpochMillis: Long): Boolean =
+    rules.any {
+        it.targetType == "WEBSITE" && it.isEnabled && !it.isExpiredAt(nowEpochMillis)
+    }

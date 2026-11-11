@@ -53,6 +53,7 @@ import com.example.myexodus.accountability.activity.PartnerActivityJournal
 import com.example.myexodus.accountability.activity.PartnerActivityReceiver
 import com.example.myexodus.accountability.monitoring.MonitoringSnapshotReceiver
 import com.example.myexodus.accountability.monitoring.MonitoringSnapshotRecorder
+import com.example.myexodus.accountability.monitoring.rulesNeeding
 import com.example.myexodus.accountability.monitoring.PartnerDmsClient
 import com.example.myexodus.accountability.monitoring.PartnerHeartbeatClient
 import com.example.myexodus.accountability.monitoring.StandbyBucket
@@ -61,7 +62,11 @@ import com.example.myexodus.accountability.monitoring.parsePartnerStatus
 import com.example.myexodus.accountability.rulecontrol.RuleControlReceiver
 import com.example.myexodus.accountability.rulecontrol.RuleDeliveryTrace
 import com.example.myexodus.accountability.serialization.AccountabilityEventKind
+import com.example.myexodus.accountability.serialization.MonitoringCapability
+import com.example.myexodus.blocking.BlockerAccessibilityService
 import com.example.myexodus.blocking.EnforcementForegroundService
+import com.example.myexodus.blocking.OverlayController
+import com.example.myexodus.blocking.hasUsageAccess
 import com.example.myexodus.accountability.plan.PartnerPlanReceiver
 import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.serialization.PlanWire
@@ -71,9 +76,12 @@ import com.example.myexodus.accountability.sync.PushInstallationRegistrar
 import com.example.myexodus.accountability.sync.decodePublicKey
 import com.example.myexodus.notifications.NotificationAccess
 import com.example.myexodus.telemetry.CrashReporting
+import com.example.myexodus.vpn.VpnLifecycle
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.prunePartnerActivity
 import com.example.myexodus.data.db.LocalDatabaseMigration
+import com.example.myexodus.data.db.entity.PartnerEventJournal
+import com.example.myexodus.data.db.entity.PartnerProtectionGap
 import com.example.myexodus.data.db.entity.decodeMilestoneDays
 import com.example.myexodus.secrets.SecretsRepository
 import com.example.myexodus.accountability.sos.NudgeInboxRepository
@@ -120,6 +128,9 @@ object AccountabilityModule {
 
     private const val TAG = "MyExodusAccountabilityModule"
     private const val TAG_NUDGE = "MyExodusNudgeInbox"
+
+    /** 30-day retention holds few rows: 100 makes the live-rule fold exact. */
+    private const val RULE_FEED_LIMIT = 100
 
     @Provides @Singleton
     fun provideAccountabilityDatabase(@ApplicationContext context: Context): AccountabilityDatabase =
@@ -828,7 +839,14 @@ object AccountabilityModule {
             // retention, rule changes are infrequent) so the week filter in load() is exact.
             ruleChanges = { pairId ->
                 storeFactory.open()?.partnerRuleChangeDao()
-                    ?.recent(pairId, System.currentTimeMillis(), 100)
+                    ?.recent(pairId, System.currentTimeMillis(), RULE_FEED_LIMIT)
+                    ?: emptyList()
+            },
+            // Owner ask 2026-11-10: the permission-loss rows the receive hook writes, shown on
+            // Rules & blocks and the feed (30-day retention, same as rule changes).
+            protectionGaps = { pairId ->
+                storeFactory.open()?.partnerProtectionGapDao()
+                    ?.recent(pairId, System.currentTimeMillis(), RULE_FEED_LIMIT)
                     ?: emptyList()
             },
             decoderFor = { enrollment ->
@@ -991,12 +1009,29 @@ object AccountabilityModule {
 
     @Provides @Singleton
     fun provideMonitoringSnapshotRecorder(
+        @ApplicationContext context: Context,
         storeFactory: AppRulesStoreFactory,
         db: AccountabilityDatabase,
     ): MonitoringSnapshotRecorder = MonitoringSnapshotRecorder(
         storeFactory = storeFactory,
         outbox = db,
         liveness = { EnforcementForegroundService.livenessSnapshot(SystemClock.elapsedRealtime()) },
+        // A probe that throws makes the whole set unknown (null): an unreadable grant state
+        // must never be journaled as "all revoked".
+        capabilities = {
+            runCatching {
+                buildSet {
+                    if (BlockerAccessibilityService.connected.get()) {
+                        add(MonitoringCapability.ACCESSIBILITY)
+                    }
+                    if (context.hasUsageAccess()) add(MonitoringCapability.USAGE_ACCESS)
+                    if (OverlayController.overlayPermissionGranted(context)) {
+                        add(MonitoringCapability.OVERLAY)
+                    }
+                    if (VpnLifecycle.consented(context)) add(MonitoringCapability.WEBSITE_FILTER)
+                }
+            }.getOrNull()
+        },
     )
 
     @Provides @Singleton
@@ -1054,6 +1089,7 @@ object AccountabilityModule {
         ruleControlReceiver: RuleControlReceiver,
         deliveryTrace: RuleDeliveryTrace,
         enrollmentDao: EnrollmentDao,
+        storeFactory: AppRulesStoreFactory,
     ): MailboxMessageHandler {
         val processedDao = db.processedEventDao()
         return MailboxMessageHandler(
@@ -1135,7 +1171,46 @@ object AccountabilityModule {
             // "added a partner to a rule, the partner saw nothing"). Notify only when a row was
             // actually stored, so a mailbox redelivery cannot double-post.
             onAccountabilityEvent = { pairId, senderKeyId, event, _ ->
-                monitoringReceiver.onEvent(pairId, senderKeyId, event)
+                val lost = monitoringReceiver.onEvent(pairId, senderKeyId, event)
+                // Owner directive 2026-11-10: a grant the other phone lost only alerts when
+                // a rule assigned to this partner needs it. The feed is this device's rule
+                // state; a lost grant no live rule relies on stays silent.
+                if (lost.isNotEmpty()) {
+                    runCatching {
+                        val store = storeFactory.open()
+                        val rows = store?.partnerRuleChangeDao()
+                            ?.recent(pairId, System.currentTimeMillis(), RULE_FEED_LIMIT)
+                            .orEmpty()
+                        val needing = rulesNeeding(rows, lost)
+                        if (needing.isNotEmpty()) {
+                            // Owner ask 2026-11-10: the loss is also a feed row on this
+                            // device (Rules & blocks), not only a tray notification.
+                            val gapDao = store?.partnerProtectionGapDao()
+                            val nowMs = System.currentTimeMillis()
+                            runCatching {
+                                needing.forEach { (capability, rules) ->
+                                    gapDao?.insert(
+                                        PartnerProtectionGap(
+                                            pairId = pairId,
+                                            eventId = event.eventId,
+                                            capability = capability.wire,
+                                            ruleNames = PartnerProtectionGap.encodeRuleNames(rules),
+                                            occurredAtMs = event.occurredAtMinute * 60_000L,
+                                            expiresAtMs = nowMs + PartnerEventJournal.RETENTION_MILLIS,
+                                        ),
+                                    )
+                                }
+                            }.onFailure { Log.w(TAG, "protection gap store failed pairId=$pairId", it) }
+                            enrollmentDao.getByPairId(pairId)?.let { enrollment ->
+                                PartnerNotifications.notifyPermissionLost(
+                                    context, pairId, displayNameOf(enrollment), needing,
+                                )
+                            }
+                        }
+                    }.onFailure {
+                        Log.w(TAG, "permission-lost notification failed pairId=$pairId", it)
+                    }
+                }
                 val change = event.ruleChange
                 val traced = event.kind == AccountabilityEventKind.RULE_CONTROL
                 if (traced) {

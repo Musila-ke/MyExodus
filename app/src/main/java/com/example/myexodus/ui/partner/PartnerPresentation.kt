@@ -5,6 +5,8 @@ import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleIdentity
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainHead
+import com.example.myexodus.accountability.serialization.MonitoringCapability
+import com.example.myexodus.data.db.entity.PartnerProtectionGap
 import com.example.myexodus.data.db.entity.PartnerRuleChange
 import com.example.myexodus.recovery.RecoveryMirror
 import com.example.myexodus.ui.PillTone
@@ -116,7 +118,23 @@ sealed interface PartnerAlert {
         override val atEpochMillis: Long,
         val identity: RuleIdentity? = null,
     ) : PartnerAlert
+
+    /** Owner ask 2026-11-10: a grant the partner's phone lost while a rule they assigned this
+     *  device needs it — the feed/Rules half of the permission-lost notification. One row per
+     *  lost grant, naming the affected rules. */
+    data class PermissionLost(
+        val capability: MonitoringCapability,
+        val ruleNames: List<String>,
+        override val atEpochMillis: Long,
+    ) : PartnerAlert
 }
+
+/** A stored protection-gap row as a feed entry; an unknown grant token (a newer sender's
+ *  capability this build cannot name) is dropped rather than rendered as a wrong one. */
+fun protectionGapAlert(row: PartnerProtectionGap): PartnerAlert? =
+    MonitoringCapability.fromWire(row.capability)?.let {
+        PartnerAlert.PermissionLost(it, row.ruleNameList(), row.occurredAtMs)
+    }
 
 /** A stored RULE_CONTROL row as a feed entry; an unknown verb (a newer sender) is dropped
  *  rather than rendered as a wrong one. */

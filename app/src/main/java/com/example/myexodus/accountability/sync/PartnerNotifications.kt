@@ -14,6 +14,7 @@ import com.example.myexodus.R
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.MonitoringCapability
 import com.example.myexodus.accountability.serialization.PlanWire
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleIdentity
@@ -23,6 +24,7 @@ import com.example.myexodus.notifications.NotificationTapTarget
 import com.example.myexodus.ui.appLabel
 import com.example.myexodus.ui.partner.PartnerAlert
 import com.example.myexodus.ui.partner.VIEW_ACTIVITY
+import com.example.myexodus.ui.partner.VIEW_CHECKINS
 import com.example.myexodus.ui.partner.VIEW_REQUESTS
 import com.example.myexodus.ui.partner.VIEW_RULES
 import com.example.myexodus.ui.partner.parseActivityText
@@ -348,6 +350,58 @@ object PartnerNotifications {
             openPartnerView = VIEW_RULES,
             openPairId = pairId,
         )
+    }
+
+    /** Owner directive 2026-11-10: the other device lost a grant a rule the partner was
+     *  assigned to needs. One per-pair entry, same tray key as every other partner event;
+     *  the body states each lost capability's real effect and names the affected rules. */
+    fun notifyPermissionLost(
+        context: Context,
+        pairId: String,
+        partnerName: String,
+        lost: Map<MonitoringCapability, List<String>>,
+    ) {
+        if (lost.isEmpty()) return
+        val body = lost.entries.joinToString("\n") { (capability, rules) ->
+            context.getString(
+                R.string.partner_permission_lost_line,
+                context.getString(capability.effectRes()),
+                ruleNames(context, rules),
+            )
+        }
+        post(
+            context,
+            CHANNEL_ACCOUNTABILITY_EVENTS,
+            context.getString(R.string.partner_channel_activity_name),
+            NotificationManager.IMPORTANCE_HIGH,
+            idFor(NOTIF_PARTNER_EVENT, pairId),
+            R.string.partner_event_title,
+            R.string.partner_event_text,
+            namedTitle = context.getString(R.string.partner_permission_lost_title_named, partnerName),
+            namedText = body,
+            tag = partnerTag("event", pairId),
+            // Owner ruling 2026-11-10: the tap lands on the phone report that now reads Limited;
+            // the loss itself stays listed on Rules & blocks and in the feed.
+            openPartnerView = VIEW_CHECKINS,
+            openPairId = pairId,
+        )
+    }
+
+    private fun MonitoringCapability.effectRes(): Int = when (this) {
+        MonitoringCapability.ACCESSIBILITY -> R.string.partner_permission_lost_accessibility
+        MonitoringCapability.USAGE_ACCESS -> R.string.partner_permission_lost_usage
+        MonitoringCapability.OVERLAY -> R.string.partner_permission_lost_overlay
+        MonitoringCapability.WEBSITE_FILTER -> R.string.partner_permission_lost_vpn
+    }
+
+    private fun ruleNames(context: Context, rules: List<String>): String {
+        val shown = rules.take(3).joinToString(", ")
+        val extra = rules.size - 3
+        return if (extra > 0) {
+            context.getString(R.string.partner_permission_lost_more, shown, extra)
+        } else {
+            shown
+        }
     }
 
     /** The body names the rule/batch the wire identified; a pre-v2 sender keeps the generic

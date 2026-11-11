@@ -726,6 +726,7 @@ class PartnerSyncCoordinator(
         if (chain.hasEvent(pairId, senderKeyId, row.eventId)) return Emit.Duplicate
         val state = row.monitoringState?.let(MonitoringState::fromWire) ?: return Emit.Skip
         val bucket = row.outboxAgeBucket?.let(OutboxAgeBucket::fromWire) ?: return Emit.Skip
+        val capabilities = row.capabilitiesOrNull()
         val signature = try {
             signer.beginSign()
         } catch (e: Exception) {
@@ -747,6 +748,8 @@ class PartnerSyncCoordinator(
                                 state = state,
                                 outboxAge = bucket,
                                 latestSequence = sequence,
+                                capabilities = capabilities,
+                                schemaVersion = row.schemaVersion,
                             ),
                         )
                     },

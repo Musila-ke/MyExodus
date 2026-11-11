@@ -7,6 +7,7 @@ import androidx.room3.PrimaryKey
 import com.example.myexodus.accountability.serialization.AccountabilityEventCategory
 import com.example.myexodus.accountability.serialization.AccountabilityEventKind
 import com.example.myexodus.accountability.serialization.AccountabilityEventWire
+import com.example.myexodus.accountability.serialization.MonitoringCapability
 import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.serialization.OutboxAgeBucket
 import com.example.myexodus.accountability.serialization.RuleChange
@@ -61,6 +62,8 @@ data class PartnerEventJournal(
     @ColumnInfo(name = "rule_batch_label") val ruleBatchLabel: String? = null,
     /** RULE_CONTROL rows only: the assigned pair the envelope is routed to. */
     @ColumnInfo(name = "route_pair_id") val routePairId: String? = null,
+    /** v3 MONITORING_STATUS rows only: grants held when the snapshot was taken. */
+    @ColumnInfo(name = "capabilities") val capabilities: String? = null,
     @ColumnInfo(name = "schema_version") val schemaVersion: Int,
     @ColumnInfo(name = "created_at_ms") val createdAtMs: Long,
     /** §8.7: partner-local event detail is retained for 30 days, then swept. */
@@ -90,6 +93,12 @@ data class PartnerEventJournal(
             require(ruleId == null && ruleChange == null && routePairId == null) {
                 "monitoring journal rows carry no rule fields"
             }
+            require((schemaVersion >= 3) == (capabilities != null)) {
+                "capabilities ride only on v3 monitoring rows"
+            }
+            require(capabilities == null || MonitoringCapability.decodeSetOrNull(capabilities) != null) {
+                "monitoring capabilities are outside the contract"
+            }
         } else if (parsed.kind == AccountabilityEventKind.RULE_CONTROL) {
             val rid = requireNotNull(ruleId) { "rule journal rows need a rule id" }
             require(AccountabilityEventWire.isEventId(rid)) { "rule journal rule id is not a UUID" }
@@ -102,7 +111,7 @@ data class PartnerEventJournal(
             require(monitoringState == null && outboxAgeBucket == null) {
                 "rule journal rows carry no monitoring fields"
             }
-            if (schemaVersion == AccountabilityEventWire.SCHEMA_VERSION) {
+            if (schemaVersion >= 2) {
                 requireNotNull(ruleTargetType?.let(RuleTargetType::fromWire)) {
                     "v2 rule journal rows need a target type"
                 }
@@ -126,11 +135,18 @@ data class PartnerEventJournal(
                 "block events carry no rule fields"
             }
         }
+        if (parsed.kind != AccountabilityEventKind.MONITORING_STATUS) {
+            require(capabilities == null) { "only monitoring rows carry capabilities" }
+        }
     }
 
-    /** Wire identity for a v2 row; null for a v1 row queued before the upgrade. */
+    /** Held grants for a v3 row; null for a v1/v2 row queued before the upgrade. */
+    fun capabilitiesOrNull(): Set<MonitoringCapability>? =
+        capabilities?.let(MonitoringCapability::decodeSetOrNull)
+
+    /** Wire identity for a v2+ row; null for a v1 row queued before the upgrade. */
     fun ruleIdentityOrNull(): RuleIdentity? {
-        if (schemaVersion < AccountabilityEventWire.SCHEMA_VERSION) return null
+        if (schemaVersion < 2) return null
         val type = ruleTargetType?.let(RuleTargetType::fromWire) ?: return null
         return RuleIdentity(
             label = ruleLabel ?: return null,
@@ -151,13 +167,23 @@ data class PartnerEventJournal(
             createdAtMs: Long,
             monitoringState: MonitoringState? = null,
             outboxAgeBucket: OutboxAgeBucket? = null,
+            capabilities: Set<MonitoringCapability>? = null,
         ): PartnerEventJournal = PartnerEventJournal(
             eventId = eventId,
             category = category.wire,
             occurredAtMinute = occurredAtMinute,
             monitoringState = monitoringState?.wire,
             outboxAgeBucket = outboxAgeBucket?.wire,
-            schemaVersion = AccountabilityEventWire.SCHEMA_VERSION,
+            capabilities = capabilities?.let(MonitoringCapability::encodeSet),
+            // A snapshot taken while the reading was unverifiable carries no grant claim, so
+            // it degrades to a v2 body rather than asserting "no capabilities held".
+            schemaVersion = if (category.kind == AccountabilityEventKind.MONITORING_STATUS &&
+                capabilities == null
+            ) {
+                2
+            } else {
+                AccountabilityEventWire.SCHEMA_VERSION
+            },
             createdAtMs = createdAtMs,
             expiresAtMs = createdAtMs + RETENTION_MILLIS,
         )

@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.accountability.serialization.AccountabilityEventCategory
 import com.example.myexodus.accountability.serialization.AccountabilityEventWire
+import com.example.myexodus.accountability.serialization.MonitoringCapability
 import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.serialization.OutboxAgeBucket
 import com.example.myexodus.data.db.ActivityLogKeyManager
@@ -17,9 +18,7 @@ import com.example.myexodus.data.db.RulesStoreKeyManager
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -63,6 +62,7 @@ class MonitoringSnapshotReceiverTest {
         latest: Long = 9,
         state: MonitoringState = MonitoringState.DEGRADED,
         bucket: OutboxAgeBucket = OutboxAgeBucket.ONE_TO_SIX_HOURS,
+        capabilities: Set<MonitoringCapability>? = null,
     ) = AccountabilityEventWire.monitoring(
         eventId = AccountabilityEventWire.newEventId(),
         sequence = sequence,
@@ -71,11 +71,15 @@ class MonitoringSnapshotReceiverTest {
         state = state,
         outboxAge = bucket,
         latestSequence = latest,
+        capabilities = capabilities,
     )
 
     @Test
     fun monitoringEvent_becomesTheRecipientSnapshot() = runTest {
-        assertTrue(receiver().onEvent("pair-1", "gen-a", event()))
+        assertEquals(
+            emptySet<MonitoringCapability>(),
+            receiver().onEvent("pair-1", "gen-a", event()),
+        )
 
         val row = factory.open()!!.partnerMonitoringSnapshotDao().byPair("pair-1")!!
         assertEquals(MonitoringState.DEGRADED.wire, row.monitoringState)
@@ -96,7 +100,7 @@ class MonitoringSnapshotReceiverTest {
             occurredAtMillis = nowMs,
         )
 
-        assertFalse(receiver().onEvent("pair-1", "gen-a", accountability))
+        assertEquals(emptySet<MonitoringCapability>(), receiver().onEvent("pair-1", "gen-a", accountability))
         assertNull(factory.open()!!.partnerMonitoringSnapshotDao().byPair("pair-1"))
     }
 
@@ -105,11 +109,84 @@ class MonitoringSnapshotReceiverTest {
         val receiver = receiver()
         receiver.onEvent("pair-1", "gen-a", event(sequence = 4, state = MonitoringState.ACTIVE))
 
-        assertFalse(receiver.onEvent("pair-1", "gen-a", event(sequence = 3, state = MonitoringState.UNAVAILABLE)))
+        assertEquals(
+            emptySet<MonitoringCapability>(),
+            receiver.onEvent("pair-1", "gen-a", event(sequence = 3, state = MonitoringState.UNAVAILABLE)),
+        )
         assertEquals(
             MonitoringState.ACTIVE.wire,
             factory.open()!!.partnerMonitoringSnapshotDao().byPair("pair-1")!!.monitoringState,
         )
+    }
+
+    /** Owner directive 2026-11-10: the transition the alert rides on is `before - after`. */
+    @Test
+    fun lostGrants_areReportedAndTheNewSetIsStored() = runTest {
+        val receiver = receiver()
+        receiver.onEvent("pair-1", "gen-a", event(sequence = 4, capabilities = ALL_GRANTS))
+
+        val lost = receiver.onEvent(
+            "pair-1",
+            "gen-a",
+            event(sequence = 5, capabilities = setOf(MonitoringCapability.ACCESSIBILITY)),
+        )
+
+        assertEquals(setOf(MonitoringCapability.USAGE_ACCESS, MonitoringCapability.OVERLAY,
+            MonitoringCapability.WEBSITE_FILTER), lost)
+        assertEquals(
+            MonitoringCapability.encodeSet(setOf(MonitoringCapability.ACCESSIBILITY)),
+            factory.open()!!.partnerMonitoringSnapshotDao().byPair("pair-1")!!.capabilities,
+        )
+    }
+
+    @Test
+    fun grantedBack_thenLostAgain_reportsTheSecondLoss() = runTest {
+        val receiver = receiver()
+        receiver.onEvent("pair-1", "gen-a", event(sequence = 4, capabilities = ALL_GRANTS))
+        receiver.onEvent(
+            "pair-1", "gen-a", event(sequence = 5, capabilities = ALL_GRANTS), // no change
+        )
+        receiver.onEvent("pair-1", "gen-a", event(sequence = 6, capabilities = emptySet()))
+
+        assertEquals(
+            emptySet<MonitoringCapability>(),
+            receiver.onEvent("pair-1", "gen-a", event(sequence = 7, capabilities = ALL_GRANTS)),
+        )
+        assertEquals(
+            ALL_GRANTS,
+            receiver.onEvent("pair-1", "gen-a", event(sequence = 8, capabilities = emptySet())),
+        )
+    }
+
+    /** A re-pair's first snapshot arrives under a new install generation — it must not read
+     *  as a loss against the previous install's grants. */
+    @Test
+    fun newInstallGeneration_neverReportsALoss() = runTest {
+        val receiver = receiver()
+        receiver.onEvent("pair-1", "gen-a", event(sequence = 4, capabilities = ALL_GRANTS))
+
+        val lost = receiver.onEvent(
+            "pair-1", "gen-b", event(sequence = 1, capabilities = emptySet()),
+        )
+
+        assertEquals(emptySet<MonitoringCapability>(), lost)
+    }
+
+    /** A pre-v3 sender states no grants: null on either side is never a loss. */
+    @Test
+    fun grantlessSender_neverReportsALoss() = runTest {
+        val receiver = receiver()
+        receiver.onEvent("pair-1", "gen-a", event(sequence = 4, capabilities = null))
+
+        val lost = receiver.onEvent(
+            "pair-1", "gen-a", event(sequence = 5, capabilities = emptySet()),
+        )
+
+        assertEquals(emptySet<MonitoringCapability>(), lost)
+    }
+
+    private companion object {
+        val ALL_GRANTS = MonitoringCapability.entries.toSet()
     }
 
     private class FakeKeyManager : DatabaseKeyManager {

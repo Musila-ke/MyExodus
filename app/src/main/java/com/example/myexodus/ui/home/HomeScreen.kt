@@ -86,6 +86,7 @@ import com.example.myexodus.blocking.usage.AccountingOutage
 import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.entity.RestrictionRule
+import com.example.myexodus.data.db.entity.hasLiveWebsiteRule
 import com.example.myexodus.settings.HomeSettings
 import com.example.myexodus.settings.accessibilitySettingsIntent
 import com.example.myexodus.settings.batteryOptimizationSettingsIntent
@@ -105,7 +106,6 @@ import com.example.myexodus.ui.rememberInstalledAppPackages
 import com.example.myexodus.ui.rememberWindowWidth
 import com.example.myexodus.ui.ruleRowState
 import com.example.myexodus.ui.rules.RULES_CARD_MAX_HEIGHT
-import com.example.myexodus.ui.rules.hasLiveWebsiteRule
 import com.example.myexodus.ui.scheduleSummary
 import com.example.myexodus.ui.streaks.FreeSinceLine
 import com.example.myexodus.ui.streaks.HabitLabelRow

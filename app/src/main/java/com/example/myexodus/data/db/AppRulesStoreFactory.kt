@@ -1587,6 +1587,116 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * v27 → v28 (owner directive 2026-11-10): a monitoring snapshot and its journal row
+         * now state the grants the sender held, so the partner's device can name a revoked
+         * grant a shared rule needs. Nullable — an unverifiable reading claims nothing, and
+         * pre-v3 rows stay valid.
+         */
+        val MIGRATION_27_28 = object : Migration(27, 28) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE partner_monitoring_snapshot ADD COLUMN capabilities TEXT",
+                ).use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE partner_event_journal ADD COLUMN capabilities TEXT",
+                ).use { it.step() }
+            }
+        }
+
+        /** v28 rollback (older build reinstalled): table rebuilds drop the grant columns while
+         *  every snapshot and journal row survives. Rebuilds, not DROP COLUMN — the latter is
+         *  unsafe on the system SQLite versions this app supports. */
+        val MIGRATION_28_27 = object : Migration(28, 27) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_monitoring_snapshot_old (" +
+                        "pair_id TEXT NOT NULL, monitoring_state TEXT NOT NULL, " +
+                        "outbox_age_bucket TEXT NOT NULL, " +
+                        "snapshot_install_generation TEXT NOT NULL, " +
+                        "latest_relationship_seq INTEGER NOT NULL, " +
+                        "snapshot_event_sequence INTEGER NOT NULL, " +
+                        "occurred_at_minute INTEGER NOT NULL, " +
+                        "received_at_ms INTEGER NOT NULL, PRIMARY KEY(pair_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO partner_monitoring_snapshot_old (pair_id, monitoring_state, " +
+                        "outbox_age_bucket, snapshot_install_generation, " +
+                        "latest_relationship_seq, snapshot_event_sequence, occurred_at_minute, " +
+                        "received_at_ms) SELECT pair_id, monitoring_state, outbox_age_bucket, " +
+                        "snapshot_install_generation, latest_relationship_seq, " +
+                        "snapshot_event_sequence, occurred_at_minute, received_at_ms " +
+                        "FROM partner_monitoring_snapshot",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE partner_monitoring_snapshot").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE partner_monitoring_snapshot_old RENAME TO partner_monitoring_snapshot",
+                ).use { it.step() }
+
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_event_journal_old (" +
+                        "event_id TEXT NOT NULL, category TEXT NOT NULL, " +
+                        "occurred_at_minute INTEGER NOT NULL, monitoring_state TEXT, " +
+                        "outbox_age_bucket TEXT, rule_id TEXT, rule_change TEXT, " +
+                        "rule_label TEXT, rule_target_type TEXT, rule_item_count INTEGER, " +
+                        "rule_batch_label TEXT, route_pair_id TEXT, " +
+                        "schema_version INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, " +
+                        "expires_at_ms INTEGER NOT NULL, PRIMARY KEY(event_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO partner_event_journal_old (event_id, category, " +
+                        "occurred_at_minute, monitoring_state, outbox_age_bucket, rule_id, " +
+                        "rule_change, rule_label, rule_target_type, rule_item_count, " +
+                        "rule_batch_label, route_pair_id, schema_version, created_at_ms, " +
+                        "expires_at_ms) SELECT event_id, category, occurred_at_minute, " +
+                        "monitoring_state, outbox_age_bucket, rule_id, rule_change, rule_label, " +
+                        "rule_target_type, rule_item_count, rule_batch_label, route_pair_id, " +
+                        "schema_version, created_at_ms, expires_at_ms FROM partner_event_journal",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE partner_event_journal").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE partner_event_journal_old RENAME TO partner_event_journal",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_event_journal_created_at_ms " +
+                        "ON partner_event_journal (created_at_ms)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_event_journal_expires_at_ms " +
+                        "ON partner_event_journal (expires_at_ms)",
+                ).use { it.step() }
+            }
+        }
+
+        /**
+         * v28 → v29 (owner ask 2026-11-10): the receiver's record of a grant the partner's
+         * phone lost while a live rule needs it, so the loss shows on Rules & blocks and the
+         * feed. Additive — no existing table is touched.
+         */
+        val MIGRATION_28_29 = object : Migration(28, 29) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_protection_gap (" +
+                        "pair_id TEXT NOT NULL, event_id TEXT NOT NULL, " +
+                        "capability TEXT NOT NULL, rule_names TEXT NOT NULL, " +
+                        "occurred_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL, " +
+                        "PRIMARY KEY(pair_id, event_id, capability))",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_protection_gap_occurred_at_ms " +
+                        "ON partner_protection_gap (occurred_at_ms)",
+                ).use { it.step() }
+            }
+        }
+
+        /** v29 rollback (older build reinstalled): the gap list is derived state — it
+         *  rebuilds from the next snapshot transition. */
+        val MIGRATION_29_28 = object : Migration(29, 28) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("DROP TABLE IF EXISTS partner_protection_gap").use { it.step() }
+            }
+        }
+
         /** v23 rollback (older build reinstalled): table rebuilds remove the identity and
          *  batch columns while every rule and journal row survives. */
         val MIGRATION_23_22 = object : Migration(23, 22) {
@@ -1902,6 +2012,8 @@ class AppRulesStoreFactory(
             MIGRATION_24_25, MIGRATION_25_24,
             MIGRATION_25_26, MIGRATION_26_25,
             MIGRATION_26_27, MIGRATION_27_26,
+            MIGRATION_27_28, MIGRATION_28_27,
+            MIGRATION_28_29, MIGRATION_29_28,
         )
     }
 }

@@ -64,6 +64,35 @@ enum class MonitoringState(val wire: String) {
     }
 }
 
+/**
+ * Closed set of grants a block needs (owner directive 2026-11-10: a partner is told when a
+ * shared rule loses the capability that makes it enforceable). A snapshot carries the set
+ * that is *held*; the recipient derives a loss by diffing against the previous snapshot and
+ * only alerts when one of its own shared rules needs the missing grant.
+ */
+enum class MonitoringCapability(val wire: String) {
+    ACCESSIBILITY("A11Y"),
+    USAGE_ACCESS("USAGE"),
+    OVERLAY("OVERLAY"),
+    WEBSITE_FILTER("VPN"),
+    ;
+
+    companion object {
+        fun fromWire(value: String): MonitoringCapability? = entries.firstOrNull { it.wire == value }
+
+        /** Canonical stored/encoded form: sorted wire names, comma-separated; "" = none held. */
+        fun encodeSet(values: Set<MonitoringCapability>): String =
+            values.sortedBy { it.wire }.joinToString(",") { it.wire }
+
+        /** Null for an unknown grant — the caller treats the whole set as untrustworthy. */
+        fun decodeSetOrNull(value: String): Set<MonitoringCapability>? {
+            if (value.isEmpty()) return emptySet()
+            val parsed = value.split(',').map { fromWire(it) ?: return null }
+            return parsed.toSet()
+        }
+    }
+}
+
 /** Coarse outbox age for a monitoring snapshot — a bucket, never a raw timestamp delta. */
 enum class OutboxAgeBucket(val wire: String) {
     UNDER_1H("UNDER_1H"),
@@ -198,6 +227,10 @@ data class AccountabilityEvent(
     val ruleChange: RuleChange? = null,
     /** Bounded name of what changed; null only on a schema-v1 body (pre-2026-10-31 sender). */
     val ruleIdentity: RuleIdentity? = null,
+    /** Grants held when the snapshot was taken; null on pre-v3 bodies. */
+    val capabilities: Set<MonitoringCapability>? = null,
+    /** The body version this event encodes as; decode sets it to what arrived. */
+    val schemaVersion: Int = AccountabilityEventWire.SCHEMA_VERSION,
 ) {
     val kind: AccountabilityEventKind = category.kind
 
@@ -205,6 +238,17 @@ data class AccountabilityEvent(
         require(AccountabilityEventWire.isEventId(eventId)) { "event id is not a UUID" }
         require(relationshipSequence >= 1) { "relationship sequence must be positive" }
         require(occurredAtMinute >= 1) { "occurred-at minute must be positive" }
+        require(schemaVersion in 1..AccountabilityEventWire.SCHEMA_VERSION) {
+            "event schema version is not a live contract"
+        }
+        // A v3 monitoring body always states the held grants; a pre-v3 body never does.
+        if (kind == AccountabilityEventKind.MONITORING_STATUS) {
+            require((schemaVersion >= 3) == (capabilities != null)) {
+                "capabilities ride only on v3 monitoring bodies"
+            }
+        } else {
+            require(capabilities == null) { "only monitoring snapshots carry capabilities" }
+        }
         when (kind) {
             AccountabilityEventKind.ACCOUNTABILITY_EVENT -> require(
                 monitoringState == null && outboxAgeBucket == null &&
@@ -242,6 +286,9 @@ data class AccountabilityEvent(
             AccountabilityEventKind.RULE_CONTROL -> {
                 requireNotNull(ruleId) { "rule control events need a rule id" }
                 requireNotNull(ruleChange) { "rule control events need a change" }
+                require((schemaVersion >= 2) == (ruleIdentity != null)) {
+                    "rule identity rides only on v2+ rule control bodies"
+                }
                 require(
                     monitoringState == null && outboxAgeBucket == null &&
                         latestRelationshipSequence == null &&
@@ -254,9 +301,10 @@ data class AccountabilityEvent(
 
 object AccountabilityEventWire {
 
-    /** v2 adds the bounded [RuleIdentity] to RULE_CONTROL (owner mandate 2026-10-31); v1
-     *  bodies still decode so a queued pre-upgrade journal row is never stranded. */
-    const val SCHEMA_VERSION = 2
+    /** v2 adds the bounded [RuleIdentity] to RULE_CONTROL (owner mandate 2026-10-31); v3 adds
+     *  the held-grant set to MONITORING_STATUS (owner directive 2026-11-10). Older versions
+     *  still decode so a queued pre-upgrade journal row is never stranded. */
+    const val SCHEMA_VERSION = 3
 
     /** Hard body bound. Relay ciphertext ceiling is 4096 bytes; this leaves ample envelope room. */
     const val MAX_BODY_BYTES = 512
@@ -280,11 +328,13 @@ object AccountabilityEventWire {
     private const val K_RULE_TARGET = "tgt"
     private const val K_RULE_ITEMS = "cnt"
     private const val K_RULE_BATCH = "bat"
+    private const val K_CAPABILITIES = "caps"
 
     private val ALL_KEYS = setOf(
         K_VERSION, K_EVENT_ID, K_SEQUENCE, K_KIND, K_CATEGORY, K_TIME,
         K_MONITORING_STATE, K_OUTBOX_AGE, K_LATEST_SEQUENCE, K_MISSING_START, K_MISSING_END,
         K_RULE_ID, K_RULE_CHANGE, K_RULE_LABEL, K_RULE_TARGET, K_RULE_ITEMS, K_RULE_BATCH,
+        K_CAPABILITIES,
     )
 
     private val WHITESPACE = Regex("\\s+")
@@ -330,6 +380,10 @@ object AccountabilityEventWire {
         state: MonitoringState,
         outboxAge: OutboxAgeBucket,
         latestSequence: Long,
+        capabilities: Set<MonitoringCapability>? = null,
+        // A snapshot that cannot state its grants degrades to v2 — it must never encode as a
+        // v3 body claiming an empty set.
+        schemaVersion: Int = if (capabilities == null) 2 else SCHEMA_VERSION,
     ): AccountabilityEvent {
         require(category.kind == AccountabilityEventKind.MONITORING_STATUS) {
             "not a monitoring category"
@@ -342,6 +396,8 @@ object AccountabilityEventWire {
             monitoringState = state,
             outboxAgeBucket = outboxAge,
             latestRelationshipSequence = latestSequence,
+            capabilities = capabilities,
+            schemaVersion = schemaVersion,
         )
     }
 
@@ -379,7 +435,7 @@ object AccountabilityEventWire {
 
     fun encode(event: AccountabilityEvent): ByteArray {
         val entries = mutableListOf<Pair<String, CBORObject>>(
-            K_VERSION to CanonicalCbor.int(SCHEMA_VERSION.toLong()),
+            K_VERSION to CanonicalCbor.int(event.schemaVersion.toLong()),
             K_EVENT_ID to CanonicalCbor.text(event.eventId),
             K_SEQUENCE to CanonicalCbor.int(event.relationshipSequence),
             K_KIND to CanonicalCbor.text(event.kind.wire),
@@ -391,6 +447,9 @@ object AccountabilityEventWire {
         event.latestRelationshipSequence?.let { entries += K_LATEST_SEQUENCE to CanonicalCbor.int(it) }
         event.missingSequenceStart?.let { entries += K_MISSING_START to CanonicalCbor.int(it) }
         event.missingSequenceEnd?.let { entries += K_MISSING_END to CanonicalCbor.int(it) }
+        event.capabilities?.let {
+            entries += K_CAPABILITIES to CanonicalCbor.text(MonitoringCapability.encodeSet(it))
+        }
         event.ruleId?.let { entries += K_RULE_ID to CanonicalCbor.text(it.toString()) }
         event.ruleChange?.let { entries += K_RULE_CHANGE to CanonicalCbor.text(it.wire) }
         event.ruleIdentity?.let { identity ->
@@ -424,8 +483,8 @@ object AccountabilityEventWire {
         if (keys.size != map.keys.size || !ALL_KEYS.containsAll(keys)) return null
 
         val version = map.integerOrNull(K_VERSION) ?: return null
-        // v1 bodies still decode: a journal row queued before the v2 upgrade must not strand.
-        if (version != 1L && version != SCHEMA_VERSION.toLong()) return null
+        // Older bodies still decode: a journal row queued before an upgrade must not strand.
+        if (version < 1L || version > SCHEMA_VERSION.toLong()) return null
         val eventId = map.textOrNull(K_EVENT_ID) ?: return null
         val sequence = map.integerOrNull(K_SEQUENCE) ?: return null
         val kind = map.textOrNull(K_KIND)
@@ -469,9 +528,16 @@ object AccountabilityEventWire {
         } else {
             null
         }
+        val capabilities = if (keys.contains(K_CAPABILITIES)) {
+            if (version < 3L) return null
+            map.textOrNull(K_CAPABILITIES)
+                ?.let(MonitoringCapability::decodeSetOrNull) ?: return null
+        } else {
+            null
+        }
         val identityKeys = setOf(K_RULE_LABEL, K_RULE_TARGET, K_RULE_ITEMS, K_RULE_BATCH)
         val ruleIdentity = if (keys.any(identityKeys::contains)) {
-            if (version != SCHEMA_VERSION.toLong()) return null
+            if (version < 2L) return null
             val label = map.textOrNull(K_RULE_LABEL) ?: return null
             val target = map.textOrNull(K_RULE_TARGET)
                 ?.let(RuleTargetType::fromWire) ?: return null
@@ -496,10 +562,15 @@ object AccountabilityEventWire {
             }
 
             AccountabilityEventKind.MONITORING_STATUS -> {
-                setOf(
-                    K_VERSION, K_EVENT_ID, K_SEQUENCE, K_KIND, K_CATEGORY, K_TIME,
-                    K_MONITORING_STATE, K_OUTBOX_AGE, K_LATEST_SEQUENCE,
-                )
+                buildSet {
+                    addAll(
+                        listOf(
+                            K_VERSION, K_EVENT_ID, K_SEQUENCE, K_KIND, K_CATEGORY, K_TIME,
+                            K_MONITORING_STATE, K_OUTBOX_AGE, K_LATEST_SEQUENCE,
+                        ),
+                    )
+                    if (version >= 3L) add(K_CAPABILITIES)
+                }
             }
 
             AccountabilityEventKind.GAP_MARKER -> {
@@ -510,7 +581,7 @@ object AccountabilityEventWire {
             }
 
             AccountabilityEventKind.RULE_CONTROL -> {
-                if (version == SCHEMA_VERSION.toLong()) {
+                if (version >= 2L) {
                     val identity = ruleIdentity ?: return null
                     buildSet {
                         addAll(
@@ -548,6 +619,8 @@ object AccountabilityEventWire {
                 ruleId = ruleId,
                 ruleChange = ruleChange,
                 ruleIdentity = ruleIdentity,
+                capabilities = capabilities,
+                schemaVersion = version.toInt(),
             ).takeIf { it.kind == kind }
         } catch (e: IllegalArgumentException) {
             null

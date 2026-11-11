@@ -26,6 +26,9 @@ class RuleControlReceiver(
             val nowMs = now()
             val dao = store.partnerRuleChangeDao()
             dao.deleteExpired(nowMs)
+            // The gap rows share this retention cadence and are written off the rule path,
+            // so the same sweep keeps them bounded.
+            store.partnerProtectionGapDao().deleteExpired(nowMs)
             val identity = event.ruleIdentity
             dao.insert(
                 PartnerRuleChange(
