@@ -1992,4 +1992,12 @@
     <string name="backup_restore_applied">Restoring. The app will restart in a moment.</string>
     <string name="backup_restore_done_title">Backup restored</string>
     <string name="backup_restore_done_body">Revision %1$d is now on this phone.</string>
+    <string name="app_lock_locked_title">My Exodus is locked</string>
+    <string name="app_lock_locked_body">Unlock with your device screen lock to open the app. Your private data stays encrypted until then.</string>
+    <string name="app_lock_setup_title">Protect My Exodus</string>
+    <string name="app_lock_setup_body">Choose your device screen lock so only you can open your private data.</string>
+    <string name="app_lock_recovery_title">Recovery needed</string>
+    <string name="app_lock_recovery_body">Your protected data is still on this device, but it could not be opened automatically. Nothing has been deleted.</string>
+    <string name="app_lock_transition_body">Finishing a protected operation. Keep the app open.</string>
+    <string name="app_lock_progress_description">Working</string>
 </resources>

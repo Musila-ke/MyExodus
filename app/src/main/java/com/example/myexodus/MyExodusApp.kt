@@ -33,6 +33,7 @@ import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.accountability.sync.PushInstallationRegistrar
 import com.example.myexodus.accountability.sync.enqueuePartnerSync
 import com.example.myexodus.accountability.sync.runPartnerSyncPass
+import com.example.myexodus.applock.AppLockCoordinator
 import com.example.myexodus.backup.BackupStagingSweeper
 import com.example.myexodus.blocking.BootReconciliationStore
 import com.example.myexodus.blocking.EnforcementForegroundService
@@ -110,6 +111,9 @@ class MyExodusApp : Application(), Configuration.Provider {
     // Plan §8.3/§8.6: the updater's durable record has one main-process owner; this startup
     // touch reconciles it after process death and after package replacement.
     @Inject lateinit var updateCoordinator: UpdateCoordinator
+    // §8.8: process-scope screen-off revocation must not depend on MainActivity being alive.
+    // Lazy because a locked-boot process cannot read the CE feature status this constructs.
+    @Inject lateinit var appLockCoordinator: dagger.Lazy<AppLockCoordinator>
 
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -139,6 +143,17 @@ class MyExodusApp : Application(), Configuration.Provider {
         statusMonitor.refresh()
     }
 
+    /** §8.8: screen-off revokes the session even when a background service keeps the process alive. */
+    private val screenOffReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != Intent.ACTION_SCREEN_OFF) return
+            // Pre-unlock there is no UI session and CE feature status is unreadable; a new
+            // process always starts locked anyway, so a missed broadcast is harmless.
+            if (!context.getSystemService(UserManager::class.java).isUserUnlocked) return
+            appLockCoordinator.get().onScreenOff()
+        }
+    }
+
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
             .setWorkerFactory(hiltWorkerFactory)
@@ -159,6 +174,7 @@ class MyExodusApp : Application(), Configuration.Provider {
         purgeLegacyCacheIfUnlocked()
         super.onCreate()
         startupTrace.lap("super")
+        registerSystemReceiver(screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
         // §8.5: App Check provider in place before ANY Firestore op (mailbox pull, backfill
         // responder, drain) — app-startup install covers paths that never route through drainOutbox.
         AppCheckInstaller.install(this)

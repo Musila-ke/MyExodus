@@ -52,6 +52,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.example.myexodus.applock.AppLockCoordinator
+import com.example.myexodus.applock.AppLockRootGate
+import com.example.myexodus.applock.AppLockState
 import com.example.myexodus.blocking.AttemptRecorder
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.EnforcementForegroundService
@@ -200,6 +203,9 @@ class MainActivity : FragmentActivity() {
     @Volatile private var identityMigrationInFlight = false
 
     private val startupTrace = StartupTrace("Activity")
+
+    /** Plan §4.1: process-local App Lock state (Phase 2 shell; auth/provider phases follow). */
+    @Inject lateinit var appLockCoordinator: AppLockCoordinator
 
     /** Bridges the screen-lock confirm flow's RESULT_OK back into the signing coroutine. */
     private var credentialContinuation: CancellableContinuation<Boolean>? = null
@@ -376,6 +382,15 @@ class MainActivity : FragmentActivity() {
         refreshWebsiteLimitTunnel()
         // Updater R01: foreground entry joins the 24-hour discovery check when one is due.
         UpdateCheckWorker.enqueueForegroundIfDue(this)
+        // §8.8: consume the single-use external-return token; the state itself decides what shows.
+        appLockCoordinator.onHostResumed()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // §8.8: configuration changes keep the session; a real app switch revokes it unless a
+        // trusted external activity holds the single-use token.
+        appLockCoordinator.onHostStopped(isChangingConfigurations)
     }
 
     /**
@@ -578,11 +593,20 @@ class MainActivity : FragmentActivity() {
         startPartnerSigningHeal()
         startupTrace.lap("intents")
         enableEdgeToEdge()
+        // §8.2: FLAG_SECURE is set before the first protected frame exists. The lock shell is
+        // covered too, so recents and screenshots never show the app in either state.
+        if (appLockCoordinator.state.value != AppLockState.DISABLED) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
         setContent {
             // Hoisted so a Settings change repaints the whole app in the same frame; the store
             // is the durable copy, this is the live one.
             var themeMode by remember { mutableStateOf(themeSettings.mode) }
+            val appLockState by appLockCoordinator.state.collectAsStateWithLifecycle()
             MyExodusTheme(darkTheme = rememberDarkTheme(themeMode)) {
+                // §8.2: sole parent of the protected tree. While the state is neither DISABLED
+                // nor UNLOCKED, no app navigation, sheet, dialog or screen below exists.
+                AppLockRootGate(state = appLockState) {
                 // Plan §8.10: new clients read the server-published minimum version at startup
                 // and show the update-required message below it. This is a UX signal only —
                 // rules and callables enforce independently, so a failed read is not a bypass.
@@ -949,6 +973,8 @@ class MainActivity : FragmentActivity() {
                 // vanished (or why the tapped approval did nothing).
                 if (identityResetNotice) {
                     IdentityResetDialog(onDismiss = { identityResetNotice = false })
+                }
+                // End of the protected tree opened by AppLockRootGate.
                 }
             }
         }

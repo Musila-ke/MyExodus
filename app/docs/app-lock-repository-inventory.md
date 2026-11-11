@@ -142,9 +142,79 @@ New, absent today (grep-confirmed): `AppLockCoordinator`, `AndroidCredentialAuth
   sites are the migration surface and must not cache DAOs across a lease.
 - **D4:** operational allowlist = the existing DE snapshot plus BootReconciliationStore; nothing
   new is replicated into device-protected storage.
-- **D5:** `ActivityLogStore` has no live open/append/read caller besides `checkpoint()`
-  (`MyExodusApp.kt:415`); verify in Phase 2 before including it in the gate — it may be a dead
-  surface.
+- **D5 (resolved in Phase 2):** `ActivityLogStore` has no writer or reader. Its only live consumer
+  is `activityLogStore.checkpoint()` (`MyExodusApp.kt:431`), and `checkpoint()` returns without
+  opening when `db == null` (`ActivityLogStore.kt:206-219`), so a session that never opened the
+  store performs no read. Route 1 still wraps its DEK for correctness (the file exists and holds
+  ciphertext), but it cannot cause background reads while locked.
 - **D6:** the partner signing gate and approval chain remain byte-for-byte untouched.
 - **D7:** API 30+ per-use CryptoObject; API 26-29 legacy 30 s validity window; no app PIN.
 - No contradiction with the plan was found; the Phase 1 stop-gate is not triggered.
+
+## 11. Phase 2 status — UI shell and state
+
+Plan gate (§7): "Cold launch, rotation, external intents and screen-off conceal protected UI;
+existing PIN remains functional."
+
+**Files changed**
+
+- `applock/AppLockState.kt` (new): state enum; `showsProtectedUi` true only for DISABLED/UNLOCKED.
+- `applock/AppLockStatusStore.kt` (new): durable prefs (`app_lock_status`) and the pure,
+  fail-closed startup mapping (§4.2): absent/"disabled" → DISABLED; "enabled" +
+  `active_pending_first_unlock`/`first_unlock_verified` → LOCKED; "enabled" with an interrupted
+  journal stage (`staging`, `committing`, …) or a missing/unknown one → RECOVERY_REQUIRED; any
+  other feature status → RECOVERY_REQUIRED (never silently DISABLED).
+- `applock/AppLockCoordinator.kt` (new): in-process `StateFlow<AppLockState>` seeded from the
+  store; session/attempt generations; `onScreenOff`, `lockManually`, `onHostStopped(changing)`,
+  `onHostResumed`, and the §8.8 expected-external-operation token (single use, same session
+  generation, `elapsedRealtime()` 60 s window, defeated by screen-off/manual lock, never
+  persisted).
+- `applock/AppLockRootGate.kt` (new): sole parent of the protected tree (§8.2); non-unlocked
+  states render a scrollable, TalkBack-labeled lock shell instead.
+- `MainActivity.kt`: host was already `FragmentActivity` (:162), no superclass change;
+  `FLAG_SECURE` added synchronously before `setContent` when the state is not DISABLED;
+  `onStop` reports the host boundary; the entire existing `MyExodusTheme` content is now inside
+  `AppLockRootGate`.
+- `MyExodusApp.kt`: process-scope `ACTION_SCREEN_OFF` dynamic receiver, guarded by
+  `UserManager.isUserUnlocked`; the coordinator is `dagger.Lazy` so a locked-boot process never
+  reads credential-encrypted prefs (the prefs are also lazy inside the store).
+- `res/values/strings.xml`: eight lock-shell strings.
+- `test/.../applock/AppLockCoordinatorTest.kt` (new): 15 Robolectric tests.
+
+**Evidence**
+
+- App Lock unit suite: 15 tests, 0 failures, 0 errors (Robolectric, sdk 34). Covers the startup
+  truth table, fail-closed cases, fresh-process locked, screen-off revocation and generation
+  increment, config-change session retention, app-switch revocation, token single-use/same
+  generation, the 60 s boundary (60 000 ms valid, 60 001 invalid, backwards time invalid),
+  manual-lock and screen-off token defeat, DISABLED no-ops, and unlock never surviving a new
+  process.
+- Phase 1 exit-gate regression suites: enforcement (`EnforcementForegroundServiceTest` 16,
+  `EnforcementFgsEnsureTest` 2), boot reconciliation (4), scheduler (`MilestoneSchedulerTest` 5),
+  background delivery (`MailboxOutboxDrainerTest` 13, `MailboxOutboxDrainerCrashWindowTest` 9,
+  `PartnerSyncCoordinatorTest` 60, `MessageDeliveryTest` 9), DB migrations
+  (`AppRulesStoreMigrationTest` 14, `LocalDatabaseMigrationTest` 2) — 0 failures, 0 errors.
+
+**Gate accounting (honest split)**
+
+- PASSED (unit-level): cold-process start locked; screen-off revokes; app switch revokes;
+  configuration change keeps the session; external token semantics.
+- VACUOUS: "existing PIN remains functional" — no app PIN exists (D7), so the clause has no
+  subject. The plan's own instruction is no app PIN in v1.
+- BLOCKED (device): visual concealment of the real UI across cold launch, rotation, external
+  intents and screen-off. No AVD was connected during this window and no physical device has this
+  build; to be executed at the next emulator/device slot. The mechanism is in place end to end in
+  production code paths.
+- DEFERRED to Phase 6: call sites that spawn trusted external activities do not yet call
+  `beginExpectedExternalOperation`; until wired, an enabled lock keeps the app locked after any
+  external launch (fail-closed, no bypass). No production path can set the feature "enabled"
+  before Phase 5's enrollment writer, so Phase 2 ships dormant for every current user.
+- FLAG_SECURE is applied when the state is not DISABLED, including RECOVERY_REQUIRED (ciphertext
+  and lock UI can still be on screen).
+
+**Next phase entry conditions (§7 Phase 3)**
+
+`VaultDatabaseProvider` with the Mutex-atomic lease gate, generation-scoped Flow/Paging, and no
+injectable standalone DAOs; existing SQLCipher key only (route 1); stale collectors and background
+entry points must not read a closed vault. Entry requires this section's unit evidence to remain
+green.
