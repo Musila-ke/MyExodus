@@ -922,6 +922,78 @@ test('deadline: a live sibling install supersedes the six-hour row instead of no
   assert.strictEqual((await outboxRef(INSTALL, 1).get()).exists, false);
 });
 
+// Owner devices 2026-11-12: one phone registers TWO install rows — its FID (submitHeartbeat)
+// and the owner-bound service id (the Phase 6 contact bridge) — under ONE FCM token. On a real
+// uninstall both fall silent together, and each row's probe saw the other's fresher beat as a
+// "live sibling" and superseded BOTH: the partner was never told. Same token is the same
+// device, so the notice must fire exactly once and the twin row must be cancelled.
+test('liveness probe: the same phone’s two install rows produce one immediate notice', async () => {
+  await seedPairing();
+  await register(MON, INSTALL);
+  await register(MON, 'install-mon-fid', { token: `token-${INSTALL}` });
+  await register(WATCH, WATCH_INSTALL);
+  await seedState({
+    lastReceivedAtMs: NOW - 60 * MINUTE,
+    extra: { late_deadline_at: Timestamp.fromMillis(NOW - 15 * MINUTE) },
+  });
+  await seedState({
+    installId: 'install-mon-fid',
+    lastReceivedAtMs: NOW - 60 * MINUTE + 3000,
+    generation: 2,
+    extra: { late_deadline_at: Timestamp.fromMillis(NOW - 15 * MINUTE) },
+  });
+  const probes = probeRecorder({ failTimes: 2, code: 'messaging/registration-token-not-registered' });
+  const pushes = pushRecorder();
+
+  const result = await workerWith(pushes.sendPush, probes.sendProbe)();
+  assert.strictEqual(result.lateNotified, 1, 'the phone is gone: the partner is told');
+  assert.strictEqual(result.outboxCreated, 1);
+  assert.strictEqual(result.sent, 1);
+  assert.strictEqual(pushes.sends.length, 1, 'one partner notification for one outage');
+
+  const states = [
+    (await stateRef().get()).data(),
+    (await stateRef(MON, 'install-mon-fid').get()).data(),
+  ];
+  assert.strictEqual(states.filter((s) => s.notice_state === 'NOTIFIED').length, 1);
+  assert.strictEqual(states.filter((s) => s.notice_state === 'SUPERSEDED').length, 1,
+    'the same phone’s other row is cancelled, never paged twice');
+  assert.ok(states.every((s) => s.late_deadline_at === undefined && s.next_deadline_at === undefined));
+
+  clockMs += HOUR;
+  await workerWith(pushes.sendPush, probes.sendProbe)();
+  assert.strictEqual(pushes.sends.length, 1, 'never a second notice for the same outage');
+});
+
+test('deadline: the same phone’s two install rows produce one six-hour notice', async () => {
+  await seedPairing();
+  await register(WATCH, WATCH_INSTALL);
+  await register(MON, INSTALL);
+  await register(MON, 'install-mon-fid', { token: `token-${INSTALL}` });
+  await seedState({ lastReceivedAtMs: NOW - 7 * HOUR });
+  // A beat a hair fresher than its twin's: under the old rule this counted as a live sibling.
+  await seedState({
+    installId: 'install-mon-fid',
+    lastReceivedAtMs: NOW - 6 * HOUR + 30_000,
+    generation: 2,
+  });
+  const pushes = pushRecorder();
+
+  const result = await workerWith(pushes.sendPush)();
+  assert.strictEqual(result.notified, 1, 'one outage, one transition');
+  assert.strictEqual(result.outboxCreated, 1);
+  assert.strictEqual(pushes.sends.length, 1, 'one partner notification');
+  assert.strictEqual((await outboxRef(INSTALL, 1).get()).exists, true);
+  assert.strictEqual((await outboxRef('install-mon-fid', 1).get()).exists, false,
+    'the phone’s other row never writes a second outbox row');
+  const states = [
+    (await stateRef().get()).data(),
+    (await stateRef(MON, 'install-mon-fid').get()).data(),
+  ];
+  assert.strictEqual(states.filter((s) => s.notice_state === 'NOTIFIED').length, 1);
+  assert.strictEqual(states.filter((s) => s.notice_state === 'SUPERSEDED').length, 1);
+});
+
 test('heartbeat: an accepted beat revives a superseded row cleanly', async () => {
   await seedPairing();
   await register(MON, INSTALL);

@@ -163,12 +163,26 @@ function consentingPartner(pairing, monitoredUid) {
  * the user replaced or reinstalled must never make the partner think the app is gone — and a
  * silent row that has a live sibling is superseded precisely so it cannot.
  */
-function hasLiveSibling(states, installId, nowMs, windowMs = PARTNER_PUSH_AFTER_MS) {
+function hasLiveSibling(states, installId, nowMs, windowMs = PARTNER_PUSH_AFTER_MS, ownToken = null) {
   return (Array.isArray(states) ? states : []).some((state) => {
     if (!state || state.install_id === installId) return false;
+    // One phone holds TWO install rows — its FID (`submitHeartbeat`) and the owner-bound
+    // service id (the contact bridge) — and both are registered under the same FCM token.
+    // They fall silent together, so a same-token row is the same device, never evidence
+    // that the user is still there on another one.
+    if (ownToken && state.push_token === ownToken) return false;
     const lastReceivedAtMs = Number(state.last_received_at_ms) || 0;
     return lastReceivedAtMs > 0 && nowMs - lastReceivedAtMs < windowMs;
   });
+}
+
+/** True when the phone's other row (same push token) already told the partner about this
+ *  silence. Availability is user-level and NOTIFIED is terminal until a heartbeat revives
+ *  it, so paging again from the second row would duplicate the same outage's notice. */
+function sameDeviceAlreadyNotified(states, ownToken) {
+  if (!ownToken) return false;
+  return (Array.isArray(states) ? states : []).some((state) =>
+    !!state && state.push_token === ownToken && state.notice_state === 'NOTIFIED');
 }
 
 /**
@@ -361,6 +375,7 @@ module.exports = {
   consentEnabled,
   consentingPartner,
   hasLiveSibling,
+  sameDeviceAlreadyNotified,
   deadlineDecision,
   livenessProbeDecision,
   suppressionReason,

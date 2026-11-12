@@ -224,6 +224,17 @@ data class PartnerActivityUi(
     val streaks: List<PartnerStreakUi> = emptyList(),
 )
 
+/**
+ * Owner report 2026-11-12: a projection row can outlive what it describes — a placeholder for
+ * a pin, or the cleared aggregate the last shared streak's stop/delete leaves behind
+ * (`PartnerActivityDao.refreshAggregateAfterStreakRemoved`). [PartnerSummaryCard] draws no
+ * numbers without shared state, so rendering it in that case left a blank card above the
+ * activity card. A pinned message alone still renders (ADR #285).
+ */
+fun showsPartnerSummary(activity: PartnerActivityUi?): Boolean =
+    activity != null &&
+        (activity.lastEventOccurredAtEpochMillis != null || activity.pinnedMessageText != null)
+
 /** One received streak as the dashboard's selector renders it (schema v27 projection row). */
 data class PartnerStreakUi(
     val habitId: String,

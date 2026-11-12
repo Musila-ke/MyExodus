@@ -29,6 +29,7 @@ const {
   consentEnabled,
   consentingPartner,
   hasLiveSibling,
+  sameDeviceAlreadyNotified,
   deadlineDecision,
   livenessProbeDecision,
   suppressionReason,
@@ -546,6 +547,35 @@ test('hasLiveSibling: any other install inside the notice window keeps the user 
     false,
     'a receipt-less row is not evidence of life',
   );
+});
+
+// Owner device 2026-11-12: one phone holds two install rows (its FID from submitHeartbeat,
+// and the owner-bound service id the contact bridge mirrors) and both register under ONE FCM
+// token. Both went silent on uninstall and each suppressed the other's notice — the partner
+// was paged by neither. Same token is the same device, never a live sibling.
+test('hasLiveSibling: a row on the same push token is the same phone, not a live sibling', () => {
+  const siblings = [{ install_id: 'service-row', last_received_at_ms: NOW - 5 * MINUTE, push_token: 'tok-1' }];
+  assert.strictEqual(hasLiveSibling(siblings, 'fid-row', NOW, undefined, 'tok-1'), false);
+  assert.strictEqual(hasLiveSibling(siblings, 'fid-row', NOW, undefined, 'tok-2'), true, 'a different token is another device');
+  assert.strictEqual(hasLiveSibling(siblings, 'fid-row', NOW), true, 'no own token keeps the conservative reading');
+  assert.strictEqual(
+    hasLiveSibling(
+      [{ install_id: 'service-row', last_received_at_ms: NOW - 5 * MINUTE, push_token: 'tok-1' }],
+      'fid-row', NOW, undefined, null,
+    ),
+    true,
+    'an unknown own token cannot prove same-device',
+  );
+});
+
+test('sameDeviceAlreadyNotified: only a same-token NOTIFIED row counts', () => {
+  const notified = { install_id: 'service-row', notice_state: 'NOTIFIED', push_token: 'tok-1' };
+  assert.strictEqual(sameDeviceAlreadyNotified([notified], 'tok-1'), true);
+  assert.strictEqual(sameDeviceAlreadyNotified([notified], 'tok-2'), false, 'another device’s notice is not ours');
+  assert.strictEqual(sameDeviceAlreadyNotified([{ ...notified, notice_state: 'SUPERSEDED' }], 'tok-1'), false);
+  assert.strictEqual(sameDeviceAlreadyNotified([{ install_id: 'service-row', push_token: 'tok-1' }], 'tok-1'), false);
+  assert.strictEqual(sameDeviceAlreadyNotified([notified], null), false);
+  assert.strictEqual(sameDeviceAlreadyNotified(null, 'tok-1'), false);
 });
 
 test('livenessProbeDecision: an ingestion outage rebases from max(receipt, outage end)', () => {

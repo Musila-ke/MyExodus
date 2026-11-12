@@ -183,6 +183,27 @@ class PartnerPresentationTest {
     }
 
     @Test
+    fun showsPartnerSummary_onlyWithStateOrAPin() {
+        // No projection row at all.
+        assertEquals(false, showsPartnerSummary(null))
+        // A cleared aggregate (last shared streak stopped/deleted) or a bare placeholder row.
+        assertEquals(false, showsPartnerSummary(activity(lastEvent = null)))
+        // A snapshot-less message writes only the pin (ADR #285) — the card renders it.
+        assertEquals(true, showsPartnerSummary(activity(lastEvent = null, pin = "Keep going")))
+        // Received shared state, pin or not.
+        assertEquals(true, showsPartnerSummary(activity(lastEvent = now)))
+        assertEquals(true, showsPartnerSummary(activity(lastEvent = now, pin = "Keep going")))
+    }
+
+    private fun activity(lastEvent: Long?, pin: String? = null) = PartnerActivityUi(
+        daysFree = 0,
+        milestonesReached = emptyList(),
+        relapseCount = 0,
+        lastEventOccurredAtEpochMillis = lastEvent,
+        pinnedMessageText = pin,
+    )
+
+    @Test
     fun startOfLocalDay_isTheZoneBoundary() {
         // 2023-11-14T21:30Z → midnight UTC of 2023-11-14.
         val expected = 1_699_920_000_000L

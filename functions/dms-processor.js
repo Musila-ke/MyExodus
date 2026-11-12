@@ -37,6 +37,7 @@ const {
   LATE_AFTER_MS,
   consentingPartner,
   hasLiveSibling,
+  sameDeviceAlreadyNotified,
   suppressionReason,
   circuitBreakerTripped,
   dispatchBackoffMs,
@@ -164,12 +165,30 @@ async function findOpenIngestionOutage(db) {
   return snap.empty ? null : snap.docs[0].id;
 }
 
-/** The user's other installation rows, read inside the caller's transaction. */
+/** The push token registered for one install id, read in the caller's transaction. */
+async function pushTokenOf(tx, db, uid, installId) {
+  if (typeof installId !== 'string' || installId.length === 0) return null;
+  const snap = await tx.get(db.doc(`users/${uid}/push_installations/${installId}`));
+  return snap.exists ? snap.get('token') || null : null;
+}
+
+/** The user's other installation rows, read inside the caller's transaction. Each carries
+ *  its own push token so the same-token duplication (FID row + service-id row of one phone)
+ *  is visible to the sibling checks; the doc id rides along for the cascade write. */
 async function siblingStates(tx, db, uid, excludeDocId) {
   const snap = await tx.get(
     db.collection('dms_install_state').where('uid', '==', uid).limit(MAX_INSTALLS_PER_USER),
   );
-  return snap.docs.filter((doc) => doc.id !== excludeDocId).map((doc) => doc.data());
+  const siblings = [];
+  for (const doc of snap.docs) {
+    if (doc.id === excludeDocId) continue;
+    siblings.push({
+      id: doc.id,
+      ...doc.data(),
+      push_token: await pushTokenOf(tx, db, uid, doc.get('install_id')),
+    });
+  }
+  return siblings;
 }
 
 /** A state row that must never page the partner: its user is demonstrably alive on another
@@ -184,6 +203,18 @@ function supersedeRow(tx, stateRef, nowMs) {
     late_deadline_at: FieldValue.delete(),
     updated_at: Timestamp.fromMillis(nowMs),
   });
+}
+
+/** After notifying, cancel the same phone's other row: same token means same device, and a
+ *  second row must not page the partner again for one outage. A NOTIFIED sibling is left
+ *  alone — that is the state a returning heartbeat needs to find for the recovery notice. */
+function supersedeSameDevice(tx, db, siblings, ownToken, nowMs) {
+  if (!ownToken) return;
+  for (const sibling of siblings) {
+    if (sibling.push_token !== ownToken) continue;
+    if (sibling.notice_state === 'NOTIFIED' || sibling.notice_state === NOTICE_STATE_SUPERSEDED) continue;
+    supersedeRow(tx, db.doc(`dms_install_state/${sibling.id}`), nowMs);
+  }
 }
 
 /**
@@ -218,11 +249,18 @@ async function processDueRow(db, dueDoc, nowMs) {
 
     // A user with another install still reporting is not silent, and the partner's status
     // page already reflects the newer receipt: this row must never notify, including on
-    // beats from before a reinstall (the stale-install false positive).
+    // beats from before a reinstall (the stale-install false positive). The phone's own
+    // second row is excluded by its shared push token, and if that row already notified,
+    // the partner has been told — paging again would duplicate one outage's notice.
+    const ownToken = await pushTokenOf(tx, db, state.uid, state.install_id);
     const siblings = await siblingStates(tx, db, state.uid, dueDoc.id);
-    if (hasLiveSibling(siblings, state.install_id, nowMs)) {
+    if (hasLiveSibling(siblings, state.install_id, nowMs, PARTNER_PUSH_AFTER_MS, ownToken)) {
       supersedeRow(tx, dueDoc.ref, nowMs);
       return { status: 'superseded' };
+    }
+    if (sameDeviceAlreadyNotified(siblings, ownToken)) {
+      supersedeRow(tx, dueDoc.ref, nowMs);
+      return { status: 'superseded', reason: 'SAME_DEVICE_NOTIFIED' };
     }
 
     // Reads before writes: every consenting relationship, then the deterministic outbox ids.
@@ -256,6 +294,7 @@ async function processDueRow(db, dueDoc, nowMs) {
       next_deadline_at: FieldValue.delete(),
       updated_at: Timestamp.fromMillis(nowMs),
     });
+    supersedeSameDevice(tx, db, siblings, ownToken, nowMs);
 
     let created = 0;
     relationships.forEach((relationship, index) => {
@@ -278,6 +317,12 @@ async function processDueRow(db, dueDoc, nowMs) {
     });
     return { status: 'notified', outboxCreated: created };
   });
+}
+
+/** The token read before the send rides the claim: `markInstallationStale` deletes the
+ *  token, and the notice transaction needs it to recognise the phone's other install row. */
+function claimWithToken(claim, installation) {
+  return { ...claim, token: (installation && installation.token) || null };
 }
 
 /**
@@ -344,7 +389,7 @@ async function processProbeRow(db, dueDoc, nowMs, sendProbe) {
     // rejected now. A merely missing row is not — the client can remove its own install on
     // sign-out, and the six-hour deadline remains the backstop for that.
     if (installation && installation.stale === true) {
-      const notice = await createUninstallNotice(db, dueDoc.ref, claim, nowMs);
+      const notice = await createUninstallNotice(db, dueDoc.ref, claimWithToken(claim, installation), nowMs);
       return { status: 'reminded', skipped: true, ...notice };
     }
     return { status: 'reminded', skipped: true };
@@ -355,8 +400,12 @@ async function processProbeRow(db, dueDoc, nowMs, sendProbe) {
     return { status: 'reminded', sent: true };
   } catch (error) {
     if (isTokenInvalid('fcm', error)) {
+      // The token read above is the last moment it exists: markInstallationStale deletes it,
+      // and the notice transaction needs it to recognise the phone's other install row.
+      const notice = await createUninstallNotice(
+        db, dueDoc.ref, claimWithToken(claim, installation), nowMs,
+      );
       await markInstallationStale(db, claim.uid, claim.installId);
-      const notice = await createUninstallNotice(db, dueDoc.ref, claim, nowMs);
       return { status: 'reminded', tokenCleared: true, ...notice };
     }
     return { status: 'reminded', sendFailed: errorCodeOf(error) };
@@ -375,7 +424,7 @@ async function processProbeRow(db, dueDoc, nowMs, sendProbe) {
  * partner notice is owed — the row is marked SUPERSEDED instead.
  */
 async function createUninstallNotice(db, stateRef, claim, nowMs) {
-  const { uid, installId, generation, lastReceivedAtMs } = claim;
+  const { uid, installId, generation, lastReceivedAtMs, token: ownToken } = claim;
   return db.runTransaction(async (tx) => {
     const fresh = await tx.get(stateRef);
     if (!fresh.exists) return { notice: 'skipped', reason: 'REMOVED' };
@@ -385,11 +434,20 @@ async function createUninstallNotice(db, stateRef, claim, nowMs) {
       return { notice: 'skipped', reason: 'MOVED' };
     }
     if (state.notice_state === 'NOTIFIED') return { notice: 'skipped', reason: 'ALREADY_NOTIFIED' };
+    // The same phone's other row may have notified after this row's probe was claimed —
+    // a superseded row must never resurrect itself into a second notice.
+    if (state.notice_state === NOTICE_STATE_SUPERSEDED) {
+      return { notice: 'skipped', reason: 'SUPERSEDED' };
+    }
 
     const siblings = await siblingStates(tx, db, uid, stateRef.id);
-    if (hasLiveSibling(siblings, installId, nowMs)) {
+    if (hasLiveSibling(siblings, installId, nowMs, PARTNER_PUSH_AFTER_MS, ownToken)) {
       supersedeRow(tx, stateRef, nowMs);
       return { notice: 'superseded' };
+    }
+    if (sameDeviceAlreadyNotified(siblings, ownToken)) {
+      supersedeRow(tx, stateRef, nowMs);
+      return { notice: 'superseded', reason: 'SAME_DEVICE_NOTIFIED' };
     }
 
     const outageGeneration = (Number(state.outage_generation) || 0) + 1;
@@ -424,6 +482,7 @@ async function createUninstallNotice(db, stateRef, claim, nowMs) {
       late_deadline_at: FieldValue.delete(),
       updated_at: Timestamp.fromMillis(nowMs),
     });
+    supersedeSameDevice(tx, db, siblings, ownToken, nowMs);
 
     let outboxCreated = 0;
     relationships.forEach((relationship, index) => {

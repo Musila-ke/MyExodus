@@ -796,7 +796,8 @@ fun PartnerScreen(
                         // summary — the activity card below already says why the page is
                         // empty, and a second "nothing shared" sentence above it repeated
                         // the same absence in two cards.
-                        current.activity?.let { PartnerSummaryCard(it, current.chainStatus) }
+                        current.activity?.takeIf(::showsPartnerSummary)
+                            ?.let { PartnerSummaryCard(it, current.chainStatus) }
                         ActivityChartCard(current.alerts)
                         // Owner directive 2026-11-09: the answer (summary + picture + list)
                         // comes before the composer. The send action used to sit between the
