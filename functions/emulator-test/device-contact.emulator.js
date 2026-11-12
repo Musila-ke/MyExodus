@@ -567,6 +567,24 @@ test('the rollout flag stops both workers: liveness owns dispatch or the legacy 
   assert.deepStrictEqual(await worker()(), { disabled: 'PARTNER_ACCOUNTABILITY' });
 });
 
+test('a contact accepted while liveness is paused stores MONITORING_UNAVAILABLE, then resumes', async () => {
+  const device = makeDevice();
+  await seedRegistration(device);
+  await seedPairing();
+
+  await db.doc('config/features').set({ device_liveness_alerts_v1_enabled: false });
+  const paused = await submit(contact(device));
+  assert.strictEqual(paused.outcome, 'ACCEPTED');
+  const state = (await db.doc(livenessPath()).get()).data();
+  assert.strictEqual(state.status, 'MONITORING_UNAVAILABLE');
+  assert.strictEqual(state.lastAcceptedContactAtMs, NOW);
+
+  await db.doc('config/features').set({ device_liveness_alerts_v1_enabled: true });
+  clockMs += MINUTE;
+  await submit(contact(device, { heartbeatCounter: 2, deviceReportedAtMs: clockMs }));
+  assert.strictEqual((await db.doc(livenessPath()).get()).data().status, 'ACTIVE');
+});
+
 test('MONITORING_UNAVAILABLE pauses evaluation without fabricating alerts', async () => {
   await seedLiveness({
     status: 'MONITORING_UNAVAILABLE',

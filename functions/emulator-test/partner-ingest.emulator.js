@@ -412,6 +412,22 @@ test('the per-installation ingestion budget is charged per batch and stops furth
   assert.strictEqual((await request([eventFor([bob])])).results[0].code, 'ACCEPTED');
 });
 
+test('paused ingest returns retryable maintenance without writing, then accepts after resume', async () => {
+  const bob = await seedRecipient(BOB);
+  const w = eventFor([bob]);
+  await db.doc('config/features').set({ delivery_ingest_v1_enabled: false });
+
+  await expectRejection(request([w]), 'unavailable', 'MAINTENANCE');
+  assert.strictEqual(await exists(ledgerPath(w.event.eventId)), false);
+  assert.strictEqual(await exists(mailboxPath(BOB, w.event.eventId, bob.installationId)), false);
+  assert.strictEqual(await exists(jobPath(w.event.eventId, bob.installationId)), false);
+  assert.strictEqual(await exists(ratePath), false, 'a paused ingest charges no budget');
+
+  await db.doc('config/features').delete();
+  const reply = await request([w]);
+  assert.strictEqual(reply.results[0].code, 'ACCEPTED');
+});
+
 test('an account being deleted cannot ingest', async () => {
   const bob = await seedRecipient(BOB);
   await db.doc(`deletionJobs/${ALICE}`).set({ status: 'QUEUED' });

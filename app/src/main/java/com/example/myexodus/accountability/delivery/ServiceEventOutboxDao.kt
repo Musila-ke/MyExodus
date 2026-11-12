@@ -122,6 +122,13 @@ interface ServiceEventOutboxDao {
     )
     suspend fun waitingRows(ownerUid: String, nowMs: Long, limit: Int): List<PendingPartnerEvent>
 
+    /** §14 oldest `WAITING_FOR_RECIPIENT_KEY` metric (null = nothing waiting). */
+    @Query(
+        "SELECT MIN(created_local_at_ms) FROM pending_partner_events " +
+            "WHERE status = 'WAITING_FOR_RECIPIENT_KEY'",
+    )
+    suspend fun oldestWaitingCreatedAt(): Long?
+
     @Query(
         "UPDATE pending_partner_events SET next_attempt_at_ms = :nextAttemptAtMs " +
             "WHERE event_id = :eventId AND status = 'WAITING_FOR_RECIPIENT_KEY'",

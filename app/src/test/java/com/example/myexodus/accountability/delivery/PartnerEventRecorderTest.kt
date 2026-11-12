@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.accountability.crypto.EventCipher
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.AccountabilityEventCategory
+import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.state.AccountabilityDatabase
 import java.util.Base64
 import kotlinx.coroutines.runBlocking
@@ -400,6 +401,74 @@ class PartnerEventRecorderTest {
         assertEquals(1, outbox.cleanupAcked(1_001 + retention))
         assertNull(outbox.event(acked.eventId))
         assertEquals("unacknowledged rows are never deleted", PendingPartnerEvent.STATUS_PENDING, outbox.event(pending.eventId)!!.status)
+    }
+
+    /** §13.4 stable identity: a migrated record keeps the persisted legacy event id. */
+    @Test
+    fun requestedEventId_isTheStoredIdentity() = runBlocking {
+        val recorder = recorder(records = mutableListOf(enrollment(1)))
+        val legacyId = "11111111-1111-4111-8111-111111111111"
+
+        val result = recorder.record(
+            PartnerEventKind.RULE_CHANGE_ATTEMPT,
+            safeMetadata = mapOf("ruleChange" to RuleChange.CREATED.wire),
+            sensitivePayload = "payload".toByteArray(),
+            requestedEventId = legacyId,
+        ) as PartnerEventRecorder.RecordResult.Recorded
+
+        assertEquals(legacyId, result.eventId)
+        assertEquals(legacyId, outbox.event(legacyId)?.eventId)
+    }
+
+    /** §13.4 consent boundary: a rule routed to one pairing never fans out to the others. */
+    @Test
+    fun recipientPairId_sealsOnlyForTheRoutedPairing() = runBlocking {
+        val recorder = recorder(records = mutableListOf(enrollment(1), enrollment(2)))
+
+        val recorded = recorder.record(
+            PartnerEventKind.RULE_CHANGE_ATTEMPT,
+            safeMetadata = mapOf("ruleChange" to RuleChange.ASSIGNED.wire),
+            sensitivePayload = "payload".toByteArray(),
+            recipientPairId = "pair-1",
+        ) as PartnerEventRecorder.RecordResult.Recorded
+
+        val envelopes = ExistingE2eeRecipientEncryptor.decode(
+            checkNotNull(checkNotNull(outbox.event(recorded.eventId)).recipientEnvelopesBlob),
+        )
+        assertEquals(
+            listOf(ExistingE2eeRecipientEncryptor.recipientKeyIdOf(byteArrayOf(1))),
+            envelopes.map { it.recipientEncryptionKeyId },
+        )
+    }
+
+    @Test
+    fun staleKeyRegeneration_keepsTheRoutedPairScope() = runBlocking {
+        val records = mutableListOf(enrollment(1), enrollment(2))
+        val recorder = recorder(records = records)
+        val recorded = recorder.record(
+            PartnerEventKind.RULE_CHANGE_ATTEMPT,
+            safeMetadata = mapOf("ruleChange" to RuleChange.UPDATED.wire),
+            sensitivePayload = "payload".toByteArray(),
+            recipientPairId = "pair-1",
+        ) as PartnerEventRecorder.RecordResult.Recorded
+
+        // The partner re-enrolled under the same pair with a fresh agreement key.
+        records.clear()
+        records += enrollment(11).copy(pairId = "pair-1")
+        records += enrollment(2)
+        assertEquals(
+            PartnerEventRecorder.RegenerationResult.Regenerated,
+            recorder.regenerateRecipientEnvelopes(recorded.eventId, recipientKeyRevision = 2),
+        )
+
+        val envelopes = ExistingE2eeRecipientEncryptor.decode(
+            checkNotNull(checkNotNull(outbox.event(recorded.eventId)).recipientEnvelopesBlob),
+        )
+        assertEquals(
+            "the rotated key for pair-1 only — pair-2 is not part of this routing",
+            listOf(ExistingE2eeRecipientEncryptor.recipientKeyIdOf(byteArrayOf(11))),
+            envelopes.map { it.recipientEncryptionKeyId },
+        )
     }
 
     private fun recorder(

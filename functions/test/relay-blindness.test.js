@@ -115,8 +115,8 @@ test('delivery modules contain no decryption or key-derivation code', () => {
 
 test('the event write callable accepts no key-material field', () => {
   assert.deepStrictEqual([...INPUT_KEYS].sort(), [
-    'ciphertextB64', 'eventId', 'keyEpoch', 'pairId', 'senderId',
-  ], 'keyEpoch is a counter; no secret material crosses the callable');
+    'ciphertextB64', 'eventId', 'installationId', 'keyEpoch', 'pairId', 'senderId',
+  ], 'keyEpoch is a counter; installationId is an opaque handle; no secret material');
 });
 
 test('direct client mailbox writes are denied in the rules', () => {

@@ -10,8 +10,14 @@ package com.example.myexodus.accountability.sync
  * - `partner_notifications_denied` — the §14 "denied rate among active pairs" numerator; only
  *   enrolled devices report, so the Crashlytics event count over the `pairings` collection's
  *   active-pair count approximates the rate on the console side.
+ * - `partner_delivery_phase rule_producer=staged|legacy` — the §14 current-phase flag, one
+ *   event per enrolled pass so the rollout stage is countable from the same rail.
  * - `partner_outbox_pending age=<bucket>` — the §14 outbox age distribution. Fired whenever
  *   any row is still PENDING at pass end; an absent event is a healthy pass.
+ * - `partner_waiting_recipient_key age=<bucket>` — the §14 oldest
+ *   `WAITING_FOR_RECIPIENT_KEY` age; absent when nothing is waiting on a recipient key.
+ * - `partner_recipient_key_regenerated` (fired by [PartnerEventDrain], same rail) — the §14
+ *   recipient-key stale re-encryption count.
  * - `partner_t1_ms bucket=<bucket>` (fired by [MailboxOutboxDrainer], same rail) — the §11 T1
  *   stage (write attempt → Firestore confirmed), bucketed against its <1s/<3s targets.
  */
@@ -19,12 +25,19 @@ class PartnerSyncTelemetry(
     private val canPost: () -> Boolean,
     private val oldestPendingCreatedAt: suspend () -> Long?,
     private val report: (String) -> Unit,
+    private val staged: suspend () -> Boolean = { false },
+    private val oldestWaitingCreatedAt: suspend () -> Long? = { null },
     private val now: () -> Long = System::currentTimeMillis,
 ) {
 
     suspend fun afterPass(pass: PartnerSyncCoordinator.SyncReport) {
         if (!pass.enrolled) return
+        val producer = if (runCatching { staged() }.getOrDefault(false)) "staged" else "legacy"
+        report("$EVENT_DELIVERY_PHASE rule_producer=$producer")
         if (!canPost()) report(EVENT_NOTIFICATIONS_DENIED)
+        runCatching { oldestWaitingCreatedAt() }.getOrNull()?.let {
+            report("$EVENT_WAITING_RECIPIENT_KEY age=${outboxAgeBucket(now() - it)}")
+        }
         val oldest = runCatching { oldestPendingCreatedAt() }.getOrNull() ?: return
         report("$EVENT_OUTBOX_PENDING age=${outboxAgeBucket(now() - oldest)}")
     }
@@ -32,6 +45,9 @@ class PartnerSyncTelemetry(
     companion object {
         const val EVENT_NOTIFICATIONS_DENIED = "partner_notifications_denied"
         const val EVENT_OUTBOX_PENDING = "partner_outbox_pending"
+        const val EVENT_DELIVERY_PHASE = "partner_delivery_phase"
+        const val EVENT_WAITING_RECIPIENT_KEY = "partner_waiting_recipient_key"
+        const val EVENT_RECIPIENT_KEY_REGENERATED = "partner_recipient_key_regenerated"
 
         /** §11 T1 stage sample, emitted by the drainer through the same Crashlytics rail. */
         const val EVENT_T1_MS = "partner_t1_ms"

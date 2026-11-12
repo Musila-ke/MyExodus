@@ -11,6 +11,7 @@ import com.example.myexodus.accountability.EventCreator
 import com.example.myexodus.accountability.crypto.AccountabilitySigner
 import com.example.myexodus.accountability.crypto.EventCipher
 import com.example.myexodus.accountability.crypto.IdentityEpochStore
+import com.example.myexodus.accountability.delivery.PartnerRuleChangeTransport
 import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.AccountabilityEvent
@@ -1177,6 +1178,70 @@ class PartnerSyncCoordinatorTest {
         assertEquals("the at-pairing row is the one delivered", at, delivered.eventId)
     }
 
+    /** §13.3 staged producer: SIGNED means the service outbox already holds the transferable
+     *  copy, so the journal row was the migration checkpoint and must leave the queue. */
+    @Test
+    fun ruleJournal_signedTransport_takesTheRowOffTheJournal_withoutChaining() = runTest {
+        enroll()
+        val eventId = insertRuleChangeRow(UUID.randomUUID(), RuleChange.ASSIGNED)
+        val transported = mutableListOf<String>()
+        coordinator = coordinator(
+            warmSigner(),
+            ruleChangeTransport = { row ->
+                transported += row.eventId
+                PartnerRuleChangeTransport.SIGNED
+            },
+        )
+
+        val report = coordinator.syncOnce()
+
+        assertEquals("the signed path still counts as linked", 1, report.eventsLinked)
+        assertEquals(listOf(eventId), transported)
+        assertTrue("the signed path never writes the legacy chain", store.chainFor(pairId).isEmpty())
+        assertEquals(
+            "the outbox row is the checkpoint; the journal row leaves the work list",
+            0,
+            factory.open()!!.partnerEventJournalDao()
+                .dueRuleChangesForPair(pairId, 0L, System.currentTimeMillis(), 10).size,
+        )
+    }
+
+    /** §13.4 crash-window heal: the legacy path chained the event but the pass died before
+     *  deleting the journal row — the next pass clears it without asking any transport. */
+    @Test
+    fun ruleJournal_eventAlreadyOnTheChain_isHealed_withoutConsultingTheTransport() = runTest {
+        enroll()
+        val eventId = insertRuleChangeRow(UUID.randomUUID(), RuleChange.ASSIGNED)
+        val signature = Signature.getInstance("SHA256withECDSA").apply { initSign(mySigning.private) }
+        assertTrue(
+            eventCreator(warmSigner()).create(
+                pairId,
+                EventPayload(type = EventPayload.TYPE_STREAK_UPDATED, text = ""),
+                signature,
+                eventId = eventId,
+            ) is EventCreator.CreateResult.Created,
+        )
+        var transportCalls = 0
+        coordinator = coordinator(
+            warmSigner(),
+            ruleChangeTransport = {
+                transportCalls++
+                PartnerRuleChangeTransport.SIGNED
+            },
+        )
+
+        val report = coordinator.syncOnce()
+
+        assertEquals("nothing new was delivered", 0, report.eventsLinked)
+        assertEquals("the existing chain row already owns delivery", 0, transportCalls)
+        assertEquals(1, store.chainFor(pairId).size)
+        assertEquals(
+            0,
+            factory.open()!!.partnerEventJournalDao()
+                .dueRuleChangesForPair(pairId, 0L, System.currentTimeMillis(), 10).size,
+        )
+    }
+
     /**
      * Stress finding (2026-10-29): LIMIT 100 returns the same oldest rows every pass, so a
      * backlog larger than one batch used to starve its tail until expiry. Delivered rows now
@@ -1588,6 +1653,9 @@ class PartnerSyncCoordinatorTest {
         fence: SessionFence = SessionFence.Unfenced,
         resolveRuleLabel: (String, String) -> String = { _, target -> target },
         pullPartnerEvents: suspend () -> Int = { partnerEventPulls++; partnerEventsToPull() },
+        ruleChangeTransport: suspend (PartnerEventJournal) -> PartnerRuleChangeTransport = {
+            PartnerRuleChangeTransport.LEGACY
+        },
     ) = PartnerSyncCoordinator(
         enrollmentDao = db.enrollmentDao(),
         storeFactory = factory,
@@ -1635,6 +1703,7 @@ class PartnerSyncCoordinatorTest {
         fence = fence,
         resolveRuleLabel = resolveRuleLabel,
         pullPartnerEvents = pullPartnerEvents,
+        ruleChangeTransport = ruleChangeTransport,
     )
 
     private fun enroll(

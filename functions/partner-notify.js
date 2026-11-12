@@ -40,11 +40,20 @@ function wakeData(job) {
   return { v: '1', type: 'PARTNER_EVENT', eventId: job.eventId };
 }
 
+/** §8.7 `partner_notify_v1_enabled`: paused dispatch leaves every mailbox record and job
+ *  untouched for the next pass after re-enable. Unset/true = enabled. */
+function notifierPaused(featuresData) {
+  return Boolean(featuresData) && featuresData.partner_notify_v1_enabled === false;
+}
+
 /**
  * One claim, one send, one reconcile. Returns the outcome for the sweeper's logging. Any
  * thrown error leaves the row LEASED; the lease expiry path retries it.
  */
 async function dispatchJob({ db, jobId, now = () => Date.now() }) {
+  const featuresSnap = await db.doc('config/features').get();
+  if (notifierPaused(featuresSnap.exists ? featuresSnap.data() : null)) return 'PAUSED';
+
   const jobRef = db.doc(`${COLLECTIONS.notificationOutbox}/${jobId}`);
 
   const claim = await db.runTransaction(async (tx) => {
@@ -206,6 +215,9 @@ async function runPartnerNotifySweep({ db, now = () => Date.now() }) {
   if (features.exists && features.data().partnerAccountabilityEnabled === false) return;
 
   const at = now();
+  // Fanout materialization still runs while paused: it creates the durable mailbox/job
+  // records a paused notifier must retain. Only provider dispatch pauses.
+  const paused = notifierPaused(features.exists ? features.data() : null);
 
   const tasks = await db.collection(COLLECTIONS.fanoutTasks)
     .where('status', '==', 'PENDING')
@@ -220,6 +232,8 @@ async function runPartnerNotifySweep({ db, now = () => Date.now() }) {
       });
     }
   }
+
+  if (paused) return;
 
   const due = await db.collection(COLLECTIONS.notificationOutbox)
     .where('status', '==', STATUS.PENDING)

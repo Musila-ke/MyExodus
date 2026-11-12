@@ -905,3 +905,445 @@ remains inert while `config/features.device_liveness_alerts_v1_enabled` is unset
    gating or record a bounded "monitoring unavailable" state instead of silence.
 
 **Next:** Phase 7 — legacy migration, lifecycle and rollout.
+
+---
+
+## Phase 7 — Legacy migration, lifecycle and rollout (2026-11-12)
+
+### Unit 1 — the four rollout controls (§8.7)
+
+Plan line: "Use separate rollout controls `delivery_ingest_v1_enabled`,
+`delivery_client_sync_v1_enabled`, `partner_notify_v1_enabled`, and
+`device_liveness_alerts_v1_enabled`. Paused ingest returns retryable maintenance; paused
+client sync continues local recording; paused notifier retains mailbox/jobs; paused
+liveness exposes `MONITORING_UNAVAILABLE` without fabricating tamper signals. These
+independent controls are intentional safety boundaries, not unnecessary feature flags."
+
+**Touched files**
+
+| File | Change |
+|---|---|
+| `functions/partner-ingest.js` | `delivery_ingest_v1_enabled === false` → `HttpsError('unavailable', 'MAINTENANCE')` after auth, before payload validation and before the rate budget is charged. |
+| `functions/partner-notify.js` | `notifierPaused()` helper; `dispatchJob` returns `'PAUSED'` before any job read; `runPartnerNotifySweep` skips dispatch after fanout materialization, so mailbox rows and jobs are still created and retained. |
+| `functions/device-contact.js` | Reads `config/features` inside the submit transaction; while paused an accepted contact stores `STATUS_MONITORING_UNAVAILABLE`, otherwise `STATUS_ACTIVE`. The legacy `dms_install_state` bridge is untouched. |
+| `app/src/main/java/.../accountability/sync/PartnerRolloutGate.kt` | `clientSyncEnabled()` + `DELIVERY_CLIENT_SYNC_CONFIG_KEY` (Remote Config, default ON = kill switch). |
+| `app/src/main/java/.../accountability/delivery/PartnerEventDrain.kt` | `syncEnabled` constructor param (default `{ true }`); `run` claims nothing while paused. |
+| `app/src/main/java/.../di/PartnerDeliveryModule.kt` | Wires `syncEnabled = { gate.clientSyncEnabled() }`. |
+| `app/src/main/java/.../di/AccountabilityModule.kt` | Sets `delivery_client_sync_v1_enabled → true` in the Remote Config defaults before the first read. |
+
+**Tests**
+
+| Suite | Result |
+|---|---|
+| `functions/test/partner-notify.test.js` (new, 2 tests) | 2/2 |
+| `functions` `npm test` (full pure suite) | 267/267 |
+| `npm run test:partner-ingest` (emulator) | 15/15 — the new pause test asserts zero ledger/mailbox/job writes and zero rate charge while paused, then `ACCEPTED` after resume |
+| `npm run test:liveness` (emulator) | 14/14 — the new pause test asserts `MONITORING_UNAVAILABLE` + `lastAcceptedContactAtMs` while paused, `ACTIVE` on the first contact after resume |
+| `PartnerEventDrainTest` (new paused test) | pass — 0 claimed, 0 submitted, row stays due, the normal drain accepts it after re-enable |
+
+**Design decisions**
+
+1. The notifier pause check sits in `dispatchJob` (single choke point covering both the
+   trigger and the sweep) plus one sweep-level skip so the sweep does not pay 50 config
+   reads per minute. A paused dispatch returns `'PAUSED'`, not an error — the job stays
+   `due` for the next pass after re-enable.
+2. Ingest pause returns the existing maintenance error shape the client already treats as
+   retryable (`FirebasePartnerDeliveryTransport` retries on `unavailable`), so no client
+   change was needed. Nothing is acknowledged and nothing is dropped; the exact signed
+   bytes resubmit unchanged.
+3. Liveness pause is evaluated at contact time, not evaluation time: the stored status
+   carries the pause, so the existing evaluator (`MONITORING_PAUSED` → `{action:'NONE'}`)
+   is the second line of defence, and the first contact after re-enable restores `ACTIVE`
+   with no operator write.
+4. Client sync pause changes no recording path — only the drain's claim loop is gated.
+   The 15-minute periodic worker remains the re-entry path after re-enable
+   (`Result()` carries `earliestNextAttemptMs = null`, so no immediate retry is scheduled).
+5. All four flags are kill switches: unset or `true` = enabled. Absence of the flag never
+   disables a path.
+
+### Unit 2 — dual-acceptance backend policy (§13.3)
+
+Plan line: "Server dual-acceptance is per-installation and versioned; never allow a
+migrated installation to force a legacy-signature downgrade." And §13.5: "Old APK
+installations remain supported during a documented compatibility window; expose a server
+metric for legacy usage."
+
+**Touched files**
+
+| File | Change |
+|---|---|
+| `functions/event-append-logic.js` | Optional `installationId` (UUID v4); allowlist is now required 5 + optional 1; new `INSTALLATION_ID_INVALID`. |
+| `functions/event-append.js` | Inside the append transaction, when `installationId` names an existing `partnerDeviceSigningRegistrations/{uid}:{id}` doc (any status, incl. `REVOKED`), throw `HttpsError('failed-precondition', 'SIGNED_TRANSPORT_REQUIRED')` before any write. On `appended`, log `legacyUserEventAccepted` (hashed uid + `installationIdentified` boolean). |
+| `functions/test/event-append-logic.test.js` | New pure test: optional/malformed installation ids. |
+| `functions/test/relay-blindness.test.js` | Allowlist assertion now expects 6 keys. |
+| `functions/emulator-test/event-append.emulator.js` | New emulator test covering five dual-acceptance cases; `partnerDeviceSigningRegistrations` cleared per test. |
+
+**Tests**
+
+| Suite | Result |
+|---|---|
+| `functions` `npm test` (full pure suite) | 268/268 |
+| `npm run test:append` (emulator) | 11/11 — new test asserts: omitting `installationId` still appends; an identified migrated installation gets `SIGNED_TRANSPORT_REQUIRED` with zero writes; the same id under another uid is a different installation; `REVOKED` still blocks; a committed event replays after registration. |
+
+**Design decisions**
+
+1. The check runs after the replay check (a committed event stays retrievable even when
+   its installation later registers) and before the profile/pair/rate gates, matching
+   §8.8's "timeout-after-commit retries are safe".
+2. Registration existence — not `status: ACTIVE` — blocks the legacy path. A `REVOKED`
+   registration proves the installation migrated; §8's lifecycle line ("Revoked
+   registrations and partnerships never regain access") forbids treating revocation as a
+   downgrade lane.
+3. The legacy `appendUserEvent` path still legitimately carries messages, streaks,
+   sessions, attempts and plans in this release, so it cannot reject every registered
+   installation wholesale. The guard catches version skew (a migrated client on the old
+   path); it cannot catch a client that omits `installationId`. That is the documented
+   compatibility-window limit, covered by the §13.5 metric rather than a false claim of
+   enforcement.
+
+**Deployment (§13.1 ordering — server before any client migration).** The Phase 7 server
+half was deployed to production on 2026-11-12 before any client migration can be enabled:
+
+```
+firebase deploy --only functions:appendUserEvent,functions:ingestPartnerEvents,functions:partnerNotifyTrigger,functions:partnerNotifySweep,functions:submitDeviceContact,functions:deviceLivenessWorker --project myexodus-53804
+```
+
+All six updated successfully (Cloud Functions API `updateTime` = 2026-11-12T00:17-00:21Z).
+No rules or index changes were part of Phase 7. The first attempt failed in the CLI's
+10-second local source-analysis step (`User code failed to load … Timeout after 10000`);
+a retry on an idle machine succeeded with no code change — a CLI flake, not a source
+defect. The producer flag remains OFF, so no client is migrating yet; the deployed server
+accepts both transports in the meantime.
+
+### Unit 3 — staged rule-lifecycle producer (§13.3/§13.4, plan line 184)
+
+Plan line: "Add idempotent locked-vault migration performed when foreground unlock is
+already available, dual-acceptance backend policy, key recovery/rotation, restoration
+detection, staged flags, telemetry, rollback and tests." §13.4: "Migrate journaled rule
+rows only under normal foreground unlock, keep stable event IDs, verify counts and digests,
+checkpoint progress, and resume after a crash." §13.5: "`BLOCK_ATTEMPT` and `CHECK_IN` keep
+the legacy path this release; there is no producer for them."
+
+**Touched files**
+
+| File | Change |
+|---|---|
+| `app/src/main/java/.../accountability/delivery/PartnerRuleChangeProducer.kt` | New. `PartnerRuleChangeTransport` = `LEGACY`/`SIGNED`/`ACKNOWLEDGED`/`DEFERRED`; decides per journal row. The outbox event id is the journal row's own UUID (`requestedEventId`); envelopes seal for `row.routePairId` only. |
+| `app/src/main/java/.../accountability/sync/PartnerSyncCoordinator.kt` | `reconcilePair` consults the transport before the legacy emit: the `chain.hasEvent` crash-window heal runs first, then LEGACY emits the chain row, SIGNED deletes the journal row (the outbox row is the checkpoint), ACKNOWLEDGED clears it, DEFERRED retains it for the next pass. |
+| `app/src/main/java/.../accountability/sync/PartnerRolloutGate.kt` | `ruleProducerStagedEnabled()` reads `delivery_producer_rules_v1_enabled` with **default false** — the only flag with inverted polarity (staged transport is opt-in; the three kill switches stay default-on). |
+| `app/src/main/java/.../di/PartnerDeliveryModule.kt` | Provides the producer (`staged = { gate.ruleProducerStagedEnabled() }`, label resolver). |
+| `app/src/main/java/.../di/AccountabilityModule.kt` | Wires `ruleChangeTransport = ruleChangeProducer::transport` into the coordinator. |
+
+**Tests**
+
+| Suite | Result |
+|---|---|
+| `PartnerRuleChangeProducerTest` (6 tests) | 6/6 — flag off records nothing; flag on records one signed copy under the journal identity and route pair; crash-window pending row stays SIGNED without re-recording; already-ACKED row reports ACKNOWLEDGED; recorder failure defers and leaves the journal row; v1 row without identity migrates with the neutral name. |
+| `PartnerSyncCoordinatorTest` (transport tests) | 65/65 whole suite — `ruleJournal_signedTransport_takesTheRowOffTheJournal_withoutChaining` (no chain write, journal row leaves the work list, still counts as linked); `ruleJournal_eventAlreadyOnTheChain_isHealed_withoutConsultingTheTransport` (the heal precedes transport selection). |
+
+**Design decisions**
+
+1. An existing outbox row wins over the flag. A crash after enqueue but before the journal
+   delete reports SIGNED again without re-recording — the migration is idempotent at the
+   transport-selection point, not merely at the outbox.
+2. The journal UUID as outbox event id is what makes redelivery a no-op end to end: the
+   recipient feed's `(pairId, eventId)` primary key dedupes a copy that arrives on both
+   transports during the staged window.
+3. Staged-off is the shipped default and stays fully functional: the legacy chain path is
+   untouched, and the flag only diverts journal rows that still exist (a migrated row never
+   moves backward — its journal copy is gone).
+4. A v1 journal row predates rule identity, so the identity is resolved at migration time
+   from the live rule; when the rule is already gone the neutral `RuleIdentity("Restriction
+   rule", APP)` is used rather than dropping or blocking the change.
+5. `BLOCK_ATTEMPT` and `CHECK_IN` have no producer in this release — an explicit §13.5 scope
+   decision, not an omission. Their notifications stay on the legacy path unchanged.
+
+### Unit 4 — vault-gated idempotent migration and recipient projection (§13.4)
+
+Plan line: "Migration runs only when the vault is already open through the normal foreground
+unlock… The recipient feed's `(pairId, eventId)` primary key makes any redelivery a no-op."
+A migrated rule change must land in the same dashboard feed and notification the legacy
+chain path produced.
+
+**Touched files**
+
+| File | Change |
+|---|---|
+| `app/src/main/java/.../accountability/rulecontrol/PartnerRuleChangeProjection.kt` | New. `onDelivered` accepts a decrypted `RULE_CHANGE_ATTEMPT` document, opens the vault via `AppRulesStoreFactory.open()`, inserts the same `PartnerRuleChange` feed row the chain path writes, and notifies once. Non-rule kinds and malformed payloads are ignored without touching the store. |
+| `app/src/main/java/.../di/PartnerDeliveryModule.kt` | `providePartnerMailboxReceiver(onDelivered = projection::onDelivered)`; new `providePartnerRuleChangeProjection`. |
+| `PartnerMailboxReceiver` | Unchanged — an exception from `onDelivered` (the locked-vault path) leaves the mailbox document unreceipted, so it retries after the next foreground unlock. |
+
+**Tests**
+
+| Suite | Result |
+|---|---|
+| `PartnerRuleChangeProjectionTest` (4 tests) | 4/4 — delivered change becomes the feed row and notifies once; redelivery is a no-op and never notifies twice; other kinds / malformed documents are ignored without touching the store; closed vault propagates so the mailbox document stays unreceipted. |
+| `PartnerEventDrainTest` (stale-key + waiting) | 17/17 whole suite — regeneration and waiting-row delivery in one pass (see Unit 5/6). |
+
+**Design decisions**
+
+1. Vault gating is fail-safe by construction: the projection never opens the store itself
+   from background; it calls the gate-backed factory, and `VaultLockedException` propagating
+   out of `onDelivered` is the mechanism that keeps the document unreceipted. Migration
+   therefore happens only after the normal foreground unlock, never from a background
+   unlock of its own.
+2. The feed row shape is the legacy `PartnerRuleChange` row — same columns, same
+   notification — so the dashboard and notification read identically whether a change
+   arrived on the old or new transport. Identity fields come from the signed payload.
+3. The notification fires only on first insert (`inserted == true`); duplicate delivery stays
+   silent. The `(pairId, eventId)` primary key is the only dedupe state needed.
+
+### Unit 5 — key recovery and rotation (§8.1/§13.4)
+
+Plan line: "Key recovery/rotation." §8.1: the drain re-encrypts a stale recipient envelope
+"from the retained sealed source for the server's current authorized key set only" — a
+revoked key is never a re-encryption target.
+
+**Touched files**
+
+| File | Change |
+|---|---|
+| `app/src/main/java/.../accountability/delivery/PartnerEventDrain.kt` | Stale branch regenerates from the sealed source for the authorized set (empty set passed through as empty, never null → park `WAITING_FOR_RECIPIENT_KEY`); `regenerateWaiting` re-probes waiting rows once per drain with a 900 s defer. |
+| `app/src/main/java/.../accountability/delivery/PartnerEventRecorder.kt` | `regenerateRecipientEnvelopes` selects envelopes for the routed pair only, keeps the event identity and sealed source, and refuses once acceptance was possible or when ownership/source is gone. |
+| `app/src/main/java/.../accountability/delivery/PartnerEventRegistrar.kt` | Re-enrollment paths: `REENROLL_REQUIRED` state, foreground-only registration, rotate-intent retry. |
+
+**Tests**
+
+| Suite | Result |
+|---|---|
+| `PartnerEventRecorderTest` (18 tests) | 18/18 — includes `staleKeyRegeneration_replacesCiphertextForTheNewRecipient_andKeepsTheIdentity`, `staleKeyRegeneration_keepsTheRoutedPairScope`, `regeneration_isClosedOnceAcceptanceWasPossible`, `regeneration_requiresOwnershipAndALiveSealedSource`, `regeneration_opensTheSealedSourceWithTheRowsOwnSchemaVersion`, `sealFailure_degradesRegeneration_butNeverDelivery`. |
+| `PartnerEventRegistrarTest` (8 tests) | 8/8 — includes `rotationPrecondition_isRetriedWithTheOtherIntent`, `rotationNotEnrolled_isRetriedAsEnroll_whenLocalStateClaimedActive`, `serverKeyIdMismatch_isRetryable_andNothingIsCommitted`. |
+| `PartnerMailboxReceiverTest` (9 tests) | 9/9 — delivered/duplicate/receipt paths the projection rides on. |
+
+**Design decisions**
+
+1. An empty authorized set is passed through as empty and parks the row `WAITING_FOR_RECIPIENT_KEY` — no ciphertext is ever written for a key the server has not currently
+   authorized, and a revoked key is never a regeneration target.
+2. Regeneration is bounded, not unlimited: once the row could have been accepted (an
+   acceptance-possible state was observed), the sealed-source path closes and only the
+   already-signed bytes can resend. This is what keeps a `SourceUnavailable` row from
+   spinning.
+3. Waiting rows re-probe once per drain with a 900 s defer; when the partner's new key
+   appears, the row regenerates, re-signs and delivers in the same pass and the §14 counter
+   fires (Unit 6).
+
+### Unit 6 — §14 telemetry rails
+
+Plan line (§14): "pending count, oldest pending age, … recipient-key stale re-encryption
+count, oldest `WAITING_FOR_RECIPIENT_KEY`, … required-enforcement health and current phase
+flag." Metadata stays an event name plus a coarse bucket (Decision 12); nothing
+customer-facing is ever logged.
+
+**Touched files**
+
+| File | Change |
+|---|---|
+| `app/src/main/java/.../accountability/sync/PartnerSyncTelemetry.kt` | New events `partner_delivery_phase rule_producer=legacy\|staged` (first event of every enrolled pass), `partner_waiting_recipient_key age=<bucket>`, `partner_recipient_key_regenerated`; existing outbox-age and notifications-denied events unchanged. Every read is `runCatching`-wrapped so telemetry can never take the pass down. |
+| `app/src/main/java/.../accountability/delivery/ServiceEventOutboxDao.kt` | `oldestWaitingCreatedAt()` — `MIN(created_local_at_ms)` over `WAITING_FOR_RECIPIENT_KEY` (null when nothing waits). |
+| `app/src/main/java/.../accountability/delivery/PartnerEventDrain.kt` | `onRecipientKeyRegenerated: () -> Unit` seam; fires on every successful `Regenerated` in both the stale-response branch and `regenerateWaiting`. |
+| `app/src/main/java/.../di/AccountabilityModule.kt` | Wires the gate's staged flag and the waiting-age query into `PartnerSyncTelemetry`. |
+| `app/src/main/java/.../di/PartnerDeliveryModule.kt` | Wires the counter to `CrashReporting.nonFatal(EVENT_RECIPIENT_KEY_REGENERATED)`. |
+| `app/docs/MyExodus Monitoring.md` | §1 instrumentation table gained the three new events with their emit points. |
+
+**Tests**
+
+| Suite | Result |
+|---|---|
+| `PartnerSyncTelemetryTest` (8 tests) | 8/8 — unpaired pass reports nothing; phase flag always first on enrolled passes; denied-only when notifications cannot post; fully-degraded pass order (phase, denied, waiting bucket, pending bucket); bucket edges (15 m / 1 h / 24 h exact boundaries); waiting absent when nothing waits; failing reads never throw and never take the pass down; `latencyBucket` edges unchanged. |
+| `PartnerEventDrainTest` (17 tests) | 17/17 — new `waitingRow_deliversOnceTheRecipientKeyAppears_andCountsTheRegeneration` (parked row, zero counter, key appears, 900 s elapsed → one regeneration + accepted), and the stale-key test asserts the counter exactly once. |
+
+**Design decisions**
+
+1. The phase event is first and unconditional on enrolled periodic passes. Dashboard
+   "Check now" never reports — the §14 placement rule (periodic worker only) predates this
+   unit and still holds.
+2. Coarse buckets only (`under_15m`/`under_1h`/`under_24h`/`over_24h`); the regeneration
+   counter carries no dimensions at all. Decision 12.
+3. The counter rides the shared Crashlytics rail through a DI-built `() -> Unit`, the same
+   seam precedent as the send-latency metric — `PartnerEventDrain` keeps no dependency on
+   the sync package.
+
+### Unit 7 — rollback runbooks and compatibility window (§13.9/§13.5)
+
+Plan line: "Produce runbooks for transport/App Check outage, signing/recipient key loss, and
+liveness false-positive. Persist rollout state, log registration tier …, and document the
+compatibility window." §13 item 7: rollback pauses transmission or dispatch only — never
+disables security checks, deletes the outbox, purges legacy aliases, or fabricates liveness
+state.
+
+**Touched files**
+
+| File | Change |
+|---|---|
+| `app/docs/partner-delivery-runbooks.md` | New, §13.9 deliverable. Control-surface table (7 switches, location, default, effect); Runbook A transport/App Check outage with detect signals, immediate actions (keep App Check enforcement on), least-disruptive rollback order and server-first/producer-last restore order; Runbook B signing/recipient-key loss and migration crash recovery; Runbook C liveness false-positive, fleet-incident declaration and DLQ handling; §13.5 compatibility-window policy. |
+| `app/docs/MyExodus Monitoring.md` | The three new §14 events (Unit 6) documented alongside the existing rails. |
+
+**Tests**
+
+| Suite | Result |
+|---|---|
+| — | No executable surface; every control, default and error code in the runbook is a source read of the shipped code on 2026-11-12 (files and functions named inline in the runbooks), not an assumption. |
+
+**Design decisions**
+
+1. The compatibility window is policy, not a timer: no legacy purge in this release; the
+   window closes for a kind only after the producer flag has been enabled in production AND
+   `legacyUserEventAccepted` shows no unmigrated senders for 30 consecutive days. Cleanup
+   then ships as a separate release, never as a flag flip.
+2. `legacyUserEventAccepted` with `senderHash` + `installationIdentified` is the window's
+   counter; `installationIdentified = true` on an accepted legacy event is a routing bug and
+   is documented as such.
+3. The runbooks link, never duplicate: attestation/revocation lives in
+   `MyExodus Architecture Decisions.md`; lost devices link to
+   `blocked-two-device-runbook.md` leg 5, `partner-sos-runbook.md` and
+   `MyExodus Identity & Account Transition.md`.
+
+### Unit 8 — restoration detection (§13.4)
+
+Plan line: "Add … restoration detection." A replacement install must not inherit the old
+installation's signing key or recipient key, and no device-migration path may carry the
+accountability state elsewhere.
+
+**Evidence (source, 2026-11-12)**
+
+| Control | Evidence |
+|---|---|
+| App-level backup off | `app/src/main/AndroidManifest.xml:61` — `android:allowBackup="false"`. Blocks cloud and ADB backup on every API level. |
+| API 31+ device-to-device transfer | `app/src/main/res/xml/data_extraction_rules.xml` — `cloud-backup` and `device-transfer` both exclude `database/`, `sharedpref/`, `rules_snapshot.json` and `files/datastore/`. Every accountability store is Keystore-bound; a transferred copy would be permanently unreadable and would orphan the Keystore references, so nothing transfers. |
+| Pre-31 full backup | `app/src/main/res/xml/backup_rules.xml` — the same four exclusions, belt-and-braces under `allowBackup="false"`. |
+| In-app encrypted backup | `app/src/main/java/.../backup/BackupPayload.kt:76-83` allowlist is habit/streak/milestone/attempt/session/coaching/riskWindow/policy — no enrollment, partner keys, service outbox, journal or mailbox rows. |
+| Consequence | A replacement install has no signing key and no enrollment state, so it cannot masquerade as the old installation; registration is installation-scoped. The lost sender's pair is torn down from the surviving side (Runbook B → `blocked-two-device-runbook.md` leg 5). |
+
+**Design decision**
+
+1. Restoration is detected structurally, not heuristically: there is no restore path that
+   carries the keys, so the app never has to guess whether it is a restored identity. The
+   only re-entry is fresh enrollment from a surviving side.
+
+**Phase 7 complete.** All unit work for plan line 184 is implemented and tested; the server
+half of Units 1-2 was deployed and emulator-verified. Device verification of Phase 7 behavior
+on the two physical phones is the Phase 8 release matrix, not a Phase 7 unit.
+
+---
+
+## Phase 8 — release verification (2026-11-12)
+
+Plan line 186: "Run unit, emulator, integration, end-to-end and real-device matrix
+including overnight Doze/probe, enforcement-disabled, stale-recipient-key, FCM registration
+and direct-APK integrity quota scenarios; verify partner E2EE compatibility; measure
+latency; complete acceptance evidence and operational runbook; publish signed APK via
+existing GitHub Releases updater only after release gates pass."
+
+Every automated tier below was run on the final tree. The physical matrix was executed to
+the limit of the hardware actually present (two Transsion X6532, API 34); every remaining
+§12 leg is recorded BLOCKED with its gate, never claimed as passed.
+
+### Release artifact under test
+
+| Item | Value |
+|---|---|
+| App | versionCode 16 / versionName 1.1.14 (`dumpsys package` on both phones) |
+| APK | `app/build/outputs/apk/release/app-release.apk`, 39,120,593 B, file SHA-256 `c981836401cf11c3a57a3a6e4fdf3dedac0d5553bdbc2e52648c26608cd42b9d` |
+| Signer certificate | SHA-256 `8f88188070952dde4c490a01ce8aa0407e9172ee4bbc035693ea795ab598854b` — identical to the Phase 0 direct-APK release identity (`apksigner verify --print-certs`) |
+| Installed | `.106` lastUpdateTime 2026-11-12 03:27:49; `.107` 03:28:28; both `install -r`, no uninstall |
+| GitHub Releases | none published (`gh release list` empty) — publish stays gated on this matrix |
+
+### Live environment at verification time
+
+| Item | State |
+|---|---|
+| Devices | 2× Infinix X6532 (Transsion), Android 14 / API 34, GMS 26.43.30, release-signed APK, live pair |
+| Functions | the six Phase-7 functions, deployed 2026-11-12T00:17–00:21Z, unchanged since |
+| `config/features` | `partnerSosEnabled: true` only — ingest/notify enabled by absence, liveness OFF by absence |
+| Remote Config | no `delivery_*` keys: producer OFF, client sync ON, push registration ON |
+| `partnerDeviceSigningRegistrations` | 2 ACTIVE docs (one per phone), `integrityTier = ACTIVE_HARDWARE`, revision 1, no revocation; created 00:29:44Z and 00:32:38Z, ~2 minutes after install — the shipped release build registered itself with real hardware attestation |
+| `partnerDeviceLiveness` | 1 doc (`.106`): `status = MONITORING_UNAVAILABLE`, `enforcementState = HEALTHY`, `lastHeartbeatCounter = 1` — contact stored with the alert flag off, matching plan §13.6 |
+| `config/device_liveness_incident` | absent (404) |
+| Cloud Logging | 0 ERROR entries in the last 8 h (`entries:list`) |
+| App Check quota (7 d) | 5 `serviceruntime.googleapis.com/quota/rate/net_usage` series; peak/day 184 debug-token exchanges, 75 / 59 integrity exchanges. No 70 % quota alert policy exists — see Gaps |
+
+### Test tiers (final tree)
+
+| Tier | Result |
+|---|---|
+| `functions` pure unit | 268/268 PASSED (Phase 7 record; Phase 8 changed no functions code) |
+| Firestore rules + emulator suites | `test:rules`, `test:append`, `test:partner-registration`, `test:partner-ingest`, `test:liveness`, `test:dms` — chained run exit 0 |
+| Android full unit suite | 2804 tests. First run exposed one failure: `RuleControlReceiverTest.redeliveredEvent_isANoOp_andKeepsTheFirstRow` still asserted the pre-Phase-7 `onEvent = true` on redelivery. The shipped contract is `true` then `false` (duplicate insert returns −1 so the caller cannot re-notify); the stale assertion was corrected. Focused class re-run green (4/4); full-suite re-run green — 295 suites, 2804 tests, 0 failures / 0 errors / 0 skipped. |
+| Phase 0 baseline | 810 accountability tests on the pre-plan tree; all remain green inside the full suite |
+
+### Acceptance matrix
+
+| AC | Verdict | Evidence / gate |
+|---|---|---|
+| AC01 | PARTIAL | Signing key is non-auth-bound at source (`PartnerEventKeyStore:130` `setUserAuthenticationRequired(false)`); background signing unit-covered in Phase 4. AFU screen-locked >15 min execution on hardware is BLOCKED — needs an owner-attended locked-device window |
+| AC02 | PARTIAL | Stable ID, atomic insert and redelivery no-op covered by unit + emulator suites; process-death / reboot / 1 h airplane on hardware BLOCKED (no unattended device window) |
+| AC03 | PASSED | Emulator append + notify suites cover death after commit, lost response, lease reclaim and duplicate trigger; one durable job set |
+| AC04 | PASSED | Emulator attribution suite: one-time challenge, bad chain, tamper, revoked key, cross-account and unauthorized-partnership rejection; live hardware shows only ACTIVE registrations |
+| AC05 | PARTIAL | Both physical phones pass real outside-Play App Check with the release-signed APK at `ACTIVE_HARDWARE`. The rest of the §12 device matrix is BLOCKED (no Pixel/Samsung/API 26/30/33/35+ hardware); invalid-build rejection is emulator-covered only |
+| AC06 | PARTIAL | New signing key requires no recent auth or unlocked screen (source); automatic registration with no prompt observed twice. The >15 min locked-screen sign leg is BLOCKED on the owner. The existing cold-window BiometricPrompt (ADR #296) is the legacy chain and remains enforced |
+| AC07 | PASSED | Phase 0 P0 E2EE gate + relay-blindness tests; sealed payload allowlist rejects unknown keys; no plaintext in server logs or FCM payload (source + tests); lost-key historical ciphertext policy documented in Runbook B |
+| AC08 | PARTIAL | Mailbox/notification unit + emulator cover FCM denial, delay and duplicates, and never report dispatch as acknowledgement; on-device notification-denied leg BLOCKED (would need the owner's settings) |
+| AC09 | PARTIAL | Liveness emulator suite exit 0: probe at 90 min, 20 min window, 240/360 min grace, one alert per episode, incident suppression. The overnight false-positive device leg is explicitly gated on the owner (§13.6 tests not yet run); the live flag stays OFF |
+| AC10 | PARTIAL | Pair-lifecycle and registration-revocation emulator suites PASSED; device teardown/rotation leg BLOCKED (needs the owner to re-pair) |
+| AC11 | PARTIAL | Migration and transport-state unit tests PASSED (crash-window heal, stable event id, retain-on-defer); on-device journal migration BLOCKED — producer flag OFF, no journal rows on the phones |
+| AC12 | PARTIAL | All automated tiers green; p95 latency NOT MEASURED. Targets (§14): ≤10 s enqueue→accept and ≤5 s accept→FCM dispatch. Measurement needs the staged transport live and cold-window rule events (owner biometric) — BLOCKED |
+| AC13 | PASSED | No new FGS (manifest unchanged; the existing periodic worker carries the path), no Direct Boot telemetry queue, no identity delegation, no routine foreground-auth dependency |
+| AC14 | PASSED | This change set touches no blocking/enforcement code path; app-lock behaviour unchanged (file-set verified) |
+| AC15 | PARTIAL | Heartbeat / degraded / restored logic covered by unit + liveness emulator suites; live doc shows counter 1, HEALTHY, required capability `ACCESSIBILITY` only (a live rule needs it; optional VPN not reported). Device degraded/restored leg BLOCKED |
+| AC16 | PARTIAL | Drain stale/regenerate tests PASSED (no-effect `RECIPIENT_KEY_STALE`, same id/seq/time, envelope immutable); device rotation leg BLOCKED (requires partner re-enrollment) |
+| AC17 | PARTIAL | Emulator attribution tests cover cross-account denial and distinct installation ids; on-device account switch BLOCKED (would destroy the live pair) |
+| AC18 | PARTIAL | RKP dual-root / forged / revoked fixtures PASSED in emulator tests; live `ACTIVE_HARDWARE` accepted on both phones; a deliberate non-GMS outcome is not runnable here (both devices are GMS) — recorded as not executed |
+| AC19 | PARTIAL | Burst/coalescing logic unit-covered (`COALESCE_WINDOW_MS` 60 s, security alerts exempt); end-to-end 200-event burst on the live pair BLOCKED (staged transport live + owner-gated events) |
+
+### §12 physical-device matrix coverage
+
+| Axis | Covered |
+|---|---|
+| API 26 / 30 / 33 / 34 / 35+ | **34 only** (2 devices) |
+| Pixel/stock, Samsung, Transsion-class | **Transsion only** |
+| AFU screen-locked, overnight idle, reboot-before-first-unlock, first unlock, force-stop, Doze, notification denial, offline recovery, key re-enrollment | **none this phase** — all BLOCKED on an owner-attended window |
+| Direct-APK release build | **yes** — signed release APK on both phones |
+| Real non-Play App Check | **yes** — `ACTIVE_HARDWARE` registrations on both |
+| Deliberate non-GMS / failed-integrity classification | **not executed** — no non-GMS hardware; emulator rejection tests cover the negative path |
+| RKP dual-root fixtures | emulator fixtures only |
+| Boot receiver delivery, Android 12+ | BLOCKED — requires a reboot-before-first-unlock sequence |
+
+### Release gates
+
+- **GitHub Releases publish: NOT TRIGGERED.** The §13.8 gate requires the release matrix to
+  pass; the owner-gated legs above are BLOCKED, not passed.
+- Rollout flags remain at shipped defaults; producer OFF. The Phase-7 server deploy stays
+  inert, so §13.1 server-before-client is honored.
+
+### Gaps opened by this phase
+
+1. **No 70 % App Check quota alert policy** (plan §14). Observed usage is far below any
+   plausible limit (peak 184/day debug-token exchanges), but the required rail is absent.
+   The quota metric's labels do not expose the limit value, and the per-metric daily limits
+   are not published in official docs (published figures cover provider attestation, not
+   these quota names); the Firebase console is the source for the denominator. Decision:
+   add the policy before `delivery_producer_rules_v1_enabled` is ever enabled in production;
+   the legacy path in use today is unaffected.
+2. **Owner-attended device legs** (Doze/overnight, AFU, notification-denied, rotation,
+   account switch, burst, latency) are queued as one Phase 8 device window, not dropped.
+
+### Code review (final pass)
+
+- No CRITICAL or HIGH findings. Informational: telemetry `oldestWaitingCreatedAt()` is not
+  owner-scoped (aggregate only, no row data); the producer maps every non-ACKED existing
+  outbox row to SIGNED (intended migration invariant); legacy `appendUserEvent` cannot
+  detect clients that omit `installationId` (documented §13.5 compatibility limit).
+- Found and fixed during this phase: `RuleControlReceiverTest` asserted the old redelivery
+  contract; the implementation was correct and the stale assertion was updated.
+
+### Runbook correction
+
+`app/docs/partner-delivery-runbooks.md`: `device_liveness_alerts_v1_enabled` was documented
+as "absent = enabled"; the source (`functions/device-contact.js`) requires an explicit
+`true` and returns `LIVENESS_V1_OFF` otherwise. Fixed in the control-surface table and
+Runbook C, matching plan §13.6.
+
+**Phase 8 record status.** All automated tiers are green on the final tree. The physical
+matrix is PARTIAL: the release-signed direct APK and real App Check `ACTIVE_HARDWARE`
+registration are proven on both phones; every remaining §12 axis and every owner-attended
+acceptance leg is BLOCKED and enumerated above. Publish stays gated.

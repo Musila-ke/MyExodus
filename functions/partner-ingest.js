@@ -284,6 +284,14 @@ function createIngestPartnerEventsHandler({ db, now = () => Date.now() }) {
     const auth = request.auth;
     if (!auth) throw new HttpsError('unauthenticated', 'anonymous sign-in required');
 
+    // §8.7 `delivery_ingest_v1_enabled`: paused ingest is retryable maintenance, never a
+    // dropped event. The client keeps its exact signed bytes and resubmits unchanged, so
+    // nothing is acknowledged and nothing is lost while paused. Unset/true = enabled.
+    const featuresSnap = await db.doc('config/features').get();
+    if (featuresSnap.exists && featuresSnap.data().delivery_ingest_v1_enabled === false) {
+      throw new HttpsError('unavailable', 'MAINTENANCE');
+    }
+
     const data = request.data;
     if (data === null || typeof data !== 'object' || Array.isArray(data)) {
       throw new HttpsError('invalid-argument', 'REQUEST_INVALID');

@@ -92,8 +92,8 @@ class RuleControlReceiverTest {
         val receiver = receiver()
         val delivered = event(RuleChange.ASSIGNED)
 
-        assertTrue(receiver.onEvent("pair-1", delivered))
-        assertTrue(receiver.onEvent("pair-1", delivered))
+        assertTrue("first delivery stores the row", receiver.onEvent("pair-1", delivered))
+        assertFalse("redelivery reports no new row so the caller cannot re-notify", receiver.onEvent("pair-1", delivered))
 
         assertEquals(1, rows("pair-1").size)
     }

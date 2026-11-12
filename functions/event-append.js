@@ -23,6 +23,7 @@ const { logger } = require('firebase-functions');
 const crypto = require('node:crypto');
 
 const { UID_BUCKET, PAIR_BUCKET, decideCharge } = require('./event-buckets');
+const { COLLECTIONS } = require('./partner-events');
 const {
   RECORD_KIND,
   SCHEMA_VERSION,
@@ -56,7 +57,7 @@ function createAppendUserEventHandler({ db, now = () => Date.now() }) {
     const nowMs = now();
     const chargeBytes = Buffer.byteLength(input.ciphertextB64, 'utf8');
 
-    return db.runTransaction(async (tx) => {
+    const reply = await db.runTransaction(async (tx) => {
       // Active pair + membership first: `members` is the authoritative membership source
       // (written only by registerPairing, AD-02) and derives the mailbox recipient.
       const pairSnap = await tx.get(db.doc(`pairings/${input.pairId}`));
@@ -92,16 +93,28 @@ function createAppendUserEventHandler({ db, now = () => Date.now() }) {
       // switch (ADR #207) lived in the mailbox create rule until Release 0 step 3 denied
       // direct creates; the same live gate moves here so switch-off still stops NEW sends
       // while stored data stays intact.
-      const [profileSnap, deletionSnap, featuresSnap, userBucketSnap, pairBucketSnap] =
-        await Promise.all([
-          tx.get(db.doc(`users/${auth.uid}`)),
-          tx.get(db.doc(`deletionJobs/${auth.uid}`)),
-          tx.get(db.doc('config/features')),
-          tx.get(db.doc(`eventRateLimits/user_${auth.uid}`)),
-          tx.get(db.doc(`eventRateLimits/pair_${input.pairId}`)),
-        ]);
+      const registrationRef = input.installationId
+        ? db.doc(`${COLLECTIONS.deviceRegistrations}/${auth.uid}:${input.installationId}`)
+        : null;
+      const [profileSnap, deletionSnap, featuresSnap, userBucketSnap, pairBucketSnap,
+        registrationSnap] = await Promise.all([
+        tx.get(db.doc(`users/${auth.uid}`)),
+        tx.get(db.doc(`deletionJobs/${auth.uid}`)),
+        tx.get(db.doc('config/features')),
+        tx.get(db.doc(`eventRateLimits/user_${auth.uid}`)),
+        tx.get(db.doc(`eventRateLimits/pair_${input.pairId}`)),
+        registrationRef ? tx.get(registrationRef) : null,
+      ]);
       if (featuresSnap.exists && featuresSnap.get('partnerAccountabilityEnabled') === false) {
         throw new HttpsError('permission-denied', 'FEATURE_DISABLED');
+      }
+      // §13.3/§8.3.8 dual-acceptance: a sender that identifies a migrated installation is
+      // refused on the legacy path — an installation never moves back to the unsigned
+      // transport after registering. Old APKs omit the field and stay supported for the
+      // documented compatibility window.
+      if (registrationSnap && registrationSnap.exists) {
+        logger.warn('appendUserEvent rejected', { reason: 'SIGNED_TRANSPORT_REQUIRED' });
+        throw new HttpsError('failed-precondition', 'SIGNED_TRANSPORT_REQUIRED');
       }
       if (deletionSnap.exists) {
         throw new HttpsError('permission-denied', 'ACCOUNT_DELETING');
@@ -150,6 +163,16 @@ function createAppendUserEventHandler({ db, now = () => Date.now() }) {
       tx.set(db.doc(`eventRateLimits/pair_${input.pairId}`), bucketDoc(pairCharge.next));
       return { status: 'appended' };
     });
+    // §13.5 legacy-usage metric: Cloud Logging counts this line. Hashed uid only, no event
+    // content (AAD discipline §9.4); `installationIdentified` separates migrated clients
+    // that still legitimately use the legacy path for not-yet-migrated kinds.
+    if (reply.status === 'appended') {
+      logger.info('legacyUserEventAccepted', {
+        senderHash: hashForLog(auth.uid),
+        installationIdentified: Boolean(input.installationId),
+      });
+    }
+    return reply;
   };
 }
 

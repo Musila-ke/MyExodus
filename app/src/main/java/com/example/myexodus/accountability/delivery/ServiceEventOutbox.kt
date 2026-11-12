@@ -38,6 +38,7 @@ class ServiceEventOutbox(
         val sealedSource: ByteArray?,
         val status: String,
         val lastErrorCode: String?,
+        val recipientPairId: String? = null,
     )
 
     sealed interface EnqueueOutcome {
@@ -132,6 +133,7 @@ class ServiceEventOutbox(
                     recipientKeyRevision = request.recipientKeyRevision,
                     lastErrorCode = request.lastErrorCode,
                     createdLocalAtMs = nowMs,
+                    recipientPairId = request.recipientPairId,
                 ),
             )
             EnqueueOutcome.Enqueued(request.eventId, installation.installationId, sequence)

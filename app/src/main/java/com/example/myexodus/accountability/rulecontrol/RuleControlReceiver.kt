@@ -30,7 +30,7 @@ class RuleControlReceiver(
             // so the same sweep keeps them bounded.
             store.partnerProtectionGapDao().deleteExpired(nowMs)
             val identity = event.ruleIdentity
-            dao.insert(
+            val inserted = dao.insert(
                 PartnerRuleChange(
                     pairId = pairId,
                     eventId = event.eventId,
@@ -45,7 +45,9 @@ class RuleControlReceiver(
                     expiresAtMs = nowMs + PartnerEventJournal.RETENTION_MILLIS,
                 ),
             )
-            true
+            // False on a redelivery: the row already exists, so the caller must not notify
+            // the user a second time for the same event.
+            inserted != -1L
         }.onFailure { Log.w(TAG, "rule change store failed pairId=$pairId", it) }
             .getOrDefault(false)
     }

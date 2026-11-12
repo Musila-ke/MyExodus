@@ -13,12 +13,19 @@ const MAX_CIPHERTEXT_CHARS = 512 * 1024;
 const RECORD_KIND = 'USER_ENCRYPTED';
 const SCHEMA_VERSION = 1;
 
-const INPUT_KEYS = ['ciphertextB64', 'eventId', 'keyEpoch', 'pairId', 'senderId'];
+const REQUIRED_INPUT_KEYS = ['ciphertextB64', 'eventId', 'keyEpoch', 'pairId', 'senderId'];
+// §13.3 dual-acceptance: optional device identification. Old APKs omit it and keep working
+// during the compatibility window; a sender that supplies it can be checked against its
+// registration before the legacy path accepts anything.
+const OPTIONAL_INPUT_KEYS = ['installationId'];
+const INPUT_KEYS = [...REQUIRED_INPUT_KEYS, ...OPTIONAL_INPUT_KEYS];
 
 // pairId is min(uid)+"_"+max(uid) — Firestore doc-id-safe by construction. Auth uids are
 // alphanumeric; the wider pattern covers both without allowing a '/'.
 const PAIR_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
+// Same v4 pinning as the signed ingest: one installation identifier format across both paths.
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function isBoundedBase64(value, maxChars) {
   return typeof value === 'string' &&
@@ -31,9 +38,14 @@ function validateAppendInput(data) {
   if (data === null || typeof data !== 'object' || Array.isArray(data)) {
     return { ok: false, reason: 'INVALID_INPUT' };
   }
-  const keys = Object.keys(data).sort();
-  if (keys.length !== INPUT_KEYS.length || !INPUT_KEYS.every((key, i) => keys[i] === key)) {
+  const keys = Object.keys(data);
+  if (!keys.every((key) => INPUT_KEYS.includes(key)) ||
+      !REQUIRED_INPUT_KEYS.every((key) => keys.includes(key))) {
     return { ok: false, reason: 'FIELD_ALLOWLIST' };
+  }
+  if (data.installationId !== undefined &&
+      (typeof data.installationId !== 'string' || !UUID_V4.test(data.installationId))) {
+    return { ok: false, reason: 'INSTALLATION_ID_INVALID' };
   }
   if (typeof data.pairId !== 'string' || !PAIR_ID_PATTERN.test(data.pairId)) {
     return { ok: false, reason: 'PAIR_ID_INVALID' };

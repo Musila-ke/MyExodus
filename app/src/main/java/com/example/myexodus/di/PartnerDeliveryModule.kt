@@ -17,15 +17,20 @@ import com.example.myexodus.accountability.delivery.PartnerEventDrain
 import com.example.myexodus.accountability.delivery.PartnerEventKeyStore
 import com.example.myexodus.accountability.delivery.PartnerEventRecorder
 import com.example.myexodus.accountability.delivery.PartnerEventRegistrar
+import com.example.myexodus.accountability.delivery.PartnerRuleChangeProducer
 import com.example.myexodus.accountability.delivery.PartnerMailboxDecryptor
 import com.example.myexodus.accountability.delivery.PartnerMailboxReceiver
 import com.example.myexodus.accountability.delivery.ServiceEventOutbox
 import com.example.myexodus.accountability.delivery.ServicePayloadProtector
 import com.example.myexodus.accountability.delivery.SystemPartnerDeliveryClock
 import com.example.myexodus.accountability.enrollment.CekDerivation
+import com.example.myexodus.accountability.rulecontrol.PartnerRuleChangeProjection
 import com.example.myexodus.accountability.state.AccountabilityDatabase
 import com.example.myexodus.accountability.sync.AppCheckInstaller
 import com.example.myexodus.accountability.sync.FirestoreSchema
+import com.example.myexodus.accountability.sync.PartnerNotifications
+import com.example.myexodus.accountability.sync.PartnerRolloutGate
+import com.example.myexodus.accountability.sync.PartnerSyncTelemetry
 import com.example.myexodus.accountability.sync.await
 import com.example.myexodus.accountability.sync.decodePublicKey
 import com.example.myexodus.blocking.BlockerAccessibilityService
@@ -33,6 +38,8 @@ import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.hasLiveWebsiteRule
 import com.example.myexodus.data.db.entity.isExpiredAt
 import com.example.myexodus.notifications.NotificationAccess
+import com.example.myexodus.telemetry.CrashReporting
+import com.example.myexodus.ui.appLabel
 import com.example.myexodus.vpn.DnsSinkholeVpnService
 import com.example.myexodus.vpn.VpnEngineState
 import com.google.firebase.auth.FirebaseAuth
@@ -96,14 +103,16 @@ object PartnerDeliveryModule {
         cipher = eventCipher,
     )
 
-    /** §8.6 Phase 5 recipient half: the mailbox the server fans partner events into. The
-     *  default [PartnerMailboxReceiver.onDelivered] no-op is the Phase 7 projection seam. */
+    /** §8.6 Phase 5 recipient half: the mailbox the server fans partner events into. §13.4
+     *  Phase 7: delivered signed rule changes project into the same feed row the legacy chain
+     *  path writes, so the dashboard reads the same regardless of transport. */
     @Provides @Singleton
     fun providePartnerMailboxReceiver(
         db: AccountabilityDatabase,
         outbox: ServiceEventOutbox,
         decryptor: PartnerMailboxDecryptor,
         firestore: FirebaseFirestore,
+        projection: PartnerRuleChangeProjection,
     ): PartnerMailboxReceiver = PartnerMailboxReceiver(
         dao = db.partnerMailboxDao(),
         ownerUid = { FirebaseAuth.getInstance().currentUser?.uid },
@@ -112,6 +121,20 @@ object PartnerDeliveryModule {
             FirestoreSchema.partnerMailboxDocsAfter(firestore, uid, installationId, fromMs, limit)
         },
         decrypt = decryptor::open,
+        onDelivered = projection::onDelivered,
+    )
+
+    @Provides @Singleton
+    fun providePartnerRuleChangeProjection(
+        @ApplicationContext context: Context,
+        db: AccountabilityDatabase,
+        storeFactory: AppRulesStoreFactory,
+    ): PartnerRuleChangeProjection = PartnerRuleChangeProjection(
+        storeFactory = storeFactory,
+        enrollmentDao = db.enrollmentDao(),
+        notify = { pairId, partnerName, change, identity ->
+            PartnerNotifications.notifyRuleChanged(context, pairId, partnerName, change, identity)
+        },
     )
 
     @Provides @Singleton
@@ -224,6 +247,24 @@ object PartnerDeliveryModule {
         onRecorded = { coordinator.get().onEventCommitted() },
     )
 
+    /** §13.3 Phase 7 staged switch: journaled rule-lifecycle rows move to the signed transport
+     *  only while the Remote Config flag is explicitly on; the shipped legacy chain stays the
+     *  default path until then. */
+    @Provides @Singleton
+    fun providePartnerRuleChangeProducer(
+        @ApplicationContext context: Context,
+        outbox: ServiceEventOutbox,
+        recorder: PartnerEventRecorder,
+        storeFactory: AppRulesStoreFactory,
+        gate: PartnerRolloutGate,
+    ): PartnerRuleChangeProducer = PartnerRuleChangeProducer(
+        outbox = outbox,
+        recorder = recorder,
+        storeFactory = storeFactory,
+        staged = { gate.ruleProducerStagedEnabled() },
+        resolveRuleLabel = { _, target -> appLabel(context, target) },
+    )
+
     @Provides @Singleton
     fun providePartnerEventDrain(
         outbox: ServiceEventOutbox,
@@ -232,6 +273,8 @@ object PartnerDeliveryModule {
         registrar: PartnerEventRegistrar,
         recorder: PartnerEventRecorder,
         clock: PartnerDeliveryClock,
+        gate: PartnerRolloutGate,
+        crashReporting: CrashReporting,
     ): PartnerEventDrain = PartnerEventDrain(
         outbox = outbox,
         keyStore = keyStore,
@@ -240,6 +283,10 @@ object PartnerDeliveryModule {
         recorder = recorder,
         clock = clock,
         ownerUid = { FirebaseAuth.getInstance().currentUser?.uid },
+        syncEnabled = { gate.clientSyncEnabled() },
+        onRecipientKeyRegenerated = {
+            crashReporting.nonFatal(PartnerSyncTelemetry.EVENT_RECIPIENT_KEY_REGENERATED)
+        },
     )
 
     @Provides @Singleton

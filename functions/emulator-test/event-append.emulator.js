@@ -46,6 +46,7 @@ beforeEach(async () => {
   await db.recursiveDelete(db.collection('eventRateLimits'));
   await db.recursiveDelete(db.collection('deletionJobs'));
   await db.recursiveDelete(db.collection('config'));
+  await db.recursiveDelete(db.collection('partnerDeviceSigningRegistrations'));
   await db.doc(`pairings/${PAIR}`).set({ members: [ALICE, BOB], status: 'active' });
   await db.doc(`users/${ALICE}`).set({ status: 'ACTIVE' });
   await db.doc(`users/${BOB}`).set({ status: 'ACTIVE' });
@@ -154,6 +155,40 @@ test('the active-profile requirement and the deletion tombstone block new events
   await db.doc(`users/${ALICE}`).set({ status: 'ACTIVE' });
   await db.doc(`deletionJobs/${ALICE}`).set({ status: 'PENDING' });
   await expectRejection(call(), 'permission-denied', 'ACCOUNT_DELETING');
+});
+
+test('dual acceptance is per-installation: a migrated sender is refused on the legacy path', async () => {
+  const migrated = '6f1c0d2e-3b4a-4c5d-8e9f-0a1b2c3d4e5f';
+  const fresh = '8b3e2f40-5d6c-4e7f-8a91-2c3d4e5f6071';
+  await db.doc(`partnerDeviceSigningRegistrations/${ALICE}:${migrated}`)
+    .set({ status: 'ACTIVE', installationId: migrated, ownerUid: ALICE });
+
+  // An old APK that omits installationId stays supported (compatibility window).
+  assert.deepStrictEqual(await call(input()), { status: 'appended' });
+
+  // An identified migrated installation is refused before any write.
+  const blocked = '7a2d1e3f-4c5b-4d6e-9f80-1b2c3d4e5f60';
+  await expectRejection(
+    call(input({ eventId: blocked, installationId: migrated })),
+    'failed-precondition',
+    'SIGNED_TRANSPORT_REQUIRED',
+  );
+  assert.strictEqual((await db.doc(`mailboxes/${BOB}/messages/${blocked}`).get()).exists, false);
+
+  // The same installation id under another account is a different installation.
+  assert.deepStrictEqual(await call(input({ eventId: fresh, installationId: fresh }), BOB), { status: 'appended' });
+
+  // A revoked registration still blocks the legacy path (no regaining access).
+  await db.doc(`partnerDeviceSigningRegistrations/${ALICE}:${migrated}`)
+    .set({ status: 'REVOKED' }, { merge: true });
+  await expectRejection(
+    call(input({ eventId: blocked, installationId: migrated })),
+    'failed-precondition',
+    'SIGNED_TRANSPORT_REQUIRED',
+  );
+
+  // A committed event stays retrievable after its installation registers (commit-before-migration).
+  assert.deepStrictEqual(await call(), { status: 'replayed' });
 });
 
 test('the operator kill switch stops new events but keeps committed replays valid', async () => {

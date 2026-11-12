@@ -27,11 +27,15 @@ class PartnerEventDrain(
     private val recorder: PartnerEventRecorder,
     private val clock: PartnerDeliveryClock,
     private val ownerUid: () -> String?,
+    /** §8.7 `delivery_client_sync_v1_enabled`; paused means recording continues, sending stops. */
+    private val syncEnabled: suspend () -> Boolean = { true },
     private val limits: DrainLimits = DrainLimits(),
     /** Jitter over the exponential delay; overridden in tests to keep timings exact. */
     private val jitterMs: (Long) -> Long = { delay ->
         Random.nextLong(0, (delay / 4).coerceAtLeast(1) + 1)
     },
+    /** §14 recipient-key stale re-encryption count: one call per successful regeneration. */
+    private val onRecipientKeyRegenerated: () -> Unit = {},
 ) {
 
     data class DrainLimits(
@@ -66,6 +70,9 @@ class PartnerEventDrain(
      * challenge and must run from a foreground drain, never from the background worker.
      */
     suspend fun run(allowRegistration: Boolean): Result = mutex.withLock {
+        // §8.7 rollout safety boundary: a paused sync claims and submits nothing. Rows stay
+        // recorded and due; the next pass after re-enable delivers them unchanged.
+        if (!syncEnabled()) return@withLock Result()
         val uid = ownerUid() ?: return@withLock Result()
         outbox.applyActiveOwner(uid)
         // §4.3 retention: ACKED rows keep only their empty shell for seven days. Cleanup
@@ -240,6 +247,8 @@ class PartnerEventDrain(
                                 prepared.eventId,
                                 clock.wallClockMs() + limits.waitingBackoffMs,
                             )
+                            PartnerEventRecorder.RegenerationResult.Regenerated ->
+                                onRecipientKeyRegenerated()
                             // SourceUnavailable: only the already-signed bytes can resend, and
                             // the defer above already bounds the next attempt.
                             else -> Unit
@@ -305,7 +314,8 @@ class PartnerEventDrain(
         val waiting = outbox.waitingRows(uid, clock.wallClockMs(), limits.batchSize)
         waiting.forEach { row ->
             when (recorder.regenerateRecipientEnvelopes(row.eventId)) {
-                PartnerEventRecorder.RegenerationResult.Regenerated -> Unit
+                PartnerEventRecorder.RegenerationResult.Regenerated ->
+                    onRecipientKeyRegenerated()
                 PartnerEventRecorder.RegenerationResult.RecipientKeyUnavailable,
                 PartnerEventRecorder.RegenerationResult.Failed,
                 PartnerEventRecorder.RegenerationResult.SourceUnavailable,

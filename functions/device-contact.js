@@ -51,6 +51,7 @@ const {
   probePriority,
   STATUS_ACTIVE,
   STATUS_CONTACT_STALE,
+  STATUS_MONITORING_UNAVAILABLE,
   STATUS_UNAVAILABLE,
   NOTICE_DEVICE_UNAVAILABLE,
   NOTICE_DEVICE_RECONNECTED,
@@ -202,12 +203,14 @@ function createSubmitDeviceContactHandler({ db, now = () => Date.now() }) {
     const legacyRef = db.doc(`dms_install_state/${stateDocId(auth.uid, contact.installationId)}`);
 
     return db.runTransaction(async (tx) => {
-      const [deletionSnap, freshRegSnap, livenessSnap, legacySnap] = await Promise.all([
-        tx.get(db.doc(`deletionJobs/${auth.uid}`)),
-        tx.get(regRef),
-        tx.get(livenessRef),
-        tx.get(legacyRef),
-      ]);
+      const [deletionSnap, freshRegSnap, livenessSnap, legacySnap, featuresSnap] =
+        await Promise.all([
+          tx.get(db.doc(`deletionJobs/${auth.uid}`)),
+          tx.get(regRef),
+          tx.get(livenessRef),
+          tx.get(legacyRef),
+          tx.get(db.doc(FEATURES_DOC)),
+        ]);
       if (deletionSnap.exists) throw new HttpsError('permission-denied', 'ACCOUNT_DELETING');
       const freshReg = freshRegSnap.exists ? freshRegSnap.data() : null;
       if (!freshReg || freshReg.status !== 'ACTIVE' || freshReg.signingKeyId !== contact.keyId) {
@@ -237,6 +240,13 @@ function createSubmitDeviceContactHandler({ db, now = () => Date.now() }) {
         ? await legacyRecoveryCandidates(tx, db, auth.uid, contact.installationId, outageGeneration)
         : [];
 
+      // §8.7 `device_liveness_alerts_v1_enabled`: while paused the contact is still stored
+      // (freshness data, no alert authority) but the row reads MONITORING_UNAVAILABLE, so
+      // nothing downstream can mistake operator pause for a tamper/absence signal. The next
+      // contact after re-enable flips it back to ACTIVE.
+      const alertsEnabled = featuresSnap.exists &&
+        featuresSnap.data().device_liveness_alerts_v1_enabled === true;
+
       // --- Reads are done; every write below is part of this one transaction. -------------
       tx.set(livenessRef, {
         ownerUid: auth.uid,
@@ -248,7 +258,7 @@ function createSubmitDeviceContactHandler({ db, now = () => Date.now() }) {
         lastObservedEnforcement: storedEnforcement(contact.enforcement, nowMs),
         enforcementState: decision.enforcementState,
         missingCapabilities: decision.missingCapabilities,
-        status: STATUS_ACTIVE,
+        status: alertsEnabled ? STATUS_ACTIVE : STATUS_MONITORING_UNAVAILABLE,
         outageEpisodeId: null,
         pendingProbeId: null,
         probeSentAtMs: null,

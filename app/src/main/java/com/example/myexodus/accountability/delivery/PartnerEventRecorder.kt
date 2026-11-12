@@ -57,13 +57,17 @@ class PartnerEventRecorder(
         kind: PartnerEventKind,
         safeMetadata: Map<String, Any> = emptyMap(),
         sensitivePayload: ByteArray? = null,
+        /** Scopes recipient envelopes to one pairing; null means every enrolled recipient. */
+        recipientPairId: String? = null,
+        /** §13.4 stable identity: a migrated record keeps its persisted legacy event ID. */
+        requestedEventId: String? = null,
     ): RecordResult {
         return try {
             val uid = ownerUid() ?: return RecordResult.NoAccount
             PartnerEventProtocol.metadataIssue(kind, safeMetadata)?.let {
                 return RecordResult.Rejected(it)
             }
-            val eventId = newEventId()
+            val eventId = requestedEventId ?: newEventId()
             val installation = outbox.ensureInstallation(uid)
             val occurredAtMs = clock.wallClockMs()
             val content = sensitivePayload ?: ByteArray(0)
@@ -79,6 +83,7 @@ class PartnerEventRecorder(
 
             var encryption = encryptor.encryptForAll(
                 eventId, installation.installationId, uid, kind, content,
+                recipientPairId = recipientPairId,
             )
             var detailOmitted = false
             if (encryption is Encrypted) {
@@ -95,6 +100,7 @@ class PartnerEventRecorder(
                         val marker = encryptor.encryptForAll(
                             eventId, installation.installationId, uid, kind,
                             ExistingE2eeRecipientEncryptor.OMITTED_DETAIL_MARKER,
+                            recipientPairId = recipientPairId,
                         )
                         if (marker !is Encrypted) {
                             encryption = marker
@@ -142,6 +148,7 @@ class PartnerEventRecorder(
                         sealedSource = sealedSource,
                         status = status,
                         lastErrorCode = lastErrorCode,
+                        recipientPairId = recipientPairId,
                     ),
                     clock.wallClockMs(),
                 )
@@ -207,7 +214,8 @@ class PartnerEventRecorder(
             }
             when (
                 val encryption = encryptor.encryptForAll(
-                    eventId, row.installationId, uid, kind, source, authorizedRecipientKeyIds,
+                    eventId, row.installationId, uid, kind, source,
+                    authorizedRecipientKeyIds, recipientPairId = row.recipientPairId,
                 )
             ) {
                 is Encrypted -> if (

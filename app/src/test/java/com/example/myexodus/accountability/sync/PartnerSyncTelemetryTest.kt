@@ -12,6 +12,8 @@ class PartnerSyncTelemetryTest {
     private class Fake(
         private val canPost: Boolean = true,
         private val oldestPending: (() -> Long?)? = null,
+        private val staged: Boolean = false,
+        private val oldestWaiting: (() -> Long?)? = null,
         private var now: Long = 1_000_000_000L,
     ) {
         val events = mutableListOf<String>()
@@ -19,9 +21,14 @@ class PartnerSyncTelemetryTest {
             canPost = { canPost },
             oldestPendingCreatedAt = { oldestPending?.invoke() },
             report = { events += it },
+            staged = { staged },
+            oldestWaitingCreatedAt = { oldestWaiting?.invoke() },
             now = { now },
         )
     }
+
+    private val phaseLegacy = "${PartnerSyncTelemetry.EVENT_DELIVERY_PHASE} rule_producer=legacy"
+    private val phaseStaged = "${PartnerSyncTelemetry.EVENT_DELIVERY_PHASE} rule_producer=staged"
 
     @Test
     fun unpairedPass_reportsNothing() = runTest {
@@ -31,27 +38,41 @@ class PartnerSyncTelemetryTest {
     }
 
     @Test
-    fun enrolledPass_reportsDeniedOnlyWhenNotificationsCannotPost() = runTest {
+    fun enrolledPass_reportsThePhaseFlag_andDeniedOnlyWhenNotificationsCannotPost() = runTest {
         Fake(canPost = false).let {
             it.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
-            assertEquals(listOf(PartnerSyncTelemetry.EVENT_NOTIFICATIONS_DENIED), it.events)
+            assertEquals(
+                listOf(phaseLegacy, PartnerSyncTelemetry.EVENT_NOTIFICATIONS_DENIED),
+                it.events,
+            )
         }
         Fake(canPost = true).let {
             it.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
-            assertTrue(it.events.isEmpty())
+            assertEquals(listOf(phaseLegacy), it.events)
+        }
+        Fake(staged = true).let {
+            it.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
+            assertEquals(listOf(phaseStaged), it.events)
         }
     }
 
     @Test
-    fun worstPass_reportsBothDeniedAndOutboxAge() = runTest {
-        // The fully-degraded pass: notifications denied AND rows stuck PENDING — both rails
-        // fire, denied first (the §14 denied-rate numerator, then the age histogram).
+    fun worstPass_reportsPhaseDeniedAndBothAgeBuckets() = runTest {
+        // The fully-degraded pass: notifications denied AND rows stuck PENDING/WAITING — every
+        // rail fires, in the documented order.
         val now = 1_000_000_000L
-        val fake = Fake(canPost = false, oldestPending = { now }, now = now)
+        val fake = Fake(
+            canPost = false,
+            oldestPending = { now },
+            oldestWaiting = { now - 60 * 60_000L },
+            now = now,
+        )
         fake.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
         assertEquals(
             listOf(
+                phaseLegacy,
                 PartnerSyncTelemetry.EVENT_NOTIFICATIONS_DENIED,
+                "${PartnerSyncTelemetry.EVENT_WAITING_RECIPIENT_KEY} age=under_24h",
                 "${PartnerSyncTelemetry.EVENT_OUTBOX_PENDING} age=under_15m",
             ),
             fake.events,
@@ -72,9 +93,28 @@ class PartnerSyncTelemetryTest {
             fake.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
             assertEquals(
                 "${age}ms old → $bucket",
-                listOf("${PartnerSyncTelemetry.EVENT_OUTBOX_PENDING} age=$bucket"),
+                listOf(phaseLegacy, "${PartnerSyncTelemetry.EVENT_OUTBOX_PENDING} age=$bucket"),
                 fake.events,
             )
+        }
+    }
+
+    @Test
+    fun oldestWaiting_isBucketed_andAbsentWhenNothingWaits() = runTest {
+        val now = 1_000_000_000L
+        Fake(oldestWaiting = { now - 24 * 60 * 60_000L }, now = now).let {
+            it.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
+            assertEquals(
+                listOf(
+                    phaseLegacy,
+                    "${PartnerSyncTelemetry.EVENT_WAITING_RECIPIENT_KEY} age=over_24h",
+                ),
+                it.events,
+            )
+        }
+        Fake(oldestWaiting = { null }).let {
+            it.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
+            assertEquals(listOf(phaseLegacy), it.events)
         }
     }
 
@@ -82,14 +122,17 @@ class PartnerSyncTelemetryTest {
     fun nothingPending_reportsNoOutboxEvent() = runTest {
         val fake = Fake(oldestPending = { null })
         fake.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
-        assertTrue(fake.events.isEmpty())
+        assertEquals(listOf(phaseLegacy), fake.events)
     }
 
     @Test
-    fun failingAgeRead_neverThrowsAndReportsNothing() = runTest {
-        val fake = Fake(oldestPending = { throw IllegalStateException("db down") })
+    fun failingReads_neverThrow_andNeverTakeThePassDown() = runTest {
+        val fake = Fake(
+            oldestPending = { throw IllegalStateException("db down") },
+            oldestWaiting = { throw IllegalStateException("db down") },
+        )
         fake.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
-        assertTrue(fake.events.isEmpty())
+        assertEquals(listOf(phaseLegacy), fake.events)
     }
 
     @Test

@@ -39,7 +39,7 @@ import com.example.myexodus.accountability.enrollment.EnrollmentRecord
         ProcessedEvent::class,
         UnpairState::class,
     ],
-    version = 18,
+    version = 19,
     exportSchema = false,
 )
 abstract class AccountabilityDatabase : RoomDatabase() {
@@ -551,6 +551,28 @@ abstract class AccountabilityDatabase : RoomDatabase() {
         }
 
         /**
+         * v19 adds the recipient-pair scope of an outbox row's envelopes. Additive and
+         * nullable: a pre-existing row (the legacy capture path seals for every enrollment)
+         * keeps NULL and its regeneration behaviour unchanged.
+         */
+        internal val MIGRATION_18_19 = object : Migration(18, 19) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE `pending_partner_events` ADD COLUMN `recipient_pair_id` TEXT",
+                ).use { it.step() }
+            }
+        }
+
+        /** v19 rollback (D-33): drop the additive column. */
+        internal val MIGRATION_19_18 = object : Migration(19, 18) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "ALTER TABLE `pending_partner_events` DROP COLUMN `recipient_pair_id`",
+                ).use { it.step() }
+            }
+        }
+
+        /**
          * Every migration, oldest schema to current, plus the one downgrade step (D-33) that
          * Room selects by `(from, to)` — the one list every builder registers.
          * Hand-maintained copies have silently diverged twice (7→8, ADR #50; 9→10, ADR #58),
@@ -563,6 +585,7 @@ abstract class AccountabilityDatabase : RoomDatabase() {
             MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_12, MIGRATION_13_14, MIGRATION_14_13,
             MIGRATION_14_15, MIGRATION_15_14, MIGRATION_15_16, MIGRATION_16_15,
             MIGRATION_16_17, MIGRATION_17_16, MIGRATION_17_18, MIGRATION_18_17,
+            MIGRATION_18_19, MIGRATION_19_18,
         )
 
         @Volatile private var instance: AccountabilityDatabase? = null

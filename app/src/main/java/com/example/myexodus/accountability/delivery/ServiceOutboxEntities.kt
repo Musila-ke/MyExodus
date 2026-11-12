@@ -69,6 +69,9 @@ data class PendingPartnerEvent(
     @ColumnInfo(name = "created_local_at_ms") val createdLocalAtMs: Long,
     @ColumnInfo(name = "acked_server_at_ms") val ackedServerAtMs: Long? = null,
     @ColumnInfo(name = "terminal_at_ms") val terminalAtMs: Long? = null,
+    /** §13.4: the pairing whose recipient(s) the envelopes were sealed for, so a stale-key
+     *  regeneration stays scoped to it. Null for kinds that fan out to every enrollment. */
+    @ColumnInfo(name = "recipient_pair_id") val recipientPairId: String? = null,
 ) {
     companion object {
         const val STATUS_PENDING = "PENDING"

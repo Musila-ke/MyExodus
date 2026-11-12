@@ -51,17 +51,21 @@ class ExistingE2eeRecipientEncryptor(
         plaintext: ByteArray,
         /** Non-null restricts the set to the server's current authorized recipient key IDs. */
         authorizedRecipientKeyIds: Set<String>? = null,
+        /** Non-null restricts the set to one pairing: a rule assigned to one partner must
+         *  never be encrypted to the others (§13.4 consent boundary). */
+        recipientPairId: String? = null,
     ): Outcome {
         val all = try {
             enrollments()
         } catch (_: Exception) {
             return Outcome.RecipientKeyUnavailable
         }
-        val records = if (authorizedRecipientKeyIds == null) {
-            all
-        } else {
-            all.filter { recipientKeyIdOf(it.partnerAgreementPubKey) in authorizedRecipientKeyIds }
-        }
+        val records = all
+            .filter { recipientPairId == null || it.pairId == recipientPairId }
+            .filter {
+                authorizedRecipientKeyIds == null ||
+                    recipientKeyIdOf(it.partnerAgreementPubKey) in authorizedRecipientKeyIds
+            }
         if (records.isEmpty()) return Outcome.RecipientKeyUnavailable
         return try {
             val envelopes = records

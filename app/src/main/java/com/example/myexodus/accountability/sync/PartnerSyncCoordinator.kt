@@ -7,6 +7,7 @@ import com.example.myexodus.account.SessionFence
 import com.example.myexodus.account.SessionFingerprint
 import com.example.myexodus.accountability.EventCreator
 import com.example.myexodus.accountability.crypto.AccountabilitySigner
+import com.example.myexodus.accountability.delivery.PartnerRuleChangeTransport
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.AccountabilityEventCategory
@@ -126,6 +127,11 @@ class PartnerSyncCoordinator(
     /** OPD #43: the partner's account was deleted — erase this device's copy of the pair
      *  (journal a terminal responder row + shred). True = the pair is gone. */
     private val purgeAccountDeletedPair: suspend (pairId: String) -> Boolean = { false },
+    /** §13.3 Phase 7 staged transport for journaled rule-lifecycle rows. The default keeps
+     *  every production and test caller on the shipped signed-chain path until the producer
+     *  is wired and its flag is on. */
+    private val ruleChangeTransport: suspend (PartnerEventJournal) -> PartnerRuleChangeTransport =
+        { PartnerRuleChangeTransport.LEGACY },
 ) {
 
     data class SyncReport(
@@ -505,14 +511,27 @@ class PartnerSyncCoordinator(
         val journal = store.partnerEventJournalDao()
         val nowMs = System.currentTimeMillis()
         for (row in journal.dueRuleChangesForPair(pairId, sinceMs, nowMs, RECONCILE_BATCH)) {
-            when (val emit = emitRuleChange(pairId, senderKeyId, row)) {
-                // Once the event is on the chain, the chain and its outbox row own delivery;
-                // the journal row only feeds creation. Deleting it lets the LIMIT window
-                // advance past a backlog that exceeds one batch.
-                is Emit.Created -> { linked++; journal.deleteById(row.eventId) }
-                Emit.Duplicate -> journal.deleteById(row.eventId)
-                Emit.Skip -> Unit
-                Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
+            // Crash-window heal across both transports: an event already on the chain was
+            // delivered by the legacy path before a prior pass died before deleting the row.
+            if (chain.hasEvent(pairId, senderKeyId, row.eventId)) {
+                journal.deleteById(row.eventId)
+                continue
+            }
+            when (ruleChangeTransport(row)) {
+                PartnerRuleChangeTransport.LEGACY -> when (val emit = emitRuleChange(pairId, senderKeyId, row)) {
+                    // Once the event is on the chain, the chain and its outbox row own delivery;
+                    // the journal row only feeds creation. Deleting it lets the LIMIT window
+                    // advance past a backlog that exceeds one batch.
+                    is Emit.Created -> { linked++; journal.deleteById(row.eventId) }
+                    Emit.Duplicate -> journal.deleteById(row.eventId)
+                    Emit.Skip -> Unit
+                    Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
+                }
+                // The signed outbox row now holds the sealed source, envelopes and stable
+                // event id transactionally — it is the migration checkpoint (§13.4).
+                PartnerRuleChangeTransport.SIGNED -> { linked++; journal.deleteById(row.eventId) }
+                PartnerRuleChangeTransport.ACKNOWLEDGED -> journal.deleteById(row.eventId)
+                PartnerRuleChangeTransport.DEFERRED -> Unit
             }
         }
         if (profileConsent?.shareAvailability == true) {

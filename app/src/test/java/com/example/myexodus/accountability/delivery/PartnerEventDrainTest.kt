@@ -46,6 +46,7 @@ class PartnerEventDrainTest {
     private lateinit var drain: PartnerEventDrain
     private lateinit var records: MutableList<EnrollmentRecord>
     private var currentUid: String? = "uid-1"
+    private var regenerations = 0
 
     private val cek = ByteArray(32) { (it + 1).toByte() }
 
@@ -64,6 +65,7 @@ class PartnerEventDrainTest {
             outbox, FakeProtector(), encryptorFor(records), clock, { currentUid },
         )
         registrar = ScriptedRegistrar(context, keyStore, outbox)
+        regenerations = 0
         drain = PartnerEventDrain(
             outbox = outbox,
             keyStore = keyStore,
@@ -73,6 +75,7 @@ class PartnerEventDrainTest {
             clock = clock,
             ownerUid = { currentUid },
             jitterMs = { 0 },
+            onRecipientKeyRegenerated = { regenerations++ },
         )
     }
 
@@ -80,6 +83,30 @@ class PartnerEventDrainTest {
     fun tearDown() {
         db.close()
         context.deleteDatabase(dbName)
+    }
+
+    @Test
+    fun pausedSync_claimsNothing_andRetainsTheRowForTheNextEnabledPass() = runBlocking {
+        registered()
+        record()
+        val paused = PartnerEventDrain(
+            outbox = outbox,
+            keyStore = keyStore,
+            transport = transport,
+            registrar = registrar,
+            recorder = recorder,
+            clock = clock,
+            ownerUid = { currentUid },
+            syncEnabled = { false },
+            jitterMs = { 0 },
+        )
+
+        val result = paused.run(allowRegistration = false)
+
+        assertEquals(0, result.claimed)
+        assertEquals(0, transport.submitted.size)
+        assertEquals("a paused sync never schedules or drops the row", 1, outbox.dueRows("uid-1", clock.nowMs, 10).size)
+        assertEquals(1, drain.run(allowRegistration = false).accepted)
     }
 
     @Test
@@ -223,6 +250,7 @@ class PartnerEventDrainTest {
         val result = drain.run(allowRegistration = false)
 
         assertEquals(1, result.retried)
+        assertEquals("§14 stale re-encryption count", 1, regenerations)
         val row = checkNotNull(outbox.event(recorded.eventId))
         assertEquals(PendingPartnerEvent.STATUS_PENDING, row.status)
         assertEquals(5, row.recipientKeyRevision)
@@ -307,6 +335,41 @@ class PartnerEventDrainTest {
             row.wireOutcome,
         )
         assertEquals(clock.nowMs + 900_000, row.nextAttemptAtMs)
+    }
+
+    @Test
+    fun waitingRow_deliversOnceTheRecipientKeyAppears_andCountsTheRegeneration() = runBlocking {
+        registered()
+        val recorded = record()
+        records.clear()
+        val staleKeyId = ExistingE2eeRecipientEncryptor.recipientKeyIdOf(byteArrayOf(9))
+        transport.responder = { batch ->
+            PartnerEventBatchResultV1(
+                listOf(
+                    PartnerEventResultV1(
+                        index = 0,
+                        eventId = batch.events[0].event.eventId,
+                        code = PartnerEventResultCode.RECIPIENT_KEY_STALE,
+                        currentRecipientKeys = listOf(RecipientKeyRef(staleKeyId, 2, null)),
+                    ),
+                ),
+            )
+        }
+        drain.run(allowRegistration = false)
+        assertEquals(
+            PendingPartnerEvent.STATUS_WAITING_FOR_RECIPIENT_KEY,
+            checkNotNull(outbox.event(recorded.eventId)).status,
+        )
+        assertEquals("nothing was regenerated yet", 0, regenerations)
+
+        records += enrollment(9)
+        transport.responder = ScriptedTransport.ACCEPT_ALL
+        clock.nowMs += 900_000
+
+        val result = drain.run(allowRegistration = false)
+
+        assertEquals(1, regenerations)
+        assertEquals(1, result.accepted)
     }
 
     @Test

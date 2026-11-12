@@ -31,6 +31,17 @@ test('the outer field allowlist is exact — extras and misses are rejected', ()
   assert.strictEqual(validateAppendInput([]).reason, 'INVALID_INPUT');
 });
 
+test('installation id is optional but must be UUID v4 when supplied (§13.3)', () => {
+  const installId = '6f1c0d2e-3b4a-4c5d-8e9f-0a1b2c3d4e5f';
+  assert.deepStrictEqual(validateAppendInput({ ...valid(), installationId: installId }), { ok: true });
+  for (const bad of ['', 'install-1', installId.toUpperCase(), null, 7]) {
+    assert.strictEqual(
+      validateAppendInput({ ...valid(), installationId: bad }).reason,
+      'INSTALLATION_ID_INVALID',
+    );
+  }
+});
+
 test('pair ids, event ids, sender ids and epochs are bounded and doc-id-safe', () => {
   assert.strictEqual(validateAppendInput({ ...valid(), pairId: 'a/b' }).reason, 'PAIR_ID_INVALID');
   assert.strictEqual(validateAppendInput({ ...valid(), eventId: 'a/b' }).reason, 'EVENT_ID_INVALID');

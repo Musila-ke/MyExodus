@@ -9,9 +9,10 @@ import com.example.myexodus.data.db.entity.PartnerRuleChange
 @Dao
 interface PartnerRuleChangeDao {
 
-    /** Redelivered events collide on (pair, event) and are ignored, never duplicated. */
+    /** Redelivered events collide on (pair, event) and are ignored, never duplicated.
+     *  Returns the new row id, or -1 when the collision was ignored. */
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insert(row: PartnerRuleChange)
+    suspend fun insert(row: PartnerRuleChange): Long
 
     @Query(
         "SELECT * FROM partner_rule_change WHERE pair_id = :pairId AND expires_at_ms > :nowMs " +

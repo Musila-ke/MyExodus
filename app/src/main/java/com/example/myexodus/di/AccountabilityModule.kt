@@ -19,6 +19,7 @@ import com.example.myexodus.accountability.crypto.EventCipher
 import com.example.myexodus.accountability.crypto.IdentityEpochStore
 import com.example.myexodus.accountability.crypto.IdentityMigration
 import com.example.myexodus.accountability.delivery.PartnerMailboxReceiver
+import com.example.myexodus.accountability.delivery.PartnerRuleChangeProducer
 import com.example.myexodus.accountability.delivery.ServiceEventOutbox
 import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
@@ -42,6 +43,7 @@ import com.example.myexodus.accountability.sync.MailboxEventProcessor
 import com.example.myexodus.accountability.sync.MailboxMessageHandler
 import com.example.myexodus.accountability.sync.MailboxOutboxDrainer
 import com.example.myexodus.accountability.sync.MailboxRejectionChecker
+import com.example.myexodus.accountability.sync.DELIVERY_CLIENT_SYNC_CONFIG_KEY
 import com.example.myexodus.accountability.sync.PUSH_REGISTRATION_CONFIG_KEY
 import com.example.myexodus.accountability.sync.PairingExchange
 import com.example.myexodus.accountability.sync.PartnerRolloutGate
@@ -247,7 +249,12 @@ object AccountabilityModule {
                 .setMinimumFetchIntervalInSeconds(900)
                 .build(),
         )
-        remoteConfig.setDefaultsAsync(mapOf(PUSH_REGISTRATION_CONFIG_KEY to true))
+        remoteConfig.setDefaultsAsync(
+            mapOf(
+                PUSH_REGISTRATION_CONFIG_KEY to true,
+                DELIVERY_CLIENT_SYNC_CONFIG_KEY to true,
+            ),
+        )
         return PartnerRolloutGate { key ->
             runCatching { remoteConfig.fetchAndActivate().await() }
             remoteConfig.getBoolean(key)
@@ -890,10 +897,13 @@ object AccountabilityModule {
         @ApplicationContext context: Context,
         db: AccountabilityDatabase,
         crashReporting: CrashReporting,
+        gate: PartnerRolloutGate,
     ): PartnerSyncTelemetry = PartnerSyncTelemetry(
         canPost = { NotificationAccess.canPost(context) },
         oldestPendingCreatedAt = db.outboxDao()::oldestPendingCreatedAt,
         report = { event -> crashReporting.nonFatal(event) },
+        staged = { gate.ruleProducerStagedEnabled() },
+        oldestWaitingCreatedAt = db.serviceEventOutboxDao()::oldestWaitingCreatedAt,
     )
 
     @Provides @Singleton
@@ -917,6 +927,7 @@ object AccountabilityModule {
         dms: PartnerDmsClient,
         sessionFence: SessionFence,
         recipientMailbox: PartnerMailboxReceiver,
+        ruleChangeProducer: PartnerRuleChangeProducer,
     ): PartnerSyncCoordinator = PartnerSyncCoordinator(
         enrollmentDao = enrollmentDao,
         storeFactory = storeFactory,
@@ -930,6 +941,7 @@ object AccountabilityModule {
         expireApprovals = approval::expireDue,
         resumeUnpairs = deletion::resumePending,
         purgeAccountDeletedPair = deletion::handleAccountDeleted,
+        ruleChangeTransport = ruleChangeProducer::transport,
         rotateKeys = { pairId, senderKeyId ->
             sessionKeyManager.rotateIfDue(pairId, senderKeyId, System.currentTimeMillis())
         },
