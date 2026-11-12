@@ -241,6 +241,36 @@ test('block attempts coalesce under one server-owned group id per minute', async
   );
 });
 
+test('a 200-event burst preserves every mailbox entry and job under one push group', async () => {
+  const bob = await seedRecipient(BOB);
+  const total = 200;
+  for (let start = 0; start < total; start += 20) {
+    const batch = [];
+    for (let index = start; index < start + 20; index += 1) {
+      batch.push(eventFor([bob], {
+        eventId: crypto.randomUUID(),
+        sequence: index + 1,
+        kind: 'BLOCK_ATTEMPT',
+        metadata: { category: 'BLOCKED_APP_ATTEMPT' },
+      }));
+    }
+    const reply = await request(batch);
+    assert.ok(
+      reply.results.every((result) => result.code === 'ACCEPTED'),
+      `burst batch ${start / 20 + 1} is fully accepted`,
+    );
+  }
+
+  const mailboxes = await db.collection(`partnerMailboxes/${BOB}/messages`).get();
+  assert.strictEqual(mailboxes.size, total, 'AC19: every authorized mailbox entry is preserved');
+  const jobs = await db.collection('partnerNotificationOutbox').get();
+  assert.strictEqual(jobs.size, total, 'AC19: every accepted event owns a notification job');
+  const group = `blk:${BOB}:${bob.installationId}:${Math.floor(NOW / 60000)}`;
+  jobs.forEach((job) => {
+    assert.strictEqual(job.get('groupId'), group, 'the burst shares one push group per minute');
+  });
+});
+
 test('an identical retry is ALREADY_ACCEPTED, even after key rotation', async () => {
   const bob = await seedRecipient(BOB);
   const w = eventFor([bob]);
