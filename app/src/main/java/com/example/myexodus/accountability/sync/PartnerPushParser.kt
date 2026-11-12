@@ -3,10 +3,10 @@ package com.example.myexodus.accountability.sync
 /**
  * Plan Step 9 (§8.12): the complete client-side contract for a push payload. A wake is a
  * generic synchronization trigger — never content — so the only decisions are "run the sync
- * pass, optionally handling this message first", "force a heartbeat", and "nothing to do".
- * The server's partner DMS notice uses the same `type` vocabulary and is rendered by the OS
- * from its `notification` block; the liveness probe is data-only — the service posts its own
- * silent status entry, never anything from the payload.
+ * pass, optionally handling this message first", "force a heartbeat", "render the availability
+ * notice", and "nothing to do". The DMS notice and the liveness probe are data-only — the
+ * service renders the notice (named, with a real tap route) and the probe's silent status
+ * entry, never anything the provider displayed.
  *
  * A missing `messageId` is a valid generic wake (§8.12's own example has none): the pass then
  * reconciles the whole mailbox. A present id must look like the Firestore document id the
@@ -22,6 +22,11 @@ internal sealed interface PartnerPushWake {
      *  still accepted until Phase 7 retires that worker. */
     data class LivenessProbe(val probeId: String?) : PartnerPushWake
 
+    /** Owner ruling 2026-11-12: the DMS availability/enforcement notice is data-only and
+     *  rendered locally — [pairId] is this phone's pairing-label lookup key (malformed or
+     *  absent only costs the name) and [noticeType] picks the copy. */
+    data class Availability(val pairId: String?, val noticeType: String) : PartnerPushWake
+
     /** Not ours, an unknown schema version, or a malformed id. */
     object Ignored : PartnerPushWake
 }
@@ -32,6 +37,8 @@ internal object PartnerPushParser {
     const val KEY_TYPE = "type"
     const val KEY_MESSAGE_ID = "messageId"
     const val KEY_PROBE_ID = "probeId"
+    const val KEY_PAIR_ID = "pairId"
+    const val KEY_NOTICE_TYPE = "noticeType"
 
     const val VERSION = "1"
     const val TYPE_SYNC_AVAILABLE = "SYNC_AVAILABLE"
@@ -42,6 +49,27 @@ internal object PartnerPushParser {
      *  routing data; the mailbox pull reconciles by receipt watermark, so there is no
      *  expedited-id path to take here). */
     const val TYPE_PARTNER_EVENT = "PARTNER_EVENT"
+
+    /** Owner ruling 2026-11-12: the DMS notice (data-only since the provider's fixed copy and
+     *  bare launcher tap could not name the partner or land on their page). */
+    const val TYPE_PARTNER_AVAILABILITY = "PARTNER_AVAILABILITY"
+
+    /** The notice types `functions/dms-processor.js` dispatches — the app picks the copy. */
+    const val NOTICE_AVAILABILITY_6H = "AVAILABILITY_6H"
+    const val NOTICE_RECOVERY = "RECOVERY"
+    const val NOTICE_DEVICE_UNAVAILABLE = "DEVICE_UNAVAILABLE"
+    const val NOTICE_DEVICE_RECONNECTED = "DEVICE_RECONNECTED"
+    const val NOTICE_ENFORCEMENT_DEGRADED = "ENFORCEMENT_DEGRADED"
+    const val NOTICE_ENFORCEMENT_RESTORED = "ENFORCEMENT_RESTORED"
+
+    private val NOTICE_TYPES = setOf(
+        NOTICE_AVAILABILITY_6H,
+        NOTICE_RECOVERY,
+        NOTICE_DEVICE_UNAVAILABLE,
+        NOTICE_DEVICE_RECONNECTED,
+        NOTICE_ENFORCEMENT_DEGRADED,
+        NOTICE_ENFORCEMENT_RESTORED,
+    )
 
     private val MESSAGE_ID = Regex("^[A-Za-z0-9_-]{1,128}$")
 
@@ -78,6 +106,17 @@ internal object PartnerPushParser {
                 }
             }
             TYPE_PARTNER_EVENT -> PartnerPushWake.Sync(null)
+            TYPE_PARTNER_AVAILABILITY -> {
+                val noticeType = data[KEY_NOTICE_TYPE]
+                when {
+                    noticeType !in NOTICE_TYPES -> PartnerPushWake.Ignored
+                    else -> PartnerPushWake.Availability(
+                        // An unusable pair id only costs the name, never the notice.
+                        pairId = PartnerNudgePush.validPairId(data[KEY_PAIR_ID]),
+                        noticeType = noticeType!!,
+                    )
+                }
+            }
             else -> PartnerPushWake.Ignored
         }
     }

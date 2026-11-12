@@ -1,9 +1,10 @@
 'use strict';
 // Step 9 payload inspection (§8.12): every plaintext byte the provider can see is pinned here.
-// The wake carries the versioned generic type plus an opaque message id; DMS notices carry
-// fixed OS copy and a hashed per-relationship collapse key; the liveness probe is data-only
-// and shows nothing. Nothing here may ever name a relationship, uid, install, category,
-// event, or timestamp.
+// The wake carries the versioned generic type plus an opaque message id; DMS notices are
+// data-only with the pair id and notice type as local lookup keys (owner ruling 2026-11-12,
+// D16 precedent) and a hashed per-relationship collapse key; the liveness probe is data-only
+// and shows nothing. Wake payloads never name a relationship, uid, install, category, event,
+// or timestamp; no payload reaches the OS as provider-rendered copy.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -67,21 +68,31 @@ test('relay wake is high priority (owner ruling 2026-11-09), TTL 30m, collapsed,
   assert.strictEqual(ANDROID_PACKAGE, 'com.example.myexodus');
 });
 
-test('availability notice: fixed copy, high priority, hashed collapse key that never names the pair', () => {
-  const row = { notice_type: NOTICE_AVAILABILITY, relationship_id: 'monitored-uid_watcher-uid' };
-  const message = _buildDmsMessage(row, ['tok-1', 'tok-2']);
+test('availability notice: data-only with local lookup keys, high priority, hashed collapse key', () => {
+  const pair = 'monitored-uid_watcher-uid';
+  const message = _buildDmsMessage(
+    { notice_type: NOTICE_AVAILABILITY, relationship_id: pair }, ['tok-1', 'tok-2'],
+  );
 
-  assert.deepStrictEqual(message.data, { v: '1', type: 'SYNC_AVAILABLE' });
-  assert.deepStrictEqual(message.notification, {
-    title: 'Partner check-in',
-    body: 'A paired device has not checked in recently. This is not proof the app was removed or blocking was turned off.',
+  // Owner ruling 2026-11-12 (D16 precedent): the app renders the copy post-parse and owns the
+  // tap, so the OS displays nothing and the wire carries only the two local lookup keys.
+  assert.strictEqual(message.notification, undefined, 'the OS never displays DMS copy');
+  assert.strictEqual(message.android.notification, undefined, 'no OS channel to post to');
+  assert.deepStrictEqual(message.data, {
+    v: '1',
+    type: 'PARTNER_AVAILABILITY',
+    pairId: pair,
+    noticeType: NOTICE_AVAILABILITY,
   });
-  assert.strictEqual(message.android.priority, 'high', 'user-visible time-sensitive notice');
+  assert.deepStrictEqual(message.tokens, ['tok-1', 'tok-2']);
+  assert.strictEqual(message.android.priority, 'high', 'a Doze-deferred wake cannot do its job');
   assert.strictEqual(message.android.ttl, 60 * 60 * 1000);
   assert.match(message.android.collapseKey, /^avail-[0-9a-f]{16}$/);
   assert.strictEqual(message.android.restrictedPackageName, 'com.example.myexodus');
-  assert.strictEqual(message.android.notification.channelId, 'availability_alerts_v1');
-  assertNoIdentity(message, ['monitored-uid_watcher-uid', 'monitored-uid', 'watcher-uid']);
+  assert.ok(
+    !JSON.stringify(message.android).includes(pair),
+    'provider metadata never names the pair: only the hashed collapse key distinguishes it',
+  );
 });
 
 test('recovery supersedes its own silence notice; different pairs never collapse together', () => {
@@ -92,10 +103,7 @@ test('recovery supersedes its own silence notice; different pairs never collapse
 
   assert.strictEqual(silent.android.collapseKey, recovered.android.collapseKey);
   assert.notStrictEqual(silent.android.collapseKey, other.android.collapseKey);
-  assert.deepStrictEqual(recovered.notification, {
-    title: 'Partner check-in',
-    body: 'A paired device has checked in again.',
-  });
+  assert.strictEqual(recovered.data.noticeType, NOTICE_RECOVERY, 'the app picks the recovered copy');
 });
 
 test('liveness probe: data-only (no visible copy), high priority, 6h TTL, collapses', () => {

@@ -1,7 +1,6 @@
 package com.example.myexodus.accountability.delivery
 
 import android.content.Context
-import android.os.Build
 import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.Constraints
@@ -16,6 +15,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.example.myexodus.util.canExpediteWork
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.concurrent.TimeUnit
@@ -93,12 +93,15 @@ internal const val DEVICE_CONTACT_NOW_WORK_NAME = "device-contact-now"
 /** §8.7 probe reply. Expedited only on Android 12+ per the plan; below that the ordinary
  *  request still runs inside the 20-minute window. Top-level internal so a JVM test can pin
  *  both branches. */
-internal fun deviceContactProbeRequest(probeId: String): OneTimeWorkRequest =
+internal fun deviceContactProbeRequest(
+    probeId: String,
+    expedited: Boolean = canExpediteWork(),
+): OneTimeWorkRequest =
     OneTimeWorkRequestBuilder<DeviceContactWorker>()
         .setInputData(workDataOf(DEVICE_CONTACT_PROBE_ID to probeId))
         .setConstraints(contactConstraints())
         .apply {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (expedited) {
                 setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             }
         }

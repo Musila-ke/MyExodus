@@ -71,19 +71,14 @@ const MAX_LEASE_RECOVERY_PER_RUN = 50;
 // set of installations the partner's status page is derived from.
 const MAX_INSTALLS_PER_USER = 20;
 
-// §8.12: the complete plaintext on the wire is the fixed OS copy + the generic sync data key.
-// No relationship id, uid, install id, event category, or precise time.
+// Owner ruling 2026-11-12: the DMS notice is data-only and the app renders it locally. An
+// OS-displayed notification can only carry the provider's fixed copy and the launcher's bare
+// tap (owner report: the tap "took me nowhere" and the copy never named the partner). The app
+// already has the named copy and the per-pair tap routing, so the notice rides the same
+// data-only shape as the D16 nudge: the pair id and notice type are local lookup keys, never
+// content, and nothing is displayed until the app's own post path renders it. Lockscreen copy
+// stays generic (FR-13) because the app builds its public version from generic resources.
 const ANDROID_PACKAGE = 'com.example.myexodus';
-const CHANNEL_AVAILABILITY = 'availability_alerts_v1';
-const PUSH_TITLE = 'Partner check-in';
-// §18 DoD: the notice itself must say silence is not proof — a partner may read it as an
-// accusation otherwise. Still identity-free and whole-content (no fetch needed to interpret).
-const PUSH_BODY_SILENT = 'A paired device has not checked in recently. This is not proof the app was removed or blocking was turned off.';
-const PUSH_BODY_RECOVERED = 'A paired device has checked in again.';
-// Phase 6 enforcement copy. Deliberately generic: which protection is missing is shown in the
-// app, never on a lock screen (§8.7 "generic copy incl. server receipt time").
-const PUSH_BODY_DEGRADED = 'A paired device reports that a required protection is turned off. Open the app to review it.';
-const PUSH_BODY_RESTORED = 'A paired device reports that its required protection is back on.';
 const PUSH_TTL_MS = 60 * 60 * 1000;
 
 // The monitored device's own silent liveness probe. Data-only, NO notification block: the
@@ -111,20 +106,6 @@ function availabilityCollapseKey(relationshipId, family = 'avail') {
 function noticeFamily(noticeType) {
   return noticeType === NOTICE_ENFORCEMENT_DEGRADED ||
     noticeType === NOTICE_ENFORCEMENT_RESTORED ? 'enforce' : 'avail';
-}
-
-function noticeBody(noticeType) {
-  switch (noticeType) {
-    case NOTICE_RECOVERY:
-    case NOTICE_DEVICE_RECONNECTED:
-      return PUSH_BODY_RECOVERED;
-    case NOTICE_ENFORCEMENT_DEGRADED:
-      return PUSH_BODY_DEGRADED;
-    case NOTICE_ENFORCEMENT_RESTORED:
-      return PUSH_BODY_RESTORED;
-    default:
-      return PUSH_BODY_SILENT;
-  }
 }
 
 function errorCodeOf(error) {
@@ -588,25 +569,27 @@ async function markInstallationStale(db, recipientUid, installationId) {
 }
 
 /**
- * §8.12: the complete plaintext on the wire. Fixed OS copy + the generic sync key only — no
- * relationship id, uid, install id, event category, or precise time, because those would let
- * anyone holding a notification read the partner's state without the app's E2EE channel.
- * Exported so the emulator suite can assert the payload byte-for-byte.
+ * Owner ruling 2026-11-12: data-only, no `notification` block. The app renders the notice
+ * post-parse from [row.relationship_id] (a local lookup key for this phone's pairing label)
+ * and [row.notice_type] (which copy); the rendered tray entry names the partner and its tap
+ * opens that pair's check-ins page. No uid, install id, or precise time rides the wire, and
+ * provider metadata carries only the hashed collapse key. Exported so the emulator suite can
+ * assert the payload byte-for-byte.
  */
 function buildDmsMessage(row, tokens) {
   return {
     tokens,
-    notification: {
-      title: PUSH_TITLE,
-      body: noticeBody(row.notice_type),
+    data: {
+      v: '1',
+      type: 'PARTNER_AVAILABILITY',
+      pairId: String(row.relationship_id),
+      noticeType: String(row.notice_type),
     },
-    data: { v: '1', type: 'SYNC_AVAILABLE' },
     android: {
       priority: 'high',
       ttl: PUSH_TTL_MS,
       collapseKey: availabilityCollapseKey(row.relationship_id, noticeFamily(row.notice_type)),
       restrictedPackageName: ANDROID_PACKAGE,
-      notification: { channelId: CHANNEL_AVAILABILITY },
     },
   };
 }

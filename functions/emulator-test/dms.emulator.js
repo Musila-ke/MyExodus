@@ -1280,15 +1280,20 @@ test('worker: the partner-accountability switch stops transitions and dispatch w
   assert.strictEqual(recorder.sends.length, 0);
 });
 
-test('payload: the wire message is fixed copy plus the generic sync key — no relationship identity', () => {
+test('payload: the wire message is data-only with local lookup keys — the OS renders nothing', () => {
   const availability = _buildDmsMessage(
     { notice_type: NOTICE_AVAILABILITY, relationship_id: PAIR_ID }, ['tok-a'],
   );
-  assert.strictEqual(availability.notification.title, 'Partner check-in');
-  assert.strictEqual(availability.notification.body, 'A paired device has not checked in recently. This is not proof the app was removed or blocking was turned off.');
-  assert.deepStrictEqual(availability.data, { v: '1', type: 'SYNC_AVAILABLE' });
-  assert.deepStrictEqual(Object.keys(availability.data).sort(), ['type', 'v'], 'no extra data keys');
-  assert.deepStrictEqual(availability.android.notification, { channelId: 'availability_alerts_v1' });
+  // Owner ruling 2026-11-12 (D16 precedent): the app renders the named copy and owns the tap.
+  assert.strictEqual(availability.notification, undefined, 'no provider-rendered copy');
+  assert.strictEqual(availability.android.notification, undefined, 'no provider channel');
+  assert.deepStrictEqual(availability.data, {
+    v: '1',
+    type: 'PARTNER_AVAILABILITY',
+    pairId: PAIR_ID,
+    noticeType: NOTICE_AVAILABILITY,
+  });
+  assert.deepStrictEqual(Object.keys(availability.data).sort(), ['noticeType', 'pairId', 'type', 'v']);
   assert.strictEqual(availability.android.priority, 'high');
   assert.strictEqual(availability.android.restrictedPackageName, 'com.example.myexodus');
   assert.strictEqual(availability.android.ttl, 60 * 60 * 1000);
@@ -1298,7 +1303,7 @@ test('payload: the wire message is fixed copy plus the generic sync key — no r
   const recovery = _buildDmsMessage(
     { notice_type: NOTICE_RECOVERY, relationship_id: PAIR_ID }, ['tok-b'],
   );
-  assert.strictEqual(recovery.notification.body, 'A paired device has checked in again.');
+  assert.strictEqual(recovery.data.noticeType, NOTICE_RECOVERY, 'the app picks the recovered copy');
   assert.strictEqual(
     recovery.android.collapseKey,
     availability.android.collapseKey,
@@ -1310,9 +1315,12 @@ test('payload: the wire message is fixed copy plus the generic sync key — no r
   );
   assert.notStrictEqual(otherPair.android.collapseKey, availability.android.collapseKey);
 
-  const wire = JSON.stringify(availability) + JSON.stringify(recovery) + JSON.stringify(otherPair);
+  // Provider metadata never names the pair; the data keys are this phone's own lookup keys.
+  const metadata = JSON.stringify([
+    availability.android, recovery.android, otherPair.android,
+  ]);
   for (const secret of [MON, WATCH, THIRD, INSTALL, WATCH_INSTALL, PAIR_ID]) {
-    assert.ok(!wire.includes(secret), `wire payload leaks ${secret}`);
+    assert.ok(!metadata.includes(secret), `provider metadata leaks ${secret}`);
   }
 });
 

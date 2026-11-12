@@ -61,6 +61,8 @@ class PartnerEventRecorder(
         recipientPairId: String? = null,
         /** §13.4 stable identity: a migrated record keeps its persisted legacy event ID. */
         requestedEventId: String? = null,
+        /** §8.2 device occurrence instant; null = the act is being staged now. */
+        occurredAtMs: Long? = null,
     ): RecordResult {
         return try {
             val uid = ownerUid() ?: return RecordResult.NoAccount
@@ -69,7 +71,7 @@ class PartnerEventRecorder(
             }
             val eventId = requestedEventId ?: newEventId()
             val installation = outbox.ensureInstallation(uid)
-            val occurredAtMs = clock.wallClockMs()
+            val occurredAt = occurredAtMs ?: clock.wallClockMs()
             val content = sensitivePayload ?: ByteArray(0)
 
             // §8.1: the source seal is retained until ACKED so a definitive RECIPIENT_KEY_STALE
@@ -91,7 +93,7 @@ class PartnerEventRecorder(
                 val probeIssue = PartnerEventProtocol.validate(
                     eventOf(
                         eventId, installation.installationId, uid, PROBE_SEQUENCE,
-                        kind, occurredAtMs, safeMetadata, encryption.envelopes,
+                        kind, occurredAt, safeMetadata, encryption.envelopes,
                     ),
                 )
                 when (probeIssue) {
@@ -108,7 +110,7 @@ class PartnerEventRecorder(
                             val markerIssue = PartnerEventProtocol.validate(
                                 eventOf(
                                     eventId, installation.installationId, uid, PROBE_SEQUENCE,
-                                    kind, occurredAtMs, safeMetadata, marker.envelopes,
+                                    kind, occurredAt, safeMetadata, marker.envelopes,
                                 ),
                             )
                             if (markerIssue != null) return RecordResult.Rejected(markerIssue)
@@ -141,7 +143,7 @@ class PartnerEventRecorder(
                         eventId = eventId,
                         kind = kind,
                         safeMetadataJson = Jcs.canonicalize(safeMetadata),
-                        deviceOccurredAtMs = occurredAtMs,
+                        deviceOccurredAtMs = occurredAt,
                         elapsedRealtimeAtCaptureMs = clock.elapsedRealtimeMs(),
                         recipientEnvelopes = envelopes,
                         recipientKeyRevision = null,

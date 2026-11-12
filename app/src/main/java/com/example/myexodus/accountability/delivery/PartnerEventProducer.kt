@@ -27,6 +27,8 @@ class PartnerEventRecord(
     val sensitivePayload: ByteArray? = null,
     /** Scopes envelopes to the route pairing; null fans out to every enrolled recipient. */
     val recipientPairId: String? = null,
+    /** §8.2 device occurrence instant; null means "staged now" (the reporter's own act). */
+    val occurredAtEpochMillis: Long? = null,
 )
 
 /**
@@ -66,6 +68,7 @@ class PartnerEventProducer(
                 sensitivePayload = record.sensitivePayload,
                 recipientPairId = record.recipientPairId,
                 requestedEventId = record.eventId,
+                occurredAtMs = record.occurredAtEpochMillis,
             )
         ) {
             is PartnerEventRecorder.RecordResult.Recorded -> PartnerEventTransport.SIGNED

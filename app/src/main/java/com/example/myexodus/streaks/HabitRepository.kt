@@ -508,6 +508,7 @@ class HabitRepository(
         val db = storeFactory.open() ?: return false
         val now = readings().tWallMillis
         var availabilityChanged = false
+        var availabilityRevokeEmitted = false
         val written = guardingStore({ false }) {
             db.withWriteTransaction<Unit> {
                 val before = db.pairSharingDao().profileFor(pairId)
@@ -544,10 +545,27 @@ class HabitRepository(
                         )
                     }
                 }
+                // Owner ruling 2026-11-12: availability off is exactly the loophole the plan
+                // missed — revoke the switch and every protective signal goes silent with no
+                // notice. The partner hears the switch itself.
+                if (!shareAvailability && before?.shareAvailability == true) {
+                    availabilityRevokeEmitted = db.userProfileDao().getActive()?.let { profile ->
+                        PartnerActivityJournal.emitForProfile(
+                            db,
+                            profile.userId,
+                            EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED,
+                            now,
+                            targetPairId = pairId,
+                        )
+                    } ?: false
+                }
             }
             true
         }
-        if (written && availabilityChanged) PartnerSyncSignals.activityEmitted.tryEmit(Unit)
+        // The journal emit already nudged the sync pass; a second kick would double it.
+        if (written && availabilityChanged && !availabilityRevokeEmitted) {
+            PartnerSyncSignals.activityEmitted.tryEmit(Unit)
+        }
         return written
     }
 

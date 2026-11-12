@@ -24,8 +24,8 @@ android {
         targetSdk = 36
         // Release 0 is the first build that carries a meaningful version: the server's
         // clientCompatibility minimum is compared against this versionCode (plan §8.10).
-        versionCode = 23
-        versionName = "1.1.21"
+        versionCode = 29
+        versionName = "1.1.27"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

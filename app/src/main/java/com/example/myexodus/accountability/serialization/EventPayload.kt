@@ -91,6 +91,11 @@ data class EventPayload(
          *  snapshot-less (ADR #285 shape) — profile consent, not streak state. */
         const val TYPE_CHECKINS_SHARING_STOPPED = "checkins_sharing_stopped"
 
+        /** Device availability was switched off (owner ruling 2026-11-12): turning the switch
+         *  off must reach the partner, or revoking it would silently cut every protective
+         *  signal with no notice. Snapshot-less, same consent-announcement shape. */
+        const val TYPE_AVAILABILITY_SHARING_STOPPED = "availability_sharing_stopped"
+
         val ACTIVITY_TYPES: Set<String> = setOf(
             TYPE_STREAK_UPDATED,
             TYPE_RELAPSE_RECORDED,
@@ -102,6 +107,7 @@ data class EventPayload(
             TYPE_STREAK_RENAMED,
             TYPE_STREAK_DELETED,
             TYPE_CHECKINS_SHARING_STOPPED,
+            TYPE_AVAILABILITY_SHARING_STOPPED,
         )
 
         /** Wire v2 (ADR #134): the kinds that concern one habit — exactly these carry
@@ -162,7 +168,8 @@ fun classifyActivity(payload: EventPayload): ActivityEvent = when {
     // and the event is the consent change itself.
     payload.stateAfter == null &&
         payload.type != EventPayload.TYPE_MOTIVATIONAL_MESSAGE &&
-        payload.type != EventPayload.TYPE_CHECKINS_SHARING_STOPPED ->
+        payload.type != EventPayload.TYPE_CHECKINS_SHARING_STOPPED &&
+        payload.type != EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED ->
         ActivityEvent.Malformed(payload.type)
     else -> ActivityEvent.Valid(payload)
 }

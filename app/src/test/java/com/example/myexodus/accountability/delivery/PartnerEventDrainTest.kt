@@ -47,6 +47,7 @@ class PartnerEventDrainTest {
     private lateinit var records: MutableList<EnrollmentRecord>
     private var currentUid: String? = "uid-1"
     private var regenerations = 0
+    private var enrollmentRecipientKeyId: String? = null
 
     private val cek = ByteArray(32) { (it + 1).toByte() }
 
@@ -58,6 +59,7 @@ class PartnerEventDrainTest {
         outbox = ServiceEventOutbox(db)
         clock = MutableClock()
         currentUid = "uid-1"
+        enrollmentRecipientKeyId = null
         keyStore = FakeKeyStore()
         transport = ScriptedTransport()
         records = mutableListOf(enrollment(1))
@@ -76,6 +78,7 @@ class PartnerEventDrainTest {
             ownerUid = { currentUid },
             jitterMs = { 0 },
             onRecipientKeyRegenerated = { regenerations++ },
+            currentRecipientKeyId = { enrollmentRecipientKeyId },
         )
     }
 
@@ -435,6 +438,82 @@ class PartnerEventDrainTest {
     }
 
     @Test
+    fun staleRecipientKey_reregistersOnAForegroundPass_thenDelivers() = runBlocking {
+        // #196: a completed pairing mints a new agreement key while the signing key still
+        // looks healthy; the server keeps advertising the previous enrollment's recipient
+        // key until a foreground pass re-registers.
+        registered()
+        record()
+        enrollmentRecipientKeyId = "fresh-key-id"
+
+        val result = drain.run(allowRegistration = true)
+
+        assertEquals(1, registrar.calls)
+        assertEquals(1, result.accepted)
+        assertEquals(1, transport.submitted.size)
+    }
+
+    @Test
+    fun matchingRecipientKey_neverRegisters() = runBlocking {
+        registered()
+        record()
+        enrollmentRecipientKeyId = "recipient-key-id"
+
+        val result = drain.run(allowRegistration = true)
+
+        assertEquals(0, registrar.calls)
+        assertEquals(1, result.accepted)
+    }
+
+    @Test
+    fun backgroundDrain_neverRefreshesTheRecipientKey() = runBlocking {
+        registered()
+        record()
+        enrollmentRecipientKeyId = "fresh-key-id"
+
+        val result = drain.run(allowRegistration = false)
+
+        assertEquals("§8.3.1: registration is a foreground act", 0, registrar.calls)
+        assertEquals(1, result.accepted)
+    }
+
+    @Test
+    fun failedRecipientKeyRefresh_stillDeliversOutboundRows() = runBlocking {
+        registered()
+        record()
+        enrollmentRecipientKeyId = "fresh-key-id"
+        registrar.refreshOverride = PartnerEventRegistrar.Outcome.Retryable
+
+        val result = drain.run(allowRegistration = true)
+
+        assertEquals(1, registrar.calls)
+        assertEquals("a stale recipient key only blocks inbound delivery", 1, result.accepted)
+        assertEquals(
+            InstallationState.REGISTRATION_ACTIVE,
+            outbox.installation("uid-1")!!.registrationState,
+        )
+    }
+
+    @Test
+    fun refreshThatMintedAnUnregisteredKey_suspendsInsteadOfSigningWithIt() = runBlocking {
+        registered()
+        record()
+        enrollmentRecipientKeyId = "fresh-key-id"
+        registrar.refreshMintsKey = "N".repeat(43)
+        registrar.refreshOverride = PartnerEventRegistrar.Outcome.Retryable
+
+        val result = drain.run(allowRegistration = true)
+
+        assertTrue(result.registrationRequired)
+        assertEquals("no row may be signed with a key the server never accepted", 0, result.claimed)
+        assertEquals(0, transport.submitted.size)
+        assertEquals(
+            InstallationState.REGISTRATION_REENROLL_REQUIRED,
+            outbox.installation("uid-1")!!.registrationState,
+        )
+    }
+
+    @Test
     fun leaseLeftByAKilledProcess_isReclaimedAfterExpiry() = runBlocking {
         registered()
         val recorded = record()
@@ -608,10 +687,11 @@ class PartnerEventDrainTest {
     private class FakeKeyStore : PartnerEventKeyStore() {
         var present = true
         var signCount = 0
+        var currentKeyId: String = KEY_ID
 
         override fun hasKey(installationId: String): Boolean = present
 
-        override fun keyId(installationId: String): String = KEY_ID
+        override fun keyId(installationId: String): String = currentKeyId
 
         override fun sign(installationId: String, data: ByteArray): ByteArray {
             signCount++
@@ -670,9 +750,15 @@ class PartnerEventDrainTest {
     ) {
         var calls = 0
 
+        /** Scripted refresh failure; [refreshMintsKey] simulates a key minted before it failed. */
+        var refreshOverride: Outcome? = null
+        var refreshMintsKey: String? = null
+
         override suspend fun register(installationId: String): Outcome {
             calls++
             keyStore.present = true
+            refreshMintsKey?.let { keyStore.currentKeyId = it }
+            refreshOverride?.let { return it }
             val committed = outbox.markRegistered(installationId, keyStore.keyId(installationId), "recipient-key-id")
             return if (committed) {
                 Outcome.Registered("ACTIVE_UNATTESTED", 1)

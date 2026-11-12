@@ -372,6 +372,17 @@ function createIngestPartnerEventsHandler({ db, now = () => Date.now() }) {
       if (result.reason) item.reason = result.reason;
       if (result.currentRecipientKeys) item.currentRecipientKeys = result.currentRecipientKeys;
       if (result.fanout) item.fanout = result.fanout;
+      // Every non-acceptance is logged once: the per-event response carries the code to the
+      // device, but a device-side rejection is otherwise invisible in production logs.
+      if (result.code !== RESULT.ACCEPTED && result.code !== RESULT.ALREADY_ACCEPTED) {
+        logger.info('ingestPartnerEvents event rejected', {
+          code: result.code,
+          reason: result.reason || null,
+          issue: result.issue || null,
+          eventId: item.eventId || null,
+          installationId: data.installationId,
+        });
+      }
       results.push(item);
     }
 

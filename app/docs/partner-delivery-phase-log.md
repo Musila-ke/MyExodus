@@ -1290,14 +1290,14 @@ the limit of the hardware actually present (two Transsion X6532, API 34); every 
 | AC09 | PARTIAL | Liveness emulator suite exit 0: probe at 90 min, 20 min window, 240/360 min grace, one alert per episode, incident suppression. The overnight false-positive device leg is explicitly gated on the owner (§13.6 tests not yet run); the live flag stays OFF |
 | AC10 | PARTIAL | Pair-lifecycle and registration-revocation emulator suites PASSED; device teardown/rotation leg BLOCKED (needs the owner to re-pair) |
 | AC11 | PARTIAL | Migration and transport-state unit tests PASSED (crash-window heal, stable event id, retain-on-defer); on-device journal migration BLOCKED — producer flag OFF, no journal rows on the phones |
-| AC12 | PARTIAL | All automated tiers green; p95 latency NOT MEASURED. Targets (§14): ≤10 s enqueue→accept and ≤5 s accept→FCM dispatch. Measurement needs the staged transport live and cold-window rule events (owner biometric) — BLOCKED |
+| AC12 | MEASURED — targets met for the tested condition | Matrix G14 (production ledger, staged transport, warm/unlocked path): enqueue→server acceptance p95 699 ms (n=32, target ≤10 s); acceptance→FCM acceptance p95 2,140 ms (n=40, target ≤5 s). Scope: 2× Transsion API 34, online, no OEM suppression; the all-events view (n=120, includes background/Doze/offline enqueues) reads p95 12.57 s — outside the warm-path target by design, not a regression |
 | AC13 | PASSED | No new FGS (manifest unchanged; the existing periodic worker carries the path), no Direct Boot telemetry queue, no identity delegation, no routine foreground-auth dependency |
 | AC14 | PASSED | This change set touches no blocking/enforcement code path; app-lock behaviour unchanged (file-set verified) |
 | AC15 | PARTIAL | Heartbeat / degraded / restored logic covered by unit + liveness emulator suites; live doc shows counter 1, HEALTHY, required capability `ACCESSIBILITY` only (a live rule needs it; optional VPN not reported). Device degraded/restored leg BLOCKED |
 | AC16 | PARTIAL | Drain stale/regenerate tests PASSED (no-effect `RECIPIENT_KEY_STALE`, same id/seq/time, envelope immutable); device rotation leg BLOCKED (requires partner re-enrollment) |
 | AC17 | PARTIAL | Emulator attribution tests cover cross-account denial and distinct installation ids; on-device account switch BLOCKED (would destroy the live pair) |
 | AC18 | PARTIAL | RKP dual-root / forged / revoked fixtures PASSED in emulator tests; live `ACTIVE_HARDWARE` accepted on both phones; a deliberate non-GMS outcome is not runnable here (both devices are GMS) — recorded as not executed |
-| AC19 | PARTIAL | Burst/coalescing logic unit-covered (`COALESCE_WINDOW_MS` 60 s, security alerts exempt); end-to-end 200-event burst on the live pair BLOCKED (staged transport live + owner-gated events) |
+| AC19 | PASSED at backend tier | Matrix G15: 200-event noncritical burst in the ingest emulator suite (16/16) — every batch accepted, all 200 mailbox entries and 200 notification jobs preserved, all sharing one per-minute push group. The ≤1-push-per-60 s half is covered by `claimDecision` unit tests (no emulator test — honest gap). A physical 200-event UI burst was not attempted (not sane to drive through the UI) |
 
 ### §12 physical-device matrix coverage
 
@@ -1481,3 +1481,58 @@ suites green.
 Copy note: the batch is named "Battery batch", so the template's "…in the «name» batch"
 renders "Battery batch batch". That is the batch name the owner chose, not a duplicating
 template; the S11 ruling (the batch name must appear) holds.
+
+## Post-v27 fix — 2026-11-12 (v28 / 1.1.26)
+
+### Offline block → reboot → unlock → delivery: the boot path was dropping every resume
+
+**Symptom (reported path, #176 reboot/boot).** A block recorded while the phone is offline
+must survive a reboot and reach the partner after unlock without opening My Exodus. The
+first attempt at this leg (earlier today) was invalidated: the pre-reboot in-process pass
+had already staged and delivered the block. Re-running with a genuinely offline block
+exposed the real defect.
+
+**Root causes (three, fixed together).**
+- `PartnerEventBootReceiver` guarded on `FirebaseAuth.currentUser`, but the boot broadcast
+  starts a fresh process where the persisted user is still restoring, so `currentUser` is
+  null for a window — every post-reboot resume was silently dropped (observed 2026-11-12:
+  receivers delivered, zero work enqueued). The workers already fence themselves on the
+  session, so the guard is removed; the receiver now also requests a full sync pass
+  (`enqueuePartnerSyncNow`) so an attempt that was never staged pre-reboot still reaches the
+  outbox.
+- `MyExodusApp`'s `userUnlockedReceiver` scheduled partner delivery only when
+  `localSessionManager.current() != null`, which can also be null mid-restore. It now
+  schedules unconditionally, like the boot receiver.
+- The staged event stamped `occurredAtEpochMillis` at record time only; the staged wire
+  event now carries the attempt's original `occurredAtEpochMillis` through
+  `PartnerEventProducer` → `PartnerEventRecorder` (`deviceOccurredAtMs = occurredAtMs`), so
+  a delayed event reports when it happened, not when it was staged.
+
+**Device evidence (v28 / 1.1.26, release, `install -r` on both phones).**
+- 22:01:55 `.106` offline (airplane ON + `svc wifi disable`; ping to the gateway failed):
+  `MyExodusAttempts: block logged: rule=d865636c-df5a-4643-8c41-cf928cd8d481
+  target=com.ichi2.anki`; overlay shown and dismissed; no drain ran (offline).
+- 22:02:56 `adb reboot` with the network still off. BOOT_COMPLETED dispatched 22:03:55;
+  `MyExodusPush: boot wake — resuming partner delivery` at 22:04:48 **while airplane=1 and
+  Wi-Fi off** — the receiver runs without network and without opening the app.
+- 22:04:57 network restored (`cmd connectivity airplane-mode disable; svc wifi enable`;
+  ping OK). The app was never opened.
+- 22:05:23 backend accepted the event (`receivedAt=1794510323849`):
+  `partnerEvents/P9XVqUX138cSgaFSUsyhFyrz5Sp2/installations/ae3926b5-…/events/269dc0d0-…`,
+  `kind=BLOCK_ATTEMPT`, `category=BLOCKED_APP_ATTEMPT`, `status=ACCEPTED`, `sequence=165`,
+  and **`deviceOccurredAtMs=1794510115435` = 22:01:55**, the original block time, not the
+  22:05 staging time — the timestamp fix holds on the wire.
+- 22:05:29 `.107` posted the partner notice (`partner_accountability_events_v1`, tag
+  `partner:event:P9XVqUX138cSgaFSUsyhFyrz5Sp2_Q6TjmyFsPUccwVDlnUaiKBuEDPP2`), heads-up
+  22:05:29.955→22:05:35.63, still present in the shade at 22:06.
+- Latency after network restoration: block → backend acceptance 26 s; acceptance →
+  recipient notification 5.4 s (v28 online path).
+
+**Auxiliary XOS findings recorded (device runbook).** (1) After a sideload `install -r`,
+writes to `enabled_accessibility_services` are silently reverted because the
+`ACCESS_RESTRICTED_SETTINGS` app-op is `ignore`; `appops set com.example.myexodus
+ACCESS_RESTRICTED_SETTINGS allow` restores the ability to enable the service, and XOS's App
+info page has no ⋮ overflow to grant it from the UI. (2) XOS airplane mode keeps Wi-Fi
+enabled by default ("keep Wi-Fi in airplane mode" is ON), so `svc wifi disable` must be
+added for a true offline state. Both belong in `app/docs/workstation-tooling.md`/device
+runbook at the wrap.

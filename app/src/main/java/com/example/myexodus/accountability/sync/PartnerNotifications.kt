@@ -83,11 +83,12 @@ object PartnerNotifications {
      *  only in debug builds. No production surface posts to it by design. */
     const val CHANNEL_SYNC_STATUS = "sync_status"
 
-    /** Plan Step 8 (§8.12): the server's six-hour availability notice channel. The id matches
-     *  `CHANNEL_AVAILABILITY` in functions/dms-processor.js — a rename here renames what the
-     *  worker sends to. HIGH because the notice is user-visible and time-sensitive (§8.12);
-     *  the payload itself is fixed generic copy. */
+    /** Plan Step 8 (§8.12): the availability notice channel. HIGH because the notice is
+     *  user-visible and time-sensitive. Since the owner ruling 2026-11-12 the push is
+     *  data-only and the app posts here itself, so this id no longer mirrors a server
+     *  constant — the server sends no channel at all. */
     const val CHANNEL_AVAILABILITY_ALERTS = "availability_alerts_v1"
+    const val NOTIF_AVAILABILITY_NOTICE = 2007
 
     /** §8.7 probe transparency: the probe is a data-only high-priority push, and Android
      *  grants that priority only when the app shows something the user can see. This LOW
@@ -240,6 +241,10 @@ object PartnerNotifications {
             EventPayload.TYPE_CHECKINS_SHARING_STOPPED ->
                 context.getString(R.string.partner_checkins_stopped_title_named, partnerName) to
                     context.getString(R.string.partner_checkins_stopped_body)
+            // Owner ruling 2026-11-12: the availability revoke names what stops.
+            EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED ->
+                context.getString(R.string.partner_availability_stopped_title_named, partnerName) to
+                    context.getString(R.string.partner_availability_stopped_body)
             // Owner directive 2026-11-09: the streak-management acts name themselves, so the
             // partner hears "shared / renamed / deleted a streak", not "new activity". Always
             // rich — a pre-v3 sender's label-less body is still the honest signal.
@@ -550,6 +555,47 @@ object PartnerNotifications {
                 context.getString(R.string.partner_ended_text_named_no_time)
             },
             tag = partnerTag("ended", pairId),
+        )
+    }
+
+    /** Owner ruling 2026-11-12: the DMS availability/enforcement notice, rendered here
+     *  because the push is data-only. The unlocked copy names the partner; the tap opens
+     *  their check-ins page (where the phone's real state lives), and the lockscreen public
+     *  version stays the generic copy (FR-13). */
+    fun notifyAvailabilityNotice(
+        context: Context,
+        pairId: String?,
+        partnerName: String?,
+        noticeType: String,
+    ) {
+        val (textRes, namedRes) = when (noticeType) {
+            PartnerPushParser.NOTICE_RECOVERY,
+            PartnerPushParser.NOTICE_DEVICE_RECONNECTED ->
+                R.string.partner_availability_body_recovered to
+                    R.string.partner_availability_body_recovered_named
+            PartnerPushParser.NOTICE_ENFORCEMENT_DEGRADED ->
+                R.string.partner_availability_body_degraded to
+                    R.string.partner_availability_body_degraded_named
+            PartnerPushParser.NOTICE_ENFORCEMENT_RESTORED ->
+                R.string.partner_availability_body_restored to
+                    R.string.partner_availability_body_restored_named
+            else ->
+                R.string.partner_availability_body_silent to
+                    R.string.partner_availability_body_silent_named
+        }
+        val key = pairId ?: "unknown"
+        post(
+            context,
+            CHANNEL_AVAILABILITY_ALERTS,
+            context.getString(R.string.partner_channel_availability_name),
+            NotificationManager.IMPORTANCE_HIGH,
+            idFor(NOTIF_AVAILABILITY_NOTICE, key),
+            R.string.partner_availability_title,
+            textRes,
+            namedText = partnerName?.let { context.getString(namedRes, it) },
+            tag = partnerTag("availability", key),
+            openPartnerView = VIEW_CHECKINS,
+            openPairId = pairId,
         )
     }
 

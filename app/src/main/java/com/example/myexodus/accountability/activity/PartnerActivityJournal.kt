@@ -201,7 +201,9 @@ object PartnerActivityJournal {
 
             // Owner ruling 2026-11-10: the check-ins revoke must land after share_checkins
             // was switched off — the consent row's existence is the only condition.
-            EventPayload.TYPE_CHECKINS_SHARING_STOPPED ->
+            EventPayload.TYPE_CHECKINS_SHARING_STOPPED,
+            // Owner ruling 2026-11-12: same gate for the availability switch-off.
+            EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED ->
                 if (targetPairId != null) dao.profileFor(targetPairId) != null
                 else dao.profileAll().isNotEmpty()
 

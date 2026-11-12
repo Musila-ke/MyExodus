@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -407,7 +408,10 @@ private fun AccountPage(
         Column(
             Modifier
                 .weight(1f)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(rememberScrollState())
+                // Edge-to-edge: without the IME inset the keyboard covers the form's last
+                // field (confirm password) and no amount of scrolling reveals it.
+                .imePadding(),
         ) {
             EditorialKicker(stringResource(R.string.onboarding_account_kicker))
             Spacer(Modifier.height(16.dp))

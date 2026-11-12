@@ -339,16 +339,7 @@ class MyExodusApp : Application(), Configuration.Provider {
             // the worker would only no-op against the fence, and a signed-out account has no
             // pairs to serve. Anonymous sessions are fenced-active and keep syncing (ADR #125).
             if (localSessionManager.get().current() != null) {
-                enqueuePartnerSync(this)
-                // Partner delivery plan §4.1/§6.1 step 4: the 15-minute backstop plus the
-                // startup reconciliation for rows a crash left without scheduled work.
-                enqueuePartnerEventSync(this)
-                // Phase 6 §6.3: the 15-minute signed-contact cadence plus an immediate
-                // contact on this foreground opportunity.
-                enqueueDeviceContact(this)
-                enqueueDeviceContactNow(this)
-                registerContactOnConnectivityRecovery()
-                applicationScope.launch { partnerDelivery.get().reconcileOnStart() }
+                enqueuePartnerDeliveryWork()
             }
             enqueueDailyMaintenance(this)
             UpdateCheckWorker.enqueue(this)
@@ -544,8 +535,25 @@ class MyExodusApp : Application(), Configuration.Provider {
                     runStartupVaultMaintenance(true)
                 }
             }
+            // A process started pre-unlock skipped onCreate's scheduling block; R09 requires
+            // the first unlock after boot to resume partner delivery without opening the app.
+            // Ungated like the boot receiver: FirebaseAuth can still be restoring here, and
+            // the workers fence themselves on the session anyway.
+            enqueuePartnerDeliveryWork()
             reconcileBootIfNeeded()
         }
+    }
+
+    /** Partner delivery plan §4.1/§6.1 step 4: the 15-minute backstop plus the startup
+     *  reconciliation for rows a crash left without scheduled work; §6.3's signed-contact
+     *  cadence and immediate contact. */
+    private fun enqueuePartnerDeliveryWork() {
+        enqueuePartnerSync(this)
+        enqueuePartnerEventSync(this)
+        enqueueDeviceContact(this)
+        enqueueDeviceContactNow(this)
+        registerContactOnConnectivityRecovery()
+        applicationScope.launch { partnerDelivery.get().reconcileOnStart() }
     }
 
     /** §6.3 connectivity-recovery opportunity: the first reachable network after a loss sends

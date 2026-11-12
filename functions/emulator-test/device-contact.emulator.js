@@ -412,11 +412,11 @@ test('the alert waits for the grace, publishes once, and dispatches to the partn
   assert.strictEqual(result.sent, 1);
   assert.strictEqual(pushes.length, 1);
   assert.strictEqual(pushes[0].row.notice_type, 'DEVICE_UNAVAILABLE');
-  assert.strictEqual(
-    buildMessage(pushes[0].row).notification.body,
-    'A paired device has not checked in recently. This is not proof the app was removed or blocking was turned off.',
-    'the OS copy stays the fixed generic text',
-  );
+  // Owner ruling 2026-11-12: the push is data-only; the app renders the copy post-parse.
+  const wire = buildMessage(pushes[0].row);
+  assert.strictEqual(wire.notification, undefined, 'no provider-rendered copy');
+  assert.strictEqual(wire.data.type, 'PARTNER_AVAILABILITY');
+  assert.strictEqual(wire.data.noticeType, 'DEVICE_UNAVAILABLE');
 
   const liveness = (await db.doc(livenessPath()).get()).data();
   assert.strictEqual(liveness.status, 'UNAVAILABLE');

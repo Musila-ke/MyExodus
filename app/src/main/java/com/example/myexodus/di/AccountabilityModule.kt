@@ -18,6 +18,7 @@ import com.example.myexodus.accountability.crypto.AttestationVerifier
 import com.example.myexodus.accountability.crypto.EventCipher
 import com.example.myexodus.accountability.crypto.IdentityEpochStore
 import com.example.myexodus.accountability.crypto.IdentityMigration
+import com.example.myexodus.accountability.delivery.PartnerDeliveryCoordinator
 import com.example.myexodus.accountability.delivery.PartnerEventProducer
 import com.example.myexodus.accountability.delivery.PartnerMailboxReceiver
 import com.example.myexodus.accountability.delivery.ServiceEventOutbox
@@ -68,6 +69,7 @@ import com.example.myexodus.accountability.rulecontrol.RuleControlReceiver
 import com.example.myexodus.accountability.rulecontrol.RuleDeliveryTrace
 import com.example.myexodus.accountability.serialization.AccountabilityEventKind
 import com.example.myexodus.accountability.serialization.MonitoringCapability
+import com.example.myexodus.applock.AppLockCoordinator
 import com.example.myexodus.blocking.BlockerAccessibilityService
 import com.example.myexodus.blocking.EnforcementForegroundService
 import com.example.myexodus.blocking.OverlayController
@@ -712,6 +714,8 @@ object AccountabilityModule {
         secretsRepository: SecretsRepository,
         storeFactory: AppRulesStoreFactory,
         reachability: PairingReachabilityStore,
+        partnerDelivery: Lazy<PartnerDeliveryCoordinator>,
+        appLock: Lazy<AppLockCoordinator>,
     ): PairingFlow = PairingFlow(
         enrollmentFlow = enrollmentFlow,
         enrollmentDao = enrollmentDao,
@@ -735,6 +739,13 @@ object AccountabilityModule {
             // denial flag from the orphaned pairing would otherwise outlive the fix and put a
             // false re-pair card on a brand-new, working pairing.
             reachability.markReachable(pairId)
+            // The ceremony just minted this pair's agreement key; until a foreground
+            // registration pass runs, the server still advertises the previous enrollment's
+            // recipient key and a partner reply (holding the new key) cannot be accepted.
+            // Kicked, not awaited: registration is network-bound and must not stall pairing.
+            partnerDelivery.get().kickForegroundDrain(
+                allowRegistration = appLock.get().state.value.allowsVaultAccess,
+            )
         },
         prunePartnerActivity = { pairId -> storeFactory.open()?.prunePartnerActivity(listOf(pairId)) },
     )

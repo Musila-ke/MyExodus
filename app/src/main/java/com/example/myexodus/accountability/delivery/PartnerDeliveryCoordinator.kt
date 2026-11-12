@@ -3,6 +3,10 @@ package com.example.myexodus.accountability.delivery
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * §6.1 step 4 signal sink and the §4.1 foreground trigger. There is no always-on service:
@@ -16,6 +20,8 @@ class PartnerDeliveryCoordinator(
     private val drain: PartnerEventDrain,
     private val ownerUid: () -> String?,
 ) {
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
      * The recorder's post-commit kick. `requestWake` returns true only for false→true, so a
@@ -40,6 +46,12 @@ class PartnerDeliveryCoordinator(
             return
         }
         scheduleNextRetry(context, result.earliestNextAttemptMs)
+    }
+
+    /** Fire-and-forget foreground drain for callers that must not wait on the network (the
+     *  pairing ceremony). The singleton outlives every Activity, so the scope does too. */
+    fun kickForegroundDrain(allowRegistration: Boolean) {
+        scope.launch { drainInProcess(allowRegistration) }
     }
 
     /**

@@ -36,6 +36,9 @@ class PartnerEventDrain(
     },
     /** §14 recipient-key stale re-encryption count: one call per successful regeneration. */
     private val onRecipientKeyRegenerated: () -> Unit = {},
+    /** The agreement-key id the newest enrollment would register right now; null = not
+     *  readable (never paired, or a transient failure) and disables the freshness check. */
+    private val currentRecipientKeyId: suspend () -> String? = { null },
 ) {
 
     data class DrainLimits(
@@ -91,10 +94,10 @@ class PartnerEventDrain(
             }
         }.getOrNull()
 
-        val registered = installation.registrationState == InstallationState.REGISTRATION_ACTIVE &&
+        val signingHealthy = installation.registrationState == InstallationState.REGISTRATION_ACTIVE &&
             signingKeyId != null &&
             installation.activeKeyId == signingKeyId
-        if (!registered) {
+        if (!signingHealthy) {
             if (signingKeyId == null || installation.activeKeyId != signingKeyId) {
                 // §8.3.8: a missing or mismatched signing key suspends the installation and
                 // keeps every row for re-signing; it is never dropped or re-encrypted here.
@@ -121,6 +124,33 @@ class PartnerEventDrain(
                     registrationRequired = true,
                     earliestNextAttemptMs = outbox.earliestNextAttempt(uid),
                 )
+        } else if (allowRegistration) {
+            // A successful pairing mints a new pair-scoped agreement key while the signing key
+            // and registration state still look healthy, so the server keeps advertising the
+            // previous enrollment's recipient key. A partner holding the key from the new
+            // pairing then encrypts to an id the server does not authorize, and its stale
+            // recovery cannot regenerate (its only local record is the new key). Refresh the
+            // registration; best-effort, because outbound rows do not depend on it — only a
+            // stale server view of what partners may encrypt for this device does.
+            val enrollmentRecipientKeyId = runCatching { currentRecipientKeyId() }.getOrNull()
+            if (enrollmentRecipientKeyId != null &&
+                installation.recipientKeyId != enrollmentRecipientKeyId) {
+                val outcome = registrar.register(installation.installationId)
+                val refreshedKeyId = runCatching {
+                    keyStore.keyId(installation.installationId)
+                }.getOrNull()
+                if (outcome is PartnerEventRegistrar.Outcome.Registered && refreshedKeyId != null) {
+                    signingKeyId = refreshedKeyId
+                } else if (refreshedKeyId == null || refreshedKeyId != installation.activeKeyId) {
+                    // A key minted mid-registration that the server never accepted cannot sign
+                    // anything it would accept — suspend for a full re-enrollment instead.
+                    outbox.markReenrollRequired(installation.installationId)
+                    return@withLock Result(
+                        registrationRequired = true,
+                        earliestNextAttemptMs = outbox.earliestNextAttempt(uid),
+                    )
+                }
+            }
         }
 
         // Every path above either proves the key present or returns; this is the compiler's

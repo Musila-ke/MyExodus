@@ -38,6 +38,31 @@ class BlockerAccessibilityServiceConstructionTest {
     }
 
     @Test
+    fun coverTarget_neverNarrowsToACenteredSubWindow() {
+        // Owner-caught 2026-11-12: a cold AnkiDroid launch listed ONLY its 684x563 backup
+        // dialog (XOS window-list lag), and the cover settled on that card with the
+        // DeckPicker readable around it. A non-pane rect always covers the whole display.
+        val display = Rect(0, 0, 720, 1520)
+        val dialog = Rect(18, 518, 702, 1081)
+        assertEquals(display, BlockerAccessibilityService.coverTarget(true, dialog, display))
+    }
+
+    @Test
+    fun isSplitPane_recognizesBothSplitOrientationsAndRejectsDialogs() {
+        val display = Rect(0, 0, 720, 1520)
+        assertTrue("top/bottom split: full width", BlockerAccessibilityService.isSplitPane(Rect(0, 0, 720, 760), display))
+        assertTrue("side-by-side split: full height", BlockerAccessibilityService.isSplitPane(Rect(0, 0, 360, 1520), display))
+        assertTrue(
+            "a full-screen window behind the bars still spans the display",
+            BlockerAccessibilityService.isSplitPane(Rect(0, 0, 720, 1600), display),
+        )
+        assertFalse(
+            "a centered dialog spans neither dimension",
+            BlockerAccessibilityService.isSplitPane(Rect(18, 518, 702, 1081), display),
+        )
+    }
+
+    @Test
     fun coverTarget_ignoresTheExitAnimationRectOnceTheAppIsEvicted() {
         // Regression (X6532, 2026-10-18): the evicted app's window stayed listed at its
         // 480x1440 exit-animation rect; the settle pass froze the card there and it

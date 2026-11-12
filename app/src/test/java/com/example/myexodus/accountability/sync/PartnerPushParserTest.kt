@@ -121,6 +121,72 @@ class PartnerPushParserTest {
     }
 
     @Test
+    fun availabilityNotice_carriesTheLocalLookupKeys() {
+        // Owner ruling 2026-11-12 (D16 precedent): the DMS notice is data-only; the app
+        // renders the named copy and owns the tap. functions/dms-processor.js buildDmsMessage
+        // emits exactly these keys.
+        assertEquals(
+            PartnerPushWake.Availability(PAIR_ID, PartnerPushParser.NOTICE_AVAILABILITY_6H),
+            PartnerPushParser.parse(
+                mapOf(
+                    "v" to "1",
+                    "type" to "PARTNER_AVAILABILITY",
+                    "pairId" to PAIR_ID,
+                    "noticeType" to PartnerPushParser.NOTICE_AVAILABILITY_6H,
+                ),
+            ),
+        )
+        assertEquals(
+            PartnerPushWake.Availability(PAIR_ID, PartnerPushParser.NOTICE_ENFORCEMENT_DEGRADED),
+            PartnerPushParser.parse(
+                mapOf(
+                    "v" to "1",
+                    "type" to "PARTNER_AVAILABILITY",
+                    "pairId" to PAIR_ID,
+                    "noticeType" to PartnerPushParser.NOTICE_ENFORCEMENT_DEGRADED,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun availabilityNoticeWithAnUnusablePairId_stillShows_genericCopy() {
+        // Same contract as the nudge: a malformed pair id only costs the name.
+        assertEquals(
+            PartnerPushWake.Availability(null, PartnerPushParser.NOTICE_RECOVERY),
+            PartnerPushParser.parse(
+                mapOf(
+                    "v" to "1",
+                    "type" to "PARTNER_AVAILABILITY",
+                    "pairId" to "not a pair id",
+                    "noticeType" to PartnerPushParser.NOTICE_RECOVERY,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun availabilityNoticeWithAnUnknownType_isIgnored() {
+        assertEquals(
+            PartnerPushWake.Ignored,
+            PartnerPushParser.parse(
+                mapOf(
+                    "v" to "1",
+                    "type" to "PARTNER_AVAILABILITY",
+                    "pairId" to PAIR_ID,
+                    "noticeType" to "SOMETHING_NEW",
+                ),
+            ),
+        )
+        assertEquals(
+            PartnerPushWake.Ignored,
+            PartnerPushParser.parse(
+                mapOf("v" to "1", "type" to "PARTNER_AVAILABILITY", "pairId" to PAIR_ID),
+            ),
+        )
+    }
+
+    @Test
     fun unknownOrAbsentType_isIgnored() {
         assertEquals(PartnerPushWake.Ignored, PartnerPushParser.parse(emptyMap()))
         assertEquals(PartnerPushWake.Ignored, PartnerPushParser.parse(mapOf("v" to "1")))
@@ -141,5 +207,6 @@ class PartnerPushParserTest {
     private companion object {
         const val MESSAGE_ID = "3f0a2f0e-9a51-4f4d-8c3e-2c9b0a6d1e77"
         const val PROBE_ID = "probe-ep-3f0a2f0e9a514f4d8c3e2c9b0a6d1e77"
+        const val PAIR_ID = "P9XVqUX138cSgaFSUsyhFyrz5Sp2_ylUBz1E5uteZyZFUmTdn7Zbak6p2"
     }
 }

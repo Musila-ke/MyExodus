@@ -246,8 +246,12 @@ private fun UpdateDialog(
                         Text(stringResource(R.string.settings_update_cancel_download))
                     }
                 }
-                TextButton(onClick = { update.copyDiagnostics(context) }) {
-                    Text(stringResource(R.string.settings_update_copy_diagnostics))
+                // Owner ruling 2026-11-12: the diagnostics copy is a failure-report affordance,
+                // not something a healthy update flow shows every user.
+                if (state.error != null || state.checkError != null) {
+                    TextButton(onClick = { update.copyDiagnostics(context) }) {
+                        Text(stringResource(R.string.settings_update_copy_diagnostics))
+                    }
                 }
                 // Plan §14: installed version, truthful last authenticated fetch, last outcome.
                 Text(

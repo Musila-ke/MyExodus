@@ -235,19 +235,7 @@ object PartnerDeliveryModule {
         functions = functions,
         keyStore = keyStore,
         outbox = outbox,
-        recipientPublicKeySpki = {
-            // One recipient key per installation on the server. The newest enrollment's
-            // pair-scoped agreement key is the one partners encrypt to; a pre-v12 enrollment
-            // falls back to the legacy device-level key (multi-pair limitation: one
-            // registration can authorize only one of several pair keys at a time).
-            val alias = runCatching { db.enrollmentDao().all() }
-                .getOrDefault(emptyList())
-                .firstNotNullOfOrNull { it.myAgreementKeyAlias }
-            runCatching {
-                if (alias != null) keys.pairAgreementPublicKey(alias).encoded
-                else keys.agreementPublicKey().encoded
-            }.getOrNull()
-        },
+        recipientPublicKeySpki = { currentAgreementPublicKeySpki(db, keys) },
         currentAuth = currentAuth@{
             val user = FirebaseAuth.getInstance().currentUser ?: return@currentAuth null
             // §8.3.1's five-minute window. Anonymous sessions have no reauthentication
@@ -307,6 +295,8 @@ object PartnerDeliveryModule {
         clock: PartnerDeliveryClock,
         gate: PartnerRolloutGate,
         crashReporting: CrashReporting,
+        db: AccountabilityDatabase,
+        keys: AccountabilityKeyStore,
     ): PartnerEventDrain = PartnerEventDrain(
         outbox = outbox,
         keyStore = keyStore,
@@ -318,6 +308,10 @@ object PartnerDeliveryModule {
         syncEnabled = { gate.clientSyncEnabled() },
         onRecipientKeyRegenerated = {
             crashReporting.nonFatal(PartnerSyncTelemetry.EVENT_RECIPIENT_KEY_REGENERATED)
+        },
+        currentRecipientKeyId = {
+            currentAgreementPublicKeySpki(db, keys)
+                ?.let(ExistingE2eeRecipientEncryptor::recipientKeyIdOf)
         },
     )
 
@@ -332,4 +326,24 @@ object PartnerDeliveryModule {
         drain = drain,
         ownerUid = { FirebaseAuth.getInstance().currentUser?.uid },
     )
+}
+
+/**
+ * One recipient key per installation on the server: the newest enrollment's pair-scoped
+ * agreement key (a pre-v12 enrollment falls back to the legacy device-level key; multi-pair
+ * limitation: one registration can authorize only one of several pair keys at a time).
+ * Shared by the registrar and the drain's freshness check so the two cannot disagree — a
+ * disagreement would rotate the signing key on every foreground pass.
+ */
+private suspend fun currentAgreementPublicKeySpki(
+    db: AccountabilityDatabase,
+    keys: AccountabilityKeyStore,
+): ByteArray? {
+    val alias = runCatching { db.enrollmentDao().all() }
+        .getOrDefault(emptyList())
+        .firstNotNullOfOrNull { it.myAgreementKeyAlias }
+    return runCatching {
+        if (alias != null) keys.pairAgreementPublicKey(alias).encoded
+        else keys.agreementPublicKey().encoded
+    }.getOrNull()
 }

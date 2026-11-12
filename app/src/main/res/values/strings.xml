@@ -324,6 +324,10 @@
          alerts stop. Unlocked copy only (FR-13). -->
     <string name="partner_checkins_stopped_title_named">%1$s turned off blocked-app check-ins</string>
     <string name="partner_checkins_stopped_body">You will not hear about blocked or overridden apps unless this is turned back on.</string>
+    <!-- Owner ruling 2026-11-12: switching device availability off is itself a signal the
+         partner must hear. Unlocked copy only (FR-13). -->
+    <string name="partner_availability_stopped_title_named">%1$s turned off device availability</string>
+    <string name="partner_availability_stopped_body">You will not see whether blocking is on and working on their device unless this is turned back on.</string>
     <!-- Owner directive 2026-11-09: the streak-management acts. Unlocked copy only; the
          lockscreen keeps the plain partner_event_* forms (FR-13). -->
     <string name="partner_streak_shared_title_named">%1$s shared a streak with you</string>
@@ -1219,9 +1223,22 @@
     <string name="partner_channel_activity_name">MyExodus partner activity</string>
     <string name="partner_channel_requests_name">MyExodus partner requests</string>
     <string name="partner_channel_sync_status_name">MyExodus sync status</string>
-    <!-- Plan Step 8: the server's availability notice channel ("A paired device has not checked
-         in recently"). Created at startup so the channel exists before the first 6-hour notice. -->
+    <!-- Plan Step 8: the availability notice channel ("A paired device has not checked
+         in recently"). Created at startup so the channel exists before the first notice. -->
     <string name="partner_channel_availability_name">MyExodus partner check-ins</string>
+    <!-- Owner ruling 2026-11-12: the notice is rendered locally from a data-only push, so the
+         unlocked copy names the partner and the tap opens their check-ins page; the lockscreen
+         public version keeps the generic copy (FR-13). The generic bodies match the former
+         server copy. §18 DoD: silence is not proof. -->
+    <string name="partner_availability_title">Partner check-in</string>
+    <string name="partner_availability_body_silent">A paired device has not checked in recently. This is not proof the app was removed or blocking was turned off.</string>
+    <string name="partner_availability_body_silent_named">%1$s’s phone has not checked in recently. This is not proof the app was removed or blocking was turned off.</string>
+    <string name="partner_availability_body_recovered">A paired device has checked in again.</string>
+    <string name="partner_availability_body_recovered_named">%1$s’s phone has checked in again.</string>
+    <string name="partner_availability_body_degraded">A paired device reports that a required protection is turned off. Open the app to review it.</string>
+    <string name="partner_availability_body_degraded_named">%1$s’s phone reports that a required protection is turned off. Open the app to review it.</string>
+    <string name="partner_availability_body_restored">A paired device reports that its required protection is back on.</string>
+    <string name="partner_availability_body_restored_named">%1$s’s phone reports that its required protection is back on.</string>
     <!-- Plan §6.3/§8.7: the silent status entry posted in a liveness-probe callback — the
          user-visible half that keeps the data-only high-priority probe honest. -->
     <string name="partner_channel_device_status_name">MyExodus device status</string>

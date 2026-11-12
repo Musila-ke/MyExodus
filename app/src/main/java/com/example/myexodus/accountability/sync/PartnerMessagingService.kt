@@ -9,6 +9,7 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.example.myexodus.accountability.delivery.enqueueDeviceContactProbe
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
+import com.example.myexodus.util.canExpediteWork
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import dagger.hilt.android.AndroidEntryPoint
@@ -24,12 +25,17 @@ import kotlinx.coroutines.withTimeoutOrNull
  * everything downstream. A wake with no messageId still runs the pass, which is how in-app
  * sync stays current when a visible notification is muted or never shown.
  *
- * The one exception (SOS §8.17/FR-20): a `partner_nudge` push IS rendered here as a local
- * notification posted immediately — the payload carries no content to protect, and a nudge
- * must alert now, not at the next work run. Since D16 (owner ruling 2026-10-23) the push is
- * data-only and carries the pair id; this phone resolves its own pairing label for that pair
- * and names the sender, keeping the generic copy when no label resolves. The card itself
- * still comes from Firestore via Home's listener.
+ * Two exceptions are rendered here as local notifications posted immediately, and both are
+ * data-only pushes:
+ * - `partner_nudge` (SOS §8.17/FR-20): the payload carries no content to protect, and a nudge
+ *   must alert now, not at the next work run. Since D16 (owner ruling 2026-10-23) the push
+ *   carries the pair id; this phone resolves its own pairing label and names the sender,
+ *   keeping the generic copy when no label resolves. The card itself still comes from
+ *   Firestore via Home's listener.
+ * - `PARTNER_AVAILABILITY` (owner ruling 2026-11-12): the DMS availability/enforcement notice.
+ *   The provider-rendered version could only carry fixed anonymous copy and a bare launcher
+ *   tap (owner report: the tap "took me nowhere"), so the server sends data-only and this
+ *   service names the partner and routes the tap to their check-ins page.
  *
  * All other callbacks enqueue the same one-time partner-sync work rather than doing work
  * inline: the service's execution window is short. The work is EXPEDITED (owner ruling
@@ -95,6 +101,15 @@ class PartnerMessagingService : FirebaseMessagingService() {
                     enqueueHeartbeatProbe()
                 }
             }
+            is PartnerPushWake.Availability -> {
+                Log.i(TAG, "availability notice — ${wake.noticeType}")
+                PartnerNotifications.notifyAvailabilityNotice(
+                    this,
+                    wake.pairId,
+                    partnerNameFor(wake.pairId),
+                    wake.noticeType,
+                )
+            }
             PartnerPushWake.Ignored ->
                 Log.i(TAG, "ignoring unrecognized push (from ${message.from})")
         }
@@ -154,16 +169,27 @@ class PartnerMessagingService : FirebaseMessagingService() {
 
 /** The wake request — top-level internal so a JVM test can pin the expedited flag that the
  *  seconds-level delivery contract depends on. */
-internal fun partnerWakeRequest(messageId: String?): OneTimeWorkRequest =
+internal fun partnerWakeRequest(
+    messageId: String?,
+    expedited: Boolean = canExpediteWork(),
+): OneTimeWorkRequest =
     OneTimeWorkRequestBuilder<PartnerSyncWorker>()
-        .apply { if (messageId != null) setInputData(workDataOf(PARTNER_WAKE_MESSAGE_ID to messageId)) }
-        .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        .apply {
+            if (messageId != null) setInputData(workDataOf(PARTNER_WAKE_MESSAGE_ID to messageId))
+            if (expedited) {
+                setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+            }
+        }
         .build()
 
 /** The liveness-probe request (forced heartbeat) — expedited for the same reason: the server
  *  has already waited 45 minutes for a beat. */
-internal fun partnerProbeRequest(): OneTimeWorkRequest =
+internal fun partnerProbeRequest(expedited: Boolean = canExpediteWork()): OneTimeWorkRequest =
     OneTimeWorkRequestBuilder<PartnerSyncWorker>()
         .setInputData(workDataOf(PARTNER_FORCE_HEARTBEAT to true))
-        .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        .apply {
+            if (expedited) {
+                setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+            }
+        }
         .build()

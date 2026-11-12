@@ -8,6 +8,7 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
+import com.example.myexodus.util.canExpediteWork
 
 /**
  * 2026-11-06 revision: completes a background transfer. DownloadManager's broadcast is the
@@ -26,7 +27,11 @@ class UpdateDownloadReceiver : BroadcastReceiver() {
             return
         }
         val request = OneTimeWorkRequestBuilder<UpdateVerifyWorker>()
-            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+            .apply {
+                if (canExpediteWork()) {
+                    setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                }
+            }
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             UpdateVerifyWorker.WORK_NAME,

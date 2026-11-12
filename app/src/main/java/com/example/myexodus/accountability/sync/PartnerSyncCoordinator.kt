@@ -742,8 +742,11 @@ class PartnerSyncCoordinator(
     ): EventPayload? {
         // Owner ruling 2026-11-10: the check-ins revoke is a consent announcement, never
         // state — shipping it snapshot-less keeps a check-ins-only pair's day counts, which
-        // they never consented to share, off the wire entirely.
-        if (row.kind == EventPayload.TYPE_CHECKINS_SHARING_STOPPED) {
+        // they never consented to share, off the wire entirely. The availability revoke
+        // (owner ruling 2026-11-12) has the same shape.
+        if (row.kind == EventPayload.TYPE_CHECKINS_SHARING_STOPPED ||
+            row.kind == EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED
+        ) {
             return EventPayload(
                 type = row.kind,
                 text = row.text,
@@ -1059,6 +1062,9 @@ class PartnerSyncCoordinator(
             safeMetadata = mapOf("category" to category.wire),
             sensitivePayload = encodePayload(payload),
             recipientPairId = pairId,
+            // A deferred attempt is staged long after it happened; the wire time must stay
+            // the block instant, never the pass that finally got to it.
+            occurredAtEpochMillis = attempt.occurredAtEpochMillis,
         )
     }
 

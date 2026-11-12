@@ -378,6 +378,19 @@ class EventPayloadTest {
         assertEquals(ActivityEvent.Valid(p), classifyActivity(p))
     }
 
+    /** Owner ruling 2026-11-12: the availability revoke is the same snapshot-less consent
+     *  announcement and must classify Valid, or the partner never hears the switch flip. */
+    @Test
+    fun classify_availabilitySharingStoppedWithoutStateAfter_isValid() {
+        val p = EventPayload(
+            type = EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED,
+            text = "",
+            protocolVersion = 1,
+            schemaVersion = 1,
+        )
+        assertEquals(ActivityEvent.Valid(p), classifyActivity(p))
+    }
+
     /** ADR #285: the snapshot-less message's send time rides its own optional key, and unset
      *  payloads (every existing snapshot-carrying message) keep their exact prior encoding. */
     @Test

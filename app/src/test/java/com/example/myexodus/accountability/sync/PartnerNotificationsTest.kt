@@ -216,6 +216,66 @@ class PartnerNotificationsTest {
         )
     }
 
+    /** Owner ruling 2026-11-12: the availability notice is rendered locally from the
+     *  data-only push — the unlocked copy names the partner, the tap opens their check-ins
+     *  page (the defect was a provider-rendered notice whose tap went nowhere), and the
+     *  lockscreen public version keeps the generic body (FR-13). */
+    @Test
+    fun availabilityNotice_namesPartner_routesToTheirCheckins_lockscreenStaysGeneric() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyAvailabilityNotice(
+            context,
+            PAIR_ID,
+            PARTNER_NAME,
+            PartnerPushParser.NOTICE_AVAILABILITY_6H,
+        )
+
+        val posted = manager.activeNotifications.single()
+        val notification = posted.notification
+        assertEquals(PartnerNotifications.CHANNEL_AVAILABILITY_ALERTS, notification.channelId)
+        assertEquals(
+            PartnerNotifications.partnerTag("availability", PAIR_ID),
+            posted.tag,
+        )
+        assertEquals(
+            context.getString(R.string.partner_availability_title),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(R.string.partner_availability_body_silent_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+        val tap = shadowOf(notification.contentIntent).savedIntent
+        assertEquals(MainActivity.TAB_PARTNER, tap.getStringExtra(MainActivity.EXTRA_START_TAB))
+        assertEquals(VIEW_CHECKINS, tap.getStringExtra(MainActivity.EXTRA_OPEN_PARTNER_VIEW))
+        assertEquals(PAIR_ID, tap.getStringExtra(MainActivity.EXTRA_OPEN_PARTNER))
+        assertEquals(Notification.VISIBILITY_PRIVATE, notification.visibility)
+        assertEquals(
+            "the lockscreen copy stays generic (FR-13)",
+            context.getString(R.string.partner_availability_body_silent),
+            notification.publicVersion!!.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
+    @Test
+    fun availabilityNoticeWithoutALabel_keepsTheGenericCopy() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyAvailabilityNotice(
+            context,
+            null,
+            null,
+            PartnerPushParser.NOTICE_RECOVERY,
+        )
+
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_availability_body_recovered),
+            notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
     /** #11 (owner feedback 2026-10-01): a motivational message names the sender and shows the
      *  message itself in the unlocked tray — the lockscreen public version stays generic
      *  (FR-13), body included. */
@@ -330,6 +390,32 @@ class PartnerNotificationsTest {
         )
         assertEquals(
             context.getString(R.string.partner_checkins_stopped_body),
+            notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+        assertEquals(
+            "the lockscreen copy stays generic (FR-13)",
+            context.getString(R.string.partner_event_title),
+            notification.publicVersion!!.extras.getString(Notification.EXTRA_TITLE),
+        )
+    }
+
+    /** Owner ruling 2026-11-12: switching device availability off alerts the partner, names
+     *  who did it, and says what they stop seeing — the lockscreen stays generic (FR-13). */
+    @Test
+    fun availabilitySharingStopped_namesThePartner_andSaysWhatStops() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME,
+            payload(EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED, text = ""),
+        )
+        val notification = manager.activeNotifications.single().notification
+        assertEquals(
+            context.getString(R.string.partner_availability_stopped_title_named, PARTNER_NAME),
+            notification.extras.getString(Notification.EXTRA_TITLE),
+        )
+        assertEquals(
+            context.getString(R.string.partner_availability_stopped_body),
             notification.extras.getString(Notification.EXTRA_TEXT),
         )
         assertEquals(

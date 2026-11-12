@@ -796,6 +796,34 @@ class HabitRepositoryTest {
         assertEquals("off to off is not a transition", 1, journalRows().size)
     }
 
+    /** Owner ruling 2026-11-12: switching device availability off tells the partner — the
+     *  switch is itself a protective signal, and revoking it silently was the loophole. Like
+     *  the check-ins revoke it targets the pair that switched off, survives the consent flip,
+     *  and off-to-off is a no-op; turning it ON announces nothing. */
+    @Test
+    fun setPairProfileSharing_availabilityFall_journalsTheRevoke_forThatPairOnly() = runBlocking {
+        seedProfile()
+        onboard()
+        repository.setPairProfileSharing("pair-1", shareCheckIns = false, shareRecovery = false, shareAvailability = true)
+        assertEquals("turning availability on announces nothing", 0, journalRows().size)
+
+        now = now.copy(tWallMillis = now.tWallMillis + 60_000)
+        assertTrue(
+            repository.setPairProfileSharing("pair-1", shareCheckIns = false, shareRecovery = false, shareAvailability = false),
+        )
+
+        val revoke = journalRows().single()
+        assertEquals(EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED, revoke.kind)
+        assertEquals("the pair that switched off is the only recipient", "pair-1", revoke.targetPairId)
+        assertTrue(
+            "no consent row of its own is needed — the revoke still delivers after the flip",
+            store.partnerActivityDao().pendingForPair("pair-2", sinceMs = 0L, limit = 100).isEmpty(),
+        )
+
+        repository.setPairProfileSharing("pair-1", shareCheckIns = false, shareRecovery = false, shareAvailability = false)
+        assertEquals("off to off is not a transition", 1, journalRows().size)
+    }
+
     /** Step 10: availability is a server-converged consent — every transition (revocation
      *  included) marks the row pending and kicks a sync pass; only the server's acknowledgement
      *  of the SAME value clears it. A write that leaves availability alone changes neither. */

@@ -15,6 +15,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.example.myexodus.data.db.VaultLockedException
+import com.example.myexodus.util.canExpediteWork
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.concurrent.TimeUnit
@@ -137,12 +138,16 @@ fun enqueuePartnerSyncNow(context: Context) {
 
 /** Top-level internal so a JVM test can pin the expedited flag that the seconds-level
  *  delivery contract depends on. */
-internal fun partnerSyncNowRequest(): OneTimeWorkRequest =
+internal fun partnerSyncNowRequest(expedited: Boolean = canExpediteWork()): OneTimeWorkRequest =
     OneTimeWorkRequestBuilder<PartnerSyncWorker>()
         .setConstraints(
             Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
         )
-        .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        .apply {
+            if (expedited) {
+                setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+            }
+        }
         .build()
 
 internal const val PARTNER_SYNC_NOW_WORK_NAME = "partner-sync-now"

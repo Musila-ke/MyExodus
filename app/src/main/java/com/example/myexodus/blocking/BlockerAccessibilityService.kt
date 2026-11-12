@@ -932,10 +932,16 @@ class BlockerAccessibilityService : AccessibilityService() {
     /** Multi-window (plan §8 Step 5 / Decision 10): each display showing a restricted package
      *  gets its overlay bounded to that package's LARGEST window — its main surface, so a
      *  transient sub-window can't shrink the cover (AnkiDroid's 684x563 loading card,
-     *  2026-09-13). The trigger's show passed display bounds; this pass is what re-bounds the
-     *  already-shown cover to the restricted pane (split-screen, emulator-5554 2026-09-14).
-     *  Clamped to the bar-free display: panes extend behind the nav bar, and covering it
-     *  swallows Home/Back (2026-09-13). */
+     *  2026-09-13). Largest-window is required but not sufficient: XOS's interactive-window
+     *  list can hold ONLY a centered sub-window while its main window is visibly rendered
+     *  (device-caught 2026-11-12 — the 684x563 backup dialog was the only listed AnkiDroid
+     *  window, and "largest" settled the cover on it; owner: "the block screen shrinks").
+     *  So a candidate's rect narrows the cover only when it is pane-shaped — a split-screen
+     *  pane spans the display's full width or full height; a centered sub-window spans
+     *  neither and always covers the whole bar-free display. The trigger's show passed
+     *  display bounds; this pass re-bounds the already-shown cover to the restricted pane
+     *  (split-screen, emulator-5554 2026-09-14). Clamped to the bar-free display: panes
+     *  extend behind the nav bar, and covering it swallows Home/Back (2026-09-13). */
     /** Whole-display cover, then the largest-window re-bound. The per-window root walk runs on
      *  a block transition (and its bounded settle re-runs), never per steady-state WSC
      *  (2026-08-28 review). */
@@ -1039,16 +1045,22 @@ class BlockerAccessibilityService : AccessibilityService() {
                 displayId == foregroundDisplayId && incumbent?.first == foregroundPackage
             val better = when {
                 incumbent == null -> true
-                foreground -> !incumbentIsForeground
-                incumbentIsForeground -> false
+                foreground && !incumbentIsForeground -> true
+                !foreground && incumbentIsForeground -> false
+                // Same package (or both non-foreground): the LARGEST window is its main
+                // surface. First-wins here picked AnkiDroid's 684x563 loading dialog, which
+                // XOS lists above its fill-screen window (owner-caught 2026-11-12).
                 else -> bounds.area() > incumbent.second.area()
             }
             if (better) candidate[displayId] = pkg to bounds
         }
         candidate.forEach { (displayId, entry) ->
             val (pkg, windowBounds) = entry
-            val target = Rect(windowBounds)
-            if (!target.intersect(overlay.displayBounds(displayId))) return@forEach
+            val displayBounds = overlay.displayBounds(displayId)
+            val target =
+                if (isSplitPane(windowBounds, displayBounds)) Rect(windowBounds)
+                else Rect(displayBounds)
+            if (!target.intersect(displayBounds)) return@forEach
             overlay.show(generation, displayId, target, appBlockedContent(pkg))
         }
     }
@@ -1297,12 +1309,26 @@ class BlockerAccessibilityService : AccessibilityService() {
         private const val COVER_SETTLE_MAX_ATTEMPTS = 6
 
         /** The settle pass's target (pure for direct testing): a listed window rect counts only
-         *  while its package is the active foreground. An evicted app can keep a shrunken window
-         *  listed through its exit animation; that rect must not outlive the foreground state —
-         *  the card belongs on the whole bar-free display (X6532, 2026-10-18: a 480x1440 card
-         *  froze at the exit-animation rect and stayed over the launcher). */
+         *  while its package is the active foreground AND the rect is pane-shaped. An evicted
+         *  app can keep a shrunken window listed through its exit animation; that rect must not
+         *  outlive the foreground state — the card belongs on the whole bar-free display
+         *  (X6532, 2026-10-18: a 480x1440 card froze at the exit-animation rect and stayed over
+         *  the launcher). A centered sub-window (AnkiDroid's 684x563 backup dialog, the only
+         *  window XOS listed during a cold launch) must never narrow the cover either
+         *  (owner-caught 2026-11-12). */
         fun coverTarget(foreground: Boolean, windowBounds: Rect?, displayBounds: Rect): Rect =
-            if (foreground && windowBounds != null) windowBounds else displayBounds
+            if (foreground && windowBounds != null && isSplitPane(windowBounds, displayBounds)) {
+                windowBounds
+            } else {
+                displayBounds
+            }
+
+        /** A split-screen pane spans the display's full width (top/bottom split) or full
+         *  height (side-by-side); a dialog or other floating sub-window spans neither.
+         *  Pure for direct testing. */
+        fun isSplitPane(windowBounds: Rect, displayBounds: Rect): Boolean =
+            windowBounds.width() >= displayBounds.width() ||
+                windowBounds.height() >= displayBounds.height()
 
         /** How long Path B's poll oracle may go unrefreshed and still overrule a foreground
          *  transition (ADR #107): the poll re-stamps it every ≤1.5 s, so 5 s spans several

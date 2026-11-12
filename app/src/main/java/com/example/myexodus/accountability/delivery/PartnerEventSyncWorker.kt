@@ -15,6 +15,7 @@ import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.example.myexodus.util.canExpediteWork
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.concurrent.TimeUnit
@@ -69,7 +70,9 @@ fun enqueuePartnerEventSyncNow(context: Context) {
     )
 }
 
-internal fun partnerEventSyncNowRequest(): OneTimeWorkRequest =
+internal fun partnerEventSyncNowRequest(
+    expedited: Boolean = canExpediteWork(),
+): OneTimeWorkRequest =
     OneTimeWorkRequestBuilder<PartnerEventSyncWorker>()
         .setConstraints(
             Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
@@ -77,7 +80,11 @@ internal fun partnerEventSyncNowRequest(): OneTimeWorkRequest =
         // Owner ruling 2026-11-09: a partner alert must land within seconds of the act, so the
         // capture kick may not wait for an ordinary JobScheduler slot; quota spillover degrades
         // to a normal request, never to a dropped event (the outbox row stays pending).
-        .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        .apply {
+            if (expedited) {
+                setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+            }
+        }
         .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
         .build()
 
