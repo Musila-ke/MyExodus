@@ -1855,6 +1855,34 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * v29 → v30 (owner battery 2026-11-12): the receiver's record of a staged
+         * blocked/override attempt, so Rules & blocks keeps the row the notification
+         * announced. Additive — no existing table is touched.
+         */
+        val MIGRATION_29_30 = object : Migration(29, 30) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_attempt_alert (" +
+                        "pair_id TEXT NOT NULL, event_id TEXT NOT NULL, text TEXT NOT NULL, " +
+                        "app_label TEXT, occurred_at_ms INTEGER NOT NULL, " +
+                        "expires_at_ms INTEGER NOT NULL, PRIMARY KEY(pair_id, event_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_attempt_alert_occurred_at_ms " +
+                        "ON partner_attempt_alert (occurred_at_ms)",
+                ).use { it.step() }
+            }
+        }
+
+        /** v30 rollback (older build reinstalled): the attempt list reflects delivered
+         *  staged events only — the legacy chain rows it does not hold stay untouched. */
+        val MIGRATION_30_29 = object : Migration(30, 29) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("DROP TABLE IF EXISTS partner_attempt_alert").use { it.step() }
+            }
+        }
+
         /** v23 rollback (older build reinstalled): table rebuilds remove the identity and
          *  batch columns while every rule and journal row survives. */
         val MIGRATION_23_22 = object : Migration(23, 22) {
@@ -2172,6 +2200,7 @@ class AppRulesStoreFactory(
             MIGRATION_26_27, MIGRATION_27_26,
             MIGRATION_27_28, MIGRATION_28_27,
             MIGRATION_28_29, MIGRATION_29_28,
+            MIGRATION_29_30, MIGRATION_30_29,
         )
     }
 }

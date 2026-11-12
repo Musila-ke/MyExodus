@@ -1055,8 +1055,12 @@ the legacy path this release; there is no producer for them."
 4. A v1 journal row predates rule identity, so the identity is resolved at migration time
    from the live rule; when the rule is already gone the neutral `RuleIdentity("Restriction
    rule", APP)` is used rather than dropping or blocking the change.
-5. `BLOCK_ATTEMPT` and `CHECK_IN` have no producer in this release — an explicit §13.5 scope
-   decision, not an omission. Their notifications stay on the legacy path unchanged.
+5. `BLOCK_ATTEMPT` and `CHECK_IN` had no producer when this unit landed — an explicit §13.5
+   scope decision, not an omission. Superseded for attempts by commit `f93f3e0` ("Route every
+   partner-visible event through the staged signed transport", 2026-11-12): the coordinator's
+   `attemptRecord` now stages `BLOCK_ATTEMPT` behind the same flag, and the v22 fix below gave
+   those deliveries their recipient-side notification and history row. `CHECK_IN` still has no
+   staged producer and stays on the legacy path.
 
 ### Unit 4 — vault-gated idempotent migration and recipient projection (§13.4)
 
@@ -1415,3 +1419,65 @@ encoding pass. Replaced with the explicit unicode escape — the runtime value i
 byte-identical, so event ids already staged under the old source stay stable. The contract
 (stable across retries, v4 shape, distinct per source row and progress set) is pinned by
 `PartnerEventProtocolTest`.
+
+---
+
+## Post-v21 fix — 2026-11-12 (v22 / 1.1.20)
+
+### Staged blocked attempts reached the recipient silently
+
+**Symptom (owner battery, v21).** A blocked launch on the subject phone was accepted by the
+backend (`drain: claimed=1, accepted=1`) and pulled by the partner phone
+(`recipientEventsPulled=1`), yet the partner got **no notification and no Rules & blocks
+row** — the exact half of S11 that had passed on v9 through the legacy chain path went dark
+when v21 moved attempts onto the staged transport.
+
+**Root cause (two independent gaps).**
+- `PartnerObservationProjection.onDelivered` routed only `ACCOUNTABILITY_UPDATE` and
+  `MONITORING_UPDATE`; `BLOCK_ATTEMPT` fell through to the unknown-kind branch, so no
+  notification was posted. The v21 sender had already started staging attempts
+  (`PartnerSyncCoordinator.attemptRecord`), so the recipient half was the missing link.
+- Staged attempts write no `ChainEvent` rows, and a state-less `TYPE_ACTIVITY` payload is
+  classified `Malformed` by `PartnerActivityReceiver` (attempts are not partner activity
+  state). The dashboard's legacy attempt-history source reads chain rows, so even a
+  notification would have had no row behind it.
+
+**Fix.**
+- `accountability/delivery/PartnerObservationProjection.kt` — `BLOCK_ATTEMPT` now routes to
+  `onAccountabilityUpdate` (notification via `PartnerNotifications.notifyPartnerEvent`, same
+  copy as the legacy path), and a delivered attempt persists a `PartnerAttemptAlert` row in
+  the rules store with the sender's occurrence time and the 30-day `PartnerEventJournal`
+  retention.
+- `data/db/entity/PartnerAttemptAlert.kt` + `dao/PartnerAttemptAlertDao.kt` — new
+  pair-scoped table `partner_attempt_alert` (primary key `(pair_id, event_id)` so
+  redelivery dedupes; `IGNORE` on conflict), `AppRulesStore` v30 with
+  `MIGRATION_29_30`/`MIGRATION_30_29`, schema `30.json` exported.
+- `ui/partner/PartnerPresentation.kt` + `PartnerDashboardSource.kt` — `attemptAlert(row)`
+  decodes the stored text through the same parser the legacy rows use; staged rows merge
+  into both `alerts` (chart/today counts/recent) and `ruleHistory` (Rules & blocks).
+- `di/AccountabilityModule.kt` — `attemptAlerts` reads the DAO (30-day window, feed limit);
+  `data/db/PartnerActivityPrune.kt` — the table is wiped by the orphan sweep, account purge,
+  unpair shred, and pairing completion like every other pair-scoped row.
+
+**Tests.** `PartnerObservationProjectionTest` (new): a delivered `BLOCK_ATTEMPT` becomes
+exactly one row with text/appLabel/occurrence/expiry and a redelivery dedupes;
+`ACCOUNTABILITY_UPDATE` and an eventId-less `BLOCK_ATTEMPT` write nothing.
+`PartnerDashboardSourceTest`: staged attempt rows feed both `alerts.recent` and
+`ruleHistory` with the batch label. `AppRulesStoreMigrationTest` green; focused partner
+suites green.
+
+**Device evidence (v22, both phones on release 1.1.20).** Calculator
+(`com.transsion.calculator`) is a member of the shared "Battery batch":
+- .106 logcat: `MyExodusAttempts: block logged target=com.transsion.calculator` 15:42:34.810;
+  `MyExodusPartnerEvents: drain: Result(claimed=1, accepted=1, …)` 15:42:41.271.
+- .107 tray (`dumpsys notification --noredact`): tag
+  `partner:event:P9XVqUX138cSgaFSUsyhFyrz5Sp2_x333CTYB4iSkwvOFAatGvBM5LZu1`, title
+  "Kelvin Musila tried to open a blocked app", text "Calculator was blocked in the Battery
+  batch batch." `when=1794487368003`.
+- .107 Partner → Rules & blocks now lists "Calculator · Blocked · Battery batch batch ·
+  2m ago" as the newest row (31 updates), and the activity feed shows the same row — the
+  notification and the history row agree.
+
+Copy note: the batch is named "Battery batch", so the template's "…in the «name» batch"
+renders "Battery batch batch". That is the batch name the owner chose, not a duplicating
+template; the S11 ruling (the batch name must appear) holds.

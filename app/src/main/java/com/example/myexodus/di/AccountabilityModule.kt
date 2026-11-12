@@ -884,6 +884,13 @@ object AccountabilityModule {
                     ?.recent(pairId, System.currentTimeMillis(), RULE_FEED_LIMIT)
                     ?: emptyList()
             },
+            // Owner battery 2026-11-12: staged blocked/override attempts write no chain rows —
+            // this is their Rules & blocks row (30-day retention, same as rule changes).
+            attemptAlerts = { pairId ->
+                storeFactory.open()?.partnerAttemptAlertDao()
+                    ?.recent(pairId, System.currentTimeMillis(), RULE_FEED_LIMIT)
+                    ?: emptyList()
+            },
             decoderFor = { enrollment ->
                 val cek = cekDerivation.deriveCek(
                     enrollment.pairId,

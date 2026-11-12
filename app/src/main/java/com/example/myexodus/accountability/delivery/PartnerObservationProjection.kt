@@ -13,12 +13,15 @@ import com.example.myexodus.accountability.serialization.PlanWire
 import com.example.myexodus.accountability.serialization.decodePayload
 import com.example.myexodus.accountability.sync.PartnerNotifications
 import com.example.myexodus.accountability.sync.displayNameOf
+import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.entity.PartnerAttemptAlert
+import com.example.myexodus.data.db.entity.PartnerEventJournal
 
 /**
  * §13.3 Phase 7 recipient half of the auth-free staged transport for everything the rule
- * projection does not own: activity/streak/plan/attempt content (`ACCOUNTABILITY_UPDATE`) and
- * monitoring snapshots (`MONITORING_UPDATE`). One delivered document becomes exactly the local
+ * projection does not own: activity/streak/plan content and blocked attempts
+ * (`ACCOUNTABILITY_UPDATE` / `BLOCK_ATTEMPT`) and monitoring snapshots (`MONITORING_UPDATE`). One delivered document becomes exactly the local
  * state (and notification) the legacy chain path produced, so a pair sees the same dashboard
  * whichever transport carried the event.
  *
@@ -38,11 +41,13 @@ class PartnerObservationProjection(
     private val planReceiver: PartnerPlanReceiver,
     private val monitoringReceiver: MonitoringSnapshotReceiver,
     private val permissionLoss: PartnerPermissionLossReporter,
+    private val now: () -> Long = System::currentTimeMillis,
 ) {
 
     suspend fun onDelivered(document: PartnerMailboxDocument, plaintext: ByteArray) {
         val pairId = document.pairId ?: return
         when (document.kind) {
+            PartnerEventKind.BLOCK_ATTEMPT.wire,
             PartnerEventKind.ACCOUNTABILITY_UPDATE.wire ->
                 onAccountabilityUpdate(pairId, document, plaintext)
             PartnerEventKind.MONITORING_UPDATE.wire -> onMonitoringUpdate(pairId, document, plaintext)
@@ -56,7 +61,13 @@ class PartnerObservationProjection(
         plaintext: ByteArray,
     ) {
         val payload = runCatching { decodePayload(plaintext) }.getOrNull() ?: return
-        storeFactory.open() ?: throw IllegalStateException("observation projection needs the local store")
+        val store = storeFactory.open()
+            ?: throw IllegalStateException("observation projection needs the local store")
+        // Staged attempts write no chain rows, so the dashboard's legacy attempt source never
+        // sees them — persist the row the notification announces (Rules & blocks parity).
+        if (document.kind == PartnerEventKind.BLOCK_ATTEMPT.wire) {
+            persistAttempt(store, pairId, document, payload)
+        }
         if (payload.type == PlanWire.TYPE_PLAN_PUBLISHED || payload.type == PlanWire.TYPE_PLAN_PROGRESS) {
             planReceiver.applyAppended(pairId, payload)
         } else {
@@ -80,6 +91,30 @@ class PartnerObservationProjection(
                 }.onFailure { Log.w(TAG, "partner event notification failed pairId=$pairId", it) }
             }
         }
+    }
+
+    private suspend fun persistAttempt(
+        store: AppRulesStore,
+        pairId: String,
+        document: PartnerMailboxDocument,
+        payload: EventPayload,
+    ) {
+        val eventId = document.eventId ?: return
+        runCatching {
+            val nowMs = now()
+            val dao = store.partnerAttemptAlertDao()
+            dao.deleteExpired(nowMs)
+            dao.insert(
+                PartnerAttemptAlert(
+                    pairId = pairId,
+                    eventId = eventId,
+                    text = payload.text,
+                    appLabel = payload.appLabel,
+                    occurredAtMs = document.createdAtMs,
+                    expiresAtMs = nowMs + PartnerEventJournal.RETENTION_MILLIS,
+                ),
+            )
+        }.onFailure { Log.w(TAG, "attempt alert store failed pairId=$pairId", it) }
     }
 
     private suspend fun onMonitoringUpdate(

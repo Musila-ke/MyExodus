@@ -6,6 +6,7 @@ import com.example.myexodus.accountability.serialization.RuleIdentity
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.accountability.serialization.MonitoringCapability
+import com.example.myexodus.data.db.entity.PartnerAttemptAlert
 import com.example.myexodus.data.db.entity.PartnerProtectionGap
 import com.example.myexodus.data.db.entity.PartnerRuleChange
 import com.example.myexodus.recovery.RecoveryMirror
@@ -142,6 +143,12 @@ fun ruleChangeAlert(row: PartnerRuleChange): PartnerAlert? =
     RuleChange.fromWire(row.ruleChange)?.let {
         PartnerAlert.RuleChanged(it, row.occurredAtMinute * 60_000L, row.ruleIdentityOrNull())
     }
+
+/** A stored staged attempt row as a feed entry — the same parse the legacy chain rows go
+ *  through, so both transports render identically. Only attempt texts project. */
+fun attemptAlert(row: PartnerAttemptAlert): PartnerAlert? =
+    (parseActivityText(row.text, row.occurredAtMs) as? PartnerAlert.AppActivity)
+        ?.copy(appLabel = row.appLabel)
 
 /**
  * The activity texts the app writes: "blocked:<pkg>" / "override:<pkg>" (§6) and

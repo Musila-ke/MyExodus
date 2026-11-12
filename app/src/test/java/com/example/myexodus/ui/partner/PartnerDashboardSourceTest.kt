@@ -10,6 +10,7 @@ import com.example.myexodus.accountability.state.ChainEvent
 import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.accountability.state.UnpairPhase
 import com.example.myexodus.accountability.state.UnpairState
+import com.example.myexodus.data.db.entity.PartnerAttemptAlert
 import com.example.myexodus.data.db.entity.PartnerMonitoringSnapshot
 import com.example.myexodus.data.db.entity.PartnerProtectionGap
 import com.example.myexodus.data.db.entity.PartnerRuleChange
@@ -123,6 +124,8 @@ class PartnerDashboardSourceTest {
         ruleChangeRows: List<PartnerRuleChange> = emptyList(),
         /** Owner directive 2026-11-10: stored permission-loss rows for this pair. */
         gapRows: List<PartnerProtectionGap> = emptyList(),
+        /** Owner battery 2026-11-12: staged blocked/override rows for this pair. */
+        attemptRows: List<PartnerAttemptAlert> = emptyList(),
     ): RecordingSource {
         val sinceArgs = mutableListOf<Long>()
         val sincePairIds = mutableListOf<String>()
@@ -164,6 +167,7 @@ class PartnerDashboardSourceTest {
             monitoring = { pairId -> monitoring(pairId) },
             ruleChanges = { ruleChangeRows },
             protectionGaps = { gapRows },
+            attemptAlerts = { attemptRows },
         )
         return RecordingSource(source, sinceArgs, sincePairIds, headPairIds, approvalPairIds, rejectionPairIds)
     }
@@ -223,6 +227,24 @@ class PartnerDashboardSourceTest {
             MonitoringCapability.ACCESSIBILITY,
             listOf("Watched by John Maingi"),
             now - 60_000L,
+        )
+        assertEquals(expected, paired.alerts.recent.single())
+        assertEquals(listOf(expected), paired.ruleHistory)
+    }
+
+    /** Owner battery 2026-11-12: a staged attempt (no chain row) still lands on Rules &
+     *  blocks and in the week preview, with the sender's app label intact. */
+    @Test
+    fun stagedAttempts_feedTheAlertsAndRuleHistoryLikeLegacyRows() = runTest {
+        val attempt = PartnerAttemptAlert(
+            pairId = "pair-1", eventId = "evt-1", text = "blocked:com.x|Morning batch",
+            appLabel = "Calculator", occurredAtMs = now - 60_000L,
+            expiresAtMs = now + 86_400_000L,
+        )
+        val paired = source(attemptRows = listOf(attempt)).source.load(now) as PartnerDashboardUi.Paired
+        val expected = PartnerAlert.AppActivity(
+            target = "com.x", isOverride = false, atEpochMillis = now - 60_000L,
+            batchLabel = "Morning batch", appLabel = "Calculator",
         )
         assertEquals(expected, paired.alerts.recent.single())
         assertEquals(listOf(expected), paired.ruleHistory)

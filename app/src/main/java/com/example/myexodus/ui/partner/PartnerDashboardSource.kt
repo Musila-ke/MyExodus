@@ -5,6 +5,7 @@ import com.example.myexodus.accountability.enrollment.targetEnrollment
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.serialization.OutboxAgeBucket
+import com.example.myexodus.data.db.entity.PartnerAttemptAlert
 import com.example.myexodus.data.db.entity.PartnerMonitoringSnapshot
 import com.example.myexodus.data.db.entity.PartnerProtectionGap
 import com.example.myexodus.data.db.entity.PartnerRuleChange
@@ -79,6 +80,9 @@ class PartnerDashboardSource(
     /** Owner ask 2026-11-10: grants the partner's phone lost while a live shared rule needed
      *  them — the feed/Rules half of the permission-lost notification, newest first. */
     private val protectionGaps: suspend (pairId: String) -> List<PartnerProtectionGap> = { emptyList() },
+    /** Owner battery 2026-11-12: blocked/override attempts delivered on the staged transport —
+     *  those write no chain rows, so this is their Rules & blocks source, newest first. */
+    private val attemptAlerts: suspend (pairId: String) -> List<PartnerAttemptAlert> = { emptyList() },
 ) {
 
     /**
@@ -127,12 +131,15 @@ class PartnerDashboardSource(
         val decode = runCatching { decoderFor(enrollment) }.getOrElse { { _: ByteArray -> null } }
         val ruleRows = runCatching { ruleChanges(enrollment.pairId) }.getOrElse { emptyList() }
         val gapRows = runCatching { protectionGaps(enrollment.pairId) }.getOrElse { emptyList() }
+        val attemptRows = runCatching { attemptAlerts(enrollment.pairId) }.getOrElse { emptyList() }
         val receivedAlerts = rows.mapNotNull { row ->
             runCatching { decode(row.envelope) }
                 .getOrNull()
                 ?.let { alertOf(it, row.createdAtEpochMillis) }
         }
-        val ruleAlerts = ruleRows.mapNotNull(::ruleChangeAlert) + gapRows.mapNotNull(::protectionGapAlert)
+        val ruleAlerts = ruleRows.mapNotNull(::ruleChangeAlert) +
+            gapRows.mapNotNull(::protectionGapAlert) +
+            attemptRows.mapNotNull(::attemptAlert)
         val alerts = receivedAlerts + ruleAlerts
             .filter { it.atEpochMillis >= nowMillis - WEEK_MILLIS }
         val chainHead = head(enrollment.pairId, enrollment.partnerSigningKeyId)

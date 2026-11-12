@@ -39,7 +39,7 @@ App: package `com.example.myexodus`, minSdk 26, targetSdk 36, compileSdk 37. Hil
 | Store | Owner | Vault-wrapped? | Holds |
 |---|---|---|---|
 | `myexodus_accountability.db` v14 | `accountability/state/AccountabilityDatabase.kt` | **No** — plain-FBE Room by design (AEAD envelopes, hash pointers, enrollment public keys only) | `enrollments`, chain state, mailbox cursors |
-| `myexodus_rules.db` | rules store behind `AppRulesStoreFactory` | **Yes** when App Lock enabled | `PartnerEventJournal`, `PartnerActivityOutbox`, `PartnerPlan`, `DeviceLiveness`, approval requests, rule state |
+| `myexodus_rules.db` v30 | rules store behind `AppRulesStoreFactory` | **Yes** when App Lock enabled | `PartnerEventJournal`, `PartnerActivityOutbox`, `PartnerPlan`, `DeviceLiveness`, `PartnerAttemptAlert` (staged blocked/override history, v22), approval requests, rule state |
 | activity DB | `VaultDatabase.ACTIVITY` | **Yes** when App Lock enabled | habit/urge logs |
 
 Vault gate: `AppRulesStoreFactory` refuses to open while the DI predicate
