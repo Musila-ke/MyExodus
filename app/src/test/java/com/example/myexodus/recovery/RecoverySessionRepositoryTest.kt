@@ -98,21 +98,17 @@ class RecoverySessionRepositoryTest {
     }
 
     @Test
-    fun logOnly_isBornTerminal_andNeverMirrorable() = runTest {
+    fun logOnly_isBornTerminal() = runTest {
         sessions.logOnly(4, RecoverySession.ENTRY_TAB, "UTC", now)
 
         val logged = sessions.page(10, 0).single()
         assertEquals(RecoverySession.TECHNIQUE_NONE, logged.technique)
         assertEquals(RecoverySession.STATE_COMPLETED, logged.state)
         assertEquals(0, logged.durationSec)
-        assertTrue(
-            "no technique practised — nothing to mirror",
-            sessions.pendingMirror("pair-a", sinceMs = 0L, limit = 10).isEmpty(),
-        )
     }
 
     @Test
-    fun assistRow_keepsCategoryActionAndCheckIn_andIsNeverMirrored() = runTest {
+    fun assistRow_keepsCategoryActionAndCheckIn() = runTest {
         val id = sessions.start(
             RecoverySession.TECHNIQUE_NONE,
             intensityStart = null,
@@ -136,10 +132,6 @@ class RecoverySessionRepositoryTest {
         assertEquals(UrgeCatalog.BREATHING, row.actionId)
         assertEquals(UrgeCheckIn.SAME.id, row.checkIn)
         assertEquals(RecoverySession.STATE_COMPLETED, row.state)
-        assertTrue(
-            "an assist-only action must never reach a partner mirror",
-            sessions.pendingMirror("pair-a", sinceMs = 0L, limit = 10).isEmpty(),
-        )
     }
 
     @Test
@@ -163,37 +155,6 @@ class RecoverySessionRepositoryTest {
         assertEquals(15 * 60, swept.durationSec)
         assertEquals(RecoverySession.STATE_STARTED, rows.getValue(fresh).state)
         assertEquals("a terminal row is never re-ended", RecoverySession.STATE_COMPLETED, rows.getValue(done).state)
-    }
-
-    @Test
-    fun pendingMirror_queuesTerminalTechniqueRowsOldestFirst_andLinkRemovesThemPerPair() = runTest {
-        val older = sessions.start("delay_timer", null, RecoverySession.ENTRY_TAB, "UTC", now - 60_000)
-        sessions.finish(older, RecoverySession.STATE_ABANDONED, null, now - 30_000)
-        val newer = sessions.start("sober", 7, RecoverySession.ENTRY_TAB, "UTC", now)
-        sessions.finish(newer, RecoverySession.STATE_COMPLETED, 3, now + 60_000)
-        sessions.start("values_card", null, RecoverySession.ENTRY_TAB, "UTC", now)
-        sessions.logOnly(4, RecoverySession.ENTRY_TAB, "UTC", now)
-
-        val queued = sessions.pendingMirror("pair-a", sinceMs = 0L, limit = 10)
-
-        assertEquals("live and log-only rows stay out of the mirror queue", listOf(older, newer), queued.map { it.id })
-
-        sessions.linkEvent(older, "pair-a", 42L)
-
-        assertEquals(listOf(newer), sessions.pendingMirror("pair-a", sinceMs = 0L, limit = 10).map { it.id })
-        assertEquals(
-            "ADR #111: the same row is still pending for another pair",
-            listOf(older, newer),
-            sessions.pendingMirror("pair-b", sinceMs = 0L, limit = 10).map { it.id },
-        )
-        assertEquals(
-            42L,
-            factory.open()!!.recoverySessionDao().linkSequence(older, "pair-a"),
-        )
-        assertNull(
-            "the second pair has no link yet",
-            factory.open()!!.recoverySessionDao().linkSequence(older, "pair-b"),
-        )
     }
 
     /** Owner ruling 2026-11-07: every row carries the habit that was displayed when it was
@@ -241,67 +202,17 @@ class RecoverySessionRepositoryTest {
         )
     }
 
-    /** W7 per-row deletion: the session and its mirror links go, everything else stays. Links
-     *  follow the session so no pair can be handed the event a second time. */
+    /** W7 per-row deletion: the session goes, everything else stays. */
     @Test
-    fun delete_removesTheRowAndItsMirrorLinks_andLeavesOtherRowsAlone() = runTest {
+    fun delete_removesTheRow_andLeavesOtherRowsAlone() = runTest {
         val kept = sessions.start("sober", null, RecoverySession.ENTRY_TAB, "UTC", now - 60_000)
         sessions.finish(kept, RecoverySession.STATE_COMPLETED, null, now - 30_000)
         val doomed = sessions.start("delay_timer", null, RecoverySession.ENTRY_TAB, "UTC", now)
         sessions.finish(doomed, RecoverySession.STATE_COMPLETED, null, now + 60_000)
-        sessions.linkEvent(doomed, "pair-a", 7L)
 
         sessions.delete(doomed)
 
         assertEquals(listOf(kept), sessions.page(10, 0).map { it.id })
-        assertNull(
-            "the removed session's link must not outlive it",
-            factory.open()!!.recoverySessionDao().linkSequence(doomed, "pair-a"),
-        )
-        assertEquals(
-            "a pair that never received the row sees it disappear with it",
-            listOf(kept),
-            sessions.pendingMirror("pair-b", sinceMs = 0L, limit = 10).map { it.id },
-        )
-    }
-
-    /** The pre-v12 marker, recovery side: `event_sequence` set means the row was delivered once
-     *  before per-pair links existed — excluded for every pair, never duplicated (ADR #111). */
-    @Test
-    fun legacyLinkedSession_isExcludedForEveryPair() = runTest {
-        factory.open()!!.recoverySessionDao().insert(
-            RecoverySession(
-                id = "s-legacy",
-                technique = "urge_surfing",
-                state = RecoverySession.STATE_COMPLETED,
-                startedAtEpochMs = now,
-                endedAtEpochMs = now + 60_000,
-                durationSec = 60,
-                zoneId = "UTC",
-                entry = RecoverySession.ENTRY_TAB,
-                eventSequence = 9L,
-            ),
-        )
-
-        assertTrue(sessions.pendingMirror("pair-a", sinceMs = 0L, limit = 10).isEmpty())
-        assertTrue(sessions.pendingMirror("pair-b", sinceMs = 0L, limit = 10).isEmpty())
-    }
-
-    /**
-     * Owner ruling 2026-09-29: the mirror queue is bounded to the pair's enrollment time — a
-     * session practised before the pairing is not mirrored to the newcomer.
-     */
-    @Test
-    fun pendingMirror_boundsToThePairingMoment() = runTest {
-        val before = sessions.start("sober", null, RecoverySession.ENTRY_TAB, "UTC", now - 120_000)
-        sessions.finish(before, RecoverySession.STATE_COMPLETED, 30, now - 90_000)
-        val after = sessions.start("delay_timer", null, RecoverySession.ENTRY_TAB, "UTC", now)
-        sessions.finish(after, RecoverySession.STATE_COMPLETED, 10, now + 10_000)
-
-        assertEquals(
-            listOf(after),
-            sessions.pendingMirror("pair-new", sinceMs = now - 60_000, limit = 10).map { it.id },
-        )
     }
 
     private suspend fun session(id: String): RecoverySession =

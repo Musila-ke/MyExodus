@@ -161,11 +161,6 @@ class AppRulesStoreMigrationTest {
                 ),
             )
             assertEquals(1, sessions.page(10, 0).size)
-            assertEquals(
-                "a STARTED row is not mirrorable",
-                0,
-                sessions.pendingMirror("pair-a", sinceMs = 0L, limit = 10).size,
-            )
 
             val windows = store.riskWindowDao()
             assertEquals(0L, windows.count())

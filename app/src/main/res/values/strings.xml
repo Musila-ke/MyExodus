@@ -1275,8 +1275,8 @@
     <string name="settings_sharing_milestones_body">%1$s: your partner hears which days you reach</string>
     <string name="settings_sharing_checkins_title">Blocked apps</string>
     <string name="settings_sharing_checkins_body">Your partner hears when you try a blocked app.</string>
-    <string name="settings_sharing_recovery_title">Recovery &amp; coaching</string>
-    <string name="settings_sharing_recovery_body">Your partner hears when you finish a recovery session or update your coaching plan.</string>
+    <string name="settings_sharing_recovery_title">Coaching plan</string>
+    <string name="settings_sharing_recovery_body">Your partner hears when you add, edit, or remove a step in My plan.</string>
     <string name="settings_sharing_availability_title">Device availability</string>
     <string name="settings_sharing_availability_body">Your partner sees whether blocking is switched on and working on this device, and whether it checked in recently. Never your apps or usage.</string>
     <string name="settings_sharing_availability_pending">Waiting for the server to confirm this change. It finishes automatically when you’re back online. The switch above is already in effect on this device.</string>

@@ -452,28 +452,21 @@ class PartnerSyncCoordinatorTest {
         assertEquals(listOf<String?>("m-42", null), pullWakeIds)
     }
 
-    /** W5: a finished technique session rides the same drain as attempts — linked under the
-     *  signing window, payload `recovery:<tech>:<outcome>`, technique + outcome only (INV-13). */
+    /** ADR #304: recovery sessions are private. A finished technique session stays local even
+     *  with the old recovery consent on — nothing reaches the chain. */
     @Test
-    fun recoverySession_warmWindow_becomesLinkedRecoveryEvent() = runTest {
+    fun recoverySession_isNeverShared_evenWithRecoveryConsentOn() = runTest {
         enroll()
         seedConsent(shareRecovery = true)
         insertSession()
 
         val report = coordinator.syncOnce()
 
-        assertEquals(1, report.eventsLinked)
-        assertEquals(
-            "linked session carries the chain sequence for this pair",
-            1L,
-            factory.open()!!.recoverySessionDao().linkSequence("s-1", pairId),
-        )
-        val signed = decodeSigned(store.chainFor(pairId).single().envelope)
-        val payload = decodePayload(cipher.decrypt(cek, signed.unsigned.sequence, signed.unsigned.ciphertext))
-        assertEquals("recovery:urge_surfing:completed", payload.text)
+        assertEquals(0, report.eventsLinked)
+        assertTrue("session never becomes a chain event", store.chainFor(pairId).isEmpty())
     }
 
-    /** W5 unpaired case: no pair, no remote step, row keeps its null sequence. */
+    /** Unpaired case: no pair, no remote step. */
     @Test
     fun unpaired_recoverySessionStaysLocalAndCallsNoRemoteStep() = runTest {
         insertSession()
@@ -482,10 +475,6 @@ class PartnerSyncCoordinatorTest {
 
         assertEquals(false, report.enrolled)
         assertEquals(0, report.eventsLinked)
-        assertNull(
-            "session stays unlinked without a pair",
-            factory.open()!!.recoverySessionDao().linkSequence("s-1", pairId),
-        )
         assertTrue(drainCalls.isEmpty())
     }
 
@@ -538,11 +527,12 @@ class PartnerSyncCoordinatorTest {
     }
 
     /**
-     * ADR #111 (was defect #52): with N enrollments, ONE recorded attempt and ONE recovery
-     * session must mirror to EVERY pair — the pre-v12 single-valued `event_sequence` let the
-     * first pair's pass claim the row and every later pair found nothing pending. Each pair's
-     * own chain receives its own copy (own sequence, own ciphertext the pair can decrypt), and
-     * the second run links nothing (per-pair exactly-once).
+     * ADR #111 (was defect #52): with N enrollments, ONE recorded attempt must mirror to EVERY
+     * pair — the pre-v12 single-valued `event_sequence` let the first pair's pass claim the row
+     * and every later pair found nothing pending. Each pair's own chain receives its own copy
+     * (own sequence, own ciphertext the pair can decrypt), and the second run links nothing
+     * (per-pair exactly-once). ADR #304: a recovery session in the same store stays local for
+     * every pair.
      */
     @Test
     fun multiPair_oneActivityRow_mirrorsToEveryPair_exactlyOnce() = runTest {
@@ -560,12 +550,11 @@ class PartnerSyncCoordinatorTest {
 
         val report = coordinator.syncOnce()
 
-        assertEquals("attempt + session, once per pair", 4, report.eventsLinked)
+        assertEquals("the attempt, once per pair; the session stays local", 2, report.eventsLinked)
         val attemptId = recent().single().id
         for (pId in listOf(pairId, secondPair)) {
-            assertEquals("chain of $pId holds both events", 2, store.chainFor(pId).size)
+            assertEquals("chain of $pId holds only the attempt", 1, store.chainFor(pId).size)
             assertEquals(1L, linkSequence(attemptId, pId))
-            assertEquals(2L, factory.open()!!.recoverySessionDao().linkSequence("s-1", pId))
             assertTrue("nothing left pending for $pId", pending(pId).isEmpty())
         }
         assertEquals(
@@ -583,8 +572,8 @@ class PartnerSyncCoordinatorTest {
         val second = coordinator.syncOnce()
 
         assertEquals("per-pair exactly-once", 0, second.eventsLinked)
-        assertEquals(2, store.chainFor(pairId).size)
-        assertEquals(2, store.chainFor(secondPair).size)
+        assertEquals(1, store.chainFor(pairId).size)
+        assertEquals(1, store.chainFor(secondPair).size)
     }
 
     /** An unresolvable second pair degrades to "that slice was skipped" — the first pair's
@@ -758,19 +747,16 @@ class PartnerSyncCoordinatorTest {
             occurredAtMs = pairedAt, createdAtMs = pairedAt,
             habitProgressId = TEST_HABIT_ID,
         )
+        // ADR #304: sessions are inserted on both sides of the pairing moment and still
+        // contribute nothing — the bound is exercised by the attempt and journal queues.
         insertSession(id = "s-before", startedAt = pairedAt - 1_000L)
         insertSession(id = "s-at", startedAt = pairedAt)
 
         val report = coordinator.syncOnce()
 
-        assertEquals("exactly the three at-or-after rows are delivered", 3, report.eventsLinked)
+        assertEquals("exactly the two at-or-after rows are delivered", 2, report.eventsLinked)
         assertNull("pre-pairing attempt is never turned into a chain event", linkSequence(beforeAttempt, pairId))
         assertNotNull("paired-moment attempt is delivered", linkSequence(atAttempt, pairId))
-        assertNull(
-            "pre-pairing session is never mirrored",
-            store.recoverySessionDao().linkSequence("s-before", pairId),
-        )
-        assertNotNull(store.recoverySessionDao().linkSequence("s-at", pairId))
         assertNull(store.partnerActivityDao().linkSequence("ev-before", pairId))
         assertNotNull(store.partnerActivityDao().linkSequence("ev-at", pairId))
         assertEquals(

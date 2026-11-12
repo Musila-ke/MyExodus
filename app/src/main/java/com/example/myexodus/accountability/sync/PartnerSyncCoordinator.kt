@@ -41,7 +41,6 @@ import com.example.myexodus.data.db.entity.PartnerEventJournal
 import com.example.myexodus.data.db.entity.PartnerPlan
 import com.example.myexodus.data.db.entity.PartnerPlanTask
 import com.example.myexodus.data.db.entity.decodeMilestoneDays
-import com.example.myexodus.recovery.RecoveryMirror
 import com.example.myexodus.streaks.StreakTimer
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
@@ -413,9 +412,10 @@ class PartnerSyncCoordinator(
     }
 
     /** Unlinked rows get a chain event now — but only while the auth window is warm; a cold
-     *  window stops the pass (every remaining row would fail the same way). Three queues share
-     *  the pass: block/override attempts (existing), recovery sessions (W5), and partner-visible
-     *  activity journal rows (partner-activity plan §7 Step 6), each linked in its own table.
+     *  window stops the pass (every remaining row would fail the same way). Two queues share
+     *  the pass: block/override attempts (existing) and partner-visible activity journal rows
+     *  (partner-activity plan §7 Step 6), each linked in its own table. Recovery sessions are
+     *  never shared — owner ruling 2026-11-13, ADR #304.
      *  §19.5 multi-pair: pending is per pair (ADR #111) — own activity fans out to every
      *  enrollment, one delivery per pair, and one pair's delivery never hides the row from the
      *  rest.
@@ -424,13 +424,12 @@ class PartnerSyncCoordinator(
      *  inherit history that predates them.
      *
      *  v16 consent (ADR #135, owner mandate 2026-10-04): every queue is gated against THIS
-     *  pair's matrix rows. Attempts need `pair_profile_sharing.share_checkins`, sessions
-     *  `share_recovery` — and each queue's effective since is additionally floored at its
-     *  switch's enable watermark, so an enable never delivers the while-off backlog. Activity
-     *  rows are filtered in SQL by [PartnerActivityDao.pendingForPair] against the same
-     *  matrix; the payload of each delivered row is then re-anchored and scrubbed per this
-     *  pair (see [payloadFor]) — the pair's projection must only ever reflect what this pair
-     *  consented to see.
+     *  pair's matrix rows. Attempts need `pair_profile_sharing.share_checkins`, and the
+     *  queue's effective since is additionally floored at its switch's enable watermark, so an
+     *  enable never delivers the while-off backlog. Activity rows are filtered in SQL by
+     *  [PartnerActivityDao.pendingForPair] against the same matrix; the payload of each
+     *  delivered row is then re-anchored and scrubbed per this pair (see [payloadFor]) — the
+     *  pair's projection must only ever reflect what this pair consented to see.
      *
      *  Step 7 adds the fifth queue: journaled `MONITORING_STATUS` rows (plan §8.9), consumed
      *  only while this pair shares availability and floored at that switch's enable watermark.
@@ -465,37 +464,6 @@ class PartnerSyncCoordinator(
                         is Emit.Created -> { attempts.linkEvent(attempt.id, pairId, emit.sequence); linked++ }
                         Emit.Duplicate, Emit.Skip -> Unit
                         Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true, blockedQueue = "attempts")
-                    }
-                }
-            }
-        }
-        val sessions = store.recoverySessionDao()
-        if (profileConsent?.shareRecovery == true) {
-            val since = maxOf(sinceMs, profileConsent.recoveryEnabledSinceMs)
-            for (session in sessions.pendingMirror(pairId, since, RECONCILE_BATCH)) {
-                val payload = EventPayload(
-                    type = EventPayload.TYPE_ACTIVITY,
-                    text = RecoveryMirror.text(session.technique, session.state),
-                )
-                val record = PartnerEventRecord(
-                    eventId = PartnerEventProtocol.deterministicEventId(
-                        pairId, "session", session.id,
-                    ),
-                    kind = PartnerEventKind.ACCOUNTABILITY_UPDATE,
-                    sensitivePayload = encodePayload(payload),
-                    recipientPairId = pairId,
-                )
-                when (val transport = stageEvent(record)) {
-                    PartnerEventTransport.SIGNED, PartnerEventTransport.ACKNOWLEDGED -> {
-                        sessions.linkEvent(session.id, pairId, 0L); linked++
-                    }
-                    PartnerEventTransport.DEFERRED -> Unit
-                    PartnerEventTransport.LEGACY -> when (
-                        val emit = emitPayload(pairId, "session ${session.id}", payload)
-                    ) {
-                        is Emit.Created -> { sessions.linkEvent(session.id, pairId, emit.sequence); linked++ }
-                        Emit.Duplicate, Emit.Skip -> Unit
-                        Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true, blockedQueue = "recovery sessions")
                     }
                 }
             }
