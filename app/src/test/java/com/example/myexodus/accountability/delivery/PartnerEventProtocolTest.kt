@@ -127,11 +127,36 @@ class PartnerEventProtocolTest {
     @Test
     fun `kind allowlist excludes every server-generated kind`() {
         assertEquals(
-            setOf("BLOCK_ATTEMPT", "CHECK_IN", "RULE_CHANGE_ATTEMPT"),
+            setOf(
+                "BLOCK_ATTEMPT", "CHECK_IN", "RULE_CHANGE_ATTEMPT",
+                "ACCOUNTABILITY_UPDATE", "MONITORING_UPDATE",
+            ),
             PartnerEventKind.entries.map { it.wire }.toSet(),
         )
         listOf("RULE_CHANGE_APPLIED", "PARTNER_ADDED", "PARTNER_REMOVED", "PARTNER_APPROVAL")
             .forEach { assertNull(PartnerEventKind.fromWire(it)) }
+    }
+
+    @Test
+    fun `deterministic event id is stable, v4-shaped and distinguishes the progress set`() {
+        val pairId = "pair-1"
+        val id = PartnerEventProtocol.deterministicEventId(pairId, "attempt", "42")
+        assertEquals(
+            "a crash-retry must re-stage the same row under the same id",
+            id,
+            PartnerEventProtocol.deterministicEventId(pairId, "attempt", "42"),
+        )
+        assertEquals(
+            "the id must be a canonical UUID so envelope validation accepts it",
+            id,
+            java.util.UUID.fromString(id).toString(),
+        )
+        assertEquals(4, java.util.UUID.fromString(id).version())
+        assertNotEquals(
+            "a re-check at the same revision is a different event",
+            id,
+            PartnerEventProtocol.deterministicEventId(pairId, "attempt", "43"),
+        )
     }
 
     @Test

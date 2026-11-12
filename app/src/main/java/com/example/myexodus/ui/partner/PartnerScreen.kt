@@ -59,11 +59,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -120,6 +123,7 @@ import com.example.myexodus.ui.relativeTimeText
 import com.example.myexodus.ui.rememberAppLabel
 import com.example.myexodus.ui.rememberWindowWidth
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -272,6 +276,12 @@ private fun ChainVerdictLine(status: PartnerChainStatus) {
 }
 
 /**
+ * Owner report 2026-11-12: "6 hours ago" froze while the page stayed open. Partner surfaces
+ * read the screen's 30 s tick through this instead of the wall clock, so labels age in place.
+ */
+internal val LocalPartnerNowMillis = compositionLocalOf { System.currentTimeMillis() }
+
+/**
  * Partner tab (plan §7 items 12-13 / V1 Req 7): last-known partner state from verified local
  * events, with an explicit "last synced" line — cache-first per §11 (the load is a local
  * Room read, no network on paint). The screen owns no persistence and never overstates
@@ -343,6 +353,15 @@ fun PartnerScreen(
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    // A relative label must age while the page stays open (owner report 2026-11-12); the tick
+    // repaints only the composables that read the clock — nothing re-reads Room for it.
+    var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            nowMillis = System.currentTimeMillis()
+        }
+    }
     var state by remember { mutableStateOf<PartnerDashboardUi?>(null) }
     var view by rememberSaveable { mutableStateOf<String?>(null) }
     // Hoisted from PartnerPlansScreen so a notification deep link can open the plan before the
@@ -595,17 +614,19 @@ fun PartnerScreen(
     }
     // ADR #193: the plans surface owns the whole screen, the same shape as SharingScreen.
     if (view == VIEW_PLANS && paired != null) {
-        PartnerPlansScreen(
-            planRepository = planRepository,
-            loadPartners = { source.pairRoster() },
-            openPlanId = openPlanId,
-            onOpenPlan = { openPlanId = it },
-            onBack = {
-                view = null
-                openPlanId = null
-            },
-            modifier = modifier,
-        )
+        CompositionLocalProvider(LocalPartnerNowMillis provides nowMillis) {
+            PartnerPlansScreen(
+                planRepository = planRepository,
+                loadPartners = { source.pairRoster() },
+                openPlanId = openPlanId,
+                onOpenPlan = { openPlanId = it },
+                onBack = {
+                    view = null
+                    openPlanId = null
+                },
+                modifier = modifier,
+            )
+        }
         return
     }
     // The consent surface owns the whole screen (its own BackRow walks overview → partner →
@@ -626,6 +647,7 @@ fun PartnerScreen(
     // mid-page with the back row off-screen. Each page change starts at its top.
     val scroller = rememberScrollState()
     LaunchedEffect(view) { scroller.scrollTo(0) }
+    CompositionLocalProvider(LocalPartnerNowMillis provides nowMillis) {
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -1012,7 +1034,7 @@ fun PartnerScreen(
                             stringResource(
                                 R.string.partner_tile_synced,
                                 relativeTimeText(
-                                    System.currentTimeMillis(),
+                                    LocalPartnerNowMillis.current,
                                     current.lastSyncedAtEpochMillis,
                                 ),
                             )
@@ -1022,6 +1044,7 @@ fun PartnerScreen(
                 }
             }
         }
+    }
     }
 
     // Hoisted out of the paired branch: the unpair dialog is offered from the Pairing page and
@@ -1364,7 +1387,7 @@ private fun PartnerMonitoringCard(monitoring: PartnerMonitoringUi, gap: PartnerA
                 color = MaterialTheme.colorScheme.error,
             )
             Text(
-                relativeTimeText(System.currentTimeMillis(), gap.atEpochMillis),
+                relativeTimeText(LocalPartnerNowMillis.current, gap.atEpochMillis),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -1377,7 +1400,7 @@ private fun PartnerMonitoringCard(monitoring: PartnerMonitoringUi, gap: PartnerA
                     R.string.partner_monitoring_report_fresh
                 },
                 relativeTimeText(
-                    System.currentTimeMillis(),
+                    LocalPartnerNowMillis.current,
                     monitoring.lastReportAtEpochMillis,
                 ),
             ),
@@ -1551,7 +1574,7 @@ private fun PartnerSummaryCard(activity: PartnerActivityUi, chainStatus: Partner
                     ?: activity.lastEventOccurredAtEpochMillis)?.let { at ->
                     stringResource(
                         R.string.partner_summary_last_event,
-                        relativeTimeText(System.currentTimeMillis(), at),
+                        relativeTimeText(LocalPartnerNowMillis.current, at),
                     )
                 },
                 value = daysFree,
@@ -1804,7 +1827,7 @@ private fun ApprovalRequestCard(
         requests.forEachIndexed { index, request ->
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(request.message, style = MaterialTheme.typography.bodyMedium)
-                val nowMillis = System.currentTimeMillis()
+                val nowMillis = LocalPartnerNowMillis.current
                 Text(
                     if (request.expiresAtEpochMillis <= nowMillis) {
                         stringResource(R.string.partner_my_requests_expired)
@@ -1895,7 +1918,7 @@ private fun MyRequestsCard(requests: List<ApprovalUi>) {
                 ) {
                     Text(request.message, style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        relativeTimeText(System.currentTimeMillis(), request.createdAtEpochMillis),
+                        relativeTimeText(LocalPartnerNowMillis.current, request.createdAtEpochMillis),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -2218,7 +2241,7 @@ private fun SyncCard(
             } else {
                 stringResource(
                     R.string.partner_last_synced,
-                    relativeTimeText(System.currentTimeMillis(), state.lastSyncedAtEpochMillis),
+                    relativeTimeText(LocalPartnerNowMillis.current, state.lastSyncedAtEpochMillis),
                 )
             },
             style = MaterialTheme.typography.titleSmall,
@@ -2697,7 +2720,7 @@ private fun AlertRow(alert: PartnerAlert) {
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                kind + " · " + relativeTimeText(System.currentTimeMillis(), alert.atEpochMillis),
+                kind + " · " + relativeTimeText(LocalPartnerNowMillis.current, alert.atEpochMillis),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

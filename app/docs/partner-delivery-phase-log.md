@@ -1347,3 +1347,71 @@ Runbook C, matching plan §13.6.
 matrix is PARTIAL: the release-signed direct APK and real App Check `ACTIVE_HARDWARE`
 registration are proven on both phones; every remaining §12 axis and every owner-attended
 acceptance leg is BLOCKED and enumerated above. Publish stays gated.
+
+---
+
+## Post-Phase-8 fixes — 2026-11-12 (v21 / 1.1.19)
+
+Owner-reported defects from a live v20 session, both fixed, shipped and verified on the
+two-phone production pair the same day.
+
+### 1. Partner pages did not repaint on staged-mailbox deliveries
+
+**Symptom.** Sitting on Partner → Rules & blocks, a delivered event (Google Assistant rule
+assigned) produced a notification but no new row; the row appeared only after leaving the
+subpage and re-entering. The page also kept stale relative times ("6 hours ago" frozen while
+open).
+
+**Root cause.** Two independent gaps.
+- `runPartnerSyncPass` emitted `PartnerSyncSignals.pulledEvents` only when the legacy
+  chain's `pulledCount > 0 || unpairAdvanced`. The staged transport counts deliveries in
+  `SyncReport.recipientEventsPulled` (`pullPartnerEvents`, wired at
+  `AccountabilityModule.kt:970`), so staged pulls repainted nothing.
+- Relative labels called `System.currentTimeMillis()` at composition; nothing recomposed
+  while the page sat idle.
+
+**Fix.**
+- `accountability/sync/PartnerSyncWorker.kt` — repaint condition now
+  `report.pulledCount > 0 || report.recipientEventsPulled > 0 || report.unpairAdvanced`.
+- `ui/partner/PartnerScreen.kt` — `LocalPartnerNowMillis` CompositionLocal fed by a 30 s
+  `LaunchedEffect` ticker (same cadence as Home); every partner label reads the
+  CompositionLocal instead of the wall clock. Provider wraps the hub, every subpage and the
+  plans early-return; `PartnerPlansScreen` reads the same local.
+
+**Device evidence (v21, both phones).** With the partner phone parked on Rules & blocks
+(28 updates), the subject toggled the Google Assistant rule off:
+- Partner screen went 28 → 29 updates with a new top row "Google Assistant · Rule turned
+  off · just now" **without any navigation**, while the heads-up "Rule update from Kelvin
+  Musila — Google Assistant was turned off." posted.
+- 90 s later, untouched: the same rows read "2m ago" and "24m ago" (were "just now" and
+  "22m ago") — labels age in place.
+
+### 2. End-to-end partner alert latency ≈ 88 s
+
+**Root cause.** The sender-side capture kick (`partnerEventSyncNowRequest`) lacked
+`.setExpedited(...)` while the wake/probe/post-mutation requests already had it, so the
+first hop waited for an ordinary JobScheduler slot. WorkManager 2.11.2 bytecode was checked
+first: no enqueue class references expedited restrictions, so expedited is legal inside the
+`APPEND_OR_REPLACE` chain.
+
+**Fix.** `accountability/delivery/PartnerEventSyncWorker.kt` — capture kick is expedited
+with `RUN_AS_NON_EXPEDITED_WORK_REQUEST` (quota spillover degrades, never drops; the outbox
+row stays pending). Pinned by `PartnerWakeExpeditedTest`.
+
+**Measured sample (v21, one healthy-path event).** Tap 14:55:27 → sender drain
+`claimed=1, accepted=1` 14:55:31.730 (+4.7 s) → receiver FCM wake 14:55:32.702 (+5.7 s) →
+receiver pass `recipientEventsPulled=1` 14:55:35.969 (+9.0 s). Earlier v20 sample on the
+same pair was ~88 s.
+
+**Carry.** A single sample is not the plan §12 p95 measurement; the burst/p95 leg and the
+remaining Phase 8 device legs stay open.
+
+### 3. Review finding — raw NUL byte in `deterministicEventId`
+
+The review of the v21 change set found the separator in
+`PartnerEventProtocol.deterministicEventId` was a literal NUL byte embedded in the source
+string, which makes grep/diff tooling treat the file as binary and is fragile through any
+encoding pass. Replaced with the explicit unicode escape — the runtime value is
+byte-identical, so event ids already staged under the old source stay stable. The contract
+(stable across retries, v4 shape, distinct per source row and progress set) is pinned by
+`PartnerEventProtocolTest`.

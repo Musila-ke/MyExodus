@@ -19,6 +19,8 @@
 
 The Remote Config gates fetch-and-activate per pass with a 900 s minimum interval; a console flip lands on the next periodic `PartnerSyncWorker` pass after activation. `config/features` is read fresh per function invocation.
 
+**Type trap (proven on device 2026-11-12).** Every flag above is consumed through `getBoolean()`, so it must be stored with parameter type **Boolean**. A flag stored as **String** — even one whose visible value reads `true` — makes the Android SDK log `No value of type 'Boolean' exists for parameter key '<key>'` and silently return the in-app default. For `delivery_producer_rules_v1_enabled` that default is **false**, so the client stays on the legacy chain while every dashboard shows the flag as on. If that warning appears in logcat, retype the parameter before debugging anything else. The SDK's 900 s fetch throttle (`lastFetchTime`) persists in app storage across force-stops and reinstalls-over, so a corrected template can take up to 15 minutes plus one sync pass to reach a device.
+
 **Rollback rules (plan §13 item 7, non-negotiable):** pause transmission or dispatch only. Never disable security checks, delete the outbox, purge legacy aliases, or fabricate liveness state. Rows paused by any switch above are retained and resume unchanged.
 
 ---
@@ -36,7 +38,7 @@ The Remote Config gates fetch-and-activate per pass with a 900 s minimum interva
 | `partner_t1_ms bucket=<bucket>` | Crashlytics | Write-attempt to Firestore-confirmed latency, versus the <1 s / <3 s targets. |
 | `legacyUserEventAccepted` | Cloud Logging (`functions/event-append.js`) | `senderHash` + `installationIdentified`; counts legacy-path usage for the §13.5 compatibility window. |
 | `partnerNotify` outcome logs | Cloud Logging (`functions/partner-notify.js`) | Claim/send/reconcile outcomes; `SEND_FAILED` and lease reclaims show FCM trouble. |
-| App Check quota | Firebase console | Alert at 70 % sustained daily utilization over three consecutive days (plan §14). |
+| App Check quota | Alert policy `MyExodus: App Check attestation volume above 70% of Play Integrity quota` | Rolling 24 h total of `firebaseappcheck.googleapis.com/services/verdict_count` across all services, threshold 7,000 (70 % of the 10,000/day Play Integrity quota) — fires on the first day over the line, which is stricter than the plan's three-consecutive-day review; the three-day rule is the escalation criterion, not the alert trigger. Baseline 2026-11-12: 3,237/day (32 %). |
 
 ### Immediate action for an App Check or callable outage
 

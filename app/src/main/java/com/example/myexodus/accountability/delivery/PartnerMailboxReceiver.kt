@@ -114,4 +114,7 @@ data class PartnerMailboxDocument(
     val encoding: String?,
     val pairId: String?,
     val createdAtMs: Long,
+    /** The sender's staged outbox sequence (`partner-ingest.js` writes `sequence`). Null for
+     *  a document from a backend that predates the field. */
+    val senderSequence: Long? = null,
 )

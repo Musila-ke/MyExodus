@@ -24,15 +24,25 @@ class MonitoringSnapshotReceiver(
     private val storeFactory: AppRulesStoreFactory,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
+    /**
+     * [sequenceOverride] places a staged (auth-free outbox) snapshot in the shared sequence
+     * space: the body cannot carry its own eventual sequence, so the caller passes
+     * `STAGED_SEQUENCE_BASE + document.senderSequence`. It stands in for both the latest
+     * marker and the replay-guard position. [senderKeyId] stays the requester's identity but
+     * for a staged snapshot callers pass the sender installation id — the install-generation
+     * marker must change when the sender's transport does, so the first staged snapshot never
+     * rolls a legacy generation backwards or raises a false capability-loss alert.
+     */
     suspend fun onEvent(
         pairId: String,
         senderKeyId: String,
         event: AccountabilityEvent,
+        sequenceOverride: Long? = null,
     ): Set<MonitoringCapability> {
         if (event.kind != AccountabilityEventKind.MONITORING_STATUS) return emptySet()
         val state = event.monitoringState ?: return emptySet()
         val bucket = event.outboxAgeBucket ?: return emptySet()
-        val latest = event.latestRelationshipSequence ?: return emptySet()
+        val latest = sequenceOverride ?: event.latestRelationshipSequence ?: return emptySet()
         val store = storeFactory.open() ?: return emptySet()
         return runCatching {
             val dao = store.partnerMonitoringSnapshotDao()
@@ -44,7 +54,7 @@ class MonitoringSnapshotReceiver(
                     outboxAgeBucket = bucket.wire,
                     snapshotInstallGeneration = senderKeyId,
                     latestRelationshipSeq = latest,
-                    snapshotEventSequence = event.relationshipSequence,
+                    snapshotEventSequence = sequenceOverride ?: event.relationshipSequence,
                     occurredAtMinute = event.occurredAtMinute,
                     receivedAtMs = now(),
                     capabilities = event.capabilities?.let(MonitoringCapability::encodeSet),

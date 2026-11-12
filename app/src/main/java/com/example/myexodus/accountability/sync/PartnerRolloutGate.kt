@@ -35,3 +35,13 @@ internal const val DELIVERY_CLIENT_SYNC_CONFIG_KEY = "delivery_client_sync_v1_en
 /** §13.3 staged flag, default OFF: rule-lifecycle rows move to the signed transport only
  *  when this is explicitly on. */
 internal const val DELIVERY_PRODUCER_RULES_CONFIG_KEY = "delivery_producer_rules_v1_enabled"
+
+/** True when the SDK's persisted last-successful-fetch stamp sits far enough in the future
+ *  that the throttle can never open before the clock catches up (firebase-config 23.1.0
+ *  `ConfigFetchHandler.areCachedFetchConfigsValid` compares stamp + interval against now, so
+ *  a back-dated clock pins the device to a stale template with no network attempt). */
+internal fun isFetchStampWedged(
+    fetchTimeMillis: Long,
+    nowMs: Long,
+    minimumIntervalMs: Long,
+): Boolean = fetchTimeMillis > nowMs + minimumIntervalMs

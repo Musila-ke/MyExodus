@@ -83,7 +83,12 @@ suspend fun runPartnerSyncPass(
     // deletion passes report pulledCount=0 by design (the wake path returns before the
     // watermark query), yet they are exactly the passes the Partner page must react to
     // (owner-observed stale page after a partnership ended, 2026-10-01).
-    if (report.pulledCount > 0 || report.unpairAdvanced) PartnerSyncSignals.pulledEvents.tryEmit(Unit)
+    // Owner report 2026-11-12: a staged-mailbox delivery repainted nothing until the subpage
+    // was left and re-entered — that transport counts in recipientEventsPulled, not the legacy
+    // chain's pulledCount. Both repaint.
+    if (report.pulledCount > 0 || report.recipientEventsPulled > 0 || report.unpairAdvanced) {
+        PartnerSyncSignals.pulledEvents.tryEmit(Unit)
+    }
     // ADR #216: surface a cold signing window so the foreground retries the pass once the
     // window is warm. Owner ruling 2026-11-05: automatic delivery never prompts.
     if (report.signingBlocked) PartnerSyncSignals.signingNeeded.tryEmit(Unit)

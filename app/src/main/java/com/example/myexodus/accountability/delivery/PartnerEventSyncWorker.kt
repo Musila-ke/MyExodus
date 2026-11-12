@@ -11,6 +11,7 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -73,6 +74,10 @@ internal fun partnerEventSyncNowRequest(): OneTimeWorkRequest =
         .setConstraints(
             Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
         )
+        // Owner ruling 2026-11-09: a partner alert must land within seconds of the act, so the
+        // capture kick may not wait for an ordinary JobScheduler slot; quota spillover degrades
+        // to a normal request, never to a dropped event (the outbox row stays pending).
+        .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
         .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
         .build()
 

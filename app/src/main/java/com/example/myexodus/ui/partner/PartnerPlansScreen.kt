@@ -492,7 +492,7 @@ private fun PlanDetail(
                 Text(
                     stringResource(
                         R.string.partner_plans_updated,
-                        relativeTimeText(System.currentTimeMillis(), plan.updatedAtMs),
+                        relativeTimeText(LocalPartnerNowMillis.current, plan.updatedAtMs),
                     ),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

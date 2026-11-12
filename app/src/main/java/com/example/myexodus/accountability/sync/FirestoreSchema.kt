@@ -104,6 +104,9 @@ object FirestoreSchema {
      * `>=` not `>`: documents tying the watermark are re-read and dedupe through the delivery
      * receipt, so a tie can never be skipped. `orderBy` also excludes any document missing
      * `createdAt` — one that cannot be ordered cannot be placed behind the watermark anyway.
+     * `createdAt` is an epoch-millis integer, not a Timestamp: partner-ingest.js writes
+     * `Date.now()`, and Firestore range filters are type-scoped — comparing a Timestamp here
+     * matches nothing and silently returns zero documents.
      */
     suspend fun partnerMailboxDocsAfter(
         firestore: FirebaseFirestore,
@@ -115,7 +118,7 @@ object FirestoreSchema {
         .collection(PARTNER_MAILBOXES_COLLECTION).document(recipientUid)
         .collection(MESSAGES_COLLECTION)
         .whereEqualTo("recipientInstallationId", installationId)
-        .whereGreaterThanOrEqualTo("createdAt", timestampOf(createdAtFromMs))
+        .whereGreaterThanOrEqualTo("createdAt", createdAtFromMs)
         .orderBy("createdAt")
         .limit(limit.toLong())
         .get().await()
@@ -134,7 +137,8 @@ object FirestoreSchema {
             payload = doc.getString("payload"),
             encoding = doc.getString("encoding"),
             pairId = doc.getString("pairId"),
-            createdAtMs = doc.getTimestamp("createdAt")?.toDate()?.time ?: 0L,
+            createdAtMs = doc.getLong("createdAt") ?: 0L,
+            senderSequence = doc.getLong("sequence"),
         )
 
     /** The watermark is persisted as epoch millis (server timestamps have microsecond

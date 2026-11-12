@@ -153,6 +153,7 @@ test('fanoutWrites produces one mailbox and one job per recipient with AAD input
     ownerUid: 'owner-1',
     installationId: 'install-owner',
     kind: 'BLOCK_ATTEMPT',
+    sequence: 7,
     createdAt: NOW - 5_000,
     recipients: [
       {
@@ -190,6 +191,8 @@ test('fanoutWrites produces one mailbox and one job per recipient with AAD input
   assert.equal(mailbox.data.kind, 'BLOCK_ATTEMPT');
   assert.equal(mailbox.data.recipientInstallationId, 'inst-a');
   assert.equal(mailbox.data.createdAt, NOW - 5_000);
+  // §13.3: the sender's staged sequence rides through the fanout materialization.
+  assert.equal(mailbox.data.sequence, 7);
   const jobWrite = writes[1];
   assert.equal(jobWrite.path, 'partnerNotificationOutbox/evt-1__inst-a');
   assert.equal(jobWrite.data.status, STATUS.PENDING);

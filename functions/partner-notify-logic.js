@@ -162,6 +162,9 @@ function fanoutWrites(task, collections, now) {
         installationId: task.installationId,
         kind: task.kind,
         eventId: task.eventId,
+        // §13.3: the sender's staged outbox sequence, needed to place the event in the
+        // recipient's local sequence space. Written by ingest; 0 for a pre-field task.
+        sequence: typeof task.sequence === 'number' ? task.sequence : 0,
         recipientInstallationId: entry.recipientInstallationId,
         recipientKeyId: entry.recipientKeyId,
         recipientKeyRevision: entry.recipientKeyRevision,

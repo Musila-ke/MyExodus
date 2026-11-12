@@ -7,7 +7,10 @@ import com.example.myexodus.account.SessionFence
 import com.example.myexodus.account.SessionFingerprint
 import com.example.myexodus.accountability.EventCreator
 import com.example.myexodus.accountability.crypto.AccountabilitySigner
-import com.example.myexodus.accountability.delivery.PartnerRuleChangeTransport
+import com.example.myexodus.accountability.delivery.PartnerEventKind
+import com.example.myexodus.accountability.delivery.PartnerEventProtocol
+import com.example.myexodus.accountability.delivery.PartnerEventRecord
+import com.example.myexodus.accountability.delivery.PartnerEventTransport
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.AccountabilityEventCategory
@@ -23,6 +26,7 @@ import com.example.myexodus.accountability.serialization.PlanWire
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleIdentity
 import com.example.myexodus.accountability.serialization.RuleTargetType
+import com.example.myexodus.accountability.serialization.encodePayload
 import com.example.myexodus.accountability.state.ChainStateStore
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
@@ -130,8 +134,14 @@ class PartnerSyncCoordinator(
     /** §13.3 Phase 7 staged transport for journaled rule-lifecycle rows. The default keeps
      *  every production and test caller on the shipped signed-chain path until the producer
      *  is wired and its flag is on. */
-    private val ruleChangeTransport: suspend (PartnerEventJournal) -> PartnerRuleChangeTransport =
-        { PartnerRuleChangeTransport.LEGACY },
+    private val ruleChangeTransport: suspend (PartnerEventJournal) -> PartnerEventTransport =
+        { PartnerEventTransport.LEGACY },
+    /** §13.3 Phase 7 staged transport for every other partner-visible queue row (attempts,
+     *  recovery sessions, activity journal, plans, monitoring). The flag is the gate; when it
+     *  is on, a staged row is sealed by the auth-free service key, so delivery never raises a
+     *  biometric prompt (owner demand 2026-11-12). DEFERRED leaves the row for the next pass. */
+    private val stageEvent: suspend (PartnerEventRecord) -> PartnerEventTransport =
+        { PartnerEventTransport.LEGACY },
 ) {
 
     data class SyncReport(
@@ -165,11 +175,23 @@ class PartnerSyncCoordinator(
          *  drained, which is exactly how partner Activity stayed empty while rows piled up
          *  (rig-proven 2026-10-23: pendingForPair=1, drained=true, nothing sent). */
         val signingBlocked: Boolean = false,
+        /** True only when the cold window stopped the rule-lifecycle queue itself on the
+         *  legacy transport. The rule-save trigger prompts for this and nothing else: a
+         *  staged rule row never waits on the §8.1 window, and a stop on another queue must
+         *  not raise a sheet on a save the owner expects to be prompt-free (owner report
+         *  2026-11-12 — a stale attempt row surfaced the fingerprint sheet at rule save). */
+        val ruleRowSigningBlocked: Boolean = false,
     )
 
     /** Reconcile's own tally: rows linked this pass, and whether it had to stop early because
-     *  the signing key refused a cold window (the stop leaves the remaining rows pending). */
-    private data class ReconcileOutcome(val linked: Int, val coldWindow: Boolean)
+     *  the signing key refused a cold window (the stop leaves the remaining rows pending).
+     *  [blockedQueue] names the queue that stopped, for the device log. */
+    private data class ReconcileOutcome(
+        val linked: Int,
+        val coldWindow: Boolean,
+        val blockedQueue: String? = null,
+        val ruleRowBlocked: Boolean = false,
+    )
 
     /** Pass-level mutual exclusion: the periodic worker, an FCM wake, a foreground sync and an
      *  activity-emitted signal can all call [syncOnce] at once, and reconcile's pending read is
@@ -263,6 +285,7 @@ class PartnerSyncCoordinator(
                 rejectionsFound = report.rejectionsFound + one.rejectionsFound,
                 unpairAdvanced = report.unpairAdvanced || one.unpairAdvanced,
                 signingBlocked = report.signingBlocked || one.signingBlocked,
+                ruleRowSigningBlocked = report.ruleRowSigningBlocked || one.ruleRowSigningBlocked,
             )
         }
         return report.copy(uidsResolved = resolved == enrollments.size)
@@ -328,6 +351,9 @@ class PartnerSyncCoordinator(
             enrollment.createdAtEpochMillis,
             enrollment.mySenderKeyId,
         )
+        if (reconcile.coldWindow) {
+            Log.i(TAG, "cold §8.1 window stopped the pass at ${reconcile.blockedQueue}")
+        }
 
         // Step 11 before the drain: a request created now is delivered by this same pass.
         val repairs = runCatching { repairPass(enrollment.pairId) }
@@ -382,6 +408,7 @@ class PartnerSyncCoordinator(
             // pulledCount stays 0 on the deletion wake path (owner-observed 2026-10-01).
             unpairAdvanced = pulled?.deletionRequested == true,
             signingBlocked = reconcile.coldWindow,
+            ruleRowSigningBlocked = reconcile.ruleRowBlocked,
         )
     }
 
@@ -420,17 +447,25 @@ class PartnerSyncCoordinator(
         if (profileConsent?.shareCheckins == true) {
             val since = maxOf(sinceMs, profileConsent.checkinsEnabledSinceMs)
             for (attempt in attempts.pendingEventCreation(pairId, since, RECONCILE_BATCH)) {
-                when (
-                    val emit = emitActivity(
-                        pairId,
-                        "attempt ${attempt.id}",
-                        eventText(attempt, store),
-                        appLabel = attemptAppLabel(attempt),
-                    )
-                ) {
-                    is Emit.Created -> { attempts.linkEvent(attempt.id, pairId, emit.sequence); linked++ }
-                    Emit.Duplicate, Emit.Skip -> Unit
-                    Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
+                val payload = EventPayload(
+                    type = EventPayload.TYPE_ACTIVITY,
+                    text = eventText(attempt, store),
+                    appLabel = attemptAppLabel(attempt),
+                )
+                when (val transport = stageEvent(attemptRecord(pairId, attempt, store, payload))) {
+                    // No reader of the link sequence exists (verified): a staged row links at
+                    // 0, and the outbox row owns delivery from here.
+                    PartnerEventTransport.SIGNED, PartnerEventTransport.ACKNOWLEDGED -> {
+                        attempts.linkEvent(attempt.id, pairId, 0L); linked++
+                    }
+                    PartnerEventTransport.DEFERRED -> Unit
+                    PartnerEventTransport.LEGACY -> when (
+                        val emit = emitPayload(pairId, "attempt ${attempt.id}", payload)
+                    ) {
+                        is Emit.Created -> { attempts.linkEvent(attempt.id, pairId, emit.sequence); linked++ }
+                        Emit.Duplicate, Emit.Skip -> Unit
+                        Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true, blockedQueue = "attempts")
+                    }
                 }
             }
         }
@@ -438,10 +473,30 @@ class PartnerSyncCoordinator(
         if (profileConsent?.shareRecovery == true) {
             val since = maxOf(sinceMs, profileConsent.recoveryEnabledSinceMs)
             for (session in sessions.pendingMirror(pairId, since, RECONCILE_BATCH)) {
-                when (val emit = emitActivity(pairId, "session ${session.id}", RecoveryMirror.text(session.technique, session.state))) {
-                    is Emit.Created -> { sessions.linkEvent(session.id, pairId, emit.sequence); linked++ }
-                    Emit.Duplicate, Emit.Skip -> Unit
-                    Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
+                val payload = EventPayload(
+                    type = EventPayload.TYPE_ACTIVITY,
+                    text = RecoveryMirror.text(session.technique, session.state),
+                )
+                val record = PartnerEventRecord(
+                    eventId = PartnerEventProtocol.deterministicEventId(
+                        pairId, "session", session.id,
+                    ),
+                    kind = PartnerEventKind.ACCOUNTABILITY_UPDATE,
+                    sensitivePayload = encodePayload(payload),
+                    recipientPairId = pairId,
+                )
+                when (val transport = stageEvent(record)) {
+                    PartnerEventTransport.SIGNED, PartnerEventTransport.ACKNOWLEDGED -> {
+                        sessions.linkEvent(session.id, pairId, 0L); linked++
+                    }
+                    PartnerEventTransport.DEFERRED -> Unit
+                    PartnerEventTransport.LEGACY -> when (
+                        val emit = emitPayload(pairId, "session ${session.id}", payload)
+                    ) {
+                        is Emit.Created -> { sessions.linkEvent(session.id, pairId, emit.sequence); linked++ }
+                        Emit.Duplicate, Emit.Skip -> Unit
+                        Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true, blockedQueue = "recovery sessions")
+                    }
                 }
             }
         }
@@ -471,10 +526,24 @@ class PartnerSyncCoordinator(
                 activity.linkEvent(row.eventId, pairId, 0L)
                 continue
             }
-            when (val emit = emitPayload(pairId, "activity ${row.eventId}", payload)) {
-                is Emit.Created -> { activity.linkEvent(row.eventId, pairId, emit.sequence); linked++ }
-                Emit.Duplicate, Emit.Skip -> Unit
-                Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
+            val record = PartnerEventRecord(
+                eventId = row.eventId,
+                kind = PartnerEventKind.ACCOUNTABILITY_UPDATE,
+                sensitivePayload = encodePayload(payload),
+                recipientPairId = pairId,
+            )
+            when (val transport = stageEvent(record)) {
+                PartnerEventTransport.SIGNED, PartnerEventTransport.ACKNOWLEDGED -> {
+                    activity.linkEvent(row.eventId, pairId, 0L); linked++
+                }
+                PartnerEventTransport.DEFERRED -> Unit
+                PartnerEventTransport.LEGACY -> when (
+                    val emit = emitPayload(pairId, "activity ${row.eventId}", payload)
+                ) {
+                    is Emit.Created -> { activity.linkEvent(row.eventId, pairId, emit.sequence); linked++ }
+                    Emit.Duplicate, Emit.Skip -> Unit
+                    Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true, blockedQueue = "activity")
+                }
             }
         }
         // Plans (ADR #193): the plan rows ARE the outbox. A pending flag marks "this pair owes
@@ -485,24 +554,62 @@ class PartnerSyncCoordinator(
         val plans = store.partnerPlanDao()
         for (plan in plans.pendingPublishForPair(pairId, RECONCILE_BATCH)) {
             val payload = publishedPlanPayload(plan, plans.tasks(plan.planId))
-            when (val emit = emitPayload(pairId, "plan ${plan.planId}", payload)) {
-                is Emit.Created, Emit.Duplicate -> {
+            val record = PartnerEventRecord(
+                eventId = PartnerEventProtocol.deterministicEventId(
+                    pairId, "plan", plan.planId, plan.revision.toString(),
+                ),
+                kind = PartnerEventKind.ACCOUNTABILITY_UPDATE,
+                sensitivePayload = encodePayload(payload),
+                recipientPairId = pairId,
+            )
+            when (val transport = stageEvent(record)) {
+                PartnerEventTransport.SIGNED, PartnerEventTransport.ACKNOWLEDGED -> {
                     plans.clearPublishPending(plan.planId, plan.revision, plan.updatedAtMs)
                     linked++
                 }
-                Emit.Skip -> Unit
-                Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
+                PartnerEventTransport.DEFERRED -> Unit
+                PartnerEventTransport.LEGACY -> when (
+                    val emit = emitPayload(pairId, "plan ${plan.planId}", payload)
+                ) {
+                    is Emit.Created, Emit.Duplicate -> {
+                        plans.clearPublishPending(plan.planId, plan.revision, plan.updatedAtMs)
+                        linked++
+                    }
+                    Emit.Skip -> Unit
+                    Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true, blockedQueue = "plan publish")
+                }
             }
         }
         for (plan in plans.pendingProgressForPair(pairId, RECONCILE_BATCH)) {
-            val payload = planProgressPayload(plan, plans.tasks(plan.planId))
-            when (val emit = emitPayload(pairId, "plan progress ${plan.planId}", payload)) {
-                is Emit.Created, Emit.Duplicate -> {
+            val tasks = plans.tasks(plan.planId)
+            val payload = planProgressPayload(plan, tasks)
+            // The checked set is part of the identity: a re-check at the same revision is a
+            // different event, a crash-retry of the same set is the same one.
+            val done = tasks.filter { it.done }.map { it.taskId }.sorted().joinToString(",")
+            val record = PartnerEventRecord(
+                eventId = PartnerEventProtocol.deterministicEventId(
+                    pairId, "plan-progress", plan.planId, plan.revision.toString(), done,
+                ),
+                kind = PartnerEventKind.ACCOUNTABILITY_UPDATE,
+                sensitivePayload = encodePayload(payload),
+                recipientPairId = pairId,
+            )
+            when (val transport = stageEvent(record)) {
+                PartnerEventTransport.SIGNED, PartnerEventTransport.ACKNOWLEDGED -> {
                     plans.clearProgressPending(plan.planId, plan.revision)
                     linked++
                 }
-                Emit.Skip -> Unit
-                Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
+                PartnerEventTransport.DEFERRED -> Unit
+                PartnerEventTransport.LEGACY -> when (
+                    val emit = emitPayload(pairId, "plan progress ${plan.planId}", payload)
+                ) {
+                    is Emit.Created, Emit.Duplicate -> {
+                        plans.clearProgressPending(plan.planId, plan.revision)
+                        linked++
+                    }
+                    Emit.Skip -> Unit
+                    Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true, blockedQueue = "plan progress")
+                }
             }
         }
         // §8.4 rule-control queue: the rule's own assignment IS the category consent, so this
@@ -518,20 +625,25 @@ class PartnerSyncCoordinator(
                 continue
             }
             when (ruleChangeTransport(row)) {
-                PartnerRuleChangeTransport.LEGACY -> when (val emit = emitRuleChange(pairId, senderKeyId, row)) {
+                PartnerEventTransport.LEGACY -> when (val emit = emitRuleChange(pairId, senderKeyId, row)) {
                     // Once the event is on the chain, the chain and its outbox row own delivery;
                     // the journal row only feeds creation. Deleting it lets the LIMIT window
                     // advance past a backlog that exceeds one batch.
                     is Emit.Created -> { linked++; journal.deleteById(row.eventId) }
                     Emit.Duplicate -> journal.deleteById(row.eventId)
                     Emit.Skip -> Unit
-                    Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
+                    Emit.Stop -> return ReconcileOutcome(
+                        linked,
+                        coldWindow = true,
+                        blockedQueue = "rule lifecycle",
+                        ruleRowBlocked = true,
+                    )
                 }
                 // The signed outbox row now holds the sealed source, envelopes and stable
                 // event id transactionally — it is the migration checkpoint (§13.4).
-                PartnerRuleChangeTransport.SIGNED -> { linked++; journal.deleteById(row.eventId) }
-                PartnerRuleChangeTransport.ACKNOWLEDGED -> journal.deleteById(row.eventId)
-                PartnerRuleChangeTransport.DEFERRED -> Unit
+                PartnerEventTransport.SIGNED -> { linked++; journal.deleteById(row.eventId) }
+                PartnerEventTransport.ACKNOWLEDGED -> journal.deleteById(row.eventId)
+                PartnerEventTransport.DEFERRED -> Unit
             }
         }
         if (profileConsent?.shareAvailability == true) {
@@ -539,13 +651,30 @@ class PartnerSyncCoordinator(
             for (row in journal.dueForDelivery(since, nowMs, RECONCILE_BATCH)) {
                 val category = AccountabilityEventCategory.fromWire(row.category) ?: continue
                 if (category.kind != AccountabilityEventKind.MONITORING_STATUS) continue
-                when (val emit = emitMonitoring(pairId, senderKeyId, row, category)) {
-                    // The chain row itself is the per-pair link (a snapshot carries no local
-                    // row to write back): Duplicate means "this pair already holds the event",
-                    // so it owes nothing further.
-                    is Emit.Created -> linked++
-                    Emit.Duplicate, Emit.Skip -> Unit
-                    Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true)
+                val record = monitoringRecord(pairId, row, category)
+                val transport = if (record == null) {
+                    PartnerEventTransport.LEGACY
+                } else {
+                    stageEvent(record)
+                }
+                when (transport) {
+                    // The outbox row owns delivery once handed over; a leftover journal row
+                    // would only re-stage the same event id (short-circuited by the first
+                    // check in the producer).
+                    PartnerEventTransport.SIGNED, PartnerEventTransport.ACKNOWLEDGED -> {
+                        journal.deleteById(row.eventId); linked++
+                    }
+                    PartnerEventTransport.DEFERRED -> Unit
+                    PartnerEventTransport.LEGACY -> when (
+                        val emit = emitMonitoring(pairId, senderKeyId, row, category)
+                    ) {
+                        // The chain row itself is the per-pair link (a snapshot carries no local
+                        // row to write back): Duplicate means "this pair already holds the event",
+                        // so it owes nothing further.
+                        is Emit.Created -> linked++
+                        Emit.Duplicate, Emit.Skip -> Unit
+                        Emit.Stop -> return ReconcileOutcome(linked, coldWindow = true, blockedQueue = "monitoring snapshot")
+                    }
                 }
             }
         }
@@ -808,6 +937,38 @@ class PartnerSyncCoordinator(
     }
 
     /**
+     * The staged twin of [emitMonitoring]. The wire body carries placeholder sequences
+     * (1/1): the staged outbox sequence is only known after record time, so the receiver
+     * substitutes `STAGED_SEQUENCE_BASE + senderSequence` (Phase 7 §13.3). Null when the row
+     * cannot state its snapshot — the caller falls back to the legacy emitter.
+     */
+    private fun monitoringRecord(
+        pairId: String,
+        row: PartnerEventJournal,
+        category: AccountabilityEventCategory,
+    ): PartnerEventRecord? {
+        val state = row.monitoringState?.let(MonitoringState::fromWire) ?: return null
+        val bucket = row.outboxAgeBucket?.let(OutboxAgeBucket::fromWire) ?: return null
+        val body = AccountabilityEventWire.monitoring(
+            eventId = row.eventId,
+            sequence = 1L,
+            category = category,
+            occurredAtMillis = row.occurredAtMinute * 60_000L,
+            state = state,
+            outboxAge = bucket,
+            latestSequence = 1L,
+            capabilities = row.capabilitiesOrNull(),
+            schemaVersion = row.schemaVersion,
+        )
+        return PartnerEventRecord(
+            eventId = row.eventId,
+            kind = PartnerEventKind.MONITORING_UPDATE,
+            sensitivePayload = AccountabilityEventWire.encode(body),
+            recipientPairId = pairId,
+        )
+    }
+
+    /**
      * §8.4 rule-control sender half: one journaled rule-lifecycle row → one E2EE
      * `RULE_CHANGED` envelope for the rule's assigned pair. The row is already routed by SQL;
      * an unparseable row is skipped (the entity constructor rejects those, so this is
@@ -873,6 +1034,33 @@ class PartnerSyncCoordinator(
         label,
         EventPayload(type = EventPayload.TYPE_ACTIVITY, text = text, appLabel = appLabel),
     )
+
+    /** The staged BLOCK_ATTEMPT record for one unlinked attempt row. The safe category is
+     *  derived from the rule's target type; an unresolvable rule (deleted between the pass's
+     *  SQL read and here) reports an app attempt — the conservative shipped category. */
+    private suspend fun attemptRecord(
+        pairId: String,
+        attempt: AttemptLog,
+        store: AppRulesStore,
+        payload: EventPayload,
+    ): PartnerEventRecord {
+        val targetType = runCatching { store.restrictionRuleDao().getById(attempt.ruleId) }
+            .getOrNull()?.targetType
+        val category = if (targetType == RuleTargetType.WEBSITE.wire) {
+            AccountabilityEventCategory.BLOCKED_DOMAIN_ATTEMPT
+        } else {
+            AccountabilityEventCategory.BLOCKED_APP_ATTEMPT
+        }
+        return PartnerEventRecord(
+            eventId = PartnerEventProtocol.deterministicEventId(
+                pairId, "attempt", attempt.id.toString(),
+            ),
+            kind = PartnerEventKind.BLOCK_ATTEMPT,
+            safeMetadata = mapOf("category" to category.wire),
+            sensitivePayload = encodePayload(payload),
+            recipientPairId = pairId,
+        )
+    }
 
     /** The name the owner sees for the blocked app, bounded like every wire label. Null when
      *  it would add nothing (unresolvable, or the package id itself). */

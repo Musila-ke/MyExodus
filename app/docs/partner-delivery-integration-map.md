@@ -57,7 +57,11 @@ Vault gate: `AppRulesStoreFactory` refuses to open while the DI predicate
   reconcile journal → chain events, repair protocol, drain outbox → mailbox, pull mailbox;
   `SyncReport.signingBlocked` surfaces the cold window.
 - `accountability/sync/PartnerSyncSignals.kt` — `pulledEvents`, `activityEmitted`,
-  `signingNeeded`, `ruleChangesJournaled`, `signingDeferred`.
+  `signingNeeded`, `ruleChangesJournaled`, `signingDeferred`. `pulledEvents` is emitted by
+  `runPartnerSyncPass` when EITHER transport delivered (`pulledCount > 0 ||
+  recipientEventsPulled > 0 || unpairAdvanced`); partner screens collect it to reload in
+  place, and relative labels read `LocalPartnerNowMillis` (30 s tick, `PartnerScreen.kt`)
+  instead of the wall clock.
 - Signing: `accountability/crypto/AccountabilitySigner.kt` +
   `AccountabilityKeyStore.SIGNING_ALIAS` (`setUserAuthenticationRequired(true)`, 900 s);
   `SigningPath` = Biometric / DeviceCredential / Blocked. ADR #216 (cold window reported,

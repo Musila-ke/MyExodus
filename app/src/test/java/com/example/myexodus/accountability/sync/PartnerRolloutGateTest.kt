@@ -30,4 +30,17 @@ class PartnerRolloutGateTest {
             gate.pushRegistrationEnabled(),
         )
     }
+
+    @Test
+    fun futureDatedFetchStamp_isWedged_untilTheClockCatchesUp() {
+        val now = 1_700_000_000_000L
+        val interval = 900_000L
+        assertTrue(isFetchStampWedged(now + interval + 1, now, interval))
+        assertFalse(
+            "a stamp within one interval ahead is an ordinary recent fetch, not corruption",
+            isFetchStampWedged(now + interval - 1_000, now, interval),
+        )
+        assertFalse(isFetchStampWedged(now - 60_000, now, interval))
+        assertFalse("never fetched (-1) is not a wedge", isFetchStampWedged(-1, now, interval))
+    }
 }

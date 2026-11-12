@@ -18,8 +18,8 @@ import com.example.myexodus.accountability.crypto.AttestationVerifier
 import com.example.myexodus.accountability.crypto.EventCipher
 import com.example.myexodus.accountability.crypto.IdentityEpochStore
 import com.example.myexodus.accountability.crypto.IdentityMigration
+import com.example.myexodus.accountability.delivery.PartnerEventProducer
 import com.example.myexodus.accountability.delivery.PartnerMailboxReceiver
-import com.example.myexodus.accountability.delivery.PartnerRuleChangeProducer
 import com.example.myexodus.accountability.delivery.ServiceEventOutbox
 import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.enrollment.EnrollmentDao
@@ -45,6 +45,7 @@ import com.example.myexodus.accountability.sync.MailboxOutboxDrainer
 import com.example.myexodus.accountability.sync.MailboxRejectionChecker
 import com.example.myexodus.accountability.sync.DELIVERY_CLIENT_SYNC_CONFIG_KEY
 import com.example.myexodus.accountability.sync.PUSH_REGISTRATION_CONFIG_KEY
+import com.example.myexodus.accountability.sync.isFetchStampWedged
 import com.example.myexodus.accountability.sync.PairingExchange
 import com.example.myexodus.accountability.sync.PartnerRolloutGate
 import com.example.myexodus.accountability.sync.PairingRegistration
@@ -57,7 +58,7 @@ import com.example.myexodus.accountability.activity.PartnerActivityJournal
 import com.example.myexodus.accountability.activity.PartnerActivityReceiver
 import com.example.myexodus.accountability.monitoring.MonitoringSnapshotReceiver
 import com.example.myexodus.accountability.monitoring.MonitoringSnapshotRecorder
-import com.example.myexodus.accountability.monitoring.rulesNeeding
+import com.example.myexodus.accountability.monitoring.PartnerPermissionLossReporter
 import com.example.myexodus.accountability.monitoring.PartnerDmsClient
 import com.example.myexodus.accountability.monitoring.PartnerHeartbeatClient
 import com.example.myexodus.accountability.monitoring.StandbyBucket
@@ -84,8 +85,6 @@ import com.example.myexodus.vpn.VpnLifecycle
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.prunePartnerActivity
 import com.example.myexodus.data.db.LocalDatabaseMigration
-import com.example.myexodus.data.db.entity.PartnerEventJournal
-import com.example.myexodus.data.db.entity.PartnerProtectionGap
 import com.example.myexodus.data.db.entity.decodeMilestoneDays
 import com.example.myexodus.secrets.SecretsRepository
 import com.example.myexodus.accountability.sos.NudgeInboxRepository
@@ -244,22 +243,40 @@ object AccountabilityModule {
     @Provides @Singleton
     fun providePartnerRolloutGate(): PartnerRolloutGate {
         val remoteConfig = FirebaseRemoteConfig.getInstance()
-        remoteConfig.setConfigSettingsAsync(
-            FirebaseRemoteConfigSettings.Builder()
-                .setMinimumFetchIntervalInSeconds(900)
-                .build(),
+        val settings = FirebaseRemoteConfigSettings.Builder()
+            .setMinimumFetchIntervalInSeconds(900)
+            .build()
+        val defaults = mapOf(
+            PUSH_REGISTRATION_CONFIG_KEY to true,
+            DELIVERY_CLIENT_SYNC_CONFIG_KEY to true,
         )
-        remoteConfig.setDefaultsAsync(
-            mapOf(
-                PUSH_REGISTRATION_CONFIG_KEY to true,
-                DELIVERY_CLIENT_SYNC_CONFIG_KEY to true,
-            ),
-        )
+        remoteConfig.setConfigSettingsAsync(settings)
+        remoteConfig.setDefaultsAsync(defaults)
         return PartnerRolloutGate { key ->
+            // A back-dated device clock that once wrote a future stamp wedges the SDK
+            // throttle forever (verified in firebase-config 23.1.0 bytecode: the check is
+            // lastSuccessfulFetchTime + interval vs now, no network attempt). reset() clears
+            // that stamp along with the activated template, settings and in-app defaults, so
+            // all three are re-applied before the fetch; without this the producer flag
+            // could not be flipped on such a device short of clearing app data.
+            if (isFetchStampWedged(
+                    remoteConfig.info.fetchTimeMillis,
+                    System.currentTimeMillis(),
+                    ROLLOUT_FETCH_INTERVAL_MS,
+                )
+            ) {
+                runCatching {
+                    remoteConfig.reset().await()
+                    remoteConfig.setConfigSettingsAsync(settings).await()
+                    remoteConfig.setDefaultsAsync(defaults).await()
+                }
+            }
             runCatching { remoteConfig.fetchAndActivate().await() }
             remoteConfig.getBoolean(key)
         }
     }
+
+    private const val ROLLOUT_FETCH_INTERVAL_MS = 900_000L
 
     /**
      * SOS Step 8 (§6.1/§8.15, table A2): the Reach out sender path. The target pair follows
@@ -927,7 +944,7 @@ object AccountabilityModule {
         dms: PartnerDmsClient,
         sessionFence: SessionFence,
         recipientMailbox: PartnerMailboxReceiver,
-        ruleChangeProducer: PartnerRuleChangeProducer,
+        eventProducer: PartnerEventProducer,
     ): PartnerSyncCoordinator = PartnerSyncCoordinator(
         enrollmentDao = enrollmentDao,
         storeFactory = storeFactory,
@@ -941,7 +958,8 @@ object AccountabilityModule {
         expireApprovals = approval::expireDue,
         resumeUnpairs = deletion::resumePending,
         purgeAccountDeletedPair = deletion::handleAccountDeleted,
-        ruleChangeTransport = ruleChangeProducer::transport,
+        ruleChangeTransport = eventProducer::transport,
+        stageEvent = eventProducer::stage,
         rotateKeys = { pairId, senderKeyId ->
             sessionKeyManager.rotateIfDue(pairId, senderKeyId, System.currentTimeMillis())
         },
@@ -1065,6 +1083,19 @@ object AccountabilityModule {
     ): MonitoringSnapshotReceiver = MonitoringSnapshotReceiver(storeFactory)
 
     @Provides @Singleton
+    fun providePartnerPermissionLossReporter(
+        @ApplicationContext context: Context,
+        enrollmentDao: EnrollmentDao,
+        storeFactory: AppRulesStoreFactory,
+    ): PartnerPermissionLossReporter = PartnerPermissionLossReporter(
+        storeFactory = storeFactory,
+        enrollmentDao = enrollmentDao,
+        notifyLost = { pairId, partnerName, needing ->
+            PartnerNotifications.notifyPermissionLost(context, pairId, partnerName, needing)
+        },
+    )
+
+    @Provides @Singleton
     fun provideRuleControlReceiver(
         storeFactory: AppRulesStoreFactory,
     ): RuleControlReceiver = RuleControlReceiver(storeFactory)
@@ -1115,6 +1146,7 @@ object AccountabilityModule {
         deliveryTrace: RuleDeliveryTrace,
         enrollmentDao: EnrollmentDao,
         storeFactory: AppRulesStoreFactory,
+        permissionLoss: PartnerPermissionLossReporter,
     ): MailboxMessageHandler {
         val processedDao = db.processedEventDao()
         return MailboxMessageHandler(
@@ -1200,42 +1232,7 @@ object AccountabilityModule {
                 // Owner directive 2026-11-10: a grant the other phone lost only alerts when
                 // a rule assigned to this partner needs it. The feed is this device's rule
                 // state; a lost grant no live rule relies on stays silent.
-                if (lost.isNotEmpty()) {
-                    runCatching {
-                        val store = storeFactory.open()
-                        val rows = store?.partnerRuleChangeDao()
-                            ?.recent(pairId, System.currentTimeMillis(), RULE_FEED_LIMIT)
-                            .orEmpty()
-                        val needing = rulesNeeding(rows, lost)
-                        if (needing.isNotEmpty()) {
-                            // Owner ask 2026-11-10: the loss is also a feed row on this
-                            // device (Rules & blocks), not only a tray notification.
-                            val gapDao = store?.partnerProtectionGapDao()
-                            val nowMs = System.currentTimeMillis()
-                            runCatching {
-                                needing.forEach { (capability, rules) ->
-                                    gapDao?.insert(
-                                        PartnerProtectionGap(
-                                            pairId = pairId,
-                                            eventId = event.eventId,
-                                            capability = capability.wire,
-                                            ruleNames = PartnerProtectionGap.encodeRuleNames(rules),
-                                            occurredAtMs = event.occurredAtMinute * 60_000L,
-                                            expiresAtMs = nowMs + PartnerEventJournal.RETENTION_MILLIS,
-                                        ),
-                                    )
-                                }
-                            }.onFailure { Log.w(TAG, "protection gap store failed pairId=$pairId", it) }
-                            enrollmentDao.getByPairId(pairId)?.let { enrollment ->
-                                PartnerNotifications.notifyPermissionLost(
-                                    context, pairId, displayNameOf(enrollment), needing,
-                                )
-                            }
-                        }
-                    }.onFailure {
-                        Log.w(TAG, "permission-lost notification failed pairId=$pairId", it)
-                    }
-                }
+                permissionLoss.report(pairId, event.eventId, event.occurredAtMinute, lost)
                 val change = event.ruleChange
                 val traced = event.kind == AccountabilityEventKind.RULE_CONTROL
                 if (traced) {

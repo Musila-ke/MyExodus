@@ -11,7 +11,8 @@ import com.example.myexodus.accountability.EventCreator
 import com.example.myexodus.accountability.crypto.AccountabilitySigner
 import com.example.myexodus.accountability.crypto.EventCipher
 import com.example.myexodus.accountability.crypto.IdentityEpochStore
-import com.example.myexodus.accountability.delivery.PartnerRuleChangeTransport
+import com.example.myexodus.accountability.delivery.PartnerEventRecord
+import com.example.myexodus.accountability.delivery.PartnerEventTransport
 import com.example.myexodus.accountability.enrollment.CekDerivation
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.AccountabilityEvent
@@ -1146,6 +1147,10 @@ class PartnerSyncCoordinatorTest {
 
         assertEquals(0, cold.eventsLinked)
         assertTrue("no prompt from background reconcile", store.chainFor(pairId).isEmpty())
+        assertTrue(
+            "the rule row itself is what stopped the pass — the save trigger may prompt (ADR #296)",
+            cold.ruleRowSigningBlocked,
+        )
         assertEquals(
             1,
             factory.open()!!.partnerEventJournalDao()
@@ -1155,6 +1160,32 @@ class PartnerSyncCoordinatorTest {
         coordinator = coordinator(warmSigner())
         assertEquals(1, coordinator.syncOnce().eventsLinked)
         assertEquals(1, store.chainFor(pairId).size)
+    }
+
+    /** Owner report 2026-11-12: the fingerprint sheet appeared at a rule save while the staged
+     *  rule row had already been accepted — the stop came from a stale attempt row. A rule
+     *  save's trigger must see that as "not my queue" so it defers silently. */
+    @Test
+    fun coldWindow_atAnotherQueue_doesNotFlagTheRuleRow() = runTest {
+        enroll()
+        seedConsent(shareCheckins = true)
+        recorder.recordBlocked("r-1", "com.a")
+        insertRuleChangeRow(UUID.randomUUID(), RuleChange.UPDATED)
+        coordinator = coordinator(coldSigner())
+
+        val report = coordinator.syncOnce()
+
+        assertTrue("the attempt queue stopped the pass", report.signingBlocked)
+        assertFalse(
+            "a blocked attempt must never raise the rule-save sheet",
+            report.ruleRowSigningBlocked,
+        )
+        assertEquals(
+            "the rule row is untouched, delivered by the next warm pass",
+            1,
+            factory.open()!!.partnerEventJournalDao()
+                .dueRuleChangesForPair(pairId, 0L, System.currentTimeMillis(), 10).size,
+        )
     }
 
     @Test
@@ -1189,7 +1220,7 @@ class PartnerSyncCoordinatorTest {
             warmSigner(),
             ruleChangeTransport = { row ->
                 transported += row.eventId
-                PartnerRuleChangeTransport.SIGNED
+                PartnerEventTransport.SIGNED
             },
         )
 
@@ -1226,7 +1257,7 @@ class PartnerSyncCoordinatorTest {
             warmSigner(),
             ruleChangeTransport = {
                 transportCalls++
-                PartnerRuleChangeTransport.SIGNED
+                PartnerEventTransport.SIGNED
             },
         )
 
@@ -1653,8 +1684,11 @@ class PartnerSyncCoordinatorTest {
         fence: SessionFence = SessionFence.Unfenced,
         resolveRuleLabel: (String, String) -> String = { _, target -> target },
         pullPartnerEvents: suspend () -> Int = { partnerEventPulls++; partnerEventsToPull() },
-        ruleChangeTransport: suspend (PartnerEventJournal) -> PartnerRuleChangeTransport = {
-            PartnerRuleChangeTransport.LEGACY
+        ruleChangeTransport: suspend (PartnerEventJournal) -> PartnerEventTransport = {
+            PartnerEventTransport.LEGACY
+        },
+        stageEvent: suspend (PartnerEventRecord) -> PartnerEventTransport = {
+            PartnerEventTransport.LEGACY
         },
     ) = PartnerSyncCoordinator(
         enrollmentDao = db.enrollmentDao(),
@@ -1704,6 +1738,7 @@ class PartnerSyncCoordinatorTest {
         resolveRuleLabel = resolveRuleLabel,
         pullPartnerEvents = pullPartnerEvents,
         ruleChangeTransport = ruleChangeTransport,
+        stageEvent = stageEvent,
     )
 
     private fun enroll(

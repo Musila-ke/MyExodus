@@ -1,6 +1,7 @@
 package com.example.myexodus.accountability.sync
 
 import androidx.work.NetworkType
+import com.example.myexodus.accountability.delivery.partnerEventSyncNowRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -32,6 +33,14 @@ class PartnerWakeExpeditedTest {
     @Test
     fun `post-mutation pass is expedited and keeps its network constraint`() {
         val request = partnerSyncNowRequest()
+
+        assertTrue(request.workSpec.expedited)
+        assertEquals(NetworkType.CONNECTED, request.workSpec.constraints.requiredNetworkType)
+    }
+
+    @Test
+    fun `event capture kick is expedited and keeps its network constraint`() {
+        val request = partnerEventSyncNowRequest()
 
         assertTrue(request.workSpec.expedited)
         assertEquals(NetworkType.CONNECTED, request.workSpec.constraints.requiredNetworkType)

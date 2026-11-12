@@ -10,6 +10,12 @@ enum class PartnerEventKind(val wire: String) {
     BLOCK_ATTEMPT("BLOCK_ATTEMPT"),
     CHECK_IN("CHECK_IN"),
     RULE_CHANGE_ATTEMPT("RULE_CHANGE_ATTEMPT"),
+
+    /** Activity/streak row, plan publish or plan progress: content rides the E2EE payload. */
+    ACCOUNTABILITY_UPDATE("ACCOUNTABILITY_UPDATE"),
+
+    /** Signed monitoring snapshot — the permission-loss and capability feed. */
+    MONITORING_UPDATE("MONITORING_UPDATE"),
     ;
 
     companion object {
@@ -226,9 +232,11 @@ object PartnerEventProtocol {
                 if ("category" !in metadata) PartnerEventIssue.METADATA_INVALID else null
             PartnerEventKind.RULE_CHANGE_ATTEMPT ->
                 if ("ruleChange" !in metadata) PartnerEventIssue.METADATA_INVALID else null
-            // No safe metadata is defined for a check-in; the content rides the E2EE payload.
-            PartnerEventKind.CHECK_IN ->
-                if (metadata.isNotEmpty()) PartnerEventIssue.METADATA_INVALID else null
+            // No safe metadata is defined for these payload-only kinds.
+            PartnerEventKind.CHECK_IN,
+            PartnerEventKind.ACCOUNTABILITY_UPDATE,
+            PartnerEventKind.MONITORING_UPDATE,
+            -> if (metadata.isNotEmpty()) PartnerEventIssue.METADATA_INVALID else null
         }
     }
 
@@ -278,6 +286,31 @@ object PartnerEventProtocol {
                 )
             },
         )
+    }
+
+    /**
+     * Staged outbox sequences restart at 1 per installation while recipient feeds share one
+     * monotonic sequence space with the legacy signed chain. Offsetting the sender's sequence
+     * by 2^40 on the recipient keeps the staged order intact above any plausible legacy count.
+     * Not reversible: once a feed has consumed a staged sequence, turning the staged transport
+     * back off would drop later legacy rows by the `> last_sequence` guard — roll forward.
+     */
+    const val STAGED_SEQUENCE_BASE = 1L shl 40
+
+    /**
+     * I04 forbids deriving ids from timestamps; deriving them from the source entity's stable
+     * keys is deliberate: a crash after commit but before enqueue re-stages the same row under
+     * the same id instead of duplicating the event. The digest is reshaped into a v4-formatted
+     * UUID so the existing UUIDv4 envelope validation accepts it unchanged.
+     */
+    fun deterministicEventId(vararg parts: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(("myexodus:partner-event:" + parts.joinToString("\u0000")).toByteArray(Charsets.UTF_8))
+        digest[6] = ((digest[6].toInt() and 0x0f) or 0x40).toByte()
+        digest[8] = ((digest[8].toInt() and 0x3f) or 0x80).toByte()
+        val hex = digest.copyOf(16).joinToString("") { "%02x".format(it) }
+        return "${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-" +
+            "${hex.substring(16, 20)}-${hex.substring(20)}"
     }
 
     private const val MAX_SAFE_INTEGER = 9_007_199_254_740_991L

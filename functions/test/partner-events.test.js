@@ -56,6 +56,19 @@ test('each shared invalid vector is rejected with its documented issue', () => {
   }
 });
 
+test('payload-only kinds accept empty metadata and reject any safe metadata', () => {
+  for (const kind of [P.KIND.CHECK_IN, P.KIND.ACCOUNTABILITY_UPDATE, P.KIND.MONITORING_UPDATE]) {
+    const clean = clone(eventNamed('block-attempt-app-two-recipients'));
+    clean.eventId = '11111111-1111-4111-8111-111111111111';
+    clean.kind = kind;
+    delete clean.metadata;
+    assert.strictEqual(P.validateEvent(clean), null, kind);
+
+    clean.metadata = { category: 'BLOCKED_APP_ATTEMPT' };
+    assert.strictEqual(P.validateEvent(clean), P.ISSUE.METADATA_INVALID, kind);
+  }
+});
+
 test('ownerUid is inside the signed bytes, so rebinding changes the digest', () => {
   const event = eventNamed('block-attempt-app-two-recipients');
   const rebound = { ...clone(event), ownerUid: 'anotherUid_456' };
@@ -141,7 +154,8 @@ test('result classification encodes the no-effect / immutable-after-acceptance c
 
 test('kind, result and issue vocabularies are the documented closed sets', () => {
   assert.deepStrictEqual(Object.values(P.KIND).sort(),
-    ['BLOCK_ATTEMPT', 'CHECK_IN', 'RULE_CHANGE_ATTEMPT']);
+    ['ACCOUNTABILITY_UPDATE', 'BLOCK_ATTEMPT', 'CHECK_IN', 'MONITORING_UPDATE',
+      'RULE_CHANGE_ATTEMPT']);
   assert.deepStrictEqual([...P.RESULT_CODES].sort(), ['ACCEPTED', 'ALREADY_ACCEPTED',
     'PERMANENT_REJECTED', 'RECIPIENT_KEY_STALE', 'REENROLL_REQUIRED', 'RETRYABLE']);
   assert.strictEqual(P.ISSUE_CODES.length, 11);

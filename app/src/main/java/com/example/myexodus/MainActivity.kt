@@ -452,12 +452,12 @@ class MainActivity : FragmentActivity() {
     private val signingHealMutex = Mutex()
 
     /**
-     * ADR #216 + owner ruling 2026-11-10 (ADR #296): partner delivery is automatic, and when
-     * the §8.1 key's 900 s window is cold the app now asks for device authentication at the
-     * act instead of waiting for the next unlock (owner: "if it goes cold prompt user"). The
-     * pass only prompts when rows are actually queued behind the window, so a warm or idle
-     * sync never raises a sheet; a cancelled prompt leaves the rows journaled for the next
-     * trigger. See [deliverQueuedPartnerEvents].
+     * Owner demand 2026-11-12: automatic partner delivery NEVER asks for device
+     * authentication. Every partner-visible queue rides the auth-free staged transport while
+     * the rollout flag is on, so a cold §8.1 window cannot stop a rule, streak, plan, attempt,
+     * check-in or permission-revocation update. A legacy row that does stop on the cold window
+     * stays journaled for the next trigger; the only path allowed to raise the sheet is
+     * [healBlockedPartnerSigning] — the explicit Check now.
      */
     private fun startPartnerSigningHeal() {
         lifecycleScope.launch {
@@ -465,60 +465,41 @@ class MainActivity : FragmentActivity() {
                 // ADR #294: the pass that turns a just-warmed §8.1 window (the unlock that
                 // brought the app back) into delivery runs on every foreground start instead
                 // of waiting for the 15-minute worker.
-                launch { deliverQueuedPartnerEvents(queued = false) }
+                launch { deliverQueuedPartnerEvents() }
                 launch {
-                    // ADR #216 + #296: a cold pass re-emits this signal, so the mutex inside
-                    // [deliverQueuedPartnerEvents] is what keeps a re-entrant emission from
-                    // stacking a second sheet while the first pass still holds it.
-                    PartnerSyncSignals.signingNeeded.collect { deliverQueuedPartnerEvents(queued = true) }
+                    // ADR #216 + #299: a pass that stopped cold retries once a later trigger
+                    // finds the window warm; no trigger prompts.
+                    PartnerSyncSignals.signingNeeded.collect { deliverQueuedPartnerEvents() }
                 }
                 launch {
                     // Owner ruling 2026-11-05: a rule save, edit, deactivate or delete is
                     // delivered automatically — never gated on a confirmation the subject can
-                    // ignore. A cold window prompts (ADR #296) instead of deferring.
-                    PartnerSyncSignals.ruleChangesJournaled.collect { deliverQueuedPartnerEvents(queued = true) }
+                    // ignore, and never on the §8.1 window (staged transport).
+                    PartnerSyncSignals.ruleChangesJournaled.collect { deliverQueuedPartnerEvents() }
                 }
                 launch {
                     // Plans and block episodes alert through this tick (its app-scope consumer
-                    // has no UI and runs a full pass before any prompt could fire). The tick is
-                    // emitted only after a partner-visible row commits, so the sheet can go up
-                    // now (owner report 2026-11-10: the cold prompt lagged ~20 s behind the act).
-                    PartnerSyncSignals.activityEmitted.collect { deliverQueuedPartnerEvents(queued = true) }
+                    // has no UI and runs a full pass before any prompt could fire).
+                    PartnerSyncSignals.activityEmitted.collect { deliverQueuedPartnerEvents() }
                 }
             }
         }
     }
 
     /**
-     * One automatic delivery pass. Warm (§8.1 window open): signs and sends silently. Cold
-     * with rows queued behind the window: raises the device-auth prompt, then runs the pass —
-     * the partner hears about the act now rather than at the next unlock (owner ruling
-     * 2026-11-10, ADR #296). Nothing to sign never prompts. A cancelled prompt is not an
-     * error: the journal row stays durable and the next trigger tries again.
-     *
-     * [queued] marks triggers that already proved a partner-visible row is waiting: the
-     * journal signals fire only after their transaction commits, and
-     * [PartnerSyncSignals.signingNeeded] comes from a pass that stopped on the cold window. Those prompt BEFORE the first network pass,
-     * so the sheet is up in about a second (owner report 2026-11-10: two full passes ran ahead
-     * of it, ~20 s of silent delay). The foreground-start trigger passes false: it has no such
-     * proof, so its pass detects the block first.
+     * One automatic delivery pass — always silent. A pass that ends blocked on the cold §8.1
+     * window leaves its rows durable; nothing here prompts, so the partner hears about the act
+     * as soon as the window warms (or at once, when the staged transport carried it with no
+     * window at all).
      */
-    private suspend fun deliverQueuedPartnerEvents(queued: Boolean) {
+    private suspend fun deliverQueuedPartnerEvents() {
         if (!signingHealMutex.tryLock()) return
         try {
             if (!isOnline()) return
-            if (queued && !signingWindowWarm()) {
-                signWithAuthPrompt(getString(R.string.partner_sync_auth_title)) ?: return
+            val first = runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator)
+            if (first.signingBlocked && signingWindowWarm()) {
                 runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator)
-                return
             }
-            if (!runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked) return
-            if (signingWindowWarm()) {
-                runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator)
-                return
-            }
-            signWithAuthPrompt(getString(R.string.partner_sync_auth_title)) ?: return
-            runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -868,7 +849,7 @@ class MainActivity : FragmentActivity() {
                         },
                         // ADR #294/#296: a share toggle has just journalled its rows, so a
                         // cold window prompts now instead of silently queueing.
-                        onPartnerDeliverSilently = { deliverQueuedPartnerEvents(queued = true) },
+                        onPartnerDeliverSilently = { deliverQueuedPartnerEvents() },
                         onRespondToApproval = { requestEventId, approve ->
                             respondToApproval(requestEventId, approve)
                         },

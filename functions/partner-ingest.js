@@ -216,6 +216,7 @@ async function processEvent({ db, uid, installationId, wire, at }) {
         ownerUid: uid,
         installationId,
         kind: event.kind,
+        sequence: event.sequence,
         recipients: entries.map((entry) => ({
           recipientUid: entry.recipientUid,
           recipientInstallationId: entry.key.installationId,
@@ -245,6 +246,9 @@ async function processEvent({ db, uid, installationId, wire, at }) {
           installationId,
           kind: event.kind,
           eventId: event.eventId,
+          // §13.3: the recipient places a staged event in the shared sequence space; the
+          // body cannot carry its own eventually-assigned outbox sequence.
+          sequence: event.sequence,
           recipientInstallationId,
           recipientKeyId: entry.envelope.recipientEncryptionKeyId,
           recipientKeyRevision: entry.key.revision,

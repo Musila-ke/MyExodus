@@ -27,6 +27,10 @@ const KIND = Object.freeze({
   BLOCK_ATTEMPT: 'BLOCK_ATTEMPT',
   CHECK_IN: 'CHECK_IN',
   RULE_CHANGE_ATTEMPT: 'RULE_CHANGE_ATTEMPT',
+  // §13.3 staged transport for every other partner-visible event class: the E2EE body is the
+  // legacy AccountabilityEvent / EventPayload wire, so no safe metadata is defined.
+  ACCOUNTABILITY_UPDATE: 'ACCOUNTABILITY_UPDATE',
+  MONITORING_UPDATE: 'MONITORING_UPDATE',
 });
 
 // §8.4 per-event callable response codes.
@@ -231,8 +235,9 @@ function metadataIssue(event) {
   }
   if (event.kind === KIND.BLOCK_ATTEMPT && !keys.includes('category')) return ISSUE.METADATA_INVALID;
   if (event.kind === KIND.RULE_CHANGE_ATTEMPT && !keys.includes('ruleChange')) return ISSUE.METADATA_INVALID;
-  // No safe metadata is defined for a check-in; the content rides the E2EE payload.
-  if (event.kind === KIND.CHECK_IN && keys.length > 0) return ISSUE.METADATA_INVALID;
+  // No safe metadata is defined for these kinds; the content rides the E2EE payload.
+  const payloadOnly = [KIND.CHECK_IN, KIND.ACCOUNTABILITY_UPDATE, KIND.MONITORING_UPDATE];
+  if (payloadOnly.includes(event.kind) && keys.length > 0) return ISSUE.METADATA_INVALID;
   return null;
 }
 

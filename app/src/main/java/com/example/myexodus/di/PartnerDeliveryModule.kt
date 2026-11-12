@@ -15,15 +15,20 @@ import com.example.myexodus.accountability.delivery.PartnerDeliveryCoordinator
 import com.example.myexodus.accountability.delivery.PartnerDeliveryTransport
 import com.example.myexodus.accountability.delivery.PartnerEventDrain
 import com.example.myexodus.accountability.delivery.PartnerEventKeyStore
+import com.example.myexodus.accountability.delivery.PartnerEventProducer
 import com.example.myexodus.accountability.delivery.PartnerEventRecorder
 import com.example.myexodus.accountability.delivery.PartnerEventRegistrar
-import com.example.myexodus.accountability.delivery.PartnerRuleChangeProducer
 import com.example.myexodus.accountability.delivery.PartnerMailboxDecryptor
 import com.example.myexodus.accountability.delivery.PartnerMailboxReceiver
+import com.example.myexodus.accountability.delivery.PartnerObservationProjection
 import com.example.myexodus.accountability.delivery.ServiceEventOutbox
 import com.example.myexodus.accountability.delivery.ServicePayloadProtector
 import com.example.myexodus.accountability.delivery.SystemPartnerDeliveryClock
+import com.example.myexodus.accountability.activity.PartnerActivityReceiver
 import com.example.myexodus.accountability.enrollment.CekDerivation
+import com.example.myexodus.accountability.monitoring.MonitoringSnapshotReceiver
+import com.example.myexodus.accountability.monitoring.PartnerPermissionLossReporter
+import com.example.myexodus.accountability.plan.PartnerPlanReceiver
 import com.example.myexodus.accountability.rulecontrol.PartnerRuleChangeProjection
 import com.example.myexodus.accountability.state.AccountabilityDatabase
 import com.example.myexodus.accountability.sync.AppCheckInstaller
@@ -113,6 +118,7 @@ object PartnerDeliveryModule {
         decryptor: PartnerMailboxDecryptor,
         firestore: FirebaseFirestore,
         projection: PartnerRuleChangeProjection,
+        observation: PartnerObservationProjection,
     ): PartnerMailboxReceiver = PartnerMailboxReceiver(
         dao = db.partnerMailboxDao(),
         ownerUid = { FirebaseAuth.getInstance().currentUser?.uid },
@@ -121,7 +127,32 @@ object PartnerDeliveryModule {
             FirestoreSchema.partnerMailboxDocsAfter(firestore, uid, installationId, fromMs, limit)
         },
         decrypt = decryptor::open,
-        onDelivered = projection::onDelivered,
+        onDelivered = { document, plaintext ->
+            projection.onDelivered(document, plaintext)
+            observation.onDelivered(document, plaintext)
+        },
+    )
+
+    /** §13.3 Phase 7 recipient half for every non-rule staged kind: activity/streak/plan/
+     *  attempt content and monitoring snapshots become the same local state and notification
+     *  the legacy chain callback produced. */
+    @Provides @Singleton
+    fun providePartnerObservationProjection(
+        @ApplicationContext context: Context,
+        db: AccountabilityDatabase,
+        storeFactory: AppRulesStoreFactory,
+        activityReceiver: PartnerActivityReceiver,
+        planReceiver: PartnerPlanReceiver,
+        monitoringReceiver: MonitoringSnapshotReceiver,
+        permissionLoss: PartnerPermissionLossReporter,
+    ): PartnerObservationProjection = PartnerObservationProjection(
+        context = context,
+        storeFactory = storeFactory,
+        enrollmentDao = db.enrollmentDao(),
+        activityReceiver = activityReceiver,
+        planReceiver = planReceiver,
+        monitoringReceiver = monitoringReceiver,
+        permissionLoss = permissionLoss,
     )
 
     @Provides @Singleton
@@ -247,17 +278,18 @@ object PartnerDeliveryModule {
         onRecorded = { coordinator.get().onEventCommitted() },
     )
 
-    /** §13.3 Phase 7 staged switch: journaled rule-lifecycle rows move to the signed transport
-     *  only while the Remote Config flag is explicitly on; the shipped legacy chain stays the
-     *  default path until then. */
+    /** §13.3 Phase 7 staged switch, now for every partner-visible queue: while the Remote
+     *  Config flag is explicitly on, each queue row is sealed by the auth-free service key so
+     *  delivery never raises a biometric prompt (owner demand 2026-11-12). The shipped legacy
+     *  chain stays the default path until then. */
     @Provides @Singleton
-    fun providePartnerRuleChangeProducer(
+    fun providePartnerEventProducer(
         @ApplicationContext context: Context,
         outbox: ServiceEventOutbox,
         recorder: PartnerEventRecorder,
         storeFactory: AppRulesStoreFactory,
         gate: PartnerRolloutGate,
-    ): PartnerRuleChangeProducer = PartnerRuleChangeProducer(
+    ): PartnerEventProducer = PartnerEventProducer(
         outbox = outbox,
         recorder = recorder,
         storeFactory = storeFactory,

@@ -119,6 +119,31 @@ class MonitoringSnapshotReceiverTest {
         )
     }
 
+    /** §13.3 staged snapshots carry placeholder sequences in the body; the caller's
+     *  override is the row's real order in the shared sequence space. */
+    @Test
+    fun stagedSnapshot_usesTheCallerSequenceOverride() = runTest {
+        val receiver = receiver()
+        val body = event(sequence = 1, latest = 1, state = MonitoringState.ACTIVE)
+
+        receiver.onEvent("pair-1", "install-a", body, sequenceOverride = 1_500L)
+        var row = factory.open()!!.partnerMonitoringSnapshotDao().byPair("pair-1")!!
+        assertEquals(1_500L, row.snapshotEventSequence)
+        assertEquals(1_500L, row.latestRelationshipSeq)
+
+        assertEquals(
+            "an older staged snapshot never rolls the card backwards",
+            emptySet<MonitoringCapability>(),
+            receiver.onEvent(
+                "pair-1", "install-a",
+                event(sequence = 1, latest = 1, state = MonitoringState.UNAVAILABLE),
+                sequenceOverride = 1_400L,
+            ),
+        )
+        row = factory.open()!!.partnerMonitoringSnapshotDao().byPair("pair-1")!!
+        assertEquals(MonitoringState.ACTIVE.wire, row.monitoringState)
+    }
+
     /** Owner directive 2026-11-10: the transition the alert rides on is `before - after`. */
     @Test
     fun lostGrants_areReportedAndTheNewSetIsStored() = runTest {
