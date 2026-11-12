@@ -152,9 +152,50 @@ both sides together; deferred until the wire is next touched.
 | S34a | Revoke accessibility on a phone that runs an APP rule assigned to the partner | Snapshot journals immediately (caps change, `MONITORING_PERMISSION_CHANGED`); partner's tray: "Protection gap on «partner»'s phone" / "Accessibility is off, so app blocks start late · «rule»" | **PASSED 2026-11-10 (owner-verified).** .107's tray showed the accessibility alert and the feed row appeared; the owner re-enabled it and protection returned to Active. Delivery landed 3 m 41 s after the revoke (tray `when=1794346360380`) because the idle phone sat in a cold §8.1 signing window (#296) — deferred, not dropped |
 | S34b | Revoke usage access (accessibility still on) | Authority does not move; the permission-check sampling still journals; partner sees the usage line naming the rule | **PASSED 2026-11-11 00:37:40–00:38:00 EAT (v14/1.1.12).** Usage revoked on .106 → .107's tray showed the usage line naming YouTube Music 20 s later; feed row written. An earlier 00:18 run matched. **Defect caught here:** the partner pill still read Active while the user side read Limited → owner-approved fix above; **closed on v15/1.1.13:** revoke at epoch 1794348110 → .107's Their phone read Limited with the usage line within 45 s; restore at 1794348173 → Active, gap line gone, no notification |
 | S34c | Revoke "Display over other apps" | Same path as S34b → overlay line | **PASSED 2026-11-11 00:26:32–00:26:56 EAT (v14/1.1.12).** Overlay denied on .106 → notification 24 s later; feed row written. **Pill alignment proven on v15/1.1.13:** revoke at epoch 1794348236 → Limited with "Display over other apps is off, so the block screen can't cover a blocked app · YouTube Music"; restore → Active |
-| S34d | Turn off the website filter / VPN consent with a WEBSITE rule shared | VPN line; the rule named is the website rule | Pending — needs a live WEBSITE rule (or a batch, which needs all four grants) shared with the partner |
-| S35 | Revoke a grant **no live rule needs** (e.g. usage access with only a website rule shared) | Silent — no notification, no tray change; the snapshot still advances the card | Pending with the website-rule prerequisite |
+| S34d | Turn off the website filter / VPN consent with a WEBSITE rule shared | VPN line; the rule named is the website rule | **PASSED 2026-11-12 (v22/1.1.20 staged), G4.** VPN consent revoked with the live website rule inside the shared Battery batch: revoke T=1794491127 → .107 tray `when=1794491154669` (+27 s) "The website filter is off, so website rules aren't enforced · Battery batch"; tray unchanged afterwards (38 records). Restore + re-enable proven in G5 |
+| S35 | Revoke a grant **no live rule needs** (e.g. usage access with only a website rule shared) | Silent — no notification, no tray change; the snapshot still advances the card | **PASSED 2026-11-12 (v22/1.1.20 staged), G5.** With the shared batch paused (no live rule), the VPN revoke's caps-loss snapshot drained (`claimed=1` 16:51:02) and the partner card advanced ("Updated just now") yet the tray stayed silent for 2.5+ min — the receiver's `rulesNeeding` filter working as designed |
 | S36 | Grant restored | Silent (lost set empty); the partner's next snapshot shows the filled grant set | **Recovery proven twice:** the S34a accessibility restore returned the pill to Active (owner-verified), and every S34b probe restore re-journals ACTIVE with no alert. Re-enable latency measurement still owed (task #144) |
+
+**Known harness artifact — a gap alert during a `uiautomator dump` battery
+(explained 2026-11-12, owner asked why S34a-style alerts fired while the user side read
+Protecting).** The ACCESSIBILITY capability is probed from the live binding
+(`AccountabilityModule.kt:1071` reads `BlockerAccessibilityService.connected.get()`, cleared
+on unbind at `BlockerAccessibilityService.kt:376`), not from the secure setting. On this XOS
+device a `uiautomator dump` unbinds and rebinds the service for a few seconds; when the FGS
+permission-check sample (`EnforcementForegroundService.kt:753`, every 20 ticks) lands inside
+that window, the snapshot journals the missing grant as `MONITORING_PERMISSION_CHANGED`
+(`MonitoringSnapshotRecorder.kt:82-96`) and the partner gets the truthful-at-that-instant gap
+alert. The rebind restores the grant, the next snapshot carries an empty lost set, and the
+restore is silent (S36). Decision: no code change — probing the live binding is the honest
+signal; the settings string would hide real unbinds (force-stops, crashes) the partner must
+hear about. Expect one-off gap alerts after harness dumps on the subject phone; they are not
+reproducible without injected tooling.
+
+### G. v22 staged battery re-run on the live pair (2026-11-12, release 1.1.20 v22)
+
+Owner-ordered re-run of the streak, plan, batch, permission and uninstall legs on the
+**staged transport** (`PartnerEventRecorder` → `ServiceEventOutbox` → `PartnerEventSyncWorker`
+→ callable → `PartnerMailboxReceiver` → `PartnerObservationProjection`), release APK on both
+phones, warm §8.1 windows on the acting phone. Timings are act → receiver tray `when`; the
+uninstall leg follows as the last entry of the battery (S32/S33 evidence, re-run subject).
+
+| # | Leg | Result |
+|---|---|---|
+| G1 | S34a re-run: accessibility revoke with live instrumentation | **PASSED.** Alert 39 s after the revoke (tray), naming Battery batch; partner pill Limited; restore → Active in 38 s, silent; user side read Protecting |
+| G2 | S34b re-run: usage access revoke | **PASSED.** Usage alert 32 s; restore 30 s, silent |
+| G3 | S34c re-run: overlay revoke | **PASSED.** Round trip: notify 22 s; restore 30 s, silent |
+| G4 | S34d re-run: VPN consent revoke with a live WEBSITE rule shared | **PASSED.** Revoke T=1794491127 → .107 tray `when=1794491154669` (+27 s) "The website filter is off, so website rules aren't enforced · Battery batch"; nothing after (38 records) |
+| G5 | S35 re-run: revoke a grant no live rule needs, then restore | **PASSED.** Battery batch paused (T_PAUSE=1794491368; receiver "The Battery batch batch was turned off (2 items)." `when=1794491377471`, +9 s), VPN consent revoked at T_SILENT_REVOKE=1794491437 — the caps-loss snapshot drained (`claimed=1` 16:51:02) and the partner card advanced ("Updated just now") but the tray stayed silent for 2.5+ min (no live rule needed the grant). Consent restored at T_RESTORE=1794491654 (`ACTIVATE_VPN: allow`), editor consent card cleared; batch resumed at T_RESUME=1794491676 → receiver "…was changed (2 items)." `when=1794491681301` (+5 s) |
+| G6 | S9 re-run: modify a watched batch (pause → resume → add member → remove member) | **PASSED.** Every verb ONE batch-level row with the correct item count: pause → "was turned off (2 items)." +9 s; resume → "was changed (2 items)." +5 s; add Bible (3 items) T_SAVE_MODIFY=1794491759 → "was changed (3 items)." `when=1794491764956` (+5 s); remove Bible T_REVERT=1794491813 → "was changed (2 items)." `when=1794491818610` (+5 s). Local state restored to 2 items, enabled |
+| G7 | S13/S14 re-run: share a streak | **PASSED.** Share T=1794491880 → "Kelvin Musila shared a streak with you" / "You were added to Battery Streak II." `when=1794491885401` (+5 s) |
+| G8 | S16 re-run: log a relapse with Relapses shared | **PASSED.** Relapse T=1794491910 → "Kelvin Musila logged a relapse" / "Battery Streak II · ended a 1-day streak · Nov 12, 2026 4:58 PM" `when=1794491914151` (+4 s) — wire-v2 named copy |
+| G9 | S19 re-run: turn sharing off, then re-share | **PASSED.** Unshare T=1794491990 → "Kelvin Musila stopped sharing a streak" / "You no longer see Battery Streak II." `when=1794491995581` (+5 s). Re-shared afterwards (`when=1794492020911`) and left shared for the uninstall leg |
+| G10 | S28 re-run: modify a shared plan (add a task) | **PASSED.** Edit added "Stretch for 5 minutes" (T=1794492084; sender "Saved. It reaches your partner at the next sync.", "1 of 3 done"). .107 synced to "1 of 3 done · From Kelvin Musila" and posted "Kelvin Musila shared a plan with you" / "Plan: Evening routine" `when=1794492109253` (+25 s) — the ADR #193 design (PLAN_PUBLISHED is the one plan alert; progress is filtered) |
+| G11 | S29 re-run: recipient checks a plan task | **PASSED.** .107 checked "Read for 10 minutes" → local "2 of 3 done"; .106's authored detail re-read "2 of 3 done" once delivered. No partner notification on either side: .106 has no `partner:event` record (only its normal protection-status notification), and .107's partner record still reads the G10 plan post (`when=1794492109253`) — progress syncs silently, as designed |
+
+Battery end state: Battery batch enabled (2 items), Battery Streak II shared (Day 1),
+"Evening routine" shared with John at 2 of 3 done, VPN consent restored. The uninstall leg
+runs last, with Device availability ON and this state tied.
 
 ## Owner run order (restated 2026-11-09)
 
