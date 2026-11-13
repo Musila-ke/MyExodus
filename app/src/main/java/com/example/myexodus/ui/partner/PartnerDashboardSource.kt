@@ -9,6 +9,7 @@ import com.example.myexodus.data.db.entity.PartnerAttemptAlert
 import com.example.myexodus.data.db.entity.PartnerMonitoringSnapshot
 import com.example.myexodus.data.db.entity.PartnerProtectionGap
 import com.example.myexodus.data.db.entity.PartnerRuleChange
+import com.example.myexodus.data.db.entity.PartnerSharingAlert
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.sync.displayNameOf
 import com.example.myexodus.accountability.state.ChainEvent
@@ -83,6 +84,9 @@ class PartnerDashboardSource(
     /** Owner battery 2026-11-12: blocked/override attempts delivered on the staged transport —
      *  those write no chain rows, so this is their Rules & blocks source, newest first. */
     private val attemptAlerts: suspend (pairId: String) -> List<PartnerAttemptAlert> = { emptyList() },
+    /** Owner ask 2026-11-13: sharing-switch revokes delivered on the staged transport — the
+     *  notification used to be the only surface; this row is their feed/Rules source. */
+    private val sharingAlerts: suspend (pairId: String) -> List<PartnerSharingAlert> = { emptyList() },
 ) {
 
     /**
@@ -132,6 +136,7 @@ class PartnerDashboardSource(
         val ruleRows = runCatching { ruleChanges(enrollment.pairId) }.getOrElse { emptyList() }
         val gapRows = runCatching { protectionGaps(enrollment.pairId) }.getOrElse { emptyList() }
         val attemptRows = runCatching { attemptAlerts(enrollment.pairId) }.getOrElse { emptyList() }
+        val sharingRows = runCatching { sharingAlerts(enrollment.pairId) }.getOrElse { emptyList() }
         val receivedAlerts = rows.mapNotNull { row ->
             runCatching { decode(row.envelope) }
                 .getOrNull()
@@ -139,7 +144,8 @@ class PartnerDashboardSource(
         }
         val ruleAlerts = ruleRows.mapNotNull(::ruleChangeAlert) +
             gapRows.mapNotNull(::protectionGapAlert) +
-            attemptRows.mapNotNull(::attemptAlert)
+            attemptRows.mapNotNull(::attemptAlert) +
+            sharingRows.mapNotNull(::sharingAlert)
         val alerts = receivedAlerts + ruleAlerts
             .filter { it.atEpochMillis >= nowMillis - WEEK_MILLIS }
         val chainHead = head(enrollment.pairId, enrollment.partnerSigningKeyId)

@@ -11,6 +11,7 @@ import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.accountability.state.UnpairPhase
 import com.example.myexodus.accountability.state.UnpairState
 import com.example.myexodus.data.db.entity.PartnerAttemptAlert
+import com.example.myexodus.data.db.entity.PartnerSharingAlert
 import com.example.myexodus.data.db.entity.PartnerMonitoringSnapshot
 import com.example.myexodus.data.db.entity.PartnerProtectionGap
 import com.example.myexodus.data.db.entity.PartnerRuleChange
@@ -126,6 +127,8 @@ class PartnerDashboardSourceTest {
         gapRows: List<PartnerProtectionGap> = emptyList(),
         /** Owner battery 2026-11-12: staged blocked/override rows for this pair. */
         attemptRows: List<PartnerAttemptAlert> = emptyList(),
+        /** Owner ask 2026-11-13: staged sharing-revoke rows for this pair. */
+        sharingRows: List<PartnerSharingAlert> = emptyList(),
     ): RecordingSource {
         val sinceArgs = mutableListOf<Long>()
         val sincePairIds = mutableListOf<String>()
@@ -168,6 +171,7 @@ class PartnerDashboardSourceTest {
             ruleChanges = { ruleChangeRows },
             protectionGaps = { gapRows },
             attemptAlerts = { attemptRows },
+            sharingAlerts = { sharingRows },
         )
         return RecordingSource(source, sinceArgs, sincePairIds, headPairIds, approvalPairIds, rejectionPairIds)
     }
@@ -245,6 +249,23 @@ class PartnerDashboardSourceTest {
         val expected = PartnerAlert.AppActivity(
             target = "com.x", isOverride = false, atEpochMillis = now - 60_000L,
             batchLabel = "Morning batch", appLabel = "Calculator",
+        )
+        assertEquals(expected, paired.alerts.recent.single())
+        assertEquals(listOf(expected), paired.ruleHistory)
+    }
+
+    /** Owner ask 2026-11-13: a staged consent revoke (no chain row, no text) still lands on
+     *  Rules & blocks and in the week preview — the notification is no longer the only surface. */
+    @Test
+    fun stagedSharingRevokes_feedTheAlertsAndRuleHistory() = runTest {
+        val revoke = PartnerSharingAlert(
+            pairId = "pair-1", eventId = "evt-1",
+            kind = EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED, label = null,
+            occurredAtMs = now - 60_000L, expiresAtMs = now + 86_400_000L,
+        )
+        val paired = source(sharingRows = listOf(revoke)).source.load(now) as PartnerDashboardUi.Paired
+        val expected = PartnerAlert.SharingChanged(
+            SharingChange.AVAILABILITY_STOPPED, now - 60_000L,
         )
         assertEquals(expected, paired.alerts.recent.single())
         assertEquals(listOf(expected), paired.ruleHistory)

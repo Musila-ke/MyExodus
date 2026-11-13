@@ -1195,6 +1195,46 @@ class AppRulesStoreMigrationTest {
         context.deleteDatabase("partner-protection-gap-test.db")
     }
 
+    /** v31 adds the receiver's consent-revoke feed rows (task #194). Additive in both
+     *  directions: a v30 database keeps every row, and the rollback drops only this
+     *  notification-derivative table. */
+    @Test
+    fun migration30to31AndBack_addsSharingAlert_andKeepsEveryRow() {
+        val scratchPath = context.getDatabasePath("partner-sharing-alert-test.db").absolutePath
+        AndroidSQLiteDriver().open(scratchPath).use { conn ->
+            conn.prepare("CREATE TABLE sentinel_table (id INTEGER NOT NULL, PRIMARY KEY(id))").use { it.step() }
+            conn.prepare("INSERT INTO sentinel_table (id) VALUES (1)").use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_30_31.migrate(conn) }
+
+            assertEquals(
+                listOf(
+                    "pair_id", "event_id", "kind", "label",
+                    "occurred_at_ms", "expires_at_ms",
+                ),
+                columnNames(conn, "partner_sharing_alert"),
+            )
+            conn.prepare(
+                "INSERT INTO partner_sharing_alert (pair_id, event_id, kind, label, " +
+                    "occurred_at_ms, expires_at_ms) " +
+                    "VALUES ('pair-1', 'evt-1', 'availability_sharing_stopped', NULL, 42, 99)",
+            ).use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_31_30.migrate(conn) }
+
+            assertTrue(
+                "the notification-derivative table is the rollback's only casualty",
+                columnNames(conn, "partner_sharing_alert").isEmpty(),
+            )
+            conn.prepare("SELECT id FROM sentinel_table").use { stmt ->
+                assertTrue("rollback keeps the row", stmt.step())
+                assertEquals(1L, stmt.getLong(0))
+                assertFalse(stmt.step())
+            }
+        }
+        context.deleteDatabase("partner-sharing-alert-test.db")
+    }
+
     private fun columnNames(conn: androidx.sqlite.SQLiteConnection, table: String): List<String> {
         val names = mutableListOf<String>()
         conn.prepare("PRAGMA table_info($table)").use { stmt ->

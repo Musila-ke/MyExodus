@@ -9,6 +9,7 @@ import com.example.myexodus.accountability.serialization.MonitoringCapability
 import com.example.myexodus.data.db.entity.PartnerAttemptAlert
 import com.example.myexodus.data.db.entity.PartnerProtectionGap
 import com.example.myexodus.data.db.entity.PartnerRuleChange
+import com.example.myexodus.data.db.entity.PartnerSharingAlert
 import com.example.myexodus.recovery.RecoveryMirror
 import com.example.myexodus.ui.PillTone
 import java.time.Instant
@@ -128,7 +129,35 @@ sealed interface PartnerAlert {
         val ruleNames: List<String>,
         override val atEpochMillis: Long,
     ) : PartnerAlert
+
+    /** Owner ask 2026-11-13: a sharing switch was turned off — the feed/Rules half of the
+     *  revoke notification, which until now was the only surface. [label] names the streak on
+     *  a streak revoke; the profile-wide switches carry none. */
+    data class SharingChanged(
+        val change: SharingChange,
+        override val atEpochMillis: Long,
+        val label: String? = null,
+    ) : PartnerAlert
 }
+
+/** The consent revokes this build can name; an unknown wire kind (a newer sender) is dropped
+ *  rather than rendered as a wrong switch. */
+enum class SharingChange(val wire: String) {
+    STREAK_STOPPED(EventPayload.TYPE_STREAK_SHARING_STOPPED),
+    CHECKINS_STOPPED(EventPayload.TYPE_CHECKINS_SHARING_STOPPED),
+    AVAILABILITY_STOPPED(EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED),
+    ;
+
+    companion object {
+        fun fromWire(value: String): SharingChange? = entries.firstOrNull { it.wire == value }
+    }
+}
+
+/** A stored staged-revoke row as a feed entry. */
+fun sharingAlert(row: PartnerSharingAlert): PartnerAlert? =
+    SharingChange.fromWire(row.kind)?.let {
+        PartnerAlert.SharingChanged(it, row.occurredAtMs, row.label)
+    }
 
 /** A stored protection-gap row as a feed entry; an unknown grant token (a newer sender's
  *  capability this build cannot name) is dropped rather than rendered as a wrong one. */
@@ -189,6 +218,17 @@ fun alertOf(payload: EventPayload, atEpochMillis: Long): PartnerAlert? = when (p
     EventPayload.TYPE_MILESTONE_REACHED -> payload.stateAfter?.let {
         PartnerAlert.Milestone(it.habitLabel, it.milestoneDay, it.eventOccurredAtMs)
     }
+    // Consent revokes carry no text and (for the profile switches) no state, so the text
+    // parser below can never see them — map the type itself.
+    EventPayload.TYPE_STREAK_SHARING_STOPPED -> PartnerAlert.SharingChanged(
+        SharingChange.STREAK_STOPPED,
+        atEpochMillis,
+        payload.stateAfter?.habitLabel?.takeIf { it.isNotBlank() },
+    )
+    EventPayload.TYPE_CHECKINS_SHARING_STOPPED ->
+        PartnerAlert.SharingChanged(SharingChange.CHECKINS_STOPPED, atEpochMillis)
+    EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED ->
+        PartnerAlert.SharingChanged(SharingChange.AVAILABILITY_STOPPED, atEpochMillis)
     else -> parseActivityText(payload.text, atEpochMillis)?.let {
         if (it is PartnerAlert.AppActivity) it.copy(appLabel = payload.appLabel) else it
     }

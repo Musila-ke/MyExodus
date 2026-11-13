@@ -1539,3 +1539,61 @@ info page has no ⋮ overflow to grant it from the UI. (2) XOS airplane mode kee
 enabled by default ("keep Wi-Fi in airplane mode" is ON), so `svc wifi disable` must be
 added for a true offline state. Both belong in `app/docs/workstation-tooling.md`/device
 runbook at the wrap.
+
+## Post-v30 fix — 2026-11-13 (v31 / 1.1.29, task #194)
+
+### Rule-toggle and sharing-revoke updates never reached the partner's feeds
+
+**Symptom (owner directive 2026-11-12).** A rule switch-off surfaced correctly through
+`RULE_CONTROL` (Rules & blocks + activity feed + tap-to-Rules notification). The sharing
+switches did not: switching **Device availability**, **Blocked-app check-ins**, or a
+**streak's sharing** off posted the consent notification but left no row in Rules & updates
+or Recent activity, and the availability/check-ins notifications tapped into a feed that
+never mentioned the change. A rule switch-off therefore looked recorded while the
+availability switch-off looked like it vanished.
+
+**Root cause.** The three revoke payloads are snapshot-less and carry empty text
+(`TYPE_AVAILABILITY_SHARING_STOPPED`, `TYPE_CHECKINS_SHARING_STOPPED`,
+`TYPE_STREAK_SHARING_STOPPED` — the last one carrying only `habitLabel`). Since v21 they
+deliver through the staged transport, which writes **no chain rows**, and `alertOf` /
+`parseActivityText` can only present text/state — so nothing fed `alerts` or `ruleHistory`.
+The notification was the only surface the revoke ever reached.
+
+**Fix (mirrors the `PartnerAttemptAlert` precedent).**
+- `data/db/entity/PartnerSharingAlert.kt` + `dao/PartnerSharingAlertDao.kt` — pair-scoped
+  `partner_sharing_alert` (primary key `(pair_id, event_id)`, `IGNORE` on conflict so a
+  redelivery dedupes; `kind` stores the wire consent type, `label` the streak name when the
+  revoke is habit-anchored). `AppRulesStore` v31 with
+  `MIGRATION_30_31`/`MIGRATION_31_30`, schema `31.json`.
+- `accountability/delivery/PartnerObservationProjection.kt` — every delivered
+  `SHARING_STOPPED_TYPES` payload persists the row (sender occurrence time, 30-day
+  `PartnerEventJournal` retention) before the notification path runs.
+- `ui/partner/PartnerPresentation.kt` — `PartnerAlert.SharingChanged(change, at, label)`
+  plus wire-map `SharingChange`; `alertOf` maps the three types (the legacy chain path keeps
+  parity) and `sharingAlert(row)` decodes the stored row.
+- `ui/partner/PartnerDashboardSource.kt` + `di/AccountabilityModule.kt` — stored rows fold
+  into `ruleAlerts`, so they surface in both the week `alerts` feed and `ruleHistory`
+  (Rules & blocks), same 5-row/limit handling as the other receiver-side rows.
+- `PartnerScreen.AlertRow` — label per change (streak name or "Blocked-app check-ins" /
+  the Device availability title), kind "Stopped sharing", `VisibilityOff` glyph.
+- `data/db/PartnerActivityPrune.kt` — the new table joins the orphan/unpair/purge sweep.
+
+**Scope ruling (recorded, not silent).** Only revokes produce a feed row: availability ON
+emits nothing by the owner ruling of 2026-11-12 (notify on off only), and check-ins/streak
+revokes share this one code path — the row family covers all three rather than leaving two
+of the three still invisible. Block-toggle rule changes were already fully surfaced through
+`PartnerRuleChange` (verified from source, no change needed).
+
+**Tests.** `PartnerObservationProjectionTest`: a delivered availability revoke and a streak
+revoke each persist exactly one row with kind/label/occurrence/expiry, redelivery dedupes.
+`PartnerPresentationTest`: `alertOf` maps all three types (streak label kept, blank label →
+null) and `sharingAlert` maps rows, unknown kind → null. `PartnerDashboardSourceTest`: a
+stored revoke lands in `alerts.recent` and `ruleHistory`. `AppRulesStoreMigrationTest`:
+30→31 creates the table, rollback drops only it and keeps sentinel rows; the
+`ALL_MIGRATIONS` coverage guard passes.
+
+**Device evidence.** Tests + source verification only at the time of writing: the partner
+surfaces need the second phone, which was handed back on 2026-11-13 after the AC09 window.
+Recorded BLOCKED, not PASSED — to be observed on the next borrowed-device window (turn
+availability off on .106 → expect "Stopped sharing · Device availability" in the partner's
+Rules & updates and Recent activity).

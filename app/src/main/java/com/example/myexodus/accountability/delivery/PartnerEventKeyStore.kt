@@ -129,7 +129,9 @@ open class PartnerEventKeyStore @Inject constructor() {
             .setDigests(KeyProperties.DIGEST_SHA256)
             .setUserAuthenticationRequired(false)
         if (challenge != null) builder.setAttestationChallenge(challenge)
-        if (strongBox) builder.setIsStrongBoxBacked(true)
+        if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            builder.setIsStrongBoxBacked(true)
+        }
         KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEYSTORE)
             .apply { initialize(builder.build()) }
             .generateKeyPair()

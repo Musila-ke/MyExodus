@@ -902,6 +902,13 @@ object AccountabilityModule {
                     ?.recent(pairId, System.currentTimeMillis(), RULE_FEED_LIMIT)
                     ?: emptyList()
             },
+            // Owner ask 2026-11-13: the consent-revoke rows the receive hook writes, shown on
+            // Rules & blocks and the feed (30-day retention, same as rule changes).
+            sharingAlerts = { pairId ->
+                storeFactory.open()?.partnerSharingAlertDao()
+                    ?.recent(pairId, System.currentTimeMillis(), RULE_FEED_LIMIT)
+                    ?: emptyList()
+            },
             decoderFor = { enrollment ->
                 val cek = cekDerivation.deriveCek(
                     enrollment.pairId,

@@ -43,6 +43,7 @@ import androidx.compose.material.icons.outlined.Timeline
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -2646,6 +2647,13 @@ private fun AlertRow(alert: PartnerAlert) {
             ?: stringResource(R.string.partner_alert_rule)
         is PartnerAlert.PermissionLost -> gapRuleNames(alert.ruleNames)
             ?: stringResource(R.string.partner_alert_rule)
+        is PartnerAlert.SharingChanged -> when (alert.change) {
+            SharingChange.STREAK_STOPPED -> alert.label
+                ?: stringResource(R.string.partner_alert_streak_unnamed)
+            SharingChange.CHECKINS_STOPPED -> stringResource(R.string.partner_alert_checkins_switch)
+            SharingChange.AVAILABILITY_STOPPED ->
+                stringResource(R.string.settings_sharing_availability_title)
+        }
     }
     val kind = when (alert) {
         is PartnerAlert.AppActivity ->
@@ -2669,6 +2677,7 @@ private fun AlertRow(alert: PartnerAlert) {
             }
         }
         is PartnerAlert.PermissionLost -> stringResource(permissionEffectRes(alert.capability))
+        is PartnerAlert.SharingChanged -> stringResource(R.string.partner_alert_sharing_stopped)
     }
     Row(
         Modifier.fillMaxWidth(),
@@ -2708,6 +2717,11 @@ private fun AlertRow(alert: PartnerAlert) {
             is PartnerAlert.PermissionLost -> AppMark(
                 packageName = null,
                 fallback = Icons.Outlined.GppBad,
+                size = 28.dp,
+            )
+            is PartnerAlert.SharingChanged -> AppMark(
+                packageName = null,
+                fallback = Icons.Outlined.VisibilityOff,
                 size = 28.dp,
             )
         }

@@ -110,6 +110,14 @@ data class EventPayload(
             TYPE_AVAILABILITY_SHARING_STOPPED,
         )
 
+        /** Consent revokes — announcements of a switch going off, never state. The receiver
+         *  keeps a feed row for each delivered one (they carry no chain row and no text). */
+        val SHARING_STOPPED_TYPES: Set<String> = setOf(
+            TYPE_STREAK_SHARING_STOPPED,
+            TYPE_CHECKINS_SHARING_STOPPED,
+            TYPE_AVAILABILITY_SHARING_STOPPED,
+        )
+
         /** Wire v2 (ADR #134): the kinds that concern one habit — exactly these carry
          *  [ActivityStateAfter.habitLabel] and, since wire v3, its stable [ActivityStateAfter.habitId]. */
         val HABIT_ANCHORED_ACTIVITY_TYPES: Set<String> = setOf(

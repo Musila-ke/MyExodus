@@ -1883,6 +1883,34 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * v30 → v31 (owner ask 2026-11-13): the receiver's record of a sharing-consent revoke
+         * delivered on the staged transport, so the switch-off shows on Rules & blocks and the
+         * feed instead of only in the tray. Additive — no existing table is touched.
+         */
+        val MIGRATION_30_31 = object : Migration(30, 31) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_sharing_alert (" +
+                        "pair_id TEXT NOT NULL, event_id TEXT NOT NULL, kind TEXT NOT NULL, " +
+                        "label TEXT, occurred_at_ms INTEGER NOT NULL, " +
+                        "expires_at_ms INTEGER NOT NULL, PRIMARY KEY(pair_id, event_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_sharing_alert_occurred_at_ms " +
+                        "ON partner_sharing_alert (occurred_at_ms)",
+                ).use { it.step() }
+            }
+        }
+
+        /** v31 rollback (older build reinstalled): the consent rows reflect delivered staged
+         *  events only — the tray still announces them, and nothing else references the table. */
+        val MIGRATION_31_30 = object : Migration(31, 30) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("DROP TABLE IF EXISTS partner_sharing_alert").use { it.step() }
+            }
+        }
+
         /** v23 rollback (older build reinstalled): table rebuilds remove the identity and
          *  batch columns while every rule and journal row survives. */
         val MIGRATION_23_22 = object : Migration(23, 22) {
@@ -2201,6 +2229,7 @@ class AppRulesStoreFactory(
             MIGRATION_27_28, MIGRATION_28_27,
             MIGRATION_28_29, MIGRATION_29_28,
             MIGRATION_29_30, MIGRATION_30_29,
+            MIGRATION_30_31, MIGRATION_31_30,
         )
     }
 }

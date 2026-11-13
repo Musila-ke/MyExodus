@@ -9,6 +9,7 @@ import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.monitoring.MonitoringSnapshotReceiver
 import com.example.myexodus.accountability.monitoring.PartnerPermissionLossReporter
 import com.example.myexodus.accountability.plan.PartnerPlanReceiver
+import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.encodePayload
 import com.example.myexodus.accountability.state.AccountabilityDatabase
@@ -84,6 +85,29 @@ class PartnerObservationProjectionTest {
     }
 
     @Test
+    fun deliveredConsentRevoke_becomesTheFeedRow() = runBlocking {
+        db.enrollmentDao().upsert(enrollment())
+
+        projection().onDelivered(
+            document(kind = PartnerEventKind.ACCOUNTABILITY_UPDATE.wire),
+            revoke(EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED),
+        )
+        projection().onDelivered(
+            document(eventId = "evt-2", kind = PartnerEventKind.ACCOUNTABILITY_UPDATE.wire),
+            revoke(EventPayload.TYPE_STREAK_SHARING_STOPPED, habitLabel = "No porn"),
+        )
+
+        val rows = factory.open()!!.partnerSharingAlertDao().recent("pair-1", nowMs, 100)
+            .sortedBy { it.eventId }
+        assertEquals(listOf("evt-1", "evt-2"), rows.map { it.eventId })
+        assertEquals(EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED, rows[0].kind)
+        assertEquals(null, rows[0].label)
+        assertEquals("No porn", rows[1].label)
+        assertEquals(nowMs, rows[0].occurredAtMs)
+        assertEquals(nowMs + PartnerEventJournal.RETENTION_MILLIS, rows[0].expiresAtMs)
+    }
+
+    @Test
     fun otherKinds_neverWriteAnAttemptRow() = runBlocking {
         db.enrollmentDao().upsert(enrollment())
 
@@ -126,6 +150,21 @@ class PartnerObservationProjectionTest {
 
     private fun payload(text: String, appLabel: String? = null) = encodePayload(
         EventPayload(type = EventPayload.TYPE_ACTIVITY, text = text, appLabel = appLabel),
+    )
+
+    private fun revoke(type: String, habitLabel: String? = null) = encodePayload(
+        EventPayload(
+            type = type,
+            text = "",
+            protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
+            schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,
+            stateAfter = habitLabel?.let {
+                ActivityStateAfter(
+                    daysFree = 3, relapseCount = 0, milestonesReached = emptyList(),
+                    coachingProgress = 0, eventOccurredAtMs = nowMs, habitLabel = it,
+                )
+            },
+        ),
     )
 
     private fun enrollment() = EnrollmentRecord(

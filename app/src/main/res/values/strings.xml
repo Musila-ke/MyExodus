@@ -1193,6 +1193,8 @@
     <string name="partner_alert_milestone_plain">Reached a milestone</string>
     <string name="partner_alert_streak_unnamed">Their streak</string>
     <string name="partner_alert_rule">Restriction rule</string>
+    <string name="partner_alert_checkins_switch">Blocked-app check-ins</string>
+    <string name="partner_alert_sharing_stopped">Stopped sharing</string>
     <string name="partner_rule_created">Rule created</string>
     <string name="partner_rule_assigned">Rule assigned to you</string>
     <string name="partner_rule_unassigned">Rule no longer shared with you</string>

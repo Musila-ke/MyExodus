@@ -17,6 +17,7 @@ import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.PartnerAttemptAlert
 import com.example.myexodus.data.db.entity.PartnerEventJournal
+import com.example.myexodus.data.db.entity.PartnerSharingAlert
 
 /**
  * §13.3 Phase 7 recipient half of the auth-free staged transport for everything the rule
@@ -68,6 +69,11 @@ class PartnerObservationProjection(
         if (document.kind == PartnerEventKind.BLOCK_ATTEMPT.wire) {
             persistAttempt(store, pairId, document, payload)
         }
+        // Same gap for the consent revokes: no chain row and no text/state, so without this
+        // row the notification would be the only surface they ever reach.
+        if (payload.type in EventPayload.SHARING_STOPPED_TYPES) {
+            persistSharingAlert(store, pairId, document, payload)
+        }
         if (payload.type == PlanWire.TYPE_PLAN_PUBLISHED || payload.type == PlanWire.TYPE_PLAN_PROGRESS) {
             planReceiver.applyAppended(pairId, payload)
         } else {
@@ -115,6 +121,30 @@ class PartnerObservationProjection(
                 ),
             )
         }.onFailure { Log.w(TAG, "attempt alert store failed pairId=$pairId", it) }
+    }
+
+    private suspend fun persistSharingAlert(
+        store: AppRulesStore,
+        pairId: String,
+        document: PartnerMailboxDocument,
+        payload: EventPayload,
+    ) {
+        val eventId = document.eventId ?: return
+        runCatching {
+            val nowMs = now()
+            val dao = store.partnerSharingAlertDao()
+            dao.deleteExpired(nowMs)
+            dao.insert(
+                PartnerSharingAlert(
+                    pairId = pairId,
+                    eventId = eventId,
+                    kind = payload.type,
+                    label = payload.stateAfter?.habitLabel?.takeIf { it.isNotBlank() },
+                    occurredAtMs = document.createdAtMs,
+                    expiresAtMs = nowMs + PartnerEventJournal.RETENTION_MILLIS,
+                ),
+            )
+        }.onFailure { Log.w(TAG, "sharing alert store failed pairId=$pairId", it) }
     }
 
     private suspend fun onMonitoringUpdate(

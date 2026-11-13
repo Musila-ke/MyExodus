@@ -1,5 +1,6 @@
 package com.example.myexodus.ui.partner
 
+import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.MonitoringCapability
 import com.example.myexodus.accountability.serialization.RuleChange
@@ -7,6 +8,7 @@ import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.data.db.entity.PartnerProtectionGap
 import com.example.myexodus.data.db.entity.PartnerRuleChange
+import com.example.myexodus.data.db.entity.PartnerSharingAlert
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.recovery.RecoveryMirror
 import com.example.myexodus.ui.PillTone
@@ -80,6 +82,60 @@ class PartnerPresentationTest {
         val old = alertOf(EventPayload(text = "blocked:com.ichi2.anki"), atEpochMillis = 42L)
             as PartnerAlert.AppActivity
         assertNull(old.appLabel)
+    }
+
+    @Test
+    fun alertOf_mapsEverySharingStoppedType_andKeepsTheStreakLabel() {
+        assertEquals(
+            PartnerAlert.SharingChanged(
+                SharingChange.AVAILABILITY_STOPPED, 42L,
+            ),
+            alertOf(EventPayload(type = EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED, text = ""), 42L),
+        )
+        assertEquals(
+            PartnerAlert.SharingChanged(SharingChange.CHECKINS_STOPPED, 42L),
+            alertOf(EventPayload(type = EventPayload.TYPE_CHECKINS_SHARING_STOPPED, text = ""), 42L),
+        )
+        val state = ActivityStateAfter(
+            daysFree = 3, relapseCount = 0, milestonesReached = emptyList(),
+            coachingProgress = 0, eventOccurredAtMs = 42L, habitLabel = "No porn",
+        )
+        assertEquals(
+            PartnerAlert.SharingChanged(SharingChange.STREAK_STOPPED, 42L, "No porn"),
+            alertOf(
+                EventPayload(
+                    type = EventPayload.TYPE_STREAK_SHARING_STOPPED,
+                    text = "",
+                    stateAfter = state,
+                ),
+                42L,
+            ),
+        )
+        assertEquals(
+            PartnerAlert.SharingChanged(SharingChange.STREAK_STOPPED, 42L, null),
+            alertOf(
+                EventPayload(
+                    type = EventPayload.TYPE_STREAK_SHARING_STOPPED,
+                    text = "",
+                    stateAfter = state.copy(habitLabel = " "),
+                ),
+                42L,
+            ),
+        )
+    }
+
+    @Test
+    fun sharingAlert_mapsTheStoredRow_andDropsAnUnknownKind() {
+        val row = PartnerSharingAlert(
+            pairId = "pair", eventId = "evt",
+            kind = EventPayload.TYPE_CHECKINS_SHARING_STOPPED, label = null,
+            occurredAtMs = now, expiresAtMs = now,
+        )
+        assertEquals(
+            PartnerAlert.SharingChanged(SharingChange.CHECKINS_STOPPED, now, null),
+            sharingAlert(row),
+        )
+        assertNull(sharingAlert(row.copy(kind = "something_else")))
     }
 
     @Test
