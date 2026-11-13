@@ -266,16 +266,22 @@ class PartnerEventDrain(
                                 prepared.eventId, revision, authorized,
                             )
                         ) {
-                            PartnerEventRecorder.RegenerationResult.RecipientKeyUnavailable,
-                            PartnerEventRecorder.RegenerationResult.Failed,
-                            -> outbox.deferWaiting(
-                                prepared.eventId,
-                                clock.wallClockMs() + limits.waitingBackoffMs,
-                            )
                             PartnerEventRecorder.RegenerationResult.Regenerated ->
                                 onRecipientKeyRegenerated()
-                            // SourceUnavailable: only the already-signed bytes can resend, and
-                            // the defer above already bounds the next attempt.
+                            // No local action can produce a different authorized set, so the
+                            // slow waiting backoff replaces a resend that would earn the same
+                            // rejection again.
+                            PartnerEventRecorder.RegenerationResult.RegeneratedUnchanged,
+                            PartnerEventRecorder.RegenerationResult.RecipientKeyUnavailable,
+                            PartnerEventRecorder.RegenerationResult.SourceUnavailable,
+                            PartnerEventRecorder.RegenerationResult.Failed,
+                            -> {
+                                outbox.applyRegeneratedEnvelopes(prepared.eventId, null, revision)
+                                outbox.deferWaiting(
+                                    prepared.eventId,
+                                    clock.wallClockMs() + limits.waitingBackoffMs,
+                                )
+                            }
                             else -> Unit
                         }
                         retried++
@@ -341,6 +347,7 @@ class PartnerEventDrain(
             when (recorder.regenerateRecipientEnvelopes(row.eventId)) {
                 PartnerEventRecorder.RegenerationResult.Regenerated ->
                     onRecipientKeyRegenerated()
+                PartnerEventRecorder.RegenerationResult.RegeneratedUnchanged,
                 PartnerEventRecorder.RegenerationResult.RecipientKeyUnavailable,
                 PartnerEventRecorder.RegenerationResult.Failed,
                 PartnerEventRecorder.RegenerationResult.SourceUnavailable,

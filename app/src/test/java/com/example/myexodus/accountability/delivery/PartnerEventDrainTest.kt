@@ -253,6 +253,42 @@ class PartnerEventDrainTest {
     }
 
     @Test
+    fun staleKey_thatRegeneratesToTheSameAuthorizedSet_parksWaitingWithoutResending() = runBlocking {
+        registered()
+        val recorded = record()
+        // The server rejects the exact key set the row already carries, so re-encrypting for
+        // the same recipients cannot change the answer and a resend would only re-earn it.
+        val unchangedKeyId = ExistingE2eeRecipientEncryptor.recipientKeyIdOf(byteArrayOf(1))
+        transport.responder = { batch ->
+            PartnerEventBatchResultV1(
+                listOf(
+                    PartnerEventResultV1(
+                        index = 0,
+                        eventId = batch.events[0].event.eventId,
+                        code = PartnerEventResultCode.RECIPIENT_KEY_STALE,
+                        currentRecipientKeys = listOf(RecipientKeyRef(unchangedKeyId, 2, null)),
+                    ),
+                ),
+            )
+        }
+
+        val result = drain.run(allowRegistration = false)
+
+        assertEquals(1, result.retried)
+        assertEquals("an unchanged set is not a successful re-encryption", 0, regenerations)
+        val row = checkNotNull(outbox.event(recorded.eventId))
+        assertEquals(PendingPartnerEvent.STATUS_WAITING_FOR_RECIPIENT_KEY, row.status)
+        assertNull(row.recipientEnvelopesBlob)
+        assertTrue("the sealed source survives", row.temporaryLocalCiphertext != null)
+        assertEquals(clock.nowMs + 900_000, row.nextAttemptAtMs)
+
+        clock.nowMs += 899_999
+        drain.run(allowRegistration = false)
+
+        assertEquals("no resend inside the waiting backoff", 1, transport.submitted.size)
+    }
+
+    @Test
     fun staleKey_withNoLocalEnrollment_parksTheRowWaiting() = runBlocking {
         registered()
         val recorded = record()

@@ -71,8 +71,9 @@ Symptom: the installation is marked `REENROLL_REQUIRED`; `PartnerEventDrain.run`
 Symptom: the server answers `RECIPIENT_KEY_STALE`, or rows park in `WAITING_FOR_RECIPIENT_KEY` and `partner_waiting_recipient_key` fires.
 
 - Automatic: the drain re-encrypts from the retained sealed source **for the server's current authorized key set only** (a definitively no-effect rejection; §8.1). Empty authorized set parks the row `WAITING_FOR_RECIPIENT_KEY` and never re-encrypts for a revoked key.
+- If the re-encryption reproduces exactly the key set the server just rejected, the row parks in `WAITING_FOR_RECIPIENT_KEY` (ADR #307) instead of resending the same answer. `SourceUnavailable` and regeneration failures park the same way. This bounds a futile stale loop to one probe per 900 s and is visible in `partner_waiting_recipient_key`; a sustained count therefore means "the key set is not converging", not "the phone is retrying".
 - Waiting rows re-probe once per drain (900 s backoff). When the partner's new key appears, the row regenerates, re-signs and delivers in the same pass; `partner_recipient_key_regenerated` counts it.
-- A row whose sealed source is gone (`SourceUnavailable`) can only resend its already-signed bytes; the drain's defer bounds retries.
+- A row whose sealed source is gone (`SourceUnavailable`) cannot mint new bytes; it parks WAITING and a probe only succeeds if the seal becomes readable again.
 - Sustained waiting-age growth on an online pair means the partner never re-registered a key: check their device's foreground enrollment, not the sender.
 
 ### Migration checkpoint and crash recovery (§13.4)

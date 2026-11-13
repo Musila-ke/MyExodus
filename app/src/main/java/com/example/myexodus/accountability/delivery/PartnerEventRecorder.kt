@@ -43,6 +43,9 @@ class PartnerEventRecorder(
 
     sealed interface RegenerationResult {
         data object Regenerated : RegenerationResult
+        /** The re-encryption produced exactly the key set the server just rejected: resending
+         *  cannot change the answer, so the row parks instead of re-firing the rejection. */
+        data object RegeneratedUnchanged : RegenerationResult
         data object NoSuchEvent : RegenerationResult
         /** Not owned by the active account, not definitive-no-effect, or already terminal. */
         data object NotPermitted : RegenerationResult
@@ -220,12 +223,23 @@ class PartnerEventRecorder(
                     authorizedRecipientKeyIds, recipientPairId = row.recipientPairId,
                 )
             ) {
-                is Encrypted -> if (
-                    outbox.applyRegeneratedEnvelopes(eventId, encryption.envelopes, recipientKeyRevision)
-                ) {
-                    RegenerationResult.Regenerated
-                } else {
-                    RegenerationResult.NotPermitted
+                is Encrypted -> {
+                    val previousKeyIds = runCatching {
+                        row.recipientEnvelopesBlob?.let { ExistingE2eeRecipientEncryptor.decode(it) }
+                    }.getOrNull().orEmpty().map { it.recipientEncryptionKeyId }.toSet()
+                    val newKeyIds = encryption.envelopes.map { it.recipientEncryptionKeyId }.toSet()
+                    if (newKeyIds == previousKeyIds) {
+                        // The server rejected exactly this authorized set, so re-encrypting for
+                        // the same recipients can only earn the same rejection: park instead.
+                        outbox.applyRegeneratedEnvelopes(eventId, null, recipientKeyRevision)
+                        RegenerationResult.RegeneratedUnchanged
+                    } else if (
+                        outbox.applyRegeneratedEnvelopes(eventId, encryption.envelopes, recipientKeyRevision)
+                    ) {
+                        RegenerationResult.Regenerated
+                    } else {
+                        RegenerationResult.NotPermitted
+                    }
                 }
                 RecipientKeyUnavailable -> {
                     outbox.applyRegeneratedEnvelopes(eventId, null, recipientKeyRevision)
