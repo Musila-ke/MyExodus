@@ -2029,11 +2029,11 @@
     <string name="backup_restore_done_title">Backup restored</string>
     <string name="backup_restore_done_body">Revision %1$d is now on this phone.</string>
     <string name="app_lock_locked_title">My Exodus is locked</string>
-    <string name="app_lock_locked_body">Unlock with your device screen lock to open the app. Your private data stays encrypted until then.</string>
+    <string name="app_lock_locked_body">Your data stays encrypted until you unlock.</string>
     <string name="app_lock_setup_title">Protect My Exodus</string>
-    <string name="app_lock_setup_body">Choose your device screen lock so only you can open your private data.</string>
+    <string name="app_lock_setup_body">Use your phone\'s screen lock. My Exodus never stores its own PIN.</string>
     <string name="app_lock_recovery_title">Recovery needed</string>
-    <string name="app_lock_recovery_body">Your protected data is still on this device, but it could not be opened automatically. Nothing has been deleted.</string>
+    <string name="app_lock_recovery_body">Your data is still here, but it could not be opened. Nothing was deleted.</string>
     <string name="app_lock_transition_body">Finishing a protected operation. Keep the app open.</string>
     <string name="app_lock_progress_description">Working</string>
     <string name="app_lock_unlock">Unlock</string>
@@ -2048,7 +2048,8 @@
     <string name="app_lock_cancel">Cancel</string>
     <string name="app_lock_prompt_title">Unlock My Exodus</string>
     <string name="app_lock_prompt_subtitle">Confirm it\'s you to open your private data</string>
-    <string name="app_lock_setup_disclosure">My Exodus uses the same PIN, pattern, password or strong biometric that unlocks this phone. Locally stored data that is not synced can become inaccessible if the device\'s security key is lost. The app window is blocked from screenshots and screen sharing; this is not a defense against a rooted device.</string>
+    <string name="app_lock_setup_note_grace">Locks whenever you leave the app. Screenshots are blocked.</string>
+    <string name="app_lock_setup_disclosure">Unsynced data can be lost if your phone\'s screen lock is reset.</string>
     <string name="app_lock_failure_no_screen_lock">No device screen lock is set. Set up a PIN, pattern or password first.</string>
     <string name="app_lock_failure_no_authenticator">This device has no supported way to confirm your screen lock.</string>
     <string name="app_lock_failure_busy">Another protected operation is still finishing. Try again in a moment.</string>
@@ -2056,7 +2057,9 @@
     <string name="settings_app_lock_title">App Lock</string>
     <string name="settings_app_lock_summary_on">On</string>
     <string name="settings_app_lock_summary_off">Off</string>
-    <string name="settings_app_lock_description">Lock My Exodus with your device screen lock. The same PIN, pattern, password or strong biometric that unlocks this phone is accepted; My Exodus never stores its own PIN. Locally stored data that is not synced can become inaccessible if the device\'s security key is lost. Screenshots and screen sharing of the app window are blocked while this is on. This is not a defense against a rooted device.</string>
+    <string name="settings_app_lock_description">Uses your phone\'s screen lock. Unsynced data can be lost if that lock is reset.</string>
+    <string name="settings_app_lock_hero_on">Locks whenever you leave the app.</string>
+    <string name="settings_app_lock_hero_off">Anyone who unlocks this phone can open My Exodus.</string>
     <string name="settings_app_lock_enable">Enable App Lock</string>
     <string name="settings_app_lock_lock_now">Lock now</string>
     <string name="settings_app_lock_turn_off">Turn off App Lock</string>

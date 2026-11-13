@@ -32,8 +32,8 @@ val Typography = Typography(
         lineHeight = 60.sp,
         letterSpacing = (-1).sp,
     ),
-    // Editorial headline for the first-run journey: Fraunces at a size that reads as a
-    // statement, not a label. No other screen uses this role yet.
+    // Editorial headline: Fraunces at a size that reads as a statement, not a label.
+    // Used by the first-run journey and the App Lock shell.
     headlineLarge = TextStyle(
         fontFamily = DisplayFamily,
         fontWeight = FontWeight.SemiBold,

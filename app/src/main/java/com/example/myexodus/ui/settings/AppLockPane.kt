@@ -6,11 +6,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -60,19 +62,34 @@ internal fun AppLockPane(
         BackRow(label = stringResource(R.string.settings_app_lock_title), onBack = onBack)
         Column(
             modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp).padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = 20.dp).padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
-                shape = MaterialTheme.shapes.medium,
+                shape = MaterialTheme.shapes.large,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(
-                    stringResource(R.string.settings_app_lock_description),
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(16.dp),
-                )
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        stringResource(
+                            if (enabled) R.string.settings_app_lock_summary_on
+                            else R.string.settings_app_lock_summary_off,
+                        ),
+                        style = MaterialTheme.typography.headlineMedium,
+                    )
+                    Text(
+                        stringResource(
+                            if (enabled) R.string.settings_app_lock_hero_on
+                            else R.string.settings_app_lock_hero_off,
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             failure?.let { failure ->
                 Text(
@@ -93,12 +110,15 @@ internal fun AppLockPane(
                 Button(
                     onClick = { controller.lockNow() },
                     enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
                 ) { Text(stringResource(R.string.settings_app_lock_lock_now)) }
                 OutlinedButton(
                     onClick = { confirmDisable = true },
                     enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
                 ) { Text(stringResource(R.string.settings_app_lock_turn_off)) }
                 if (busy) CircularProgressIndicator()
             } else {
@@ -113,9 +133,14 @@ internal fun AppLockPane(
                                 AppLockFailure.NoSupportedAuthenticator
                         }
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
                 ) { Text(stringResource(R.string.settings_app_lock_enable)) }
             }
+            Text(
+                stringResource(R.string.settings_app_lock_description),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 

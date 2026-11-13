@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -20,6 +21,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,6 +36,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.myexodus.R
+import com.example.myexodus.ui.BrandMark
 import kotlinx.coroutines.launch
 
 /**
@@ -58,6 +61,7 @@ private fun AppLockShell(state: AppLockState, controller: AppLockController) {
     var failure by remember(state) { mutableStateOf<AppLockFailure?>(null) }
     var busy by remember { mutableStateOf(false) }
     var confirmReset by remember(state) { mutableStateOf(false) }
+    var prompted by remember { mutableStateOf(false) }
 
     val title = when (state) {
         AppLockState.RECOVERY_REQUIRED -> R.string.app_lock_recovery_title
@@ -88,19 +92,30 @@ private fun AppLockShell(state: AppLockState, controller: AppLockController) {
         }
     }
 
+    // Intent-first (owner 2026-11-13): arriving locked opens the OS prompt once, like
+    // WhatsApp. A cancelled prompt lands back here with the Unlock button and no repeat
+    // prompt (§8.8 forbids automatic repeated prompts).
+    LaunchedEffect(state) {
+        if (state == AppLockState.LOCKED && !prompted) {
+            prompted = true
+            runOperation { controller.unlock(authorizer) }
+        }
+    }
+
     Surface(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().padding(28.dp), contentAlignment = Alignment.Center) {
             Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
             ) {
+                BrandMark(size = 52.dp)
+                Spacer(Modifier.height(20.dp))
                 Text(
                     text = stringResource(title),
-                    style = MaterialTheme.typography.headlineSmall,
+                    style = MaterialTheme.typography.headlineLarge,
                     textAlign = TextAlign.Center,
                 )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
                 Text(
                     text = stringResource(body),
                     style = MaterialTheme.typography.bodyLarge,
@@ -108,10 +123,17 @@ private fun AppLockShell(state: AppLockState, controller: AppLockController) {
                     textAlign = TextAlign.Center,
                 )
                 if (state == AppLockState.SETUP_REQUIRED) {
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(18.dp))
+                    Text(
+                        text = stringResource(R.string.app_lock_setup_note_grace),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(4.dp))
                     Text(
                         text = stringResource(R.string.app_lock_setup_disclosure),
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
                     )
@@ -135,16 +157,18 @@ private fun AppLockShell(state: AppLockState, controller: AppLockController) {
                     }
                 }
                 if (!inProgress) {
-                    Spacer(Modifier.height(24.dp))
+                    Spacer(Modifier.height(28.dp))
                     when (state) {
                         AppLockState.LOCKED -> Button(
                             enabled = !busy,
                             onClick = { runOperation { controller.unlock(authorizer) } },
+                            modifier = Modifier.fillMaxWidth().height(52.dp),
                         ) { Text(stringResource(R.string.app_lock_unlock)) }
                         AppLockState.SETUP_REQUIRED -> {
                             Button(
                                 enabled = !busy,
                                 onClick = { runOperation { controller.enroll(authorizer) } },
+                                modifier = Modifier.fillMaxWidth().height(52.dp),
                             ) { Text(stringResource(R.string.app_lock_setup_enable)) }
                             TextButton(
                                 enabled = !busy,
@@ -158,6 +182,7 @@ private fun AppLockShell(state: AppLockState, controller: AppLockController) {
                             Button(
                                 enabled = !busy,
                                 onClick = { controller.retryRecovery() },
+                                modifier = Modifier.fillMaxWidth().height(52.dp),
                             ) { Text(stringResource(R.string.app_lock_recovery_retry)) }
                             TextButton(
                                 enabled = !busy,
