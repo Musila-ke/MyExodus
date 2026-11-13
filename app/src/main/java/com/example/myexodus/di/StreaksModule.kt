@@ -7,6 +7,7 @@ import com.example.myexodus.streaks.MilestoneAlerter
 import com.example.myexodus.streaks.MilestoneScheduler
 import com.example.myexodus.streaks.StreakAnomalyLog
 import com.example.myexodus.streaks.SystemStreakClock
+import com.example.myexodus.telemetry.CrashReporting
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -38,11 +39,15 @@ object StreaksModule {
         anomalyLog: StreakAnomalyLog,
         scheduler: MilestoneScheduler,
         @ApplicationContext context: Context,
+        crashReporting: CrashReporting,
     ): HabitRepository = HabitRepository(
         storeFactory = storeFactory,
         anomalyLog = anomalyLog,
         readings = { SystemStreakClock.read(context) },
         scheduler = scheduler,
+        featureTelemetry = { event, outcome, reason ->
+            crashReporting.featureOutcome(event, outcome, reason)
+        },
     )
 
     @Provides @Singleton

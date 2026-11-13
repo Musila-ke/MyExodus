@@ -2,6 +2,7 @@ package com.example.myexodus.telemetry
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Build
 import androidx.core.content.edit
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -54,6 +55,21 @@ class CrashReporting @Inject constructor(
             detail.forEach { (k, v) -> append(' ').append(k).append('=').append(v) }
         }
         runCatching { FirebaseCrashlytics.getInstance().recordException(NonFatalEvent(message)) }
+    }
+
+    /**
+     * Feature-outcome rail (task #7, owner direction 2026-11-06): non-crash flow outcomes a
+     * remote tester can report as "X doesn't work". Same Decision-12 contract as [nonFatal] —
+     * event, outcome, reason code, OEM, API level; never labels, package names, durations, or
+     * limits — and the same Settings opt-out.
+     */
+    fun featureOutcome(event: String, outcome: String, reason: String? = null) {
+        val detail = buildList {
+            reason?.let { add("reason" to it) }
+            add("oem" to Build.MANUFACTURER)
+            add("api" to Build.VERSION.SDK_INT.toString())
+        }
+        nonFatal(event, cause = outcome, *detail.toTypedArray())
     }
 
     private fun setCollectionEnabled(value: Boolean) {

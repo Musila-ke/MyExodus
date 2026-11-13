@@ -58,6 +58,7 @@ class HabitRepositoryTest {
 
     private var now = TimeReadings(tWallMillis = T0, rBootMillis = 1_000, bootCount = 7)
     private lateinit var repository: HabitRepository
+    private val telemetry = mutableListOf<Triple<String, String, String?>>()
 
     @Before
     fun setUp() {
@@ -70,12 +71,14 @@ class HabitRepositoryTest {
         factory = AppRulesStoreFactory(context, recovery, healthStore)
         store = checkNotNull(factory.open())
         anomalyFile = tmp.newFile("streak-anomalies.log")
+        telemetry.clear()
 
         repository = HabitRepository(
             storeFactory = factory,
             anomalyLog = StreakAnomalyLog(anomalyFile),
             readings = { now },
             scheduler = MilestoneScheduler(context, factory, readings = { now }),
+            featureTelemetry = { event, outcome, reason -> telemetry += Triple(event, outcome, reason) },
         )
     }
 
@@ -484,6 +487,34 @@ class HabitRepositoryTest {
         // Exactly two streaks exist: the original and the one rollover — no third from the tap.
         assertEquals(2, store.recoveryStreakDao().getByHabit(habitIdOf()).size)
         assertEquals(1, store.habitProgressDao().getById(habitIdOf())!!.totalRelapses)
+    }
+
+    /** #7: one metadata-only outcome per flow terminal — the reason code travels, the label
+     *  and every user value never do. */
+    @Test
+    fun featureTelemetry_reportsEachFlowTerminal_metadataOnly() = runBlocking {
+        seedProfile()
+
+        assertTrue(onboard(years = -1) is HabitRepository.OnboardingResult.Rejected)
+        assertEquals(
+            listOf(Triple("streak_create", "rejected", "INVALID_DURATION")),
+            telemetry.toList(),
+        )
+
+        telemetry.clear()
+        onboard(label = "A very private label")
+        assertEquals(listOf(Triple("streak_create", "ok", null)), telemetry.toList())
+
+        telemetry.clear()
+        repository.logRelapse(habitIdOf())
+        repository.logRelapse(habitIdOf())
+        assertEquals(
+            listOf(
+                Triple("relapse_log", "ok", null),
+                Triple("relapse_log", "ignored", "duplicate"),
+            ),
+            telemetry.toList(),
+        )
     }
 
     @Test

@@ -6,6 +6,7 @@ import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleIdentity
 import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.ProtectedPackageException
 import com.example.myexodus.data.db.dao.RestrictionRuleDao
 import com.example.myexodus.data.db.entity.PairProfileSharing
 import com.example.myexodus.data.db.entity.PartnerEventJournal
@@ -13,6 +14,7 @@ import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.UserProfile
 import com.example.myexodus.data.db.entity.isExpiredAt
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 
 /** Rejects a rule write past the snapshot caps (plan §8 Step 2); the UI maps [message]. */
@@ -43,8 +45,20 @@ class RulesRepository(
      *  resolver, the default keeps tests and any unwired call site honest. */
     private val labelOf: (targetType: String, target: String) -> String = { _, target -> target },
     private val now: () -> Long = System::currentTimeMillis,
+    /** #7 (owner direction 2026-11-06): non-PII flow outcomes for remote testers — event,
+     *  outcome, optional reason code. Defaulted so tests and unwired construction stay
+     *  telemetry-free; must never throw into the write. */
+    private val featureTelemetry: (event: String, outcome: String, reason: String?) -> Unit =
+        { _, _, _ -> },
 ) {
     private fun store() = storeFactory.open() ?: throw IllegalStateException("Rules store unavailable")
+
+    /** Never the target, a label, or the cap message — only what went wrong. */
+    private fun ruleCreateReason(failure: Exception): String = when (failure) {
+        is RulesetLimitException -> "limit"
+        is ProtectedPackageException -> "self_block"
+        else -> failure.javaClass.simpleName
+    }
 
     private fun journaled(rows: List<PartnerEventJournal>) {
         if (rows.isEmpty()) return
@@ -52,14 +66,22 @@ class RulesRepository(
     }
 
     suspend fun insertRule(rule: RestrictionRule) {
-        val db = store()
-        val dao = db.restrictionRuleDao()
-        requireCapacity(dao, rule.profileId, rule.targetType)
-        val journal = journalRows(null, rule)
-        dao.insertAndBump(rule, db.policyVersionDao(), db.partnerEventJournalDao(), journal)
-        publisher.loadFromDb()
-        ensureCheckInsShared(rule.assignedPairId)
-        journaled(journal)
+        try {
+            val db = store()
+            val dao = db.restrictionRuleDao()
+            requireCapacity(dao, rule.profileId, rule.targetType)
+            val journal = journalRows(null, rule)
+            dao.insertAndBump(rule, db.policyVersionDao(), db.partnerEventJournalDao(), journal)
+            publisher.loadFromDb()
+            ensureCheckInsShared(rule.assignedPairId)
+            journaled(journal)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            runCatching { featureTelemetry(EVENT_RULE_CREATE, "failed", ruleCreateReason(e)) }
+            throw e
+        }
+        runCatching { featureTelemetry(EVENT_RULE_CREATE, "ok", null) }
     }
 
     suspend fun updateRule(rule: RestrictionRule) {
@@ -439,6 +461,7 @@ class RulesRepository(
 
     companion object {
         private const val TAG = "MyExodusRules"
+        private const val EVENT_RULE_CREATE = "rule_create"
 
         /** The placeholder for a device whose owner never chose a name — never sent as a
          *  pairing label; the ceremony shows an empty field until the owner types one. */

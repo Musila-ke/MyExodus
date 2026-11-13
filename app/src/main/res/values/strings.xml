@@ -613,7 +613,7 @@
     <string name="settings_integrity_failed">Failed: the device key couldn’t be read</string>
     <string name="settings_integrity_recheck">Recheck</string>
     <string name="settings_crash_reports_title">Crash reports</string>
-    <string name="settings_crash_reports_body">Send anonymous crash diagnostics: error type, device model, Android version. Never app names, usage times, or limits.</string>
+    <string name="settings_crash_reports_body">Send anonymous diagnostics: error type, feature outcome, device model, Android version. Never app names, usage times, or limits.</string>
 
     <!-- Settings: update channel (ADR #171 revision 2026-11-06). Updates come from GitHub
          Releases only; the signed manifest is what makes that channel trustworthy. Errors

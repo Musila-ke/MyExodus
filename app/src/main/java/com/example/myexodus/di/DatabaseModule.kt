@@ -21,6 +21,7 @@ import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.data.db.RulesStoreEncryption
 import com.example.myexodus.data.db.RulesStoreKeyManager
 import com.example.myexodus.data.db.SqlCipherVaultKeys
+import com.example.myexodus.telemetry.CrashReporting
 import dagger.Lazy
 import dagger.Module
 import dagger.Provides
@@ -140,6 +141,7 @@ object DatabaseModule {
         @ApplicationContext context: Context,
         storeFactory: AppRulesStoreFactory,
         publisher: RulesSnapshotPublisher,
+        crashReporting: CrashReporting,
     ): RulesRepository = RulesRepository(
         storeFactory,
         publisher,
@@ -148,5 +150,8 @@ object DatabaseModule {
             enqueuePartnerSyncNow(context)
         },
         labelOf = { _, target -> com.example.myexodus.ui.appLabel(context, target) },
+        featureTelemetry = { event, outcome, reason ->
+            crashReporting.featureOutcome(event, outcome, reason)
+        },
     )
 }

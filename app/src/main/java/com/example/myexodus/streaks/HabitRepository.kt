@@ -111,6 +111,11 @@ class HabitRepository(
     private val anomalyLog: StreakAnomalyLog,
     private val readings: () -> TimeReadings,
     private val scheduler: MilestoneScheduler,
+    /** #7 (owner direction 2026-11-06): non-PII flow outcomes for remote testers — event,
+     *  outcome, optional reason code. Defaulted so tests and unwired construction stay
+     *  telemetry-free; must never throw into a write (the AttemptRecorder contract). */
+    private val featureTelemetry: (event: String, outcome: String, reason: String?) -> Unit =
+        { _, _, _ -> },
 ) {
 
     private val evaluationMutex = Mutex()
@@ -163,6 +168,29 @@ class HabitRepository(
             Log.w(TAG, "Rules-store operation failed; returning the defined failure result", e)
             fallback()
         }
+
+    /** #7: one outcome per flow terminal — metadata only (never the habit label, a target, or
+     *  a counter), best-effort so telemetry can never break the write. */
+    private fun reportFeature(event: String, outcome: String, reason: String? = null) {
+        runCatching { featureTelemetry(event, outcome, reason) }
+    }
+
+    private fun rejected(reason: OnboardingResult.Rejected.Reason): OnboardingResult.Rejected {
+        reportFeature(EVENT_STREAK_CREATE, "rejected", reason.name)
+        return OnboardingResult.Rejected(reason)
+    }
+
+    private fun relapseOutcome(result: RelapseResult): RelapseResult {
+        val (outcome, reason) = when (result) {
+            is RelapseResult.RolledOver -> "ok" to null
+            RelapseResult.RejectedBeforeStreakStart -> "rejected" to "before_streak_start"
+            RelapseResult.DuplicateIgnored -> "ignored" to "duplicate"
+            RelapseResult.NoActiveStreak -> "ignored" to "no_active_streak"
+            RelapseResult.StoreUnavailable -> "failed" to "store_unavailable"
+        }
+        reportFeature(EVENT_RELAPSE_LOG, outcome, reason)
+        return result
+    }
 
     sealed interface OnboardingResult {
         data class Ready(val state: HabitState) : OnboardingResult
@@ -240,21 +268,19 @@ class HabitRepository(
         recoveryStartAt: Long,
     ): OnboardingResult {
         if (habitDurationYears < 0) {
-            return OnboardingResult.Rejected(OnboardingResult.Rejected.Reason.INVALID_DURATION)
+            return rejected(OnboardingResult.Rejected.Reason.INVALID_DURATION)
         }
         val readings = readings()
         if (recoveryStartAt > readings.tWallMillis) {
-            return OnboardingResult.Rejected(OnboardingResult.Rejected.Reason.START_IN_FUTURE)
+            return rejected(OnboardingResult.Rejected.Reason.START_IN_FUTURE)
         }
         val db = storeFactory.open()
-            ?: return OnboardingResult.Rejected(OnboardingResult.Rejected.Reason.STORE_UNAVAILABLE)
-        val ready = guardingStore({ OnboardingResult.Rejected(OnboardingResult.Rejected.Reason.STORE_UNAVAILABLE) }) {
+            ?: return rejected(OnboardingResult.Rejected.Reason.STORE_UNAVAILABLE)
+        val ready = guardingStore({ rejected(OnboardingResult.Rejected.Reason.STORE_UNAVAILABLE) }) {
             val anchor = when (val first = StreakTimer.firstAnchor(readings)) {
                 is FirstAnchor.Implausible -> {
                     anomalyLog.append(first.anomaly)
-                    return@guardingStore OnboardingResult.Rejected(
-                        OnboardingResult.Rejected.Reason.IMPLAUSIBLE_CLOCK,
-                    )
+                    return@guardingStore rejected(OnboardingResult.Rejected.Reason.IMPLAUSIBLE_CLOCK)
                 }
 
                 is FirstAnchor.Anchored -> first
@@ -310,7 +336,10 @@ class HabitRepository(
         }
         // Best-effort and outside the failure boundary: the habit is already durable, so a
         // scheduling failure must not report the onboarding as unwritten.
-        if (ready is OnboardingResult.Ready) guardingStore({ }) { scheduler.reconcile(ready.state.habitId) }
+        if (ready is OnboardingResult.Ready) {
+            reportFeature(EVENT_STREAK_CREATE, "ok")
+            guardingStore({ }) { scheduler.reconcile(ready.state.habitId) }
+        }
         return ready
     }
 
@@ -321,7 +350,7 @@ class HabitRepository(
      * user-entered time when the relapse is logged retrospectively; it defaults to now.
      */
     suspend fun logRelapse(habitId: String, backdatedRelapseAt: Long? = null): RelapseResult {
-        val db = storeFactory.open() ?: return RelapseResult.StoreUnavailable
+        val db = storeFactory.open() ?: return relapseOutcome(RelapseResult.StoreUnavailable)
         val result = guardingStore({ RelapseResult.StoreUnavailable }) {
             val written = evaluationMutex.withLock {
                 // §6.2 rolls the persisted accumulator into the record; evaluate first so it
@@ -335,7 +364,7 @@ class HabitRepository(
         // Best-effort and outside the failure boundary: the write is already durable, so a
         // scheduling failure must not report the relapse as unwritten.
         if (result is RelapseResult.RolledOver) guardingStore({ }) { scheduler.reconcile(habitId) }
-        return result
+        return relapseOutcome(result)
     }
 
     /**
@@ -973,6 +1002,9 @@ class HabitRepository(
         const val MAX_LABEL_LENGTH = EventPayload.MAX_HABIT_LABEL_LENGTH
 
         private const val MAX_EVALUATION_ATTEMPTS = 2
+
+        private const val EVENT_STREAK_CREATE = "streak_create"
+        private const val EVENT_RELAPSE_LOG = "relapse_log"
 
         private const val TAG = "MyExodusHabitRepo"
     }

@@ -232,6 +232,32 @@ class RulesSnapshotPublisherTest {
         assertTrue("Expected RulesetLimitException for URL cap, got $urlE", urlE is RulesetLimitException)
     }
 
+    /** #7: metadata-only create outcome — the reason code travels, the target never does. */
+    @Test
+    fun ruleCreate_reportsFeatureOutcome_metadataOnly() = runTest {
+        seedProfile()
+        val outcomes = mutableListOf<Triple<String, String, String?>>()
+        val repository = RulesRepository(
+            factory, publisher,
+            featureTelemetry = { event, outcome, reason -> outcomes += Triple(event, outcome, reason) },
+        )
+
+        repository.insertRule(appRule("com.instagram.android"))
+        assertEquals(listOf(Triple("rule_create", "ok", null)), outcomes)
+
+        outcomes.clear()
+        runCatching { repository.insertRule(appRule("com.example.myexodus")) }
+        assertEquals(listOf(Triple("rule_create", "failed", "self_block")), outcomes)
+
+        val dao = factory.open()!!.restrictionRuleDao()
+        for (i in 2..RulesSnapshot.MAX_APP_RULES) {
+            dao.insert(appRule("com.pkg.$i", ruleId = "r-app-$i"))
+        }
+        outcomes.clear()
+        runCatching { repository.insertRule(appRule("com.pkg.overflow")) }
+        assertEquals(listOf(Triple("rule_create", "failed", "limit")), outcomes)
+    }
+
     @Test
     fun inactiveProfileRules_areNotEnforced() = runTest {
         seedProfile()

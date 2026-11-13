@@ -47,6 +47,27 @@ Denominator note for the denied rate: only enrolled devices report, so the conso
 approximation is `partner_notifications_denied` event count over the active `pairings`
 collection count.
 
+### 1a. Feature-outcome rail (task #7, owner direction 2026-11-06)
+
+A remote tester's "X doesn't work" report needs the flow outcome, not a crash. Three
+non-crash flow terminals emit through `CrashReporting.featureOutcome(event, outcome,
+reason)` — same one-issue-class rail, same Decision-12 metadata-only contract, same
+Settings opt-out. Message shape: `event cause=<outcome> [reason=<code>] oem=<OEM>
+api=<API>`. The OEM/API pair is the same device-info contract `protection_state` already
+carries; the Crashlytics report itself adds model, OS version and app version.
+
+| Flow | Event | Terminals (outcome / reason) | Where |
+|---|---|---|---|
+| Streak create | `streak_create` | `ok` · `rejected` (reason = `INVALID_DURATION` / `START_IN_FUTURE` / `IMPLAUSIBLE_CLOCK` / `STORE_UNAVAILABLE`) | `HabitRepository.onboard` |
+| Relapse log | `relapse_log` | `ok` · `rejected` / `before_streak_start` · `ignored` / `duplicate` · `ignored` / `no_active_streak` · `failed` / `store_unavailable` | `HabitRepository.logRelapse` (covers both the app and the widget) |
+| Rule create | `rule_create` | `ok` · `failed` with reason `limit` / `self_block` / the exception's simple class name | `RulesRepository.insertRule` (covers the editor and the website-preset batch) |
+
+Honest scope limits: rule batches created through `insertBatch` are **not** instrumented
+(owner named rule create; batch creation is a distinct editor flow); never sent are habit
+labels, rule targets, cap messages, durations or limits — the reason codes above are the
+entire payload. Both seams are defaulted constructor params, so unwired construction
+(tests, harnesses) emits nothing and telemetry can never throw into a write.
+
 ## 2. Server-side rails (code, done — queryable, console charts pending)
 
 | §14 metric | Rail | Query shape |
