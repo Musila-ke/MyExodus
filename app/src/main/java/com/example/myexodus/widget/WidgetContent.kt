@@ -116,10 +116,11 @@ internal fun milestoneFraction(days: Int?, next: Int?): Float? {
  * card, the narrow 2×2, the band card, and the full-height card a resize produces. Each variant
  * is a whole composition, not a stretched copy of the smaller one — the launcher's RemoteViews
  * host re-measures containers but never rescales type, so slack has to be absorbed by weighted
- * bands (user-flagged 2026-09-27: the resized card rendered a hero over a void). The two wide
- * variants carry the icon controls — log a relapse, log an urge, reach out (owner rulings
- * 2026-10-16/17: icon-only, because text on the launcher surface spells private intent; and the
- * log controls draw the same glyphs as the app's own buttons, so one icon means one action).
+ * bands (user-flagged 2026-09-27: the resized card rendered a hero over a void). Every variant
+ * above the one-line compact card carries the four icon controls — urge assist, log a relapse,
+ * log an urge, reach out (owner rulings 2026-10-16/17: icon-only, because text on the launcher
+ * surface spells private intent; and the log controls draw the same glyphs as the app's own
+ * buttons, so one icon means one action).
  *
  * Copy is discreet by default — a day count with no status word and no recovery vocabulary (FR5).
  */
@@ -170,6 +171,7 @@ internal fun DesertDawnWidgetContent(
                 logRelapse = logRelapse,
                 logUrge = logUrge,
                 reachOut = reachOut,
+                urgeAssist = urgeAssist,
             )
 
             else -> ExpandedContent(
@@ -283,12 +285,13 @@ private fun ExpandedContent(
 }
 
 /**
- * The tall 2×2 card ([NARROW_SIZE]): the compact stack plus the same icon controls the wide
- * variants carry (widget v3, 2026-10-17). At the ~110dp a 2-column cell honestly reports there is
- * no room for a data strip — a chip beside the hero clips and so does a label-inline value row —
- * so the card stays a centered stack. The controls ride that stack at 28dp / 5dp gaps (94dp for
- * three, inside the 104dp content width) instead of the old text link: one control idiom across
- * every variant, and no launcher text naming an action. Both tested launchers draw this cell far
+ * The tall 2×2 card ([NARROW_SIZE]): the compact stack plus the same four icon controls the wide
+ * variants carry (widget v3, 2026-10-17; fourth control added 2026-11-13). At the ~110dp a
+ * 2-column cell honestly reports there is no room for a data strip — a chip beside the hero clips
+ * and so does a label-inline value row — so the card stays a centered stack. Four controls cannot
+ * sit at 28dp here (4×28 + gaps overruns the 104dp content width), so the row tightens to 24dp
+ * circles with 2dp gaps (102dp) rather than dropping one action: one control idiom across every
+ * variant, and no launcher text naming an action. Both tested launchers draw this cell far
  * taller than the preset they match, so a pinned action would turn that slack into a void;
  * centered, the slack lands as margin.
  */
@@ -300,6 +303,7 @@ private fun NarrowContent(
     logRelapse: Action?,
     logUrge: Action,
     reachOut: Action,
+    urgeAssist: Action,
 ) {
     val context = LocalContext.current
     Column(
@@ -329,7 +333,8 @@ private fun NarrowContent(
             logUrge = logUrge,
             reachOut = reachOut,
             discreet = view.discreet,
-            size = 28.dp,
+            urgeAssist = urgeAssist,
+            size = 24.dp,
             alignment = Alignment.CenterHorizontally,
         )
     }
@@ -517,18 +522,17 @@ private fun ControlRow(
     logUrge: Action,
     reachOut: Action,
     discreet: Boolean,
-    /**
-     * Null on the narrow 2×2: four 28dp circles plus gaps need ~127dp against the cell's ~104dp
-     * of content width, so that variant keeps the three controls it already drew. The two wide
-     * variants have room for the fourth.
-     */
-    urgeAssist: Action? = null,
+    urgeAssist: Action,
     size: Dp = 36.dp,
     modifier: GlanceModifier = GlanceModifier.fillMaxWidth(),
     alignment: Alignment.Horizontal = Alignment.End,
 ) {
     val context = LocalContext.current
-    val gap = if (size >= 34.dp) 8.dp else 5.dp
+    val gap = when {
+        size >= 34.dp -> 8.dp
+        size >= 26.dp -> 5.dp
+        else -> 2.dp
+    }
     // The tonal circles use the secondary container, not surfaceVariant: on the cream canvas
     // surfaceVariant is within ~8 tone steps of the card and the circles all but vanished.
     val colors = GlanceTheme.colors
@@ -537,17 +541,15 @@ private fun ControlRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalAlignment = alignment,
     ) {
-        urgeAssist?.let {
-            ActionCircle(
-                iconRes = R.drawable.ic_widget_assist,
-                contentDescription = context.getString(R.string.widget_action_assist),
-                action = it,
-                background = colors.secondaryContainer,
-                tint = colors.onSecondaryContainer,
-                size = size,
-            )
-            Spacer(GlanceModifier.width(gap))
-        }
+        ActionCircle(
+            iconRes = R.drawable.ic_widget_assist,
+            contentDescription = context.getString(R.string.widget_action_assist),
+            action = urgeAssist,
+            background = colors.secondaryContainer,
+            tint = colors.onSecondaryContainer,
+            size = size,
+        )
+        Spacer(GlanceModifier.width(gap))
         logRelapse?.let {
             ActionCircle(
                 iconRes = R.drawable.ic_log_relapse,
@@ -584,7 +586,7 @@ private fun ControlRow(
 }
 
 /** One circle control. 36dp keeps the two-band bottom block (caption + controls) inside the
- *  110dp 4×2 preset's real budget; 28dp is the narrow 2×2 variant's version. */
+ *  110dp 4×2 preset's real budget; the narrow 2×2 tightens to 24dp so its row fits four. */
 @Composable
 private fun ActionCircle(
     iconRes: Int,
@@ -609,7 +611,7 @@ private fun ActionCircle(
         Image(
             provider = ImageProvider(iconRes),
             contentDescription = contentDescription,
-            modifier = GlanceModifier.size(if (size >= 34.dp) 19.dp else 15.dp),
+            modifier = GlanceModifier.size(if (size >= 34.dp) 19.dp else 14.dp),
             colorFilter = ColorFilter.tint(tint),
         )
     }
