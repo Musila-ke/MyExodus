@@ -322,3 +322,65 @@ PATCH …/documents/serverFeatureGates/guestTransition?updateMask.fieldPaths=ena
 **Minimum client version record.** When a client rollout must be reverted, bump `clientCompatibility/current` (`{ minimumVersionCode, updateMessage }`, published in R0) so older clients fail closed on server mutations rather than writing against a rolled-back contract. The read path, caching and fail-open/closed behavior are documented in `account-release0-inventory.md`.
 
 **Verification after any rollback:** gates read back with `enabled:false`; a backup call returns `FEATURE_DISABLED`; a deletion request still accepts, revokes and completes (the emulator test above is the permanent regression); no policy in this section is disabled — the monitoring rail itself is never rolled back.
+
+## 9. Diagnosing a tester report (operator runbook, added 2026-11-13)
+
+When a tester reports "X doesn't work", collect first: app version (Settings, About), phone
+model and Android version, what they did, when, and whether Settings' "Send anonymous
+diagnostics" is on. The app never uploads local-only data (vault contents, App Lock state,
+logcat), so the server and Crashlytics rails below are the observable surface.
+
+**1. Server logs (functions + Cloud Run).** No gcloud is installed on the owner workstation;
+mint a per-command access token from the firebase-tools stored refresh token and call the
+Logging API directly (never print or persist the token):
+
+```bash
+TOKEN=$(curl -s -X POST https://www.googleapis.com/oauth2/v4/token \
+  --data-urlencode "client_id=563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com" \
+  --data-urlencode "client_secret=j9iVZfS8kkCEFUPaAeJV0sAi" \
+  --data-urlencode "refresh_token=$(jq -r .tokens.refresh_token ~/.config/configstore/firebase-tools.json)" \
+  --data-urlencode "grant_type=refresh_token" | jq -r .access_token)
+
+curl -s -H "Authorization: Bearer $TOKEN" -H "x-goog-user-project: myexodus-53804" \
+  -H "Content-Type: application/json" https://logging.googleapis.com/v2/entries:list -X POST -d '{
+    "resourceNames":["projects/myexodus-53804"],
+    "pageSize":50,
+    "orderBy":"timestamp desc",
+    "filter":"resource.type=\"cloud_run_revision\" AND severity>=WARNING"
+  }' | jq -r '.entries[]? | [.timestamp, .jsonPayload.message // .textPayload // ""] | @tsv'
+```
+
+Adjust the filter to the report: `jsonPayload.message=~"rejected"` for callable rejections,
+`resource.labels.service_name="sendNudge"` to scope one function, or
+`timestamp>="2026-11-13T17:00:00Z"` for the report's time window. `firebase functions:log`
+currently fails against this project ("Failed to retrieve log entries from Google Cloud"); the
+REST call above is the working path (verified 2026-11-13).
+
+**2. Client non-fatals.** Firebase console, project `myexodus-53804`, Crashlytics. There is no
+CLI/API for reading Crashlytics issues; use the console. Every rail in §1 and §1a groups under
+one issue class, `com.example.myexodus.telemetry.NonFatalEvent`. Search the issue's events for
+the event string: `chain_incomplete`, `chain_tamper_suspected`, `partner_outbox_pending`,
+`partner_waiting_recipient_key`, `partner_t1_ms`, `firestore_denied`, `trace:` handling, and the
+feature outcomes `streak_create cause=...`, `relapse_log cause=...`, `rule_create cause=...`.
+The message carries `oem=` and `api=`; the crash metadata adds app version and OS.
+
+**3. Firestore state.** Console or REST
+(`https://firestore.googleapis.com/v1/projects/myexodus-53804/databases/(default)/documents/<path>`)
+with the same token. Useful paths: `pairings/{id}`, `users/{uid}/push_installations`,
+`mailboxes/...`, `config/features` (the kill switches, §7).
+
+**4. Alert policies already watching.** §4 item 8 (callable rejection storm, >=20 in 15 min),
+§5 (pairing 429s), §8 (deletion/backup rails), plus the App Check verdict metric (owner ruling
+on its threshold still pending, ADR #232 revision). A tester report that maps to one of these
+usually has a matching incident in Cloud Monitoring.
+
+**5. What the rails cannot see.** A device that opted out of diagnostics; anything local-only
+(vault, App Lock, rules UI state); OEM-specific behavior with no server call. For those, ask the
+tester for a screenshot or a screen recording where FLAG_SECURE allows it.
+
+**6. GitHub Releases (the update channel).** Tester says "no update shows": check the live
+envelope `https://github.com/Musila-ke/MyExodus-Releases/releases/latest/download/update-manifest.json`
+(the app reads `releases/latest`, so a wrong tag or an artifact release promoted to latest
+breaks discovery), then its `policySequence` against the installed `versionCode`, and the signed
+release assets. The client also re-verifies a fresh policy immediately before installing. Full
+runbook and pitfalls: `app-update-channel.md` §11.
