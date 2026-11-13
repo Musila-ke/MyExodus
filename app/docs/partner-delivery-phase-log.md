@@ -1633,3 +1633,17 @@ registration, event sending, or the producer from a console without shipping an 
 operational controls are the server-side `config/features` switches (ADR #207), which pause
 ingest/dispatch while clients keep recording and retrying, and the signed GitHub Releases
 `HALT` policy for a defective client build. Runbook A was rewritten accordingly.
+
+## Phase 8 umbrella sweep — 2026-11-13 (task #169)
+
+Reconciled the acceptance matrix above against the code, the plan and the task list at the
+close of the last two-device window. No verdict changed: AC17 remains **WAIVED, not run —
+not a pass**; AC01/AC06 remain **BLOCKED** on an owner-attended locked-device window; the
+AC09 sustained-absence hardware re-proof remains **owner-WAIVED** (emulator suite + AC15 are
+its recorded evidence); AC02/AC05/AC11/AC18 partials remain blocked on hardware the project
+does not have. A repo-wide search found no stale "AC17 PASSED" or "Phase 8 complete" claim.
+No new overnights were scheduled. The GitHub Releases publish gate remains **NOT TRIGGERED**
+until the owner-gated legs run; the liveness flag is OFF and the producer flags are
+unconditional per the 2026-11-13 Remote Config removal above. The software-verifiable work
+of Phase 8 (unit/emulator tiers, E2EE, latency, runbooks, evidence) is complete; only the
+owner/device-gated legs are open, and they are recorded as such rather than claimed.
