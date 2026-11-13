@@ -18,7 +18,6 @@ val TextLight = Color(0xFF1D1B19)
 val MutedLight = Color(0xFF6E675E)
 val TealLight = Color(0xFF0F766E)
 val GoldLight = Color(0xFFB45309)
-val SuccessLight = Color(0xFF3E7A52)
 val ErrorLight = Color(0xFFB3402F)
 
 val SandDark = Color(0xFF141311)
@@ -31,7 +30,6 @@ val TextDark = Color(0xFFF2EEE9)
 val MutedDark = Color(0xFFA39B90)
 val TealDark = Color(0xFF2FA598)
 val GoldDark = Color(0xFFD99A3D)
-val SuccessDark = Color(0xFF5CA87A)
 val ErrorDark = Color(0xFFD97A66)
 
 // Warm sand container ramp — the M3 surfaceContainer/surfaceDim/surfaceBright roles.

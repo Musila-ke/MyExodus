@@ -994,18 +994,6 @@ class PartnerSyncCoordinator(
         }
     }
 
-    /** Signs and creates one `TYPE_ACTIVITY` event (attempts/sessions — the shipped shape). */
-    private suspend fun emitActivity(
-        pairId: String,
-        label: String,
-        text: String,
-        appLabel: String? = null,
-    ): Emit = emitPayload(
-        pairId,
-        label,
-        EventPayload(type = EventPayload.TYPE_ACTIVITY, text = text, appLabel = appLabel),
-    )
-
     /** The staged BLOCK_ATTEMPT record for one unlinked attempt row. The safe category is
      *  derived from the rule's target type; an unresolvable rule (deleted between the pass's
      *  SQL read and here) reports an app attempt — the conservative shipped category. */
