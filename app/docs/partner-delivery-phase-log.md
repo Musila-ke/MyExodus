@@ -1597,3 +1597,39 @@ surfaces need the second phone, which was handed back on 2026-11-13 after the AC
 Recorded BLOCKED, not PASSED — to be observed on the next borrowed-device window (turn
 availability off on .106 → expect "Stopped sharing · Device availability" in the partner's
 Rules & updates and Recent activity).
+
+---
+
+## 2026-11-13 — Remote Config removal (#177, ADR #171)
+
+**Change.** The last client-side remote-configuration SDK is gone. The live surface had grown
+to three Remote Config keys read by `PartnerRolloutGate`; all three retired in one change:
+
+| Retired key | Old default | Replacement |
+|---|---|---|
+| `partner_push_registration_enabled` | ON | `runPartnerSyncPass` always calls `registrar.register()` |
+| `delivery_client_sync_v1_enabled` | ON | `PartnerEventDrain.run` always proceeds past the uid gate |
+| `delivery_producer_rules_v1_enabled` | **OFF** (opposite polarity) | `PartnerEventProducer` always attempts the signed service-outbox path |
+
+`PartnerRolloutGate.kt` and `PartnerRolloutGateTest.kt` were deleted, along with the
+`AccountabilityModule` provider (and its 900 s fetch-interval constant), the gate parameters
+on `PartnerSyncWorker`, `PartnerLiveSync`, `PartnerSyncTelemetry`, `PartnerEventProducer`,
+`PartnerEventDrain` and the JIT arguments in `MainActivity`/`MyExodusApp`. `firebase-config`
+left `gradle/libs.versions.toml`, `app/build.gradle.kts` and `app/gradle.lockfile`
+(`firebase-config:23.1.0` gone; `firebase-config-interop` survives only as a transitive of
+other Firebase artifacts). The RC SDK's back-dated-clock fetch-throttle wedge guard
+(`isFetchStampWedged`) died with it.
+
+**Behavior notes.** The staged producer was already the production transport on every device
+by 2026-11-12, so their wire behavior does not change; the removal makes it unconditional on
+any build from this one onward. `PartnerSyncTelemetry` keeps emitting
+`partner_delivery_phase` once per enrolled pass, now a constant `rule_producer=staged`, so
+`partner_delivery_phase` dashboards need no filter change. The legacy `LEGACY` transport enum
+branch survives only as the fallback when a caller wires no producer (no shipped DI path
+does); an unsealable row still DEFERS rather than being dropped.
+
+**Capability lost, recorded honestly.** There is no longer any way to pause push
+registration, event sending, or the producer from a console without shipping an APK. The
+operational controls are the server-side `config/features` switches (ADR #207), which pause
+ingest/dispatch while clients keep recording and retrying, and the signed GitHub Releases
+`HALT` policy for a defective client build. Runbook A was rewritten accordingly.

@@ -27,8 +27,6 @@ class PartnerEventDrain(
     private val recorder: PartnerEventRecorder,
     private val clock: PartnerDeliveryClock,
     private val ownerUid: () -> String?,
-    /** §8.7 `delivery_client_sync_v1_enabled`; paused means recording continues, sending stops. */
-    private val syncEnabled: suspend () -> Boolean = { true },
     private val limits: DrainLimits = DrainLimits(),
     /** Jitter over the exponential delay; overridden in tests to keep timings exact. */
     private val jitterMs: (Long) -> Long = { delay ->
@@ -73,9 +71,6 @@ class PartnerEventDrain(
      * challenge and must run from a foreground drain, never from the background worker.
      */
     suspend fun run(allowRegistration: Boolean): Result = mutex.withLock {
-        // §8.7 rollout safety boundary: a paused sync claims and submits nothing. Rows stay
-        // recorded and due; the next pass after re-enable delivers them unchanged.
-        if (!syncEnabled()) return@withLock Result()
         val uid = ownerUid() ?: return@withLock Result()
         outbox.applyActiveOwner(uid)
         // §4.3 retention: ACKED rows keep only their empty shell for seven days. Cleanup

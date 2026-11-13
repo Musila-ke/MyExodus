@@ -12,7 +12,6 @@ class PartnerSyncTelemetryTest {
     private class Fake(
         private val canPost: Boolean = true,
         private val oldestPending: (() -> Long?)? = null,
-        private val staged: Boolean = false,
         private val oldestWaiting: (() -> Long?)? = null,
         private var now: Long = 1_000_000_000L,
     ) {
@@ -21,13 +20,11 @@ class PartnerSyncTelemetryTest {
             canPost = { canPost },
             oldestPendingCreatedAt = { oldestPending?.invoke() },
             report = { events += it },
-            staged = { staged },
             oldestWaitingCreatedAt = { oldestWaiting?.invoke() },
             now = { now },
         )
     }
 
-    private val phaseLegacy = "${PartnerSyncTelemetry.EVENT_DELIVERY_PHASE} rule_producer=legacy"
     private val phaseStaged = "${PartnerSyncTelemetry.EVENT_DELIVERY_PHASE} rule_producer=staged"
 
     @Test
@@ -42,15 +39,11 @@ class PartnerSyncTelemetryTest {
         Fake(canPost = false).let {
             it.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
             assertEquals(
-                listOf(phaseLegacy, PartnerSyncTelemetry.EVENT_NOTIFICATIONS_DENIED),
+                listOf(phaseStaged, PartnerSyncTelemetry.EVENT_NOTIFICATIONS_DENIED),
                 it.events,
             )
         }
         Fake(canPost = true).let {
-            it.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
-            assertEquals(listOf(phaseLegacy), it.events)
-        }
-        Fake(staged = true).let {
             it.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
             assertEquals(listOf(phaseStaged), it.events)
         }
@@ -70,7 +63,7 @@ class PartnerSyncTelemetryTest {
         fake.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
         assertEquals(
             listOf(
-                phaseLegacy,
+                phaseStaged,
                 PartnerSyncTelemetry.EVENT_NOTIFICATIONS_DENIED,
                 "${PartnerSyncTelemetry.EVENT_WAITING_RECIPIENT_KEY} age=under_24h",
                 "${PartnerSyncTelemetry.EVENT_OUTBOX_PENDING} age=under_15m",
@@ -93,7 +86,7 @@ class PartnerSyncTelemetryTest {
             fake.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
             assertEquals(
                 "${age}ms old → $bucket",
-                listOf(phaseLegacy, "${PartnerSyncTelemetry.EVENT_OUTBOX_PENDING} age=$bucket"),
+                listOf(phaseStaged, "${PartnerSyncTelemetry.EVENT_OUTBOX_PENDING} age=$bucket"),
                 fake.events,
             )
         }
@@ -106,7 +99,7 @@ class PartnerSyncTelemetryTest {
             it.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
             assertEquals(
                 listOf(
-                    phaseLegacy,
+                    phaseStaged,
                     "${PartnerSyncTelemetry.EVENT_WAITING_RECIPIENT_KEY} age=over_24h",
                 ),
                 it.events,
@@ -114,7 +107,7 @@ class PartnerSyncTelemetryTest {
         }
         Fake(oldestWaiting = { null }).let {
             it.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
-            assertEquals(listOf(phaseLegacy), it.events)
+            assertEquals(listOf(phaseStaged), it.events)
         }
     }
 
@@ -122,7 +115,7 @@ class PartnerSyncTelemetryTest {
     fun nothingPending_reportsNoOutboxEvent() = runTest {
         val fake = Fake(oldestPending = { null })
         fake.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
-        assertEquals(listOf(phaseLegacy), fake.events)
+        assertEquals(listOf(phaseStaged), fake.events)
     }
 
     @Test
@@ -132,7 +125,7 @@ class PartnerSyncTelemetryTest {
             oldestWaiting = { throw IllegalStateException("db down") },
         )
         fake.telemetry.afterPass(PartnerSyncCoordinator.SyncReport(enrolled = true))
-        assertEquals(listOf(phaseLegacy), fake.events)
+        assertEquals(listOf(phaseStaged), fake.events)
     }
 
     @Test

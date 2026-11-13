@@ -32,9 +32,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Phase 7 §13.3/§13.4 producer switch: staged flag polarity, stable legacy identity, per-pair
- * consent scoping, and the crash-window dispositions (an outbox row that already exists keeps
- * its signed path; a recorder that cannot record leaves the journal row for the next pass).
+ * Phase 7 §13.3/§13.4 producer switch: stable legacy identity, per-pair consent scoping, and
+ * the crash-window dispositions (an outbox row that already exists keeps its signed path; a
+ * recorder that cannot record leaves the journal row for the next pass).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
@@ -80,20 +80,10 @@ class PartnerEventProducerTest {
     }
 
     @Test
-    fun stagedFlagOff_keepsTheLegacyTransport_andRecordsNothing() = runBlocking {
-        val row = ruleRow(change = RuleChange.ASSIGNED)
-
-        val transport = producer(listOf(pairOne, pairTwo), staged = { false }).transport(row)
-
-        assertEquals(PartnerEventTransport.LEGACY, transport)
-        assertNull(outbox.event(row.eventId))
-    }
-
-    @Test
-    fun stagedFlagOn_recordsOneSignedCopy_underTheJournalIdentity_andRoutePair() = runBlocking {
+    fun recordsOneSignedCopy_underTheJournalIdentity_andRoutePair() = runBlocking {
         val ruleId = UUID.randomUUID()
         val row = ruleRow(ruleId = ruleId, change = RuleChange.DELETED)
-        val transport = producer(listOf(pairOne, pairTwo), staged = { true })
+        val transport = producer(listOf(pairOne, pairTwo))
             .transport(row)
 
         assertEquals(PartnerEventTransport.SIGNED, transport)
@@ -140,8 +130,7 @@ class PartnerEventProducerTest {
         val row = ruleRow(change = RuleChange.CREATED)
         insertOutboxRow(row.eventId)
 
-        val transport = producer(listOf(pairOne), staged = { error("must not re-read the flag") })
-            .transport(row)
+        val transport = producer(listOf(pairOne)).transport(row)
 
         assertEquals(PartnerEventTransport.SIGNED, transport)
         assertEquals(PARTIAL_ROW_SEQUENCE, outbox.event(row.eventId)?.sequence)
@@ -152,8 +141,7 @@ class PartnerEventProducerTest {
         val row = ruleRow(change = RuleChange.DISABLED)
         insertOutboxRow(row.eventId, status = PendingPartnerEvent.STATUS_ACKED)
 
-        val transport = producer(listOf(pairOne), staged = { error("must not re-read the flag") })
-            .transport(row)
+        val transport = producer(listOf(pairOne)).transport(row)
 
         assertEquals(PartnerEventTransport.ACKNOWLEDGED, transport)
     }
@@ -162,7 +150,7 @@ class PartnerEventProducerTest {
     fun recorderCannotRecord_defers_andLeavesTheJournalRowForTheNextPass() = runBlocking {
         val row = ruleRow(change = RuleChange.UPDATED)
 
-        val transport = producer(listOf(pairOne), staged = { true }, currentUid = null)
+        val transport = producer(listOf(pairOne), currentUid = null)
             .transport(row)
 
         assertEquals(PartnerEventTransport.DEFERRED, transport)
@@ -184,7 +172,7 @@ class PartnerEventProducerTest {
             expiresAtMs = 1_000 + PartnerEventJournal.RETENTION_MILLIS,
         )
 
-        val transport = producer(listOf(pairOne), staged = { true }).transport(row)
+        val transport = producer(listOf(pairOne)).transport(row)
 
         assertEquals(PartnerEventTransport.SIGNED, transport)
         val stored = checkNotNull(outbox.event(row.eventId))
@@ -212,8 +200,8 @@ class PartnerEventProducerTest {
         )
     }
 
-    /** §13.3 generic switch: every non-rule queue row uses the same staged/legacy/defer
-     *  decision as the rule journal, under the record's own deterministic id. */
+    /** §13.3 generic switch: every non-rule queue row uses the same staged/defer decision
+     *  as the rule journal, under the record's own deterministic id. */
     @Test
     fun stage_genericRecord_followsTheSameSwitchContract() = runBlocking {
         val record = PartnerEventRecord(
@@ -224,15 +212,8 @@ class PartnerEventProducerTest {
         )
 
         assertEquals(
-            "flag off keeps the shipped legacy path",
-            PartnerEventTransport.LEGACY,
-            producer(listOf(pairOne), staged = { false }).stage(record),
-        )
-        assertNull(outbox.event(record.eventId))
-
-        assertEquals(
             PartnerEventTransport.SIGNED,
-            producer(listOf(pairOne), staged = { true }).stage(record),
+            producer(listOf(pairOne)).stage(record),
         )
         val stored = checkNotNull(outbox.event(record.eventId))
         assertEquals(PartnerEventKind.ACCOUNTABILITY_UPDATE.wire, stored.kind)
@@ -246,7 +227,7 @@ class PartnerEventProducerTest {
         assertEquals(
             "an accepted copy reports acknowledged so the source row can retire",
             PartnerEventTransport.ACKNOWLEDGED,
-            producer(listOf(pairOne), staged = { error("must not re-read the flag") })
+            producer(listOf(pairOne))
                 .stage(PartnerEventRecord(
                     eventId = "22222222-2222-4222-8222-222222222222",
                     kind = PartnerEventKind.ACCOUNTABILITY_UPDATE,
@@ -256,7 +237,7 @@ class PartnerEventProducerTest {
         assertEquals(
             "no account to sign with defers, never drops",
             PartnerEventTransport.DEFERRED,
-            producer(listOf(pairOne), staged = { true }, currentUid = null)
+            producer(listOf(pairOne), currentUid = null)
                 .stage(PartnerEventRecord(
                     eventId = "33333333-3333-4333-8333-333333333333",
                     kind = PartnerEventKind.ACCOUNTABILITY_UPDATE,
@@ -266,7 +247,6 @@ class PartnerEventProducerTest {
 
     private fun producer(
         enrollments: List<EnrollmentRecord>,
-        staged: suspend () -> Boolean,
         currentUid: String? = "uid-1",
     ) = PartnerEventProducer(
         outbox = outbox,
@@ -285,7 +265,6 @@ class PartnerEventProducerTest {
             ownerUid = { currentUid },
         ),
         storeFactory = factory,
-        staged = staged,
     )
 
     private fun ruleRow(

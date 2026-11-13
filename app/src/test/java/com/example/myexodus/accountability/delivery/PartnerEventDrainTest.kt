@@ -89,30 +89,6 @@ class PartnerEventDrainTest {
     }
 
     @Test
-    fun pausedSync_claimsNothing_andRetainsTheRowForTheNextEnabledPass() = runBlocking {
-        registered()
-        record()
-        val paused = PartnerEventDrain(
-            outbox = outbox,
-            keyStore = keyStore,
-            transport = transport,
-            registrar = registrar,
-            recorder = recorder,
-            clock = clock,
-            ownerUid = { currentUid },
-            syncEnabled = { false },
-            jitterMs = { 0 },
-        )
-
-        val result = paused.run(allowRegistration = false)
-
-        assertEquals(0, result.claimed)
-        assertEquals(0, transport.submitted.size)
-        assertEquals("a paused sync never schedules or drops the row", 1, outbox.dueRows("uid-1", clock.nowMs, 10).size)
-        assertEquals(1, drain.run(allowRegistration = false).accepted)
-    }
-
-    @Test
     fun acceptedBatch_acknowledgesEveryRow_andNeverResubmits() = runBlocking {
         registered()
         record()

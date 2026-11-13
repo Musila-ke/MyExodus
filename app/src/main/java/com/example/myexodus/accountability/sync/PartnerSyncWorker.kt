@@ -31,7 +31,6 @@ class PartnerSyncWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val coordinator: PartnerSyncCoordinator,
     private val registrar: PushInstallationRegistrar,
-    private val rollout: PartnerRolloutGate,
     private val telemetry: PartnerSyncTelemetry,
 ) : CoroutineWorker(appContext, params) {
 
@@ -39,7 +38,6 @@ class PartnerSyncWorker @AssistedInject constructor(
         val report = try {
             runPartnerSyncPass(
                 registrar,
-                rollout,
                 coordinator,
                 wakeMessageId = inputData.getString(PARTNER_WAKE_MESSAGE_ID),
                 forceHeartbeat = inputData.getBoolean(PARTNER_FORCE_HEARTBEAT, false),
@@ -71,12 +69,11 @@ class PartnerSyncWorker @AssistedInject constructor(
  */
 suspend fun runPartnerSyncPass(
     registrar: PushInstallationRegistrar,
-    rollout: PartnerRolloutGate,
     coordinator: PartnerSyncCoordinator,
     wakeMessageId: String? = null,
     forceHeartbeat: Boolean = false,
 ): PartnerSyncCoordinator.SyncReport {
-    if (rollout.pushRegistrationEnabled() && !registrar.register()) {
+    if (!registrar.register()) {
         Log.w("MyExodusPartnerSync", "push installation not (re)registered this run")
     }
     val report = coordinator.syncOnce(wakeMessageId, forceHeartbeat)

@@ -10,8 +10,8 @@ package com.example.myexodus.accountability.sync
  * - `partner_notifications_denied` — the §14 "denied rate among active pairs" numerator; only
  *   enrolled devices report, so the Crashlytics event count over the `pairings` collection's
  *   active-pair count approximates the rate on the console side.
- * - `partner_delivery_phase rule_producer=staged|legacy` — the §14 current-phase flag, one
- *   event per enrolled pass so the rollout stage is countable from the same rail.
+ * - `partner_delivery_phase rule_producer=staged` — the §14 current-phase flag, one event per
+ *   enrolled pass; the staged producer is the only transport since #177.
  * - `partner_outbox_pending age=<bucket>` — the §14 outbox age distribution. Fired whenever
  *   any row is still PENDING at pass end; an absent event is a healthy pass.
  * - `partner_waiting_recipient_key age=<bucket>` — the §14 oldest
@@ -25,15 +25,13 @@ class PartnerSyncTelemetry(
     private val canPost: () -> Boolean,
     private val oldestPendingCreatedAt: suspend () -> Long?,
     private val report: (String) -> Unit,
-    private val staged: suspend () -> Boolean = { false },
     private val oldestWaitingCreatedAt: suspend () -> Long? = { null },
     private val now: () -> Long = System::currentTimeMillis,
 ) {
 
     suspend fun afterPass(pass: PartnerSyncCoordinator.SyncReport) {
         if (!pass.enrolled) return
-        val producer = if (runCatching { staged() }.getOrDefault(false)) "staged" else "legacy"
-        report("$EVENT_DELIVERY_PHASE rule_producer=$producer")
+        report("$EVENT_DELIVERY_PHASE rule_producer=staged")
         if (!canPost()) report(EVENT_NOTIFICATIONS_DENIED)
         runCatching { oldestWaitingCreatedAt() }.getOrNull()?.let {
             report("$EVENT_WAITING_RECIPIENT_KEY age=${outboxAgeBucket(now() - it)}")

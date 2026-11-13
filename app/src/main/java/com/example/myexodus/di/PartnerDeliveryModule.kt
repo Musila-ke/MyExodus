@@ -34,7 +34,6 @@ import com.example.myexodus.accountability.state.AccountabilityDatabase
 import com.example.myexodus.accountability.sync.AppCheckInstaller
 import com.example.myexodus.accountability.sync.FirestoreSchema
 import com.example.myexodus.accountability.sync.PartnerNotifications
-import com.example.myexodus.accountability.sync.PartnerRolloutGate
 import com.example.myexodus.accountability.sync.PartnerSyncTelemetry
 import com.example.myexodus.accountability.sync.await
 import com.example.myexodus.accountability.sync.decodePublicKey
@@ -266,22 +265,19 @@ object PartnerDeliveryModule {
         onRecorded = { coordinator.get().onEventCommitted() },
     )
 
-    /** §13.3 Phase 7 staged switch, now for every partner-visible queue: while the Remote
-     *  Config flag is explicitly on, each queue row is sealed by the auth-free service key so
-     *  delivery never raises a biometric prompt (owner demand 2026-11-12). The shipped legacy
-     *  chain stays the default path until then. */
+    /** §13.3 Phase 7 staged switch, now for every partner-visible queue: each queue row is
+     *  sealed by the auth-free service key so delivery never raises a biometric prompt (owner
+     *  demand 2026-11-12). */
     @Provides @Singleton
     fun providePartnerEventProducer(
         @ApplicationContext context: Context,
         outbox: ServiceEventOutbox,
         recorder: PartnerEventRecorder,
         storeFactory: AppRulesStoreFactory,
-        gate: PartnerRolloutGate,
     ): PartnerEventProducer = PartnerEventProducer(
         outbox = outbox,
         recorder = recorder,
         storeFactory = storeFactory,
-        staged = { gate.ruleProducerStagedEnabled() },
         resolveRuleLabel = { _, target -> appLabel(context, target) },
     )
 
@@ -293,7 +289,6 @@ object PartnerDeliveryModule {
         registrar: PartnerEventRegistrar,
         recorder: PartnerEventRecorder,
         clock: PartnerDeliveryClock,
-        gate: PartnerRolloutGate,
         crashReporting: CrashReporting,
         db: AccountabilityDatabase,
         keys: AccountabilityKeyStore,
@@ -305,7 +300,6 @@ object PartnerDeliveryModule {
         recorder = recorder,
         clock = clock,
         ownerUid = { FirebaseAuth.getInstance().currentUser?.uid },
-        syncEnabled = { gate.clientSyncEnabled() },
         onRecipientKeyRegenerated = {
             crashReporting.nonFatal(PartnerSyncTelemetry.EVENT_RECIPIENT_KEY_REGENERATED)
         },

@@ -97,7 +97,6 @@ firebase-functions = { group = "com.google.firebase", name = "firebase-functions
 firebase-storage = { group = "com.google.firebase", name = "firebase-storage" }
 firebase-auth = { group = "com.google.firebase", name = "firebase-auth" }
 firebase-crashlytics = { group = "com.google.firebase", name = "firebase-crashlytics" }
-firebase-config = { group = "com.google.firebase", name = "firebase-config" }
 androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
 androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
 androidx-credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }

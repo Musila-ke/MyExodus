@@ -21,15 +21,12 @@ import kotlinx.coroutines.launch
 class PartnerLiveSync(
     private val firestore: FirebaseFirestore,
     private val enrollmentDao: EnrollmentDao,
-    private val rollout: PartnerRolloutGate,
     private val ensureUid: suspend () -> String?,
 ) {
 
-    /** This uid if listening makes sense at all: kill switch on (default on unreadable —
-     *  same posture as push registration), at least one live pairing, and an anonymous uid
-     *  actually resolvable. Null silences the listener entirely. */
+    /** This uid if listening makes sense at all: at least one live pairing and an anonymous
+     *  uid actually resolvable. Null silences the listener entirely. */
     suspend fun myUidIfLive(): String? {
-        if (!rollout.pushRegistrationEnabled()) return null
         val pairs = runCatching { enrollmentDao.all() }.getOrDefault(emptyList())
         if (pairs.isEmpty()) return null
         return runCatching { ensureUid() }.getOrNull()

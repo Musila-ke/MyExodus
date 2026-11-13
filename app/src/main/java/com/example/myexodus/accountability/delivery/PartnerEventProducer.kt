@@ -9,7 +9,7 @@ import java.util.UUID
 
 /** §13.3 staged transports for one locally observable partner-visible event. */
 enum class PartnerEventTransport {
-    /** The shipped signed-chain path — the default while the staged flag is off. */
+    /** The shipped signed-chain path — only reachable when a caller wires no producer. */
     LEGACY,
     /** Handed to the service outbox under the event's deterministic/own id. */
     SIGNED,
@@ -45,7 +45,6 @@ class PartnerEventProducer(
     private val outbox: ServiceEventOutbox,
     private val recorder: PartnerEventRecorder,
     private val storeFactory: AppRulesStoreFactory,
-    private val staged: suspend () -> Boolean,
     private val resolveRuleLabel: (String, String) -> String = { _, target -> target },
 ) {
 
@@ -60,7 +59,6 @@ class PartnerEventProducer(
                 PartnerEventTransport.SIGNED
             }
         }
-        if (!staged()) return PartnerEventTransport.LEGACY
         return when (
             recorder.record(
                 kind = record.kind,
@@ -85,7 +83,6 @@ class PartnerEventProducer(
                 PartnerEventTransport.SIGNED
             }
         }
-        if (!staged()) return PartnerEventTransport.LEGACY
         val ruleId = row.ruleId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
             ?: return PartnerEventTransport.DEFERRED
         val change = row.ruleChange?.let(RuleChange::fromWire)

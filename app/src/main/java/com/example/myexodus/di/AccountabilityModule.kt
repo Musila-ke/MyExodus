@@ -44,11 +44,7 @@ import com.example.myexodus.accountability.sync.MailboxEventProcessor
 import com.example.myexodus.accountability.sync.MailboxMessageHandler
 import com.example.myexodus.accountability.sync.MailboxOutboxDrainer
 import com.example.myexodus.accountability.sync.MailboxRejectionChecker
-import com.example.myexodus.accountability.sync.DELIVERY_CLIENT_SYNC_CONFIG_KEY
-import com.example.myexodus.accountability.sync.PUSH_REGISTRATION_CONFIG_KEY
-import com.example.myexodus.accountability.sync.isFetchStampWedged
 import com.example.myexodus.accountability.sync.PairingExchange
-import com.example.myexodus.accountability.sync.PartnerRolloutGate
 import com.example.myexodus.accountability.sync.PairingRegistration
 import com.example.myexodus.accountability.sync.PairingReachabilityStore
 import com.example.myexodus.accountability.sync.PairUidResolver
@@ -106,8 +102,6 @@ import com.google.firebase.firestore.MemoryCacheSettings
 import com.google.firebase.functions.FirebaseFunctions
 import com.google.firebase.Timestamp
 import com.google.firebase.messaging.FirebaseMessaging
-import com.google.firebase.remoteconfig.FirebaseRemoteConfig
-import com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings
 import dagger.Lazy
 import dagger.Module
 import dagger.Provides
@@ -232,53 +226,6 @@ object AccountabilityModule {
 
     @Provides @Singleton
     fun provideFirebaseMessaging(): FirebaseMessaging = FirebaseMessaging.getInstance()
-
-    /**
-     * Plan §13 line 564: the push-registration rollout gate. In-code defaults are set
-     * BEFORE the first read — Remote Config's in-app defaults are separate from console
-     * values, so without this an unset console key would read `false` and silently disable a
-     * working rail. The 15-minute minimum fetch interval matches the sync cadence: a console
-     * flip is picked up by the next pass. A failed fetch must not discard the last activated
-     * value, so it is swallowed and the read still serves the cached value (or the in-app
-     * default on a fresh, offline install).
-     */
-    @Provides @Singleton
-    fun providePartnerRolloutGate(): PartnerRolloutGate {
-        val remoteConfig = FirebaseRemoteConfig.getInstance()
-        val settings = FirebaseRemoteConfigSettings.Builder()
-            .setMinimumFetchIntervalInSeconds(900)
-            .build()
-        val defaults = mapOf(
-            PUSH_REGISTRATION_CONFIG_KEY to true,
-            DELIVERY_CLIENT_SYNC_CONFIG_KEY to true,
-        )
-        remoteConfig.setConfigSettingsAsync(settings)
-        remoteConfig.setDefaultsAsync(defaults)
-        return PartnerRolloutGate { key ->
-            // A back-dated device clock that once wrote a future stamp wedges the SDK
-            // throttle forever (verified in firebase-config 23.1.0 bytecode: the check is
-            // lastSuccessfulFetchTime + interval vs now, no network attempt). reset() clears
-            // that stamp along with the activated template, settings and in-app defaults, so
-            // all three are re-applied before the fetch; without this the producer flag
-            // could not be flipped on such a device short of clearing app data.
-            if (isFetchStampWedged(
-                    remoteConfig.info.fetchTimeMillis,
-                    System.currentTimeMillis(),
-                    ROLLOUT_FETCH_INTERVAL_MS,
-                )
-            ) {
-                runCatching {
-                    remoteConfig.reset().await()
-                    remoteConfig.setConfigSettingsAsync(settings).await()
-                    remoteConfig.setDefaultsAsync(defaults).await()
-                }
-            }
-            runCatching { remoteConfig.fetchAndActivate().await() }
-            remoteConfig.getBoolean(key)
-        }
-    }
-
-    private const val ROLLOUT_FETCH_INTERVAL_MS = 900_000L
 
     /**
      * SOS Step 8 (§6.1/§8.15, table A2): the Reach out sender path. The target pair follows
@@ -781,12 +728,10 @@ object AccountabilityModule {
     fun providePartnerLiveSync(
         firestore: FirebaseFirestore,
         enrollmentDao: EnrollmentDao,
-        rollout: PartnerRolloutGate,
         resolver: PairUidResolver,
     ): PartnerLiveSync = PartnerLiveSync(
         firestore = firestore,
         enrollmentDao = enrollmentDao,
-        rollout = rollout,
         ensureUid = resolver::ensureUid,
     )
 
@@ -939,12 +884,10 @@ object AccountabilityModule {
         @ApplicationContext context: Context,
         db: AccountabilityDatabase,
         crashReporting: CrashReporting,
-        gate: PartnerRolloutGate,
     ): PartnerSyncTelemetry = PartnerSyncTelemetry(
         canPost = { NotificationAccess.canPost(context) },
         oldestPendingCreatedAt = db.outboxDao()::oldestPendingCreatedAt,
         report = { event -> crashReporting.nonFatal(event) },
-        staged = { gate.ruleProducerStagedEnabled() },
         oldestWaitingCreatedAt = db.serviceEventOutboxDao()::oldestWaitingCreatedAt,
     )
 

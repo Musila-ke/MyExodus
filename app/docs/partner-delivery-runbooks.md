@@ -8,18 +8,13 @@
 
 | Control | Where it lives | Default | What it does |
 |---|---|---|---|
-| `delivery_producer_rules_v1_enabled` | Firebase Remote Config, read by `PartnerRolloutGate.ruleProducerStagedEnabled()` | **OFF** (unset key and fetch failure both read false) | Moves rule-lifecycle journal rows onto the signed service-outbox transport. Off = the legacy chain path handles them again on the next pass. |
-| `delivery_client_sync_v1_enabled` | Remote Config, `PartnerRolloutGate.clientSyncEnabled()` | ON | Off pauses sending only. Recording continues; every row stays due and delivers unchanged after re-enable. |
-| `partner_push_registration_enabled` | Remote Config, `PartnerRolloutGate.pushRegistrationEnabled()` | ON | Off stops new push-installation registration. |
 | `delivery_ingest_v1_enabled` | Firestore `config/features` (server) | absent = enabled | Explicit `false` makes `ingestPartnerEvents` return retryable `unavailable / MAINTENANCE`. Client rows persist and retry. |
 | `partner_notify_v1_enabled` | Firestore `config/features` (server) | absent = enabled | Explicit `false` pauses dispatch. Mailbox documents and queued notification jobs stay intact. |
 | `device_liveness_alerts_v1_enabled` | Firestore `config/features` (server) | **absent = OFF** (worker returns `LIVENESS_V1_OFF`; an explicit `true` is required — plan §13 item 6 gates partner alerts on the overnight wake-probe tests passing) | While off, contact is still stored and enforcement notices still flow; no probes, absence alerts or reconnect notices are evaluated. |
 | `config/device_liveness_incident` | Firestore document | absent = no incident | Declared fleet incident; absence-only alerts are suppressed with `suppressionReason = FLEET_INCIDENT`. |
 | `partnerAccountabilityEnabled` | Firestore `config/features` | absent = enabled | Explicit `false` rejects legacy `appendUserEvent` with `FEATURE_DISABLED` (ADR #207 global kill switch). |
 
-The Remote Config gates fetch-and-activate per pass with a 900 s minimum interval; a console flip lands on the next periodic `PartnerSyncWorker` pass after activation. `config/features` is read fresh per function invocation.
-
-**Type trap (proven on device 2026-11-12).** Every flag above is consumed through `getBoolean()`, so it must be stored with parameter type **Boolean**. A flag stored as **String** — even one whose visible value reads `true` — makes the Android SDK log `No value of type 'Boolean' exists for parameter key '<key>'` and silently return the in-app default. For `delivery_producer_rules_v1_enabled` that default is **false**, so the client stays on the legacy chain while every dashboard shows the flag as on. If that warning appears in logcat, retype the parameter before debugging anything else. The SDK's 900 s fetch throttle (`lastFetchTime`) persists in app storage across force-stops and reinstalls-over, so a corrected template can take up to 15 minutes plus one sync pass to reach a device.
+`config/features` is read fresh per function invocation. **The three client-side Remote Config flags (`delivery_producer_rules_v1_enabled`, `delivery_client_sync_v1_enabled`, `partner_push_registration_enabled`) were retired 2026-11-13 under #177 (ADR #171):** push registration, service-outbox sending and the staged producer are unconditional in every build from this removal onward, so the server switches above are the only operational controls. Older builds still installed keep whatever Remote Config values they last activated; those values are ignored by current builds. The pre-removal type trap (a String-typed parameter silently reading the in-app default) died with the RC SDK.
 
 **Rollback rules (plan §13 item 7, non-negotiable):** pause transmission or dispatch only. Never disable security checks, delete the outbox, purge legacy aliases, or fabricate liveness state. Rows paused by any switch above are retained and resume unchanged.
 
@@ -31,7 +26,7 @@ The Remote Config gates fetch-and-activate per pass with a 900 s minimum interva
 
 | Signal | Where | Reading |
 |---|---|---|
-| `partner_delivery_phase rule_producer=legacy\|staged` | Crashlytics, one per enrolled periodic pass | Current rollout stage of the reporting device. |
+| `partner_delivery_phase rule_producer=staged` | Crashlytics, one per enrolled periodic pass | Current producer stage; a constant `staged` since #177. A `legacy` sample can only come from a build older than the removal. |
 | `partner_outbox_pending age=<bucket>` | Crashlytics | Any enrolled pass with a row still PENDING fires this; absent event = healthy. Sustained `over_24h` on online devices is the §14 alert condition. |
 | `partner_waiting_recipient_key age=<bucket>` | Crashlytics | Oldest `WAITING_FOR_RECIPIENT_KEY` age; sustained growth is the §14 recipient-key-stale alert condition. |
 | `partner_recipient_key_regenerated` | Crashlytics | One event per successful stale-key re-encryption (count metric). |
@@ -42,23 +37,22 @@ The Remote Config gates fetch-and-activate per pass with a 900 s minimum interva
 
 ### Immediate action for an App Check or callable outage
 
-1. Confirm the outage is transport-side (every device calling the same endpoint fails) before touching flags. One device failing is a device problem, not an outage.
+1. Confirm the outage is transport-side (every device calling the same endpoint fails) before touching switches. One device failing is a device problem, not an outage.
 2. Leave Firestore/callable App Check enforcement **on**. Enforcement is the security boundary; disabling it turns an availability incident into a security incident.
-3. Reduce quota pressure first: everything paused by Runbook A's flags keeps local recording and resumes losslessly.
+3. Reduce quota pressure first: everything paused by the server switches in the rollback sequence keeps local recording and resumes losslessly.
 4. If sustained quota above 70 % for three days, evaluate the documented options in plan §11 (a longer App Check TTL up to seven days per Firebase, quota-eligibility / Play listing, or an approved provider change) instead of allowing silent lockout.
 
 ### Rollback sequence (least disruptive first)
 
-1. `delivery_producer_rules_v1_enabled = false` — rule events return to the legacy chain path on the next pass. This is the whole-client rollback for the staged transport and needs no APK.
-2. `delivery_client_sync_v1_enabled = false` — pauses service-outbox sending entirely. Recording keeps running; rows stay due.
-3. `config/features.delivery_ingest_v1_enabled = false` — server-side pause; every client sees retryable `MAINTENANCE`, nothing is dropped.
-4. `config/features.partner_notify_v1_enabled = false` — dispatch pause; mailbox documents and queued jobs are untouched.
-5. Only if the global partner feature must stop: `partnerAccountabilityEnabled = false` (ADR #207, documented in `MyExodus Monitoring.md` §7). It stops new legacy sends only; nothing is deleted.
-6. `partner_push_registration_enabled = false` stops new registration if push registration itself is the problem.
+All remaining controls are server-side `config/features` switches (ADR #207). There is no client-side remote switch: a defective client build is recovered by fix-forward through the signed GitHub Releases channel (higher versionCode, same signing key), or by a signed `HALT` policy if it must stop being offered (ADR #171, `app/docs/app-update-channel.md`).
+
+1. `config/features.delivery_ingest_v1_enabled = false` — transport-side pause; every client sees retryable `MAINTENANCE`, rows persist and retry, nothing is dropped.
+2. `config/features.partner_notify_v1_enabled = false` — dispatch pause; mailbox documents and queued jobs are untouched.
+3. Only if the global partner feature must stop: `partnerAccountabilityEnabled = false` (ADR #207, documented in `MyExodus Monitoring.md` §7). It stops new legacy sends only; nothing is deleted.
 
 ### Restore order
 
-Server first, client last, producer last of all: `delivery_ingest_v1_enabled` and `partner_notify_v1_enabled` on → `partner_push_registration_enabled` on → `delivery_client_sync_v1_enabled` on → confirm `partner_t1_ms` and outbox-age buckets return to healthy on the next pass → `delivery_producer_rules_v1_enabled` on only if the outage is fully closed. Confirm from the next `partner_delivery_phase` sample that enrolled devices read `staged` again.
+`delivery_ingest_v1_enabled` and `partner_notify_v1_enabled` on → confirm `partner_t1_ms` and outbox-age buckets return to healthy on the next pass. `partner_delivery_phase` reads `rule_producer=staged` on every enrolled pass from #177 onward, so it is no longer a rollout indicator; a `legacy` sample means that device runs a build older than the removal.
 
 ---
 
@@ -89,7 +83,7 @@ Symptom: the server answers `RECIPIENT_KEY_STALE`, or rows park in `WAITING_FOR_
 
 ### Attestation root and revocation maintenance (linked, not duplicated)
 
-Attestation verification, trust-root pinning and revocation follow the device-attestation decisions in `MyExodus Architecture Decisions.md` (attestation entries; enrollment/rotation validates the full chain, per-event verification reads cached validated keys). Platform references: Android Keystore attestation and security key attestation are linked in the plan §14 reference block. A root transition or revocation must land as a verifier update first; the rollout flags can then stage client behavior.
+Attestation verification, trust-root pinning and revocation follow the device-attestation decisions in `MyExodus Architecture Decisions.md` (attestation entries; enrollment/rotation validates the full chain, per-event verification reads cached validated keys). Platform references: Android Keystore attestation and security key attestation are linked in the plan §14 reference block. A root transition or revocation must land as a verifier update first; client behavior then follows through the signed GitHub Releases channel (fix-forward, or a signed `HALT` policy) since the client flags were retired (#177).
 
 ### Lost-device procedures (linked, not duplicated)
 
@@ -131,5 +125,5 @@ Evaluation every five minutes **while `device_liveness_alerts_v1_enabled === tru
 
 - **No legacy purge in this release.** Legacy aliases, endpoints and the legacy `appendUserEvent` path stay deployed. Old APK installs that omit `installationId` remain accepted; a sender that identifies a registered installation is refused on the legacy path with `failed-precondition / SIGNED_TRANSPORT_REQUIRED` (§13.3), so a migrated installation never moves backward.
 - **Scope of the staged producer today:** only the rule-lifecycle producer (rules created/updated/deleted/expired) moves to the signed transport. `BLOCK_ATTEMPT` and `CHECK_IN` keep the legacy path this release; there is no producer for them.
-- **Documented window (project policy):** the window closes for a given kind only after (a) `delivery_producer_rules_v1_enabled` has been enabled in production, and (b) the `legacyUserEventAccepted` log shows no unmigrated senders for 30 consecutive days. Cleanup of legacy aliases then ships as a separate release, never as a flag flip.
+- **Documented window (project policy):** the window closes for a given kind only after (a) the staged producer has been the shipped transport for every build that carries it (unconditional since #177, 2026-11-13), and (b) the `legacyUserEventAccepted` log shows no unmigrated senders for 30 consecutive days. Cleanup of legacy aliases then ships as a separate release, never as a flag flip.
 - **Server metric:** `legacyUserEventAccepted` with `senderHash` and `installationIdentified` is the compatibility-window counter. `installationIdentified = true` on an accepted legacy event is a routing bug; investigate immediately.

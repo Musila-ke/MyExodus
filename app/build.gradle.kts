@@ -210,7 +210,6 @@ dependencies {
     implementation(libs.firebase.appcheck.playintegrity)
     implementation(libs.firebase.auth)
     implementation(libs.firebase.crashlytics)
-    implementation(libs.firebase.config)
     implementation(libs.bcprov.jdk18on)
     implementation(libs.zxcvbn)
     implementation(libs.androidx.datastore.tink)

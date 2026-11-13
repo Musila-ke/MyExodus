@@ -35,7 +35,6 @@ import com.example.myexodus.accountability.delivery.enqueuePartnerEventSync
 import com.example.myexodus.accountability.state.LocalWipeDetector
 import com.example.myexodus.accountability.sync.AppCheckInstaller
 import com.example.myexodus.accountability.sync.PartnerNotifications
-import com.example.myexodus.accountability.sync.PartnerRolloutGate
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
 import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.accountability.sync.PushInstallationRegistrar
@@ -105,7 +104,6 @@ class MyExodusApp : Application(), Configuration.Provider {
     // signer, and app startup must not construct that before the first actual tick.
     @Inject lateinit var partnerSyncCoordinator: dagger.Lazy<PartnerSyncCoordinator>
     @Inject lateinit var pushInstallationRegistrar: dagger.Lazy<PushInstallationRegistrar>
-    @Inject lateinit var partnerRolloutGate: dagger.Lazy<PartnerRolloutGate>
     // Widget snapshot writer (widget spec §7 Step 3). Field injection here is the construction
     // trigger, not decoration: nothing calls into the writer from the app — its collectors and
     // its heartbeat only run while this process is alive, and this line is what starts them.
@@ -275,7 +273,6 @@ class MyExodusApp : Application(), Configuration.Provider {
                 runCatching {
                     runPartnerSyncPass(
                         pushInstallationRegistrar.get(),
-                        partnerRolloutGate.get(),
                         partnerSyncCoordinator.get(),
                     )
                 }.onFailure { Log.w(TAG, "activity kick pass failed", it) }

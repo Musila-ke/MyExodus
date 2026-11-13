@@ -90,7 +90,6 @@ import com.example.myexodus.accountability.sync.PartnerNotifications
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
 import com.example.myexodus.accountability.sync.PartnerLiveSync
 import com.example.myexodus.accountability.sync.PartnerNudgePush
-import com.example.myexodus.accountability.sync.PartnerRolloutGate
 import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.accountability.sync.PushInstallationRegistrar
 import com.example.myexodus.accountability.sync.runPartnerSyncPass
@@ -319,7 +318,6 @@ class MainActivity : FragmentActivity() {
     /** Plan §8.10: startup compatibility read (public callable, no App Check/auth). */
     @Inject lateinit var functions: FirebaseFunctions
     @Inject lateinit var pushInstallationRegistrar: PushInstallationRegistrar
-    @Inject lateinit var partnerRolloutGate: PartnerRolloutGate
     // Owner mandate 2026-10-04 (realtime): the foreground mailbox doorbell — its ring lands
     // in [startPartnerLiveSync]'s collector below as the same in-process pass.
     @Inject lateinit var partnerLiveSync: PartnerLiveSync
@@ -435,7 +433,6 @@ class MainActivity : FragmentActivity() {
                 if (isOnline()) {
                     runPartnerSyncPass(
                         pushInstallationRegistrar,
-                        partnerRolloutGate,
                         partnerSyncCoordinator,
                     )
                 }
@@ -496,9 +493,9 @@ class MainActivity : FragmentActivity() {
         if (!signingHealMutex.tryLock()) return
         try {
             if (!isOnline()) return
-            val first = runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator)
+            val first = runPartnerSyncPass(pushInstallationRegistrar, partnerSyncCoordinator)
             if (first.signingBlocked && signingWindowWarm()) {
-                runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator)
+                runPartnerSyncPass(pushInstallationRegistrar, partnerSyncCoordinator)
             }
         } catch (e: CancellationException) {
             throw e
@@ -518,15 +515,15 @@ class MainActivity : FragmentActivity() {
         try {
             return signingHealMutex.withLock {
                 if (!isOnline()) return@withLock false
-                if (!runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked) {
+                if (!runPartnerSyncPass(pushInstallationRegistrar, partnerSyncCoordinator).signingBlocked) {
                     return@withLock true
                 }
                 if (signingWindowWarm()) {
-                    return@withLock !runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked
+                    return@withLock !runPartnerSyncPass(pushInstallationRegistrar, partnerSyncCoordinator).signingBlocked
                 }
                 // Cancelled prompt: rows stay journaled for the next automatic pass.
                 signWithAuthPrompt(getString(R.string.partner_sync_auth_title)) ?: return@withLock false
-                !runPartnerSyncPass(pushInstallationRegistrar, partnerRolloutGate, partnerSyncCoordinator).signingBlocked
+                !runPartnerSyncPass(pushInstallationRegistrar, partnerSyncCoordinator).signingBlocked
             }
         } catch (e: CancellationException) {
             throw e
@@ -558,7 +555,6 @@ class MainActivity : FragmentActivity() {
                         if (isOnline()) {
                             runPartnerSyncPass(
                                 pushInstallationRegistrar,
-                                partnerRolloutGate,
                                 partnerSyncCoordinator,
                             )
                         }
@@ -892,7 +888,6 @@ class MainActivity : FragmentActivity() {
                                 runPass = {
                                     runPartnerSyncPass(
                                         pushInstallationRegistrar,
-                                        partnerRolloutGate,
                                         partnerSyncCoordinator,
                                     )
                                 },
@@ -1411,8 +1406,8 @@ class MainActivity : FragmentActivity() {
     companion object {
         const val EXTRA_START_TAB = "extra_start_tab"
 
-        /** How often [startPartnerLiveSync] re-checks its gate while visible but not yet live
-         *  (no pairing yet, or the kill switch is off). */
+        /** How often [startPartnerLiveSync] re-checks while visible but not yet live (no
+         *  pairing yet, or the anonymous uid is not resolvable yet). */
         private const val PARTNER_LIVE_RECHECK_MILLIS = 30_000L
 
         /** Milestone notification deep link: which habit's Home to show. */
