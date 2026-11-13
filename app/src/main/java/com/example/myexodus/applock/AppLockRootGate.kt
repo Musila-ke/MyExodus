@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +57,7 @@ private fun AppLockShell(state: AppLockState, controller: AppLockController) {
     val authorizer = rememberVaultCipherAuthorizer(controller)
     var failure by remember(state) { mutableStateOf<AppLockFailure?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var confirmReset by remember(state) { mutableStateOf(false) }
 
     val title = when (state) {
         AppLockState.RECOVERY_REQUIRED -> R.string.app_lock_recovery_title
@@ -149,9 +151,24 @@ private fun AppLockShell(state: AppLockState, controller: AppLockController) {
                                 onClick = { controller.cancelSetup() },
                             ) { Text(stringResource(R.string.app_lock_setup_not_now)) }
                         }
-                        AppLockState.RECOVERY_REQUIRED -> Button(
-                            onClick = { controller.retryRecovery() },
-                        ) { Text(stringResource(R.string.app_lock_recovery_retry)) }
+                        AppLockState.RECOVERY_REQUIRED -> Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Button(
+                                enabled = !busy,
+                                onClick = { controller.retryRecovery() },
+                            ) { Text(stringResource(R.string.app_lock_recovery_retry)) }
+                            TextButton(
+                                enabled = !busy,
+                                onClick = { confirmReset = true },
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.app_lock_recovery_reset),
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
+                        }
                         else -> Unit
                     }
                 }
@@ -163,6 +180,27 @@ private fun AppLockShell(state: AppLockState, controller: AppLockController) {
                 }
             }
         }
+    }
+
+    if (confirmReset) {
+        AlertDialog(
+            onDismissRequest = { confirmReset = false },
+            title = { Text(stringResource(R.string.app_lock_recovery_reset_title)) },
+            text = { Text(stringResource(R.string.app_lock_recovery_reset_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmReset = false
+                        runOperation { controller.resetRecovery() }
+                    },
+                ) { Text(stringResource(R.string.app_lock_recovery_reset_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmReset = false }) {
+                    Text(stringResource(R.string.app_lock_cancel))
+                }
+            },
+        )
     }
 }
 

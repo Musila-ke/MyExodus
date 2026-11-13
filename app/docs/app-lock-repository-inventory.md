@@ -735,3 +735,40 @@ pass as recorded in §15; only the owner-gated physical-device and API 26-29 leg
   "Day 1" plus the populated Milestones ladder, no "Try again" — and Settings rendered with
   "App Lock On". No failure state was observed after the unlock.
 - BLOCKED: biometric leg (AVD has no fingerprint enrolled) and the physical release-build run.
+
+**Explicit reset escape hatch (§8.11) — 2026-11-13, task #162**
+
+- What shipped: `VaultRecoveryReset.erase()` (the only destructive escape from
+  RECOVERY_REQUIRED) wired through `AppLockController.resetRecovery()` and the recovery shell
+  in `AppLockRootGate`. The recovery screen keeps "Try again" and adds an error-colored
+  "Reset My Exodus data" action that opens a confirmation dialog with the §8.11 disclosure
+  ("…deleted permanently… Cloud backups made before this point cannot be removed, and your
+  partner connection is kept") and a destructive "Reset and erase" confirm.
+- Ordering: the caller quiesces both stores first; the erase destroys the vault-keyed
+  databases (including the `.restore` / `.restore-previous` staging copies), the envelope
+  (active + staging + incomplete writes), the vault alias, and the legacy-wrap material, and
+  only then commits `DISABLED`. The durable commit is last, so an interrupted reset re-enters
+  RECOVERY_REQUIRED and can be retried; every step is idempotent. The accountability store is
+  operational and not vault-keyed, so it survives by design.
+- §8.11's "keep any independent partner/anti-disable approval" is vacuous today: inventory §6
+  records no partner/anti-disable approval mechanism in main code, so nothing existed to
+  consult before the reset weakened protection.
+- Evidence (unit): `VaultRecoveryResetTest` 2/2 — every store file, sidecar, envelope artifact
+  and both legacy wrapping materials are destroyed exactly once, and a double erase is safe.
+  Full JVM suite: 298 classes / 2,837 tests, 0 failures, 0 errors, 0 skipped.
+  `:app:lintRelease` alone (ADR #208): 0 errors, 3 warnings (the standing baseline).
+- Evidence (device, emulator-5554 API 37, signed release build): with the feature enabled and
+  first-unlock verified, the active envelope was deleted out-of-band; launch landed directly in
+  RECOVERY_REQUIRED ("Recovery needed", "Nothing has been deleted") with both actions. Cancel
+  left all 7 vault-owned files and `feature_status=enabled` untouched. Confirm logged
+  `Recovery action: user-confirmed reset of all database data`, emptied the vault directory,
+  removed the scoped rules/activity stores and the legacy-named file, replaced the pre-reset
+  snapshot cache with a fresh empty one, flipped the journal to `none` / `disabled`, and the app
+  re-created empty stores under the non-vault keys and rendered normal Home UI (FLAG_SECURE
+  lifted, screenshots working). AVD PIN cleared and the rotation guard re-armed afterwards.
+- Note: the emulator's `Keystore security-level probe failed`
+  (`NoSuchAlgorithmException: AES for provider AndroidKeyStore`) appears during the
+  post-reset reopen; it is the AVD's known probe limitation, the fallback path succeeded and
+  the stores opened fresh.
+- BLOCKED (unchanged): physical-device release run of the reset flow (owner window) and the
+  API 26-29 tier (§12.2 release blocker).

@@ -76,7 +76,15 @@ class RecoveryManager(
     /** User-confirmed reset: destroys all stores, keys, and the rules snapshot cache. */
     fun resetAllData() {
         Log.w(TAG, "Recovery action: user-confirmed reset of all database data")
-        for (file in listOf(rulesDbFile, activityDbFile, legacyDbFile)) {
+        for (file in listOf(
+            rulesDbFile,
+            // Restore staging and the pre-restore copy hold pre-reset ciphertext of the same
+            // store (App Lock explicit reset, §8.11: no recoverable copy may survive).
+            File(rulesDbFile.path + AppRulesStoreFactory.RESTORE_SUFFIX),
+            File(rulesDbFile.path + AppRulesStoreFactory.PREVIOUS_SUFFIX),
+            activityDbFile,
+            legacyDbFile,
+        )) {
             deleteWithSidecars(file)
         }
         cleanupConversionArtifacts()

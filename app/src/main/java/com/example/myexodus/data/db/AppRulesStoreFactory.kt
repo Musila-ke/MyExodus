@@ -609,8 +609,8 @@ class AppRulesStoreFactory(
     companion object {
         const val DB_NAME = "myexodus_rules.db"
         private const val TAG = "MyExodusDb"
-        private const val RESTORE_SUFFIX = ".restore"
-        private const val PREVIOUS_SUFFIX = ".restore-previous"
+        internal const val RESTORE_SUFFIX = ".restore"
+        internal const val PREVIOUS_SUFFIX = ".restore-previous"
         private val SIDECARS = arrayOf("-wal", "-shm", "-journal")
 
         val MIGRATION_9_10 = object : Migration(9, 10) {

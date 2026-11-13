@@ -2041,6 +2041,10 @@
     <string name="app_lock_setup_not_now">Not now</string>
     <string name="app_lock_setup_device_lock">Set up a device screen lock</string>
     <string name="app_lock_recovery_retry">Try again</string>
+    <string name="app_lock_recovery_reset">Reset My Exodus data</string>
+    <string name="app_lock_recovery_reset_title">Reset and erase protected data?</string>
+    <string name="app_lock_recovery_reset_body">Every rule, block, streak, habit, recovery and activity record on this phone is deleted permanently. App Lock turns off. Cloud backups made before this point cannot be removed, and your partner connection is kept.</string>
+    <string name="app_lock_recovery_reset_confirm">Reset and erase</string>
     <string name="app_lock_cancel">Cancel</string>
     <string name="app_lock_prompt_title">Unlock My Exodus</string>
     <string name="app_lock_prompt_subtitle">Confirm it\'s you to open your private data</string>

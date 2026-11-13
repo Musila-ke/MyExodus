@@ -60,6 +60,7 @@ class AppLockController @Inject constructor(
     private val keyManager: VaultKeyManager,
     private val rulesStoreFactory: AppRulesStoreFactory,
     private val activityLogStore: ActivityLogStore,
+    private val reset: VaultRecoveryReset,
 ) {
 
     private val mutex = Mutex()
@@ -255,6 +256,31 @@ class AppLockController @Inject constructor(
         if (coordinator.state.value != AppLockState.RECOVERY_REQUIRED) return false
         coordinator.publish(AppLockState.LOCKED)
         return true
+    }
+
+    /**
+     * §8.11 explicit reset, reachable only from RECOVERY_REQUIRED after the UI collected the
+     * user's explicit confirmation. The durable commit is last: until every vault-keyed file is
+     * gone the lock stays in recovery, so an interrupted reset can only be retried, never
+     * mistaken for a successful recovery.
+     */
+    suspend fun resetRecovery(): AppLockResult = mutex.withLock {
+        if (coordinator.state.value != AppLockState.RECOVERY_REQUIRED) {
+            return AppLockResult.Failed(AppLockFailure.Unavailable)
+        }
+        return withContext(Dispatchers.IO + NonCancellable) {
+            quiesce()
+            try {
+                reset.erase()
+            } catch (e: Exception) {
+                Log.e(TAG, "App Lock reset failed; recovery evidence kept", e)
+                return@withContext AppLockResult.Failed(AppLockFailure.Unavailable)
+            }
+            statusStore.commitDisabled()
+            coordinator.publishDisabled()
+            reopenUnderLegacyKeys()
+            AppLockResult.Done
+        }
     }
 
     private fun preflightFailure(): AppLockResult.Failed? = when (val result = preflight()) {
