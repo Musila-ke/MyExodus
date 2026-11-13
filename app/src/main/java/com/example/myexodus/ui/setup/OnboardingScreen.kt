@@ -73,15 +73,12 @@ import com.example.myexodus.ui.settings.AccountViewModel
 import com.example.myexodus.ui.settings.failureRes
 import kotlinx.coroutines.launch
 
-private const val SLIDE_COUNT = 3
-private const val PAGE_ACCOUNT = SLIDE_COUNT
-private const val PAGE_PERMISSIONS = SLIDE_COUNT + 1
-
 private data class OnboardingSlide(
     val kickerRes: Int,
     val titleRes: Int,
     val bodyRes: Int,
     val photoRes: Int,
+    val steps: List<Int> = emptyList(),
 )
 
 private val Slides = listOf(
@@ -96,6 +93,11 @@ private val Slides = listOf(
         R.string.onboarding_slide_widget_title,
         R.string.onboarding_slide_widget_body,
         R.drawable.onboarding_rhythm,
+        steps = listOf(
+            R.string.onboarding_slide_widget_step_1,
+            R.string.onboarding_slide_widget_step_2,
+            R.string.onboarding_slide_widget_step_3,
+        ),
     ),
     OnboardingSlide(
         R.string.onboarding_slide_partner_kicker,
@@ -103,10 +105,20 @@ private val Slides = listOf(
         R.string.onboarding_slide_partner_body,
         R.drawable.onboarding_partner,
     ),
+    OnboardingSlide(
+        R.string.onboarding_slide_privacy_kicker,
+        R.string.onboarding_slide_privacy_title,
+        R.string.onboarding_slide_privacy_body,
+        R.drawable.onboarding_privacy,
+    ),
 )
 
+private val SLIDE_COUNT = Slides.size
+private val PAGE_ACCOUNT = SLIDE_COUNT
+private val PAGE_PERMISSIONS = SLIDE_COUNT + 1
+
 /**
- * First-run journey (owner request 2026-11-06): three capability slides, then the optional
+ * First-run journey (owner request 2026-11-06): capability slides, then the optional
  * account choice, then the permission wizard unchanged in behavior. The account form is the
  * Settings pane's own [AccountAuthForm], so validation and copy cannot drift between the two
  * entry points; only the surrounding choice ("continue without an account") is new.
@@ -243,6 +255,10 @@ private fun SlidePage(
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (slide.steps.isNotEmpty()) {
+                Spacer(Modifier.height(20.dp))
+                WidgetSteps(slide.steps)
+            }
         }
         Spacer(Modifier.height(20.dp))
         Row(
@@ -305,6 +321,32 @@ private fun SlidePhoto(slide: OnboardingSlide) {
                 style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 2.2.sp),
                 color = Color.White.copy(alpha = 0.92f),
             )
+        }
+    }
+}
+
+/** Numbered how-to under the widget slide: the three home-screen steps, set like an inset. */
+@Composable
+private fun WidgetSteps(steps: List<Int>) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            stringResource(R.string.onboarding_slide_widget_steps_label).uppercase(),
+            style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 2.2.sp),
+            color = MaterialTheme.colorScheme.tertiary,
+        )
+        steps.forEachIndexed { index, step ->
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    (index + 1).toString().padStart(2, '0'),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+                Text(
+                    stringResource(step),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
@@ -419,11 +461,15 @@ private fun AccountPage(
                 stringResource(R.string.account_guest_intro_title),
                 style = MaterialTheme.typography.headlineLarge,
             )
-            Spacer(Modifier.height(12.dp))
-            Text(
-                stringResource(R.string.account_guest_intro_body),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Spacer(Modifier.height(16.dp))
+            TradeOff(
+                title = stringResource(R.string.onboarding_account_with_title),
+                body = stringResource(R.string.onboarding_account_with_body),
+            )
+            Spacer(Modifier.height(14.dp))
+            TradeOff(
+                title = stringResource(R.string.onboarding_account_without_title),
+                body = stringResource(R.string.onboarding_account_without_body),
             )
             Spacer(Modifier.height(24.dp))
             AccountAuthForm(
@@ -495,6 +541,24 @@ private fun AccountPage(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 4.dp),
+        )
+    }
+}
+
+/** One side of the account choice: what it buys, set as a labelled pair so the trade-off is
+ *  read as a comparison rather than one paragraph of benefits. */
+@Composable
+private fun TradeOff(title: String, body: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            title.uppercase(),
+            style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 1.4.sp),
+            color = MaterialTheme.colorScheme.tertiary,
+        )
+        Text(
+            body,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

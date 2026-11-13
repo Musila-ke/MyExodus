@@ -785,9 +785,10 @@
     <string name="settings_theme_light">Light</string>
     <string name="settings_theme_dark">Dark</string>
 
-    <!-- First-run onboarding (owner request 2026-11-06): three capability slides, then the
+    <!-- First-run onboarding (owner request 2026-11-06): capability slides, then the
          optional-account choice, then the permission steps. Slide copy names only shipped
-         capability (blocking both apps and sites, the streak widget, partner check-ins). -->
+         capability (blocking both apps and sites, the streak widget, partner check-ins,
+         App Lock). -->
     <string name="onboarding_slide_block_kicker">Blocking</string>
     <string name="onboarding_slide_widget_kicker">Daily rhythm</string>
     <string name="onboarding_slide_partner_kicker">Accountability</string>
@@ -797,11 +798,22 @@
     <string name="onboarding_slide_block_title">Block the apps that pull you under</string>
     <string name="onboarding_slide_block_body">Choose the apps and sites you want out of reach. When one opens, a block screen stands in its place, with a timed pause before it lifts and a way to reach for help.</string>
     <string name="onboarding_slide_widget_title">Keep your streak in sight</string>
-    <string name="onboarding_slide_widget_body">A home-screen widget carries your day count, your next milestone and whether protection is on. Log an urge or reach out without opening the app.</string>
+    <string name="onboarding_slide_widget_body">Your day count, your next milestone and whether protection is on, right on the home screen. Log an urge or reach out without opening the app.</string>
+    <string name="onboarding_slide_widget_steps_label">Add the widget</string>
+    <string name="onboarding_slide_widget_step_1">Long-press an empty spot on your home screen.</string>
+    <string name="onboarding_slide_widget_step_2">Tap Widgets, then find My Exodus.</string>
+    <string name="onboarding_slide_widget_step_3">Drag Streak to where you want it.</string>
     <string name="onboarding_slide_partner_title">Someone has your back</string>
     <string name="onboarding_slide_partner_body">Pair with a person you trust. They can see how you’re doing and send a check-in when you’ve gone quiet.</string>
+    <string name="onboarding_slide_privacy_kicker">Privacy</string>
+    <string name="onboarding_slide_privacy_title">Lock it behind your screen lock</string>
+    <string name="onboarding_slide_privacy_body">App Lock asks for the PIN, pattern, password or biometric that unlocks this phone before My Exodus opens. Screenshots and screen sharing of the app are blocked while it is on. Turn it on in Settings → App Lock.</string>
     <string name="onboarding_account_continue">Continue without an account</string>
-    <string name="onboarding_account_hint">You can create an account anytime in Settings → Account. Everything above works without one.</string>
+    <string name="onboarding_account_with_title">With an account</string>
+    <string name="onboarding_account_with_body">Back up and restore your progress, and keep your partner connection if this phone is lost or replaced.</string>
+    <string name="onboarding_account_without_title">Without an account</string>
+    <string name="onboarding_account_without_body">Everything works. Your data stays on this phone, so losing it means starting over.</string>
+    <string name="onboarding_account_hint">You can create an account anytime in Settings → Account.</string>
     <string name="onboarding_account_signed_in_body">Your progress is backed up to this account. You can manage it anytime in Settings → Account.</string>
 
     <!-- First-run setup wizard (plan §8 Step 7): one screen per permission, each stating

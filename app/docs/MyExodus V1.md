@@ -1389,7 +1389,7 @@ in full: "Art credits: Solar icons by 480 Design (CC BY 4.0, iconify.design), ti
 Photography from Unsplash (unsplash.com/license)."
 
 - **First-run journey (ADR #261).** `ui/setup/OnboardingScreen.kt` is the new first-run entry:
-  three capability slides (blocking, daily rhythm/widget, accountability), then the account page
+  four capability slides (blocking, daily rhythm/widget, accountability, privacy/App Lock), then the account page
   (create, sign in, Google, or "Continue without an account"), then the unchanged five-step
   `SetupScreen` wizard. Gate is `!setupStateStore.setupSeen` alone; the old
   "missing-mechanism" evaluation is gone. `Skip` on the slides jumps to the account page; every
@@ -1406,6 +1406,15 @@ Photography from Unsplash (unsplash.com/license)."
   header/Back/Skip/Continue, finishing writes `seen=true` and lands on Home; light and dark both
   rendered. Slide 2's image was replaced twice at the owner's direction before the marked-calendar
   photo shipped; the final asset was device-verified.
+  *(Revision 2026-11-13, ADR #305: the journey gains a fourth slide — "Lock it behind your screen
+  lock" (App Lock; the body names the Settings → App Lock path and the screenshot/screen-sharing
+  block FLAG_SECURE provides, both verified against `AppLockCoordinator`/`MainActivity`). The
+  widget slide now carries a three-step add-widget how-to (long-press home screen, Widgets → My
+  Exodus, drag Streak), and the account page states the with/without-account trade-off as a
+  labelled pair above the shared form. `SLIDE_COUNT` derives from the slide list, so the account
+  and wizard page indexes follow automatically. Verified on the MyExodus_API37 emulator (the
+  X6532 was away), 360 dp light + dark: all four slides scrolled to their last line, the account
+  page and the wizard's first step; camera-visible copy matches `strings.xml`.)*
 - **Appearance control (ADR #262).** `ThemeSettings` persists `ThemeMode.SYSTEM|LIGHT|DARK`
   (SharedPreferences `theme_settings`, default `SYSTEM`); `rememberDarkTheme(mode)` is the one
   ThemeMode→Boolean conversion, used by `MainActivity`, `BlockerActivity` and

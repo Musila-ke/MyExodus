@@ -57,6 +57,7 @@ Bundled onboarding/brand art is real, sourced material; nothing here is generate
 | `drawable-nodpi/onboarding_block.jpg` (1200×676) | Unsplash photo `1584433144859-1fc3ab64a957`, fetched at `w=1200&q=80` | Unsplash License |
 | `drawable-nodpi/onboarding_rhythm.jpg` (1200×801) | Unsplash photo `1633526543814-9718c8922b7a`, fetched at `w=1200&q=80` | Unsplash License |
 | `drawable-nodpi/onboarding_partner.jpg` (1080×721) | Unsplash photo `1573496546038-82f9c39f6365`, fetched at `w=1080&q=80` | Unsplash License |
+| `drawable-nodpi/onboarding_privacy.jpg` (1200×800) | Unsplash photo `1577466037256-8f2c5ce04627`, fetched at `w=1200&q=80` | Unsplash License |
 | `drawable-nodpi/onb_usage.png`, `onb_disclosure.png`, `onb_accessibility.png`, `onb_notifications.png`, `onb_overlay.png`, `onb_check.png` (384×384) | Iconify Solar set: `graph-new-up-bold`, `eye-bold`, `accessibility-bold`, `bell-bold`, `layers-bold`, `check-bold`; Solar by 480 Design | CC BY 4.0 |
 | `drawable-nodpi/logo_lockup.png`, `logo_mark.png` | Project's own brand art | Project-owned |
 
