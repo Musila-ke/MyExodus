@@ -44,23 +44,37 @@ https://github.com/<UPDATE_RELEASE_REPOSITORY>/releases/latest/download/update-m
 That `latest` link is discovery only. APK downloads always use the immutable version-pinned URL
 carried inside the signed policy.
 
-**Live status, 2026-11-07:** the channel is live at
-`https://github.com/Musila-ke/MyExodus-Releases`. Release immutability is enabled. Published:
+**Live status, 2026-11-13:** the channel is live at
+`https://github.com/Musila-ke/MyExodus-Releases`. Release immutability is enabled. All
+artifacts are signed with the release identity (certificate SHA-256
+`8f88188070952dde4c490a01ce8aa0407e9172ee4bbc035693ea795ab598854b`). Published:
 
 - `artifact-v4` and `artifact-v5` (`myexodus-1.1.3-v5.apk`, 38,531,001 bytes, SHA-256
   `15ffc132bda5b1ec6044e66e82cafc672fcf3a377399b785743950ecef184d86`). These predate the
   updater fixes of 2026-11-07 and stay published only as history; do not rebuild them.
-- `artifact-v6` (`myexodus-1.1.4-v6.apk`, 38,531,977 bytes, SHA-256
-  `18a334a257b605ab3297878c4680fc90d2979bacb9d9707584acd20e2aef2d7b`), signed with the
-  release identity (certificate SHA-256 `8f88188070952dde4c490a01ce8aa0407e9172ee4bbc035693ea795ab598854b`).
-  This is the first artifact carrying the account-deletion local-data fix and the updater
-  reliability fixes.
-- `policy-000009`, the latest release: signed `OFFER` of versionCode 6 (`1.1.4`) at 100 percent,
-  cohort salt `3c552279608ea0cf5fd89640f950112f`. The first live publication targets a
-  two-tester base, so it goes straight to 100 percent; the 5 to 25 to 100 progression has not
-  been rehearsed and is not claimed.
+- `artifact-v6` (1.1.4, 38,531,977 bytes, SHA-256
+  `18a334a257b605ab3297878c4680fc90d2979bacb9d9707584acd20e2aef2d7b`), the first artifact
+  carrying the account-deletion local-data fix and the updater reliability fixes.
+- `artifact-v24` (`MyExodus-1.1.22-v24.apk`, 39,141,321 bytes, SHA-256
+  `0f0f254a152c7ba23e441e56ae0d8414e82f3984d3f8ba779afad3403daaa3fc`) and `artifact-v25`
+  (`app-release.apk`, same size, SHA-256
+  `c07a121cee6f8188789237eb4efbc74d85634deccd3748ecea1b85999107dd07`), the 2026-11-12
+  two-tester builds.
+- `policy-000010`: signed `OFFER` of versionCode 25 (`1.1.23`) at 100 percent, cohort salt
+  `6c50332502c0148f04e96b26f003f286`.
+- `artifact-v31` (`app-release.apk`, 39,213,401 bytes, SHA-256
+  `f741d75279ce02a9d6fef1e9a2ca1506a63b46196a1d362275c7e5e83328701c`), built with
+  `-Pmyexodus.updateRepository=Musila-ke/MyExodus-Releases` so `BuildConfig` carries the
+  channel; this is the first artifact whose Settings check has a repository to read.
+- `policy-000011`, the latest release: signed `OFFER` of versionCode 31 (`1.1.29`) at 100
+  percent, cohort salt `6cbb216c55c003585c139ccf82bb00dc`. Carries the App Lock surface
+  redesign (ADR #306), the onboarding privacy/widget/account slides, the partner
+  reply-direction and sharing-revoke fixes, and the stale-key retry bound (ADR #307).
 
-Publisher state: highest policy sequence 9, highest versionCode 6. Tags are immutable, so
+The rollout goes straight to 100 percent because the tester base is the owner and one partner:
+the 5 to 25 to 100 progression has not been rehearsed and is not claimed.
+
+Publisher state: highest policy sequence 11, highest versionCode 31. Tags are immutable, so
 `policy-000005` (an early test publication) stays burned and every new policy needs a higher
 sequence.
 
@@ -638,6 +652,31 @@ immediately before the first commit.
   attention card and chip returned to healthy.
 - The live `/releases/latest/download/update-manifest.json` was re-fetched during this sync and
   served the exact envelope described in §1.
+
+**PASSED (publication of v31, 2026-11-13):**
+
+- The release APK was rebuilt with `-Pmyexodus.updateRepository=Musila-ke/MyExodus-Releases`
+  and the generated `BuildConfig.UPDATE_RELEASE_REPOSITORY` reads that value; every earlier
+  build in this line left it empty, so Settings truthfully said the channel was unavailable.
+  `aapt dump badging`: `versionCode=31`, `versionName=1.1.29`, `sdkVersion=26`,
+  `targetSdkVersion=36`. `apksigner verify --print-certs`: certificate SHA-256
+  `8f881880…854b`, the release identity.
+- `artifact-v31` was published as a prerelease with `app-release.apk` (39,213,401 bytes); the
+  GitHub asset digest equals the local SHA-256
+  `f741d75279ce02a9d6fef1e9a2ca1506a63b46196a1d362275c7e5e83328701c`.
+- `policy-000011` was signed with the production key (`offer`, sequence 11, rollout 100,
+  cohort salt `6cbb216c55c003585c139ccf82bb00dc`) and published as the latest non-prerelease.
+- The live `/releases/latest/download/update-manifest.json` decoded to `policySequence 11`,
+  `OFFER`, versionCode 31 (`1.1.29`), rollout 100, apkUrl
+  `…/releases/download/artifact-v31/app-release.apk`, and the exact size and SHA-256 above.
+  The releases API reports `policy-000011` as the latest release.
+- `./gradlew :app:testDebugUnitTest --tests "com.example.myexodus.update.*"`: 48 tests across
+  5 classes, 0 failures, 0 errors, after the publication.
+
+**Open client-side leg.** The end-to-end check on a phone (an installed build at versionCode
+30 or lower sees `AVAILABLE`, downloads, verifies and installs v31) is scheduled for the
+physical pass; the emulator leg above was run against the policy-000008 era and has not been
+rehearsed against policy-000011.
 
 **PASSED (physical X6532, release-signed, live channel, 2026-11-07):**
 
