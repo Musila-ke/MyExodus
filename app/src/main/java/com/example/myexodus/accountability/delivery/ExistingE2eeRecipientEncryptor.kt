@@ -40,6 +40,11 @@ class ExistingE2eeRecipientEncryptor(
 
     sealed interface Outcome {
         data class Encrypted(val envelopes: List<RecipientEnvelopeV1>) : Outcome
+
+        /** The scope has readable enrollments, but the server's authorized set names none of
+         *  them: re-probing, resending or re-encrypting cannot produce a key it would accept. */
+        data object NotAuthorized : Outcome
+
         data object RecipientKeyUnavailable : Outcome
     }
 
@@ -66,7 +71,14 @@ class ExistingE2eeRecipientEncryptor(
                 authorizedRecipientKeyIds == null ||
                     recipientKeyIdOf(it.partnerAgreementPubKey) in authorizedRecipientKeyIds
             }
-        if (records.isEmpty()) return Outcome.RecipientKeyUnavailable
+        if (records.isEmpty()) {
+            val scoped = all.filter { recipientPairId == null || it.pairId == recipientPairId }
+            return if (authorizedRecipientKeyIds != null && scoped.isNotEmpty()) {
+                Outcome.NotAuthorized
+            } else {
+                Outcome.RecipientKeyUnavailable
+            }
+        }
         return try {
             val envelopes = records
                 .map { record ->

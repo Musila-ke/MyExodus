@@ -266,8 +266,19 @@ class PartnerEventDrain(
                                 prepared.eventId, revision, authorized,
                             )
                         ) {
-                            PartnerEventRecorder.RegenerationResult.Regenerated ->
+                            PartnerEventRecorder.RegenerationResult.Regenerated -> {
                                 onRecipientKeyRegenerated()
+                                retried++
+                            }
+                            // The server names an authorized set, and none of this row's local
+                            // keys is in it. Every resend earns the same rejection, and a new
+                            // pairing mints a new pair (not a usable key for this row), so the
+                            // event is terminally undeliverable — parking it for a re-probe
+                            // with a null authorized set re-fires the rejection forever.
+                            PartnerEventRecorder.RegenerationResult.NotAuthorized -> {
+                                outbox.rejectRevokedRecipientKey(prepared.eventId, atMs)
+                                rejected++
+                            }
                             // No local action can produce a different authorized set, so the
                             // slow waiting backoff replaces a resend that would earn the same
                             // rejection again.
@@ -281,10 +292,10 @@ class PartnerEventDrain(
                                     prepared.eventId,
                                     clock.wallClockMs() + limits.waitingBackoffMs,
                                 )
+                                retried++
                             }
-                            else -> Unit
+                            else -> retried++
                         }
-                        retried++
                     }
 
                     PartnerEventResultCode.RETRYABLE -> {

@@ -11,31 +11,18 @@ import org.junit.Test
  */
 class ProtectionStatusMonitorTest {
 
-    // --- authority hierarchy (Decision 2 + the app's master switch) ---
-
-    @Test
-    fun masterOff_isNoDetection_evenWithEveryGrant() {
-        assertEquals(
-            ProtectionAuthority.DEGRADED_NO_DETECTION,
-            ProtectionStatusMonitor.authorityFor(
-                enhancedModeEnabled = false,
-                a11yAlive = true,
-                usageAccess = true,
-                overlayGranted = true,
-            ),
-        )
-    }
+    // --- authority hierarchy (Decision 2) ---
 
     @Test
     fun a11yAlive_isFull_regardlessOfPollingPrerequisites() {
         // §9: Path A needs neither usage access nor SYSTEM_ALERT_WINDOW (TYPE_ACCESSIBILITY_OVERLAY).
         assertEquals(
             ProtectionAuthority.FULL,
-            ProtectionStatusMonitor.authorityFor(true, a11yAlive = true, usageAccess = false, overlayGranted = false),
+            ProtectionStatusMonitor.authorityFor(a11yAlive = true, usageAccess = false, overlayGranted = false),
         )
         assertEquals(
             ProtectionAuthority.FULL,
-            ProtectionStatusMonitor.authorityFor(true, a11yAlive = true, usageAccess = true, overlayGranted = true),
+            ProtectionStatusMonitor.authorityFor(a11yAlive = true, usageAccess = true, overlayGranted = true),
         )
     }
 
@@ -43,7 +30,7 @@ class ProtectionStatusMonitorTest {
     fun a11yUnavailable_withBothPrerequisites_isPollingOnly() {
         assertEquals(
             ProtectionAuthority.DEGRADED_POLLING_ONLY,
-            ProtectionStatusMonitor.authorityFor(true, a11yAlive = false, usageAccess = true, overlayGranted = true),
+            ProtectionStatusMonitor.authorityFor(a11yAlive = false, usageAccess = true, overlayGranted = true),
         )
     }
 
@@ -53,11 +40,11 @@ class ProtectionStatusMonitorTest {
         // either one down means nothing is enforced (§9).
         assertEquals(
             ProtectionAuthority.DEGRADED_NO_DETECTION,
-            ProtectionStatusMonitor.authorityFor(true, a11yAlive = false, usageAccess = false, overlayGranted = true),
+            ProtectionStatusMonitor.authorityFor(a11yAlive = false, usageAccess = false, overlayGranted = true),
         )
         assertEquals(
             ProtectionAuthority.DEGRADED_NO_DETECTION,
-            ProtectionStatusMonitor.authorityFor(true, a11yAlive = false, usageAccess = true, overlayGranted = false),
+            ProtectionStatusMonitor.authorityFor(a11yAlive = false, usageAccess = true, overlayGranted = false),
         )
     }
 

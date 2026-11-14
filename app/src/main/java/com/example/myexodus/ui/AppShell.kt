@@ -96,9 +96,7 @@ import com.example.myexodus.domainusage.DomainUsageEngine
 import com.example.myexodus.domainusage.PublicSuffixList
 import com.example.myexodus.recovery.RecoveryPlanRepository
 import com.example.myexodus.recovery.RecoverySessionRepository
-import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.HomeSettings
-import com.example.myexodus.settings.StrictModeManager
 import com.example.myexodus.settings.ThemeMode
 import com.example.myexodus.settings.WidgetSettings
 import com.example.myexodus.streaks.HabitRepository
@@ -172,8 +170,6 @@ fun AppShell(
     accountingOutage: AccountingOutageSource,
     recoveryStore: RecoveryStateStore,
     monitor: EnhancedModeHealthMonitor,
-    strictMode: StrictModeManager,
-    settings: EnhancedModeSettings,
     crashReporting: CrashReporting,
     /** Owner request 2026-10-17: Home's "Your blocks" privacy toggle state. */
     homeSettings: HomeSettings,
@@ -648,8 +644,6 @@ fun AppShell(
                     )
                     contentTab == 5 -> SettingsScreen(
                         monitor = monitor,
-                        strictMode = strictMode,
-                        settings = settings,
                         crashReporting = crashReporting,
                         widgetSettings = widgetSettings,
                         onWidgetSettingsChanged = onWidgetSettingsChanged,

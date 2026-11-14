@@ -32,7 +32,7 @@ class ProtectionStatusStore @Inject constructor(
 ) {
     // Lazy: constructed with the Hilt graph at process start, which can be pre-unlock
     // (LOCKED_BOOT_COMPLETED, plan §8.5) — CE SharedPreferences throw until first unlock.
-    // Same device-caught class as EnhancedModeSettings (2026-09-15, reboot leg h1).
+    // Same device-caught class as the health monitor's prefs (2026-09-15, reboot leg h1).
     private val prefs: android.content.SharedPreferences by lazy {
         appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }

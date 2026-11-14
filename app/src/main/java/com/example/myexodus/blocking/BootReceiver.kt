@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.example.myexodus.BuildConfig
-import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.vpn.VpnLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -24,7 +23,6 @@ import kotlinx.coroutines.launch
 class BootReceiver : BroadcastReceiver() {
 
     @Inject lateinit var publisher: RulesSnapshotPublisher
-    @Inject lateinit var settings: EnhancedModeSettings
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -57,9 +55,7 @@ class BootReceiver : BroadcastReceiver() {
                 pending.finish()
             }
         }
-        if (settings.enhancedModeEnabled) {
-            EnforcementForegroundService.start(context)
-        }
+        EnforcementForegroundService.start(context)
     }
 
     private companion object {

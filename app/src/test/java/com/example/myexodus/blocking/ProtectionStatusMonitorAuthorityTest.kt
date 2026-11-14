@@ -3,7 +3,6 @@ package com.example.myexodus.blocking
 import android.content.Context
 import android.view.accessibility.AccessibilityManager
 import androidx.test.core.app.ApplicationProvider
-import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.telemetry.CrashReporting
 import org.junit.After
 import org.junit.Assert.assertNotEquals
@@ -32,10 +31,8 @@ class ProtectionStatusMonitorAuthorityTest {
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
-        EnhancedModeSettings(context).enhancedModeEnabled = true
         monitor = ProtectionStatusMonitor(
             appContext = context,
-            settings = EnhancedModeSettings(context),
             store = ProtectionStatusStore(context),
             crashReporting = CrashReporting(context),
         )

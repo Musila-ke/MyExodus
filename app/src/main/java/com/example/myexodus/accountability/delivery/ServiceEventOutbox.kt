@@ -221,6 +221,16 @@ class ServiceEventOutbox(
     suspend fun permanentReject(eventId: String, errorCode: String?, terminalAtMs: Long): Boolean =
         dao.permanentRejectRow(eventId, errorCode, terminalAtMs) > 0
 
+    /** §8.1 terminal stale: no locally readable key is authorized, so no resend can succeed. */
+    suspend fun rejectRevokedRecipientKey(eventId: String, terminalAtMs: Long): Boolean =
+        dao.rejectRevokedRecipientKeyRow(
+            eventId, PendingPartnerEvent.ERROR_RECIPIENT_KEY_REVOKED, terminalAtMs,
+        ) > 0
+
+    /** Step 10: a shredded pair's queued events are cancelled, never delivered or retried. */
+    suspend fun rejectUnsentForPair(pairId: String, terminalAtMs: Long): Int =
+        dao.rejectPairRows(pairId, PendingPartnerEvent.ERROR_PAIR_REVOKED, terminalAtMs)
+
     /** §8.3.8 after a successful re-enrollment: rebuild signatures, keep event identity. */
     suspend fun resumeAfterReenroll(installationId: String): Int = dao.resumeAfterReenroll(installationId)
 

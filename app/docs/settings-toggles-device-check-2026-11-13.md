@@ -124,3 +124,13 @@ server-side suppression is covered by functions-emulator tests only (`partner-so
 always-on; (b) keep the switch but wire its off-state into the same partner alert path — include
 `enhancedModeEnabled` in both capability probes and force a final UNAVAILABLE snapshot at
 toggle-off; (c) status quo, documented as an accepted in-app kill switch.
+
+## Outcome (owner ruling 2026-11-14, ADR #308)
+
+Option (a), in its strongest form: the Enhanced Mode master switch is **deleted**, not defaulted.
+`EnhancedModeSettings`, the accessibility service's per-event gate, the FGS start/poll/process-start
+gates, the boot gate and the maintenance gate are gone; blocking is always on and authority moves
+only with the platform grants. Strict Mode is deleted with it — it had nothing left to lock. The
+AAPM explanation from the deleted screen moved to the Protection pane's accessibility row. Block
+check-ins were not part of this ruling and keep their Settings row. The sections above remain the
+record of the pre-removal behavior and its v31 evidence.

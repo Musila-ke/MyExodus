@@ -6,7 +6,6 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.telemetry.CrashReporting
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -42,11 +41,9 @@ class ProtectionStatusMonitorPublishTest {
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
-        EnhancedModeSettings(context).enhancedModeEnabled = true
         store = ProtectionStatusStore(context)
         monitor = ProtectionStatusMonitor(
             appContext = context,
-            settings = EnhancedModeSettings(context),
             store = store,
             crashReporting = CrashReporting(context),
         )

@@ -175,6 +175,39 @@ interface ServiceEventOutboxDao {
     )
     suspend fun permanentRejectRow(eventId: String, errorCode: String?, terminalAtMs: Long): Int
 
+    /**
+     * §8.1 terminal stale: the server's authorized set named none of the row's local keys, so
+     * every resend would earn the same rejection. Guarded on the stale outcome the rejection
+     * just recorded — a concurrent ACK or regeneration still wins.
+     */
+    @Query(
+        "UPDATE pending_partner_events SET status = 'PERMANENT_REJECTED', " +
+            "wire_outcome = 'PERMANENT_REJECTED', lease_until_ms = NULL, " +
+            "last_error_code = :errorCode, terminal_at_ms = :terminalAtMs, " +
+            "temporary_local_ciphertext = NULL, recipient_envelopes_blob = NULL, " +
+            "signed_envelope = NULL, signing_signature = NULL " +
+            "WHERE event_id = :eventId AND status IN ('PENDING', 'LEASED') " +
+            "AND wire_outcome = 'RECIPIENT_KEY_STALE'",
+    )
+    suspend fun rejectRevokedRecipientKeyRow(
+        eventId: String,
+        errorCode: String,
+        terminalAtMs: Long,
+    ): Int
+
+    /** Step 10 pair shred: anything queued for the revoked pair is undeliverable from the
+     *  moment its keys are destroyed, and must never be resendable afterwards. */
+    @Query(
+        "UPDATE pending_partner_events SET status = 'PERMANENT_REJECTED', " +
+            "wire_outcome = 'PERMANENT_REJECTED', lease_until_ms = NULL, " +
+            "last_error_code = :errorCode, terminal_at_ms = :terminalAtMs, " +
+            "temporary_local_ciphertext = NULL, recipient_envelopes_blob = NULL, " +
+            "signed_envelope = NULL, signing_signature = NULL " +
+            "WHERE recipient_pair_id = :pairId " +
+            "AND status NOT IN ('ACKED', 'PERMANENT_REJECTED')",
+    )
+    suspend fun rejectPairRows(pairId: String, errorCode: String, terminalAtMs: Long): Int
+
     /** §8.3.8: key loss suspends the whole installation; rows are preserved, never dropped. */
     @Query(
         "UPDATE pending_partner_events SET status = 'REENROLL_REQUIRED', lease_until_ms = NULL " +

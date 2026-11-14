@@ -92,6 +92,10 @@ data class PendingPartnerEvent(
         const val WIRE_UNKNOWN = "UNKNOWN"
 
         const val ERROR_PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
+        /** Terminal stale: the server authorizes no key this row's pair can encrypt for. */
+        const val ERROR_RECIPIENT_KEY_REVOKED = "RECIPIENT_KEY_REVOKED"
+        /** Terminal: the row's pair was shredded; nothing queued for it may ever send. */
+        const val ERROR_PAIR_REVOKED = "PAIR_REVOKED"
 
         /** §8.1 retention: ACKED rows live empty for seven days, then are deleted. */
         const val ACKED_RETENTION_MILLIS = 7L * 24 * 60 * 60 * 1000

@@ -60,12 +60,6 @@ fun enqueueDailyMaintenance(context: Context) {
     )
 }
 
-/** §13 rollback: disabling Enhanced Mode leaves nothing of this feature registered. The
- *  next unlocked process start re-enqueues, so re-enabling needs no extra call. */
-fun cancelDailyMaintenance(context: Context) {
-    WorkManager.getInstance(context).cancelUniqueWork(DAILY_MAINTENANCE_WORK_NAME)
-}
-
 /** Next 00:05 local — today's if still ahead, otherwise tomorrow's. */
 private fun nextDailyMaintenanceRunMs(): Long {
     val zone = ZoneId.systemDefault()

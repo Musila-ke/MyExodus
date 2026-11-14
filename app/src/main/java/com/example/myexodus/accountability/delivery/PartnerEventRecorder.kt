@@ -1,5 +1,6 @@
 package com.example.myexodus.accountability.delivery
 
+import com.example.myexodus.accountability.delivery.ExistingE2eeRecipientEncryptor.Outcome.NotAuthorized
 import com.example.myexodus.accountability.delivery.ExistingE2eeRecipientEncryptor.Outcome.RecipientKeyUnavailable
 import com.example.myexodus.accountability.delivery.ExistingE2eeRecipientEncryptor.Outcome.Encrypted
 import kotlinx.coroutines.CancellationException
@@ -51,6 +52,10 @@ class PartnerEventRecorder(
         data object NotPermitted : RegenerationResult
         /** The sealed source is gone or no longer opens — the original bytes can only resend. */
         data object SourceUnavailable : RegenerationResult
+        /** Readable enrollments exist for the row's scope, but the server's authorized set
+         *  names none of them. Only re-pairing could mint a key it accepts, and that is a new
+         *  pair: this row can never be delivered. */
+        data object NotAuthorized : RegenerationResult
         data object RecipientKeyUnavailable : RegenerationResult
         data object NoAccount : RegenerationResult
         data object Failed : RegenerationResult
@@ -241,6 +246,7 @@ class PartnerEventRecorder(
                         RegenerationResult.NotPermitted
                     }
                 }
+                NotAuthorized -> RegenerationResult.NotAuthorized
                 RecipientKeyUnavailable -> {
                     outbox.applyRegeneratedEnvelopes(eventId, null, recipientKeyRevision)
                     RegenerationResult.RecipientKeyUnavailable

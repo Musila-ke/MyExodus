@@ -1896,8 +1896,7 @@ private fun ApprovalRequestCard(
     }
 }
 
-/** Requester-side status list. Creation UI is owned by the Strict Mode disable gate (flagged
- *  off until a real partner device exists), so this renders only when rows exist. */
+/** Requester-side status list; it renders only when rows exist. */
 @Composable
 private fun MyRequestsCard(requests: List<ApprovalUi>) {
     PartnerSurface {

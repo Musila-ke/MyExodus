@@ -28,7 +28,6 @@ import com.example.myexodus.blocking.usage.UsageSessionMachine
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.data.db.entity.UsageLedgerSource
 import com.example.myexodus.domainusage.DomainUsageEngine
-import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.ui.appLabel
 import com.example.myexodus.ui.seedAppLabel
 import dagger.hilt.android.AndroidEntryPoint
@@ -59,7 +58,6 @@ class BlockerAccessibilityService : AccessibilityService() {
     @Inject lateinit var engine: BlockDecisionEngine
     @Inject lateinit var profiler: LatencyProfiler
     @Inject lateinit var publisher: RulesSnapshotPublisher
-    @Inject lateinit var settings: EnhancedModeSettings
     @Inject lateinit var monitor: EnhancedModeHealthMonitor
     @Inject lateinit var statusMonitor: ProtectionStatusMonitor
     @Inject lateinit var status: ProtectionStatusStore
@@ -153,7 +151,6 @@ class BlockerAccessibilityService : AccessibilityService() {
      * before detection is the FGS credit-edge audit's job, never this watchdog's guess.
      */
     private fun verifyUsageSession() {
-        if (!settings.enhancedModeEnabled) return
         syncUsageTicker()
         val oracle = EnforcementForegroundService.platformForegroundPackage ?: return
         val ageMs = SystemClock.elapsedRealtime() -
@@ -214,16 +211,6 @@ class BlockerAccessibilityService : AccessibilityService() {
             Log.i(TAG, "event pkg=${packageName ?: "null"} type=${event.eventType} winId=${event.windowId} display=$displayId winType=${window?.type ?: -1}")
         }
 
-        // App-side master switch (plan §8 Step 11): off → the pipeline does nothing at all.
-        // Warm SharedPreferences read; no database I/O on the hot path (§11).
-        if (!settings.enhancedModeEnabled) {
-            overlay.hide(stateMachine.currentGeneration, displayId)
-            // Deliberate uncredited drop (enforcement plan v2 §8 Step 4): never an over-count.
-            usageSessions.reset()
-            usageTickJob?.cancel()
-            usageTickJob = null
-            return
-        }
         // Data Flow step 3: emergency exclusion first, fail-open on protected packages — but
         // gated on the active foreground window: a background flap from a protected package
         // (the dialer's stale null-window WSCs) must not tear down the overlay over a
@@ -561,7 +548,6 @@ class BlockerAccessibilityService : AccessibilityService() {
      *  decisive signal (same rationale as [deferredWsc] — XOS window-list lag); bounded
      *  retries cover a just-unlocked service whose window list is not populated yet. */
     private fun reacquireUsageSession(attempt: Int = 0) {
-        if (!settings.enhancedModeEnabled) return
         // Nothing is in the foreground while the screen is dark, and on XOS the window list and
         // the FGS oracle both lag the power state — without this guard the 30 s watchdog
         // re-opened sessions throughout a screen-off window (device-caught 2026-10-18).

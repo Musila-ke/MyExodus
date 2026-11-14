@@ -6,7 +6,6 @@ import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
-import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.telemetry.CrashReporting
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -46,19 +45,17 @@ enum class ProtectionAuthority {
  *    liveness input: the platform's client-side enabled list flaps on OEM builds
  *    (device-caught on XOS/Transsion 2026-09-19 — see [refresh]), and ANDing it in produced
  *    false "Limited" status while Path A was fully alive.
- *  - The plan has no app-side master switch; this app does ([EnhancedModeSettings] gates both
- *    the accessibility service's per-event work and the foreground service's run). Master off
- *    means neither path is detecting, so authority is DEGRADED_NO_DETECTION — the honest
- *    state, and a deliberate pause is exactly what the strict-mode friction wants visible.
+ *  - Enforcement is always on (owner ruling 2026-11-14, ADR #308): the old app-side master
+ *    switch and the accessibility service's per-event gate were removed, so no in-app control
+ *    can turn blocking off. Authority moves only with the platform grants below.
  *  - DEGRADED_POLLING_ONLY posts no alert. Blocking still runs under Path B (at polling
- *    latency), and this app supports running without Enhanced Mode — a "protection is paused"
- *    alert there would be false. The enabled→disabled accessibility transition is already
- *    alerted by [EnhancedModeHealthMonitor].
+ *    latency), and polling-only is a supported configuration — a "protection is paused" alert
+ *    there would be false. The enabled→disabled accessibility transition is already alerted
+ *    by [EnhancedModeHealthMonitor].
  */
 @Singleton
 class ProtectionStatusMonitor @Inject constructor(
     @ApplicationContext private val appContext: Context,
-    private val settings: EnhancedModeSettings,
     private val store: ProtectionStatusStore,
     private val crashReporting: CrashReporting,
 ) {
@@ -87,7 +84,6 @@ class ProtectionStatusMonitor @Inject constructor(
      * as granted.
      */
     fun refresh(): ProtectionAuthority {
-        val enrolled = settings.enhancedModeEnabled
         // Path A liveness is the in-process service instance, not the platform's client-side
         // enabled list. That list flaps on OEM builds (XOS/Transsion, device-caught
         // 2026-09-19: it read empty while the service was bound and delivering window events,
@@ -98,9 +94,9 @@ class ProtectionStatusMonitor @Inject constructor(
         val usageAccess = runCatching { appContext.hasUsageAccess() }.getOrDefault(false)
         val overlayGranted = runCatching { OverlayController.overlayPermissionGranted(appContext) }
             .getOrDefault(false)
-        val next = authorityFor(enrolled, a11yAlive, usageAccess, overlayGranted)
+        val next = authorityFor(a11yAlive, usageAccess, overlayGranted)
         _authority.value = next
-        publish(next, causeFor(enrolled, a11yAlive, usageAccess, overlayGranted))
+        publish(next, causeFor(a11yAlive, usageAccess, overlayGranted))
         return next
     }
 
@@ -169,12 +165,10 @@ class ProtectionStatusMonitor @Inject constructor(
 
         /** Decision 2's capability hierarchy. Pure for direct testing. */
         fun authorityFor(
-            enhancedModeEnabled: Boolean,
             a11yAlive: Boolean,
             usageAccess: Boolean,
             overlayGranted: Boolean,
         ): ProtectionAuthority = when {
-            !enhancedModeEnabled -> ProtectionAuthority.DEGRADED_NO_DETECTION
             a11yAlive -> ProtectionAuthority.FULL
             usageAccess && overlayGranted -> ProtectionAuthority.DEGRADED_POLLING_ONLY
             else -> ProtectionAuthority.DEGRADED_NO_DETECTION
@@ -198,12 +192,10 @@ class ProtectionStatusMonitor @Inject constructor(
         }
 
         private fun causeFor(
-            enhancedModeEnabled: Boolean,
             a11yAlive: Boolean,
             usageAccess: Boolean,
             overlayGranted: Boolean,
         ): String = when {
-            !enhancedModeEnabled -> "enhanced_mode_off"
             a11yAlive -> "path_a"
             !usageAccess && !overlayGranted -> "usage_access+overlay"
             !usageAccess -> "usage_access"

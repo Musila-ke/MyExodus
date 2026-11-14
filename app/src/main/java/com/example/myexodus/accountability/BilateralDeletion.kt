@@ -57,6 +57,9 @@ class BilateralDeletion(
     private val enrollmentDao: EnrollmentDao,
     private val store: ChainStateStore,
     private val journal: UnpairStateDao,
+    /** Cancels the pair-scoped partner-delivery outbox — a separate queue from the chain.
+     *  Its rows are undeliverable once this pair's keys die and must never resend. */
+    private val cancelPendingPartnerEvents: suspend (pairId: String, atMs: Long) -> Unit,
     /** Destroys the pair's own agreement key (the enrollment's alias); failures propagate so
      *  the journal row stays unshredded and the erase is honestly retried, never claimed. */
     private val destroyPairAgreementKey: (alias: String) -> Unit,
@@ -233,8 +236,10 @@ class BilateralDeletion(
     private suspend fun shredPair(pairId: String) {
         // Step 10 §8.4: authorization ends before delivery does. Cancelling first means any
         // drain that already read these rows cannot send them (it rechecks inside the write
-        // lock), and nothing queued for the departing partner leaves after this point.
+        // lock), and nothing queued for the departing partner leaves after this point. This
+        // covers both queues: the chain envelopes and the partner-delivery outbox.
         store.cancelUnsentEnvelopes(pairId)
+        cancelPendingPartnerEvents(pairId, now())
         val record = enrollmentDao.getByPairId(pairId)
         if (record?.myAgreementKeyAlias != null) destroyPairAgreementKey(record.myAgreementKeyAlias)
         // The device-level key dies BEFORE the last enrollment's wipe: the AD-22 canary reads

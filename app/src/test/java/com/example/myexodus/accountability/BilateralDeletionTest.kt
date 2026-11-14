@@ -77,6 +77,7 @@ class BilateralDeletionTest {
     private val destroyedPairAliases = mutableListOf<String>()
     private val terminated = mutableListOf<String>()
     private val prunedPairs = mutableListOf<String>()
+    private val cancelledPartnerEventPairs = mutableListOf<String>()
     private val ops = mutableListOf<String>()
 
     /** Simulates the 2026-09-28 crypto-dead pair: EventCreator cannot derive a CEK. */
@@ -121,6 +122,7 @@ class BilateralDeletionTest {
             enrollmentDao = db.enrollmentDao(),
             store = store,
             journal = db.unpairStateDao(),
+            cancelPendingPartnerEvents = { id, _ -> cancelledPartnerEventPairs += id },
             destroyPairAgreementKey = { alias ->
                 destroyedPairAliases += alias
                 ops += "destroy"
@@ -220,6 +222,7 @@ class BilateralDeletionTest {
         assertNull(db.enrollmentDao().getByPairId(pairId))
         assertTrue(store.chainFor(pairId).isEmpty())
         assertNull("approval rows shredded with the pair", db.approvalRequestDao().byId("k:1"))
+        assertEquals("both queues are cancelled for the departing pair", listOf(pairId), cancelledPartnerEventPairs)
         val paired = db.unpairStateDao().get(pairId)!!
         assertEquals(UnpairState.ROLE_REQUESTER, paired.role)
         assertTrue("delivered bookkeeping", paired.delivered)

@@ -110,12 +110,10 @@ import com.example.myexodus.data.db.DatabaseHealthStore
 import com.example.myexodus.data.db.RecoveryManager
 import com.example.myexodus.applock.startExpectedExternal
 import com.example.myexodus.settings.biometricEnrollSettingsIntent
-import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.HomeSettings
 import com.example.myexodus.settings.SetupStateStore
 import com.example.myexodus.settings.ThemeSettings
 import com.example.myexodus.settings.notificationSettingsIntent
-import com.example.myexodus.settings.StrictModeManager
 import com.example.myexodus.vpn.VpnLifecycle
 import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.settings.WidgetSettings
@@ -276,8 +274,6 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var recoveryManager: RecoveryManager
     @Inject lateinit var healthStore: DatabaseHealthStore
     @Inject lateinit var monitor: EnhancedModeHealthMonitor
-    @Inject lateinit var strictMode: StrictModeManager
-    @Inject lateinit var settings: EnhancedModeSettings
     @Inject lateinit var protectionStatus: ProtectionStatusStore
     @Inject lateinit var protectionStatusMonitor: ProtectionStatusMonitor
     @Inject lateinit var crashReporting: CrashReporting
@@ -784,8 +780,6 @@ class MainActivity : FragmentActivity() {
                         accountingOutage = accountingOutageSource,
                         recoveryStore = recoveryStore,
                         monitor = monitor,
-                        strictMode = strictMode,
-                        settings = settings,
                         crashReporting = crashReporting,
                         homeSettings = homeSettings,
                         widgetSettings = widgetSettings,
@@ -1394,9 +1388,7 @@ class MainActivity : FragmentActivity() {
      *  never opened is still detected). */
     private fun refreshProtectionChecks() {
         protectionStatusMonitor.refresh()
-        if (settings.enhancedModeEnabled) {
-            EnforcementForegroundService.start(this)
-        }
+        EnforcementForegroundService.start(this)
     }
 
     companion object {

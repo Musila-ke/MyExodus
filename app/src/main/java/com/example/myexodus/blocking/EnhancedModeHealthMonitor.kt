@@ -45,7 +45,8 @@ class EnhancedModeHealthMonitor @Inject constructor(
     /** True while this service is in the platform's enabled-accessibility list. */
     val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
 
-    /** True when AAPM is active (API 36+); the unsupported-configuration state of plan §8 Step 12. */
+    /** True when AAPM is active (API 36+): the platform revokes the accessibility grant and
+     *  refuses a re-grant, so the Protection pane explains why instead of offering a dead Fix. */
     val advancedProtection: StateFlow<Boolean> = _advancedProtection.asStateFlow()
 
     init {

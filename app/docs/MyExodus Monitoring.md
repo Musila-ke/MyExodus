@@ -389,9 +389,21 @@ rolling verdict count dropped. (b) Callable rejection storm: cycled five times f
 but two of that day's 1,000+ rejection entries came from ONE installation
 (`ae3926b5-e7a1-454d-ab32-4355f6288dfa`, `ACTIVE_HARDWARE` — the physical phone, account created
 2026-11-08), whose ~13 outbox rows re-sent the same `RECIPIENT_KEY_STALE` envelopes on a clean
-900 s clock because that build predates the stale-key parking fix (`bc2f836`). 1.1.29 (published
-after the fix, commit `d30f2b5`) parks those rows; the loop ends when the phone installs it.
-Zero rejections came from the emulator.
+900 s clock because that build predates the stale-key parking fix (`bc2f836`). Zero rejections
+came from the emulator.
+
+   **2026-11-14 read — the bound was not the end.** The same storm class was still open
+(07:38:32Z through at least 09:41:05Z; ~100 entries / 35 min, ~15 per batch, 46 distinct event
+IDs, all from the same installation), and the phone had already run 1.1.29 (which carries the
+parking fix) since 04:21:38Z. The earlier "the loop ends when the phone installs 1.1.29" read was
+wrong. Root cause: parking nulled the rejected key set (erasing the unchanged-set baseline, so
+every 900 s probe re-encrypted and resent) and the probe ran with a null authorized set
+("every local enrollment"), which includes the key of a **terminated** pair that is still
+`ACTIVE` server-side — a row the server can never accept. Fixed in ADR #309: a stale answer
+whose authorized set names none of the row's readable local keys terminally rejects the row
+(`RECIPIENT_KEY_REVOKED`), and unpair purges the pair's delivery outbox (`PAIR_REVOKED`). After
+v32/1.1.30 installs, expect one final burst of up to ~46 terminal rejections and then silence;
+the storm policy auto-resolves 30 minutes after the last violation.
 
 **5. What the rails cannot see.** A device that opted out of diagnostics; anything local-only
 (vault, App Lock, rules UI state); OEM-specific behavior with no server call. For those, ask the

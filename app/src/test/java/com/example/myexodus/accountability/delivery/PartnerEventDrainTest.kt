@@ -319,7 +319,7 @@ class PartnerEventDrainTest {
     }
 
     @Test
-    fun staleKey_withEmptyAuthorizedSet_parksWaiting_andNeverReencryptsForALocalEnrollment() = runBlocking {
+    fun staleKey_withEmptyAuthorizedSet_rejectsTerminally_andNeverReencryptsForALocalEnrollment() = runBlocking {
         registered()
         val recorded = record()
         // A local enrollment exists (`records` seeds one): if the empty server set were passed
@@ -339,17 +339,56 @@ class PartnerEventDrainTest {
 
         val result = drain.run(allowRegistration = false)
 
-        assertEquals(1, result.retried)
+        assertEquals(1, result.rejected)
         val row = checkNotNull(outbox.event(recorded.eventId))
-        assertEquals(PendingPartnerEvent.STATUS_WAITING_FOR_RECIPIENT_KEY, row.status)
+        assertEquals(PendingPartnerEvent.STATUS_PERMANENT_REJECTED, row.status)
+        assertEquals(PendingPartnerEvent.ERROR_RECIPIENT_KEY_REVOKED, row.lastErrorCode)
         assertNull("no envelopes may be minted without an authorized key", row.recipientEnvelopesBlob)
-        assertTrue("the sealed source survives for a later retry", row.temporaryLocalCiphertext != null)
+        assertNull("nothing resendable survives a terminal stale", row.temporaryLocalCiphertext)
+    }
+
+    @Test
+    fun staleKey_withNoAuthorizedLocalKey_rejectsTerminally_andNeverReprobes() = runBlocking {
+        // The 2026-11-14 rejection storm: the row's pair was terminated, its local enrollment
+        // and the partner's still-ACTIVE key survived, and the server authorized a different
+        // key. The old park path nulled the envelope blob; 15 minutes later the waiting
+        // re-probe re-encrypted for the revoked key with a null authorized set and resorted
+        // to resending, earning the same rejection forever.
+        registered()
+        val recorded = record()
+        val authorizedKeyId = ExistingE2eeRecipientEncryptor.recipientKeyIdOf(byteArrayOf(7))
         assertEquals(
-            "the stale attempt is retired; no revoked-key bytes stay resendable",
-            PendingPartnerEvent.WIRE_NOT_SENT,
-            row.wireOutcome,
+            "the seeded enrollment is a different key",
+            false,
+            authorizedKeyId == ExistingE2eeRecipientEncryptor.recipientKeyIdOf(byteArrayOf(1)),
         )
-        assertEquals(clock.nowMs + 900_000, row.nextAttemptAtMs)
+        transport.responder = { batch ->
+            PartnerEventBatchResultV1(
+                listOf(
+                    PartnerEventResultV1(
+                        index = 0,
+                        eventId = batch.events[0].event.eventId,
+                        code = PartnerEventResultCode.RECIPIENT_KEY_STALE,
+                        currentRecipientKeys = listOf(RecipientKeyRef(authorizedKeyId, 6, null)),
+                    ),
+                ),
+            )
+        }
+
+        val result = drain.run(allowRegistration = false)
+
+        assertEquals(1, result.rejected)
+        val row = checkNotNull(outbox.event(recorded.eventId))
+        assertEquals(PendingPartnerEvent.STATUS_PERMANENT_REJECTED, row.status)
+        assertEquals(PendingPartnerEvent.ERROR_RECIPIENT_KEY_REVOKED, row.lastErrorCode)
+        assertNull(row.temporaryLocalCiphertext)
+        assertNull(row.recipientEnvelopesBlob)
+
+        clock.nowMs += 900_000
+        val next = drain.run(allowRegistration = false)
+
+        assertEquals("a terminal stale row never re-enters the queue", 0, next.claimed)
+        assertEquals("no resend after the waiting backoff", 1, transport.submitted.size)
     }
 
     @Test

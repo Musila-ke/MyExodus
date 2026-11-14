@@ -39,7 +39,6 @@ import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.UsageLedgerSource
-import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.telemetry.CrashReporting
 import com.example.myexodus.telemetry.StartupTrace
 import com.example.myexodus.ui.appLabel
@@ -102,7 +101,6 @@ class EnforcementForegroundService : Service() {
 
     private val startupTrace = StartupTrace("Fgs")
 
-    @Inject lateinit var settings: EnhancedModeSettings
     @Inject lateinit var engine: BlockDecisionEngine
     @Inject lateinit var emergency: EmergencyExclusionManager
     @Inject lateinit var publisher: RulesSnapshotPublisher
@@ -238,18 +236,14 @@ class EnforcementForegroundService : Service() {
     }
 
     private fun start() {
-        if (!settings.enhancedModeEnabled) {
-            stopSelf()
-            return
-        }
         checkForUserStop()
         // ADR #160: every interruption — death, stand-down, a heartbeat-fresh pipeline that
         // stopped crediting, an OEM freezer — ends at this start, and everything after the
         // ledger's own last credit is unaccounted time. Credit it from the platform's own
         // foreground record instead of letting the limit hold against a frozen counter.
         scope.launch { reconcileUncreditedSpan(processStartWall()) }
-        // §8 Step 6: publish the current authority + status at service start (covers the
-        // master switch being turned on/off and any permission change while stopped).
+        // §8 Step 6: publish the current authority + status at service start (covers any
+        // permission change while stopped).
         statusMonitor.refresh()
         // §7 Step 7: a service start is one of the plan's forced check-ins — the snapshot
         // states what this device now observes, the beat proves the install is alive. Both
@@ -646,10 +640,6 @@ class EnforcementForegroundService : Service() {
         // handoff instant).
         var heldAuthority = false
         while (coroutineContext.isActive) {
-            if (!settings.enhancedModeEnabled) {
-                stopSelf()
-                return
-            }
             val holdsAuthority = pathBHoldsAuthority()
             if (holdsAuthority && !heldAuthority && lastQueryEndMillis != 0L) {
                 Log.i(TAG, "authority regained — widening lookback to re-acquire the foreground")
@@ -1073,7 +1063,6 @@ class EnforcementForegroundService : Service() {
         activeBlockTarget = null
         activeBlockTargetSinceElapsedMs = 0L
         // §8 Step 6: the service is no longer running, so it can no longer hold authority.
-        // (Idempotent — the master switch's stop path and a system kill land here alike.)
         runCatching { statusMonitor.refresh() }
         // §14 bullet 5, graceful half — a process kill never reaches here, which is exactly
         // what makes start-without-stop the kill signal.
@@ -1237,15 +1226,9 @@ class EnforcementForegroundService : Service() {
         }
 
         /** ADR #152's process-start re-arm (called from MyExodusApp.onCreate on every cold
-         *  start). The enablement gate reads its own [EnhancedModeSettings] — this runs
-         *  before any service instance exists to carry the injected one. */
+         *  start). */
         fun ensureOnProcessStart(context: Context) {
-            if (!EnhancedModeSettings(context).enhancedModeEnabled) return
             start(context)
-        }
-
-        fun stop(context: Context) {
-            context.stopService(Intent(context, EnforcementForegroundService::class.java))
         }
     }
 }

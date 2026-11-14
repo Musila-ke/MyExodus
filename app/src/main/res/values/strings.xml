@@ -19,17 +19,8 @@
     <string name="enhanced_mode_health_disabled_text">Blocks still work, but they start up to a few seconds later while detection falls back to polling. Re-enable the accessibility service for instant blocking.</string>
     <string name="enhanced_mode_health_channel_name">MyExodus blocker status</string>
 
-    <!-- Enhanced Mode controls on Settings (audit pass: these were Kotlin literals). Each value
-         is a distinct claim about protection, so each is a resource — same reasoning as the
-         protection chip strings above. -->
-    <string name="enhanced_mode_title">Enhanced Mode</string>
-    <string name="enhanced_mode_body">Block restricted apps and websites when you open them.</string>
-    <string name="enhanced_mode_strict_title">Strict Mode</string>
-    <string name="enhanced_mode_strict_body">Lock in-app controls for 24 hours after enabling.</string>
-    <string name="enhanced_mode_strict_cooldown">Strict Mode active. In-app controls unlock in %1$s</string>
     <string name="enhanced_mode_restricted_settings_hint">If Android blocks the accessibility service, allow it via App Info → ⋮ → “Allow restricted settings”.</string>
-    <string name="enhanced_mode_unsupported">Enhanced Mode isn\'t supported with Advanced Protection enabled on this device.</string>
-    <string name="enhanced_mode_strict_unsupported">Strict Mode is locked while Advanced Protection is on this device.</string>
+    <string name="settings_accessibility_advanced_protection">Advanced Protection is on for this device, so Android turns off the accessibility service and will not allow it back on while Advanced Protection stays on. Blocks still run, but they start later.</string>
 
     <!-- Shared subpage chrome: the hub-and-spoke splits (ADR #77 Recovery, ADR #78 Partner) use
          one back row across screens, so the way out cannot drift between pages. -->

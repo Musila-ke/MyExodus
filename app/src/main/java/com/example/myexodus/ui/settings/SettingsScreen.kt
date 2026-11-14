@@ -55,10 +55,8 @@ import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.ProtectionDegradation
 import com.example.myexodus.blocking.usage.AccountingOutage
 import com.example.myexodus.blocking.usage.AccountingOutageSource
-import com.example.myexodus.settings.EnhancedModeSettings
 import com.example.myexodus.settings.IntegrityStatus
 import com.example.myexodus.settings.ProtectionChecks
-import com.example.myexodus.settings.StrictModeManager
 import com.example.myexodus.settings.ThemeMode
 import com.example.myexodus.settings.WidgetSettings
 import com.example.myexodus.settings.readProtectionChecks
@@ -80,8 +78,6 @@ import kotlinx.coroutines.withContext
 @Composable
 fun SettingsScreen(
     monitor: EnhancedModeHealthMonitor,
-    strictMode: StrictModeManager,
-    settings: EnhancedModeSettings,
     crashReporting: CrashReporting,
     widgetSettings: WidgetSettings,
     onWidgetSettingsChanged: () -> Unit,
@@ -110,6 +106,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val serviceEnabled by monitor.enabled.collectAsStateWithLifecycle()
+    val advancedProtection by monitor.advancedProtection.collectAsStateWithLifecycle()
     var checks by remember { mutableStateOf<ProtectionChecks?>(null) }
     // §8.7/D1's Settings surface input: re-read on every resume beside the permission rows,
     // since the exemption the user just granted is exactly what changes this answer.
@@ -157,6 +154,7 @@ fun SettingsScreen(
             ProtectionScreen(
                 checks = loaded,
                 serviceEnabled = serviceEnabled,
+                advancedProtection = advancedProtection,
                 degradation = degradation,
                 onReenable = onReenable,
                 onRecheck = {
@@ -201,8 +199,6 @@ fun SettingsScreen(
             account = account,
             update = update,
             monitor = monitor,
-            strictMode = strictMode,
-            settings = settings,
             crashReporting = crashReporting,
             widgetSettings = widgetSettings,
             onWidgetSettingsChanged = onWidgetSettingsChanged,
@@ -230,8 +226,6 @@ private fun SettingsIndex(
     account: AccountViewModel,
     update: UpdateViewModel,
     monitor: EnhancedModeHealthMonitor,
-    strictMode: StrictModeManager,
-    settings: EnhancedModeSettings,
     crashReporting: CrashReporting,
     widgetSettings: WidgetSettings,
     onWidgetSettingsChanged: () -> Unit,
@@ -245,13 +239,10 @@ private fun SettingsIndex(
     val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
     var discreet by remember { mutableStateOf(widgetSettings.discreetMode) }
     var crashReportsOn by remember { mutableStateOf(crashReporting.enabled) }
-    // Owned here so switching Strict on recomposes the Enhanced row in the same frame (its
-    // switch must grey out at once, not up to 60 s later on its own tick).
-    var strictOn by remember { mutableStateOf(strictMode.strictModeEnabled) }
     var themeDialogOpen by remember { mutableStateOf(false) }
     // Null until the checks land: the row shows no status rather than claiming one it hasn't read.
     // A published degradation counts too: every permission can read granted while an explicit
-    // stop (or Enhanced Mode off) still holds blocks down.
+    // stop still holds blocks down.
     val attention = checks?.let {
         attentionCount(it, serviceEnabled) + if (degradation != null) 1 else 0
     }
@@ -335,17 +326,6 @@ private fun SettingsIndex(
                     ),
                     tone = if (appLockEnabled) StatusTone.GOOD else null,
                     onClick = { onOpenPane(PANE_APP_LOCK) },
-                )
-
-                RowDivider()
-                EnhancedModeToggleRow(monitor, strictMode, settings, strictOn)
-
-                RowDivider()
-                StrictModeToggleRow(
-                    monitor,
-                    strictMode,
-                    strictOn,
-                    onStrictOnChange = { strictOn = it },
                 )
 
                 RowDivider()

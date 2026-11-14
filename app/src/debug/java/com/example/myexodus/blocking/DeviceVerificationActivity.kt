@@ -668,7 +668,7 @@ class DeviceVerificationActivity : Activity() {
      * cover's recovery button — whose MainActivity start is the restore path under test.
      */
     private fun fgsDownSuite() {
-        EnforcementForegroundService.stop(this)
+        stopService(Intent(this, EnforcementForegroundService::class.java))
         Log.i(TAG, "MARKER: FGS_STOPPED")
         runOnUiThread {
             startActivity(

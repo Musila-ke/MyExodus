@@ -51,13 +51,16 @@ internal fun ProtectionScreen(
     checks: ProtectionChecks,
     serviceEnabled: Boolean,
     /** §8 Step 6: the same published state Home's banner reads. The rows above can all read
-     *  granted while protection is still paused (an explicit stop, Enhanced Mode off, or
-     *  notifications denied), so the page states it instead of implying all is well. */
+     *  granted while protection is still paused (an explicit stop or notifications denied),
+     *  so the page states it instead of implying all is well. */
     degradation: ProtectionDegradation?,
     onReenable: () -> Unit,
     onRecheck: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    /** §8 Step 12: AAPM active — the platform revoked the accessibility grant and refuses a
+     *  re-grant, so the row says so instead of offering a Fix that cannot work. */
+    advancedProtection: Boolean = false,
     /** §8.7/D1: non-null while the outage prompt may be offered — the battery row then
      *  carries the interruption education and, for DIRECT_REQUEST, fires the exemption ask. */
     batteryPrompt: BatteryPromptRoute? = null,
@@ -111,6 +114,11 @@ internal fun ProtectionScreen(
                             if (serviceEnabled) R.string.settings_accessibility_ok else R.string.settings_accessibility_off,
                         ),
                         tone = if (serviceEnabled) StatusTone.GOOD else StatusTone.ATTENTION,
+                        supporting = if (!serviceEnabled && advancedProtection) {
+                            stringResource(R.string.settings_accessibility_advanced_protection)
+                        } else {
+                            null
+                        },
                         actionLabel = stringResource(
                             if (serviceEnabled) R.string.settings_action_open else R.string.settings_action_fix,
                         ),
