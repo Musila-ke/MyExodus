@@ -152,6 +152,13 @@ Both ran on the post-fix tree (the 20 source edits above, including the two last
   log `/tmp/lint-final-3.log`, exit 0). This run includes the final `AndroidManifest.xml`
   change, so the manifest merge is also verified.
 
+**Scope note (2026-11-14 ~16:00 EAT):** ADR #310 (automatic encrypted backup, commit `70ed6d4`)
+landed after this scan. It adds no dependencies (only the version bump) and no committed secrets
+(the wrapped ABK is runtime-generated), so the dependency and secret surfaces above are
+unchanged. Gates re-run on that tree: suite **2,840 tests / 0 failures / 0 errors / 0 skipped**,
+`:app:lintDebug` alone **"No issues found."** (exit 0), gitleaks staged **0 leaks**, opengrep
+repo rules on the changed backup code **0 findings**.
+
 ## Honest limits
 
 - SonarQube analysis had no test classpath (unresolved-import warnings), so its rule coverage on
