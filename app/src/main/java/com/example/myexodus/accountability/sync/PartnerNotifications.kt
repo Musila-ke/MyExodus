@@ -424,7 +424,7 @@ object PartnerNotifications {
         val shown = rules.take(3).joinToString(", ")
         val extra = rules.size - 3
         return if (extra > 0) {
-            context.getString(R.string.partner_permission_lost_more, shown, extra)
+            context.resources.getQuantityString(R.plurals.partner_permission_lost_more, extra, shown, extra)
         } else {
             shown
         }

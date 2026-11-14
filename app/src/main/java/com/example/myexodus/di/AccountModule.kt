@@ -192,9 +192,9 @@ object AccountModule {
     fun providePushMapping(
         firestore: FirebaseFirestore,
         crashReporting: CrashReporting,
-    ): PushMapping = object : PushMapping {
-        override suspend fun unregister(uid: String) {
-            val installationId = PushInstallationRegistrar.installationIdOf() ?: return
+    ): PushMapping = PushMapping { uid ->
+        val installationId = PushInstallationRegistrar.installationIdOf()
+        if (installationId != null) {
             FirestoreSchema.pushInstallationDocument(firestore, uid, installationId)
                 .delete()
                 .awaitReportingDenial(crashReporting, "push_installation_delete")

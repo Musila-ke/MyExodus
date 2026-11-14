@@ -173,7 +173,7 @@ class PlaintextToEncryptedMigration(
             TYPE_FLOAT -> writer.bindDouble(writeIndex, reader.getDouble(readIndex))
             TYPE_TEXT -> writer.bindText(writeIndex, reader.getText(readIndex))
             TYPE_BLOB -> writer.bindBlob(writeIndex, reader.getBlob(readIndex))
-            else -> throw IllegalStateException(
+            else -> error(
                 "Unexpected column type ${reader.getColumnType(readIndex)} at $readIndex",
             )
         }

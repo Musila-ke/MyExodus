@@ -35,7 +35,7 @@ class FlowRegistry(private val counters: EngineCounters) {
 
     /** §6.5 step 5: reset every flow currently attributed to an exhausted rule. */
     fun resetAll(key: String) {
-        val set = byRule[key] ?: return
+        val set: Set<FlowControl> = byRule[key] ?: return
         for (control in set) {
             control.reset()
             counters.inc(Counter.flow_resets_sweep)

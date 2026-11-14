@@ -302,7 +302,10 @@
     <string name="partner_permission_lost_usage">Usage access is off, so app blocking and limits run on weaker checks</string>
     <string name="partner_permission_lost_overlay">Display over other apps is off, so the block screen can’t cover a blocked app</string>
     <string name="partner_permission_lost_vpn">The website filter is off, so website rules aren’t enforced</string>
-    <string name="partner_permission_lost_more">%1$s and %2$d more</string>
+    <plurals name="partner_permission_lost_more">
+        <item quantity="one">%1$s and %2$d more</item>
+        <item quantity="other">%1$s and %2$d more</item>
+    </plurals>
     <!-- Owner mandate 2026-10-04: a relapse/milestone alert states which streak and when,
          using the wire-v2 fields (ADR #134). Unlocked copy only — the plain forms above stay
          the lockscreen public version (FR-13). Pre-v2 bodies lack the fields and degrade to

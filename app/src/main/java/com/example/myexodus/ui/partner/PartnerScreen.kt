@@ -2608,7 +2608,11 @@ private fun gapRuleNames(ruleNames: List<String>): String? {
     if (ruleNames.isEmpty()) return null
     val shown = ruleNames.take(3).joinToString(", ")
     val extra = ruleNames.size - 3
-    return if (extra > 0) stringResource(R.string.partner_permission_lost_more, shown, extra) else shown
+    return if (extra > 0) {
+        pluralStringResource(R.plurals.partner_permission_lost_more, extra, shown, extra)
+    } else {
+        shown
+    }
 }
 
 @StringRes

@@ -4,7 +4,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
-import java.net.URL
+import java.net.URI
 
 internal sealed interface PolicyFetch {
     data class Verified(
@@ -33,7 +33,7 @@ internal class HttpsPolicyClient : PolicyHttpClient {
         // Long math is load-bearing: Int 30_000 * 1_000_000 overflows to -64_771_072 ns, which
         // puts the deadline in the past and fails every fetch as an instant NETWORK_TIMEOUT.
         val deadlineNanos = System.nanoTime() + UpdateConfig.OVERALL_TIMEOUT_MS.toLong() * 1_000_000
-        var current = runCatching { URL(url) }.getOrNull()
+        var current = runCatching { URI(url).toURL() }.getOrNull()
             ?: return HttpResult.Failure(AttemptError.HOST_UNAVAILABLE)
         if (current.protocol != "https") {
             return HttpResult.Failure(AttemptError.HOST_UNAVAILABLE)
@@ -63,7 +63,7 @@ internal class HttpsPolicyClient : PolicyHttpClient {
                     }
                     val location = connection.getHeaderField("Location")
                         ?: return HttpResult.Failure(AttemptError.HOST_UNAVAILABLE)
-                    val next = runCatching { URL(current, location) }.getOrNull()
+                    val next = runCatching { current.toURI().resolve(location).toURL() }.getOrNull()
                         ?: return HttpResult.Failure(AttemptError.HOST_UNAVAILABLE)
                     if (next.protocol != "https" ||
                         !UpdateConfig.allowedRedirectHost(next.host) ||

@@ -59,6 +59,18 @@ shared wrapper would add an abstraction the screens would immediately need to es
 per the house rule against pre-abstraction; revisit only if a fourth screen copies the same block
 verbatim.
 
+### F5 — URL wall never drew for a pathless blocked host (fixed 2026-11-14)
+
+Device-caught during the #202 wall leg. Chrome's accessible `url_bar` text appends its
+security state on an insecure page (`example.com. Connection is not secure`). With a path
+(`example.com/?v=3...`) the suffix lands in the path and canonicalizes cleanly — the
+2026-11-01 production test saw only that shape. Without a path the suffix landed in the
+authority, so the candidate host became `example.com. connection is not secure`, failed
+`hostMatches`, and the scanner's Allow path left Chrome's raw NXDOMAIN page as the whole
+surface: no wall, no recovery entry. DNS enforcement was unaffected. Fix: `UrlPattern`
+truncates the authority at the first whitespace (an authority never contains one). Regression
+test `UrlPatternTest.browserSecuritySuffix_stillCanonicalizesToTheHost`.
+
 ### F4 — empty catch in `PartnerEventRecorder` (deliberate, no action)
 
 `PartnerEventRecorder.kt:164` swallows non-cancellation exceptions around the delivery kick. The
@@ -113,9 +125,13 @@ no file that had drifted into two unrelated jobs.
 
 - `./gradlew :app:testDebugUnitTest` — **297 test classes / 2,839 tests / 0 failures / 0 errors
   / 0 skipped, exit 0** (2026-11-13).
-- `./gradlew :app:lintRelease` (run alone, ADR #208) — **0 errors, 3 warnings**, exit 0,
-  2026-11-13. The three warnings are the known, accepted baseline: `ModifierParameter`,
-  `PluralsCandidate`, `UseKtx` (same set as the #194 lint run).
+- `./gradlew :app:lintDebug` (run alone, ADR #208) — **0 errors, 0 warnings**, exit 0,
+  2026-11-14, lint 9.2.1. The three known baseline warnings from the 2026-11-13 run were fixed
+  in source: `ModifierParameter` (`BatchEditor.kt`, modifier moved to the first optional
+  parameter), `PluralsCandidate` (`partner_permission_lost_more` converted to a `<plurals>`
+  resource, consumers switched to `pluralStringResource` / `getQuantityString`), `UseKtx`
+  (`AttemptRecorder.kt`, `SharedPreferences.edit { }`). Fixes are behavior-neutral; the
+  published 1.1.29 artifact predates them and they ship in the next release.
 
 ## Closeout
 

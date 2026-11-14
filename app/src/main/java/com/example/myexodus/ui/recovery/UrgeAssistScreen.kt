@@ -26,7 +26,7 @@ import androidx.compose.material.icons.outlined.Casino
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
-import androidx.compose.material.icons.outlined.HelpOutline
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.ShoppingBag
 import androidx.compose.material.icons.outlined.Smartphone
@@ -126,7 +126,6 @@ internal fun UrgeAssistScreen(
     // The parent sets this too; declaring it here keeps the surface protected if it is ever
     // hosted outside the Recovery tab (SecureSurfacesTest enforces one declaration per host).
     SecureSurface()
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val sidePadding = if (rememberWindowWidth() == WindowWidth.COMPACT) 16.dp else 24.dp
     var categoryId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -501,7 +500,7 @@ private fun SuggestionPanel(
                 selected = category == null,
                 onClick = { onCategory(null) },
                 label = { Text(stringResource(R.string.urge_category_unsure)) },
-                leadingIcon = { ChipIcon(Icons.Outlined.HelpOutline) },
+                leadingIcon = { ChipIcon(Icons.AutoMirrored.Outlined.HelpOutline) },
                 modifier = Modifier.heightIn(min = 48.dp),
             )
         }

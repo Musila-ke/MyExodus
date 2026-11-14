@@ -8,19 +8,19 @@ import com.example.myexodus.data.db.entity.RecoveryPolicy
 import kotlinx.coroutines.flow.Flow
 
 @Dao
-abstract class RecoveryPolicyDao {
+interface RecoveryPolicyDao {
 
     @Query("SELECT * FROM recovery_policy WHERE id = 0")
-    abstract fun observe(): Flow<RecoveryPolicy?>
+    fun observe(): Flow<RecoveryPolicy?>
 
     @Query("SELECT * FROM recovery_policy WHERE id = 0")
-    abstract suspend fun current(): RecoveryPolicy?
+    suspend fun current(): RecoveryPolicy?
 
     @Query("UPDATE recovery_policy SET default_friction_seconds = :frictionSeconds, " +
         "override_cooldown_seconds = :cooldownSeconds WHERE id = 0")
-    abstract suspend fun update(frictionSeconds: Long, cooldownSeconds: Long)
+    suspend fun update(frictionSeconds: Long, cooldownSeconds: Long)
 
     /** Opt-in portable-preference import (account plan §6.3.5); the row is seeded on create. */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    abstract suspend fun put(policy: RecoveryPolicy)
+    suspend fun put(policy: RecoveryPolicy)
 }

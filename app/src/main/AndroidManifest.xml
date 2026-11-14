@@ -56,12 +56,16 @@
         </intent>
     </queries>
 
+    <!-- usesCleartextTraffic=false: on API 26-27 the platform default is true, so the release
+        build said "cleartext allowed" without meaning to; the only app HTTP client (updater)
+        already rejects non-HTTPS. Debug overrides it for the local HTTP QA rig. -->
     <application
         android:name=".MyExodusApp"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="false"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"

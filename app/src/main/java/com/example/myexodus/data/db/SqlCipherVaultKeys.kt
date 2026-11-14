@@ -46,7 +46,8 @@ internal class SqlCipherVaultKeys(private val appContext: Context) : VaultStoreK
             handle.rawQuery("SELECT count(*) FROM sqlite_master", null).use { it.moveToFirst() }
             true
         } catch (t: Throwable) {
-            if (SqlCipherRawKey.isWrongKey(t)) false else throw t
+            if (!SqlCipherRawKey.isWrongKey(t)) throw t
+            false
         } finally {
             handle?.let { runCatching { it.close() } }
             Arrays.fill(raw, 0.toByte())

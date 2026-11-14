@@ -180,12 +180,11 @@ class BackupUploader(
                 }
                 // §6.4 item 14: the object on disk is the exact object that will be committed;
                 // prove length and SHA-256 before anything leaves the device.
-                if (out.header.payloadPlaintextLength != sizes.compressedBytes ||
-                    objectFile.length() != out.objectBytes ||
-                    objectFile.sha256Hex() != out.sha256.toLowerHex()
-                ) {
-                    throw IllegalStateException("sealed object does not match the staged bytes")
-                }
+                check(
+                    out.header.payloadPlaintextLength == sizes.compressedBytes &&
+                        objectFile.length() == out.objectBytes &&
+                        objectFile.sha256Hex() == out.sha256.toLowerHex(),
+                ) { "sealed object does not match the staged bytes" }
                 out to sizes
             }
         } catch (e: CancellationException) {

@@ -817,7 +817,7 @@ class BlockerAccessibilityService : AccessibilityService() {
             launchedAtElapsedMs = EnforcementForegroundService.activeBlockTargetSinceElapsedMs,
             targetPackage = packageName,
         )
-        val evicted = if (wallIsFront || wallLaunching) false else performGlobalAction(GLOBAL_ACTION_HOME)
+        val evicted = !(wallIsFront || wallLaunching) && performGlobalAction(GLOBAL_ACTION_HOME)
         killBlockedProcess(packageName)
         mainHandler.postDelayed({ killBlockedProcess(packageName) }, BLOCK_CLOSE_RETRY_MS)
         if (wallLaunching) {

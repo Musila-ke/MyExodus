@@ -159,12 +159,12 @@ class PartnerEventRecorder(
                 )
             ) {
                 is ServiceEventOutbox.EnqueueOutcome.Enqueued -> {
-                    // The row is durable; a failed kick only delays it to the periodic pass.
                     try {
                         onRecorded()
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: Exception) {
+                        // The row is durable; a failed kick only delays it to the periodic pass.
                     }
                     RecordResult.Recorded(outcome.eventId, outcome.sequence, status)
                 }

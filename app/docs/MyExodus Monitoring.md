@@ -374,6 +374,25 @@ with the same token. Useful paths: `pairings/{id}`, `users/{uid}/push_installati
 on its threshold still pending, ADR #232 revision). A tester report that maps to one of these
 usually has a matching incident in Cloud Monitoring.
 
+   **Reading incident history.** There is no public incidents API: Monitoring v3 exposes only
+policy config, and the console's `monitoring.clients6.google.com` host answers `Method not found`.
+Cloud Logging carries the events instead — query both logs with the recipe above
+(`orderBy timestamp asc`) and pair them per policy: `monitoring.googleapis.com%2FViolationOpenEventv1`
+opens an incident, `monitoring.googleapis.com%2FViolationAutoResolveEventv1` closes it, and each
+entry has `labels.policy_display_name`, `labels.policy_id`, `labels.violation_id` and a
+`terse_message` with value vs threshold. A policy whose latest event is an Open with no later
+resolve is the currently open incident. Verified 2026-11-13.
+
+   **2026-11-13 read (retention window):** no new alert class. Two classes fired, both known.
+(a) App Check attestation volume >70%: opened 11-12T12:44Z, auto-resolved 11-13T18:53Z once the
+rolling verdict count dropped. (b) Callable rejection storm: cycled five times from 14:08Z; all
+but two of that day's 1,000+ rejection entries came from ONE installation
+(`ae3926b5-e7a1-454d-ab32-4355f6288dfa`, `ACTIVE_HARDWARE` — the physical phone, account created
+2026-11-08), whose ~13 outbox rows re-sent the same `RECIPIENT_KEY_STALE` envelopes on a clean
+900 s clock because that build predates the stale-key parking fix (`bc2f836`). 1.1.29 (published
+after the fix, commit `d30f2b5`) parks those rows; the loop ends when the phone installs it.
+Zero rejections came from the emulator.
+
 **5. What the rails cannot see.** A device that opted out of diagnostics; anything local-only
 (vault, App Lock, rules UI state); OEM-specific behavior with no server call. For those, ask the
 tester for a screenshot or a screen recording where FLAG_SECURE allows it.

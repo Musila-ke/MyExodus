@@ -3,6 +3,7 @@ package com.example.myexodus.blocking
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import androidx.core.content.edit
 import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
@@ -173,7 +174,7 @@ class AttemptRecorder @Inject constructor(
                     .put("at", entry.at),
             )
         }
-        outbox.edit().putString(KEY_ENTRIES, array.toString()).apply()
+        outbox.edit { putString(KEY_ENTRIES, array.toString()) }
     }
 
     private data class PendingAttempt(val ruleId: String, val target: String, val at: Long)

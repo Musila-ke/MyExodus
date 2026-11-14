@@ -1,6 +1,7 @@
 package com.example.myexodus.applock.crypto
 
 import android.content.Context
+import com.example.myexodus.util.deleteOrWarn
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Files
@@ -44,19 +45,19 @@ class VaultEnvelopeStore(private val root: File) {
     }
 
     fun discardStaging() {
-        stagingFile().delete()
+        stagingFile().deleteOrWarn(TAG)
     }
 
     /** Removes staging and the active envelope together (pre-commit rollback / disable). */
     fun discardAll() {
-        stagingFile().delete()
-        activeFile().delete()
+        stagingFile().deleteOrWarn(TAG)
+        activeFile().deleteOrWarn(TAG)
     }
 
     /** A `.tmp` file is an interrupted write, never a usable envelope (plan §4.2 rule 3). */
     fun sweepIncompleteWrites() {
-        tmpFile(activeFile()).delete()
-        tmpFile(stagingFile()).delete()
+        tmpFile(activeFile()).deleteOrWarn(TAG)
+        tmpFile(stagingFile()).deleteOrWarn(TAG)
     }
 
     private fun read(file: File): ByteArray? = if (file.exists()) file.readBytes() else null
@@ -83,6 +84,7 @@ class VaultEnvelopeStore(private val root: File) {
     private fun stagingFile() = File(root, STAGING)
 
     private companion object {
+        const val TAG = "VaultEnvelopeStore"
         const val DIR = "vault"
         const val ACTIVE = "vault.ve"
         const val STAGING = "vault.ve.staging"

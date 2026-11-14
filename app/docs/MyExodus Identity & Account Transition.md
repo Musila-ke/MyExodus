@@ -195,6 +195,16 @@ with a reason. "Where" names the primary surfaces, not every call site.
   an unknown address reports success, so the flow cannot enumerate accounts. Unverified accounts
   keep full core use; verification is prompted in the pane. Password *change* while signed in
   and email change remain unbuilt (recent-login reauthentication exists in `AuthCoordinator`).
+  **END-TO-END VERIFIED 2026-11-13** (Lean_API34, release v31 / 1.1.29 — the first live run; no
+  prior test evidence existed): invalid text → inline "Enter a valid email address." with no
+  network call; a valid-format address with no account → the neutral `account_reset_sent` card
+  (no existence oracle); a real account's address from the app → Firebase delivered the reset
+  email to a mail.tm inbox within seconds; the emailed `oobCode`, redeemed via
+  `accounts:resetPassword`, answered `PASSWORD_RESET` for the account; the old password then
+  returned `INVALID_LOGIN_CREDENTIALS` and the new one signed in with the same uid. Test user and
+  mailbox deleted afterwards. Note for testers: while the request is in flight the pane swaps to
+  the working card and the form returns reset to its defaults, so the confirmation card is the
+  only on-screen evidence — it holds for 8 s at the top of the pane.
 - **A10. Provider availability across OEMs.** The app targets every Android skin; devices without
   Google Play services cannot use Credential Manager Google sign-in. Detect availability, hide the
   Google option and fall back to email/password — never dead-end (OPD #6 already records that the

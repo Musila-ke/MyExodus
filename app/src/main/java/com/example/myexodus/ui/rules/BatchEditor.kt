@@ -88,7 +88,6 @@ private const val TAG = "BatchEditor"
  */
 @Composable
 fun BatchEditorScreen(
-    initial: List<RestrictionRule>? = null,
     existingRules: List<RestrictionRule>,
     partners: List<ReachOutTarget>,
     repository: RulesRepository,
@@ -100,6 +99,7 @@ fun BatchEditorScreen(
     onEnableWebsiteEngine: () -> Unit,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
+    initial: List<RestrictionRule>? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()

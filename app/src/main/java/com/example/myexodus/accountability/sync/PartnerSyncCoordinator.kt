@@ -723,10 +723,8 @@ class PartnerSyncCoordinator(
             )
         }
         val isHabitRow = row.kind in EventPayload.HABIT_ANCHORED_ACTIVITY_TYPES
-        val anchor: HabitProgress?
         val base: Aggregate
         if (isHabitRow) {
-            anchor = null
             base = Aggregate(
                 daysFree = row.daysFree,
                 relapseCount = row.relapseCount,
@@ -752,7 +750,7 @@ class PartnerSyncCoordinator(
                     null
                 }
             }
-            anchor = visible
+            val anchor = visible
             val streak = store.recoveryStreakDao().getActiveStreak(anchor.progressId)
             base = Aggregate(
                 // Same displayed day count as the sender's own surfaces (ADR #128/#176).

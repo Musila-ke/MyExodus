@@ -21,6 +21,19 @@ class UrlPatternTest {
         assertNull(s.pathPrefix)
     }
 
+    /** Chrome's accessible URL-bar text appends a security-state phrase on an insecure page
+     *  ("example.com. Connection is not secure", device-caught 2026-11-14). With no path to
+     *  absorb the suffix it landed in the authority and a bare blocked host stopped matching,
+     *  so the URL wall never drew. An authority never contains whitespace — cut there. */
+    @Test
+    fun browserSecuritySuffix_stillCanonicalizesToTheHost() {
+        val suffixed = UrlPattern.parseStructure("example.com. Connection is not secure")!!
+        assertEquals("example.com", suffixed.hostUnicode)
+        assertTrue(UrlPattern.from(rule("example.com"))!!.matches(candidate("example.com. Connection is not secure")))
+        assertTrue(UrlPattern.from(rule("example.com"))!!.matches(candidate("example.com. Secure connection")))
+        assertTrue(UrlPattern.from(rule("example.com"))!!.matches(candidate("https://example.com. Connection is not secure")))
+    }
+
     @Test
     fun userinfoAndDefaultPort_stripped() {
         val s = UrlPattern.parseStructure("HTTP://User@Example.com:80/Path/Here?q=1#f")!!

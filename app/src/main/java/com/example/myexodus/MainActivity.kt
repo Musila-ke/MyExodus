@@ -56,7 +56,6 @@ import com.example.myexodus.applock.AppLockController
 import com.example.myexodus.applock.AppLockCoordinator
 import com.example.myexodus.applock.AppLockRootGate
 import com.example.myexodus.applock.AppLockState
-import com.example.myexodus.blocking.AttemptRecorder
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.EnforcementForegroundService
 import com.example.myexodus.blocking.ProtectionStatusMonitor
@@ -274,7 +273,6 @@ class MainActivity : FragmentActivity() {
      *  SSOT itself, so activation and the sinkhole's own blocklist can never disagree. */
     @Inject lateinit var rulesSnapshotPublisher: RulesSnapshotPublisher
     @Inject lateinit var recoveryStore: RecoveryStateStore
-    @Inject lateinit var attemptRecorder: AttemptRecorder
     @Inject lateinit var recoveryManager: RecoveryManager
     @Inject lateinit var healthStore: DatabaseHealthStore
     @Inject lateinit var monitor: EnhancedModeHealthMonitor
@@ -785,7 +783,6 @@ class MainActivity : FragmentActivity() {
                         psl = publicSuffixList,
                         accountingOutage = accountingOutageSource,
                         recoveryStore = recoveryStore,
-                        attempts = attemptRecorder,
                         monitor = monitor,
                         strictMode = strictMode,
                         settings = settings,
@@ -907,7 +904,6 @@ class MainActivity : FragmentActivity() {
                         requestedRecoveryView = requestedRecoveryView,
                         onRecoveryViewConsumed = { requestedRecoveryView = null },
                         planRepository = recoveryPlanRepository,
-                        rulesRepository = rulesRepository,
                         habitRepository = habitRepository,
                         partnerPlanRepository = partnerPlanRepository,
                         sessions = recoverySessions,

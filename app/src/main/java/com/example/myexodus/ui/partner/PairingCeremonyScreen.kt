@@ -244,7 +244,7 @@ fun PairingCeremonyScreen(
                 // outcome is an exception from the submit call itself (transport), the one
                 // case where the connectivity copy is true.
                 is PairingFlow.Outcome.Rejected, null -> {
-                    val reason = (outcome as? PairingFlow.Outcome.Rejected)?.reason
+                    val reason = outcome?.reason
                     Log.w(TAG, "pairing rejected: $reason")
                     val (title, body) = pairingFailureCopy(reason)
                     fail(title, body)

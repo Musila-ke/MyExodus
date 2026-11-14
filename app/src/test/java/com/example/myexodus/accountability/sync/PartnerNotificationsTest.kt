@@ -197,8 +197,8 @@ class PartnerNotificationsTest {
         assertTrue(text.contains(context.getString(R.string.partner_permission_lost_accessibility)))
         assertTrue(
             text.contains(
-                context.getString(
-                    R.string.partner_permission_lost_more, "YouTube, Games, Bank", 1,
+                context.resources.getQuantityString(
+                    R.plurals.partner_permission_lost_more, 1, "YouTube, Games, Bank", 1,
                 ),
             ),
         )

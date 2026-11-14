@@ -3,7 +3,9 @@
     xmlns:tools="http://schemas.android.com/tools">
     <!-- Debug-only: the local QA test server speaks plain HTTP (I-17's own-app request,
          PF legs), and targetSdk 28+ blocks cleartext by default. Release is untouched. -->
-    <application android:usesCleartextTraffic="true">
+    <application
+        android:usesCleartextTraffic="true"
+        tools:replace="android:usesCleartextTraffic">
         <activity
             android:name=".blocking.DeviceVerificationActivity"
             android:exported="true" />

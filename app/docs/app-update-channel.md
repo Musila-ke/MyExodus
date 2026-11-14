@@ -74,6 +74,15 @@ artifacts are signed with the release identity (certificate SHA-256
 The rollout goes straight to 100 percent because the tester base is the owner and one partner:
 the 5 to 25 to 100 progression has not been rehearsed and is not claimed.
 
+**Hardware leg, 2026-11-14:** the owner's X6532 (was 1.1.28/v30, a build with no channel
+repository) was updated to the published `artifact-v31` APK by direct install (exact SHA-256
+`f741d752…701c` verified before install, `adb install -r`, data and pairing preserved). The
+in-app path could not carry this hop because v30 predates the repository wiring — as §1 states,
+v31 is the first artifact whose Settings check has a repository to read. After the install,
+Settings → Updates on hardware reported "You're on version 1.1.29, the latest version" and a
+forced "Check again" completed against `policy-000011` with "Last verified update check: 0
+minutes ago". Every later release reaches this phone through the in-app channel.
+
 Publisher state: highest policy sequence 11, highest versionCode 31. Tags are immutable, so
 `policy-000005` (an early test publication) stays burned and every new policy needs a higher
 sequence.
@@ -673,10 +682,34 @@ immediately before the first commit.
 - `./gradlew :app:testDebugUnitTest --tests "com.example.myexodus.update.*"`: 48 tests across
   5 classes, 0 failures, 0 errors, after the publication.
 
-**Open client-side leg.** The end-to-end check on a phone (an installed build at versionCode
-30 or lower sees `AVAILABLE`, downloads, verifies and installs v31) is scheduled for the
-physical pass; the emulator leg above was run against the policy-000008 era and has not been
-rehearsed against policy-000011.
+**PASSED (client-side end-to-end against policy-000011, Lean_API34 AVD, release-signed v25 →
+v31, live channel, 2026-11-13):**
+
+- A fresh install of the released `v25` APK (`versionCode 25`, `1.1.23`, 39,141,321 bytes —
+  an installed build at versionCode 30 or lower) completed onboarding as a guest and the Home
+  banner immediately offered "Update available — Version 1.1.29 is available. Review the
+  update and choose when to download it."
+- The offer pane matched the signed envelope exactly: `Version 1.1.29`, `Download size:
+  37.4 MB`, and the five v31 release-note lines; `update_state.xml` held the full verified
+  policy-000011 envelope (`highest_version_code=31`, `highest_policy_sequence=11`).
+- Download on the live artifact: 0% → 93% → "The download is verified. Android will show its
+  install screen." (≈70 s). The attempt recorded the exact signed SHA-256
+  `f741d752…701c` before the install action.
+- Install → PackageInstaller completed the replacement in place:
+  `firstInstallTime=2026-11-13 21:57:26`, `lastUpdateTime=2026-11-13 22:04:00`,
+  `versionCode=31 versionName=1.1.29`. The attempt persisted `"state":"SUCCEEDED"`,
+  `"committed":true`, `sessionId 463522580`; `display_status` flipped to `UP_TO_DATE`.
+- Post-replace continuity: the first launch showed "MyExodus is now on version 1.1.29" with
+  the exact release notes once; OK cleared it and Home rendered with guest data intact and the
+  expected protection-resume prompt ("Protection needs to be turned back on after this update").
+- Environment note: the same leg was attempted first on the API 37 AVD and proved the offer
+  pane and a full download+verify there, but that image's system_server/input-dispatch ANR
+  storm (software rendering, load average >30) killed the app before the installer hand-off;
+  the Lean_API34 AVD ran the same release-signed flow without incident. Also proven there:
+  a fresh install without the unknown-sources grant parks the attempt at
+  `NEEDS_INSTALL_PERMISSION` and resumes correctly once
+  `appops set … REQUEST_INSTALL_PACKAGES allow` is granted (test-harness grant; a real user
+  grants it once through the system Settings screen the app opens).
 
 **PASSED (physical X6532, release-signed, live channel, 2026-11-07):**
 

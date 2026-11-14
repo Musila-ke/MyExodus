@@ -75,7 +75,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.R
 import com.example.myexodus.applock.AppLockController
-import com.example.myexodus.blocking.AttemptRecorder
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.ProtectionAuthority
 import com.example.myexodus.blocking.ProtectionDegradation
@@ -172,7 +171,6 @@ fun AppShell(
      *  Protection row's exemption offer. */
     accountingOutage: AccountingOutageSource,
     recoveryStore: RecoveryStateStore,
-    attempts: AttemptRecorder,
     monitor: EnhancedModeHealthMonitor,
     strictMode: StrictModeManager,
     settings: EnhancedModeSettings,
@@ -249,8 +247,6 @@ fun AppShell(
     requestedRecoveryView: String? = null,
     onRecoveryViewConsumed: () -> Unit = {},
     planRepository: RecoveryPlanRepository,
-    /** Settings → Coaching plan: the editor resolves the active profile through this. */
-    rulesRepository: RulesRepository,
     /** Owner mandate 2026-10-04: the Settings sharing pane's per-streak consent writes. */
     habitRepository: HabitRepository,
     /** ADR #193: partner plans, reached from the Partner hub. */
@@ -299,9 +295,10 @@ fun AppShell(
     // SOS §8.15 (Step 8): the Reach out control's sender state.
     val sosState by sos.state.collectAsStateWithLifecycle()
 
-    // FAB rev (owner mandate 2026-10-04): one roster read per Home entry feeds the pinned
-    // card's sender names and the FAB's FR-1 active-pair gate. Pairs only change on the
-    // Partner tab, so each Home entry is the freshness boundary.
+    // FAB rev (owner mandate 2026-10-04): one roster read per Home, Recovery or Streaks entry
+    // feeds the pinned card's sender names, Recovery's partner card, and the FAB's FR-1
+    // active-pair gate. Pairs only change on the Partner tab, so each tab entry is the
+    // freshness boundary.
     var partnerNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     // Owner mandate 2026-10-04 (Q4) + owner ruling 2026-10-23: the Reach-out recipient list —
     // the §19.5 target first (the pre-picker default), every other live partner after it. The
@@ -309,8 +306,8 @@ fun AppShell(
     var sosTargets by remember { mutableStateOf<List<ReachOutTarget>>(emptyList()) }
     LaunchedEffect(contentTab) {
         // Streaks reads the same roster (owner ruling 2026-11-09) for its setup form's
-        // "Share with" choice; Home's reach-out dialog uses it too.
-        if (contentTab == 0 || contentTab == 3) {
+        // "Share with" choice; Home's reach-out dialog and Recovery's partner card use it too.
+        if (contentTab == 0 || contentTab == 2 || contentTab == 3) {
             partnerNames = withContext(Dispatchers.IO) {
                 runCatching { partnerSource.partnerDisplayNames() }.getOrDefault(emptyMap())
             }
@@ -550,7 +547,9 @@ fun AppShell(
                         modifier = contentModifier,
                         habitId = habit?.habitId,
                         habitLabel = habit?.targetLabel,
-                        partnerName = partnerNames.values.firstOrNull(),
+                        // The §19.5 target, not roster-map order (newest first): with more than
+                        // one partner the card must name the one the Reach out dialog will use.
+                        partnerName = sosTargets.firstOrNull()?.name,
                         // The same confirmation the Home FAB and the widget use: one recipient,
                         // one editable message, nothing sends without that dialog.
                         onReachOut = {

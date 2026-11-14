@@ -104,12 +104,18 @@ data class UrlPattern(
             val firstDelimiter = listOf('/', '?', '#').mapNotNull { c ->
                 rest.indexOf(c).takeIf { it >= 0 }
             }.minOrNull()
-            val authorityRaw = if (firstDelimiter == null) rest else rest.substring(0, firstDelimiter)
+            // Browser accessibility text appends a state phrase after the address
+            // ("example.com. Connection is not secure" — Chrome on an insecure page).
+            // An authority never contains whitespace, so a pathless blocked host still
+            // canonicalizes to itself instead of failing the match (device-caught
+            // 2026-11-14: the wall never showed for bare-domain navigation).
+            val authorityClean = (if (firstDelimiter == null) rest else rest.substring(0, firstDelimiter))
+                .takeWhile { !it.isWhitespace() }
             val pathRaw = if (firstDelimiter == null) null else rest.substring(firstDelimiter)
 
             // Strip userinfo entirely (may contain ':' but never '@').
-            val atIndex = authorityRaw.lastIndexOf('@')
-            val authority = if (atIndex >= 0) authorityRaw.substring(atIndex + 1) else authorityRaw
+            val atIndex = authorityClean.lastIndexOf('@')
+            val authority = if (atIndex >= 0) authorityClean.substring(atIndex + 1) else authorityClean
 
             val host: String
             var port: Int? = null
