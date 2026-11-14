@@ -84,3 +84,43 @@ It does not touch streak check-ins. Only rendered when an active pair exists.
    is on" collapses to a one-liner), shifting every row below it up ~40 px; flipping back
    restores it. Observed on device; not a defect.
 3. Emulator-only evidence. The X6532 was not used for this leg.
+
+## Partner-visibility gap when Enhanced Mode is off (source audit, 2026-11-14)
+
+Found while answering the owner's question "can the user just switch Enhanced off and relapse while
+the partner pipeline reports healthy?" **Yes — the in-app switch is a silent kill switch with
+respect to partner visibility.** The partner pipeline watches OS-level grants, not this flag:
+
+1. Both capability probes derive ACCESSIBILITY from the OS binding,
+   `BlockerAccessibilityService.connected.get()`, not from `enhancedModeEnabled`:
+   `AccountabilityModule.kt:1036` (E2EE monitoring snapshots) and
+   `PartnerDeliveryModule.kt:196` (signed device-contact reports). Turning Enhanced off leaves the
+   a11y service bound, so both keep reporting ACCESSIBILITY as present.
+2. `MonitoringSnapshotRecorder.record()` is invoked only from FGS call sites
+   (`EnforcementForegroundService.kt:262, 764, 774, 792`). `EnforcementForegroundService.stop()` is
+   a plain `stopService` with no final snapshot, so toggling Enhanced off stops the reporting
+   instead of reporting the stop. The partner's last snapshot stays ACTIVE.
+3. `PartnerHeartbeatClient` beats carry only `{installId, counter}` (`PartnerHeartbeatClient.kt:59-65`)
+   and continue via the 15-minute WorkManager fallback (`PartnerSyncCoordinator.checkIn`). The
+   device never goes silent, so "no news" is indistinguishable from "healthy".
+4. `PartnerPermissionLossReporter` only raises a gap when a capability is actually lost and a rule
+   assigned to that partner needs it. No capability is lost, so no alert.
+5. Server side, `device-liveness-logic.js` `missingCapabilities()` never sees a missing
+   capability, `enforcementState` never transitions to DEGRADED, and `NOTICE_ENFORCEMENT_DEGRADED`
+   is never sent.
+
+Net: with Enhanced off, blocking is dead (Finding 1) while the partner sees a healthy,
+checking-in device. Only the user's own phone shows the Protection paused banner.
+
+**What the pipeline does cover (unchanged):** OS-level grant loss — accessibility revocation,
+usage-access revocation, overlay permission, VPN consent. That path was physically proven
+end-to-end (#142 revoke → partner notified → restore; #145). **Strict Mode** is unaffected: its
+24-hour cooldown is real in-app friction, but it is not partner-visible either.
+**Block check-ins** is unrelated to blocking (recipient-side nudge mute, SOS §8.19) and its
+server-side suppression is covered by functions-emulator tests only (`partner-sos.emulator.js`,
+`partner-sos-push.emulator.js`), not a handset leg.
+
+**Closure options (owner ruling pending, OPD #44):** (a) remove the Enhanced switch and make it
+always-on; (b) keep the switch but wire its off-state into the same partner alert path — include
+`enhancedModeEnabled` in both capability probes and force a final UNAVAILABLE snapshot at
+toggle-off; (c) status quo, documented as an accepted in-app kill switch.
