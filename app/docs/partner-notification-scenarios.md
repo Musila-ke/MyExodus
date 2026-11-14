@@ -435,4 +435,20 @@ S23 (accuracy) after every one:
     re-arms both deadlines; a revived NOTIFIED row follows the normal recovery-notice path.
     Emulator proof in S35 (40/40, five new tests); the physical E2E leg is BLOCKED — no second
     handset, .107 was uninstalled and returned.
+13. **The Pairing page contradicted the connection verdict (found and fixed 2026-11-14, ADR
+    #312).** Owner report: the other phone's app data was wiped, the partnership effectively
+    ended, yet the surviving phone still showed the partner — with "Shared activity is verified",
+    "Last synced just now", and "Updates arrive as soon as both phones are online" on the Pairing
+    page — while the hub's "Their phone" row simultaneously read "Not checking in" (red). Facts:
+    a wipe runs no app code, so no unpair or revocation is sent; the server pair document
+    survives and still answers the surviving phone's reads (so `lastSyncedAt` keeps advancing
+    and `pairingUnreachable` never fires); the only honest signal is the DMS heartbeat state.
+    Fixed in v37/1.1.35: the Pairing page's sync card consumes the same `PartnerStatus` as the
+    hub and renders the connection mapping (LATE / NOT_CHECKING_IN / NO_DATA bodies plus the §18
+    silence note) instead of the unconditional delivery promise. The partner record, name and
+    "Last synced" line stay — "Last synced" is true about the pair document, and the line below
+    now states the partner-phone fact; silence is never treated as removal, and no automatic
+    unpair happens. Physical proof on .107 (X6532C, v37/1.1.35): "Last synced just now" + red
+    "No check-in for over 90 minutes." + the silence note (screenshot
+    `/tmp/partner107_v37_pairing.png`); hub and Pairing page agree.
 

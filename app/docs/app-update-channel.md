@@ -80,8 +80,19 @@ artifacts are signed with the release identity (certificate SHA-256
   `DOWNLOADING` because the non-exported receiver was skipped), the forward-window manual-check
   throttle (a clock roll must not lock "Check again"), and the backup-card refresh after
   sign-in.
-- `policy-000013`, the latest release: signed `OFFER` of versionCode 36 (`1.1.34`) at 100
-  percent, cohort salt `345876d79674f5f39c17e8a65e7a2382`.
+- `policy-000013`: signed `OFFER` of versionCode 36 (`1.1.34`) at 100 percent, cohort salt
+  `345876d79674f5f39c17e8a65e7a2382`.
+- `artifact-v37` (`app-release.apk`, 39,211,709 bytes, SHA-256
+  `259c981b82c34ea193e5fb4b50ba12c49ddb9aa86e8114838c389bd95d546fc1`), the 1.1.35 build.
+  Carries ADR #312: the Pairing page shows the same server-derived partner connection verdict
+  as the hub instead of promising routine delivery while the partner's phone is silent.
+- `policy-000014`, the latest release: signed `OFFER` of versionCode 37 (`1.1.35`) at 100
+  percent, cohort salt `8687e498e832465e4dbdd47c2e3751a1`. Anonymous latest manifest
+  SHA-256 `e7eb2454eb15facb33c59f8cf29c470c917d83f4aadbbfa0ece1a461ecb40d62`, byte-identical
+  to the signed envelope; both asset digests match. Both handsets already ran 1.1.35 by
+  direct `install -r` when this policy was published, so an in-app replacement *by* 1.1.35
+  was not exercised — the publication is verified at the manifest and asset-digest level, and
+  the in-app path itself is proven by the v34→v36 leg above.
 
 The rollout goes straight to 100 percent because the tester base is the owner and one partner:
 the 5 to 25 to 100 progression has not been rehearsed and is not claimed.
@@ -106,7 +117,7 @@ through the verify path. Package state after the update read `versionCode=36
 versionName=1.1.34` with `firstInstallTime` preserved, the one-time "now on 1.1.34" notice
 appeared, and the signed-in account and local data survived. Details in §14.
 
-Publisher state: highest policy sequence 13, highest versionCode 36. Tags are immutable, so
+Publisher state: highest policy sequence 14, highest versionCode 37. Tags are immutable, so
 `policy-000005` (an early test publication) stays burned and every new policy needs a higher
 sequence.
 

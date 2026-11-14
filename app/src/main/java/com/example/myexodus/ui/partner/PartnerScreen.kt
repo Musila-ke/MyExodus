@@ -820,6 +820,7 @@ fun PartnerScreen(
                     VIEW_RULES -> RulesView(current)
                     else -> PairingView(
                         state = current,
+                        status = partnerStatus,
                         checking = checking,
                         checkFailed = checkFailed,
                         checkOk = checkOk,
@@ -2202,6 +2203,7 @@ private fun SyncCard(
     prominentAction: Boolean = true,
     showIdentity: Boolean = false,
     showCheck: Boolean = true,
+    connectionStatus: PartnerStatus? = null,
 ) {
     PartnerSurface(tone = tone) {
         if (showIdentity) {
@@ -2276,11 +2278,35 @@ private fun SyncCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // §18 DoD: a silence the server already reported must not be dressed as routine
+        // delivery. Same wording and weight as the check-ins card's connection block.
+        val connection = connectionStatus?.takeIf { it.consent }?.connection
+        val partnerSilent =
+            connection == PartnerConnection.NOT_CHECKING_IN || connection == PartnerConnection.LATE
         Text(
-            stringResource(R.string.partner_sync_note),
+            stringResource(
+                when (connection) {
+                    PartnerConnection.LATE -> R.string.partner_connection_body_late
+                    PartnerConnection.NOT_CHECKING_IN ->
+                        R.string.partner_connection_body_not_checking_in
+                    PartnerConnection.NO_DATA -> R.string.partner_connection_body_no_data
+                    else -> R.string.partner_sync_note
+                },
+            ),
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (partnerSilent) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
         )
+        if (connectionStatus?.consent == true && connection != PartnerConnection.CHECKING_IN) {
+            Text(
+                stringResource(R.string.partner_connection_silence_note),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         if (showCheck) {
             if (prominentAction) {
                 Button(onClick = onCheckNow, enabled = !checking) {
@@ -2789,6 +2815,7 @@ private fun RequestsView(
 @Composable
 private fun PairingView(
     state: PartnerDashboardUi.Paired,
+    status: PartnerStatus?,
     checking: Boolean,
     checkFailed: Boolean,
     checkOk: Boolean,
@@ -2817,6 +2844,10 @@ private fun PairingView(
         signingDeferred = signingDeferred,
         onCheckNow = onCheckNow,
         showIdentity = true,
+        // Owner report 2026-11-14: the hub read "Not checking in" while this page still
+        // promised "Updates arrive as soon as both phones are online" — one pair, two
+        // verdicts. The same server-derived status the hub already shows rides here too.
+        connectionStatus = status,
         // #14: the manual check appears only when the state needs it — routine freshness is
         // the automatic pass's job (foreground, worker, push).
         showCheck = checkFailed || signingDeferred || syncNeedsAttention(state),

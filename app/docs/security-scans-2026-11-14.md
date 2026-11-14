@@ -186,3 +186,19 @@ Re-ran at the final wrap after the v34-v36 change set (ADR #311 NudgeSettings re
   its reachability argument in the dependency doc.
 - ZAP/Nuclei (DAST) do not run in this gate: they need a deployed target and authorization; the
   platform gate is Android lint (ADR #208).
+
+## v37 / 1.1.35 addendum (2026-11-14 ~23:20 EAT)
+
+The ADR #312 change set (one UI file, one doc, one ADR, the version bump) re-ran the
+changed-code scans only; dependencies are unchanged, so the Trivy results above stand.
+
+- **Opengrep, project rules** — repo-rooted scan: **0 findings on 576 files**, same 30
+  parser-partial files as the v36 run.
+- **Gitleaks, worktree** — `gitleaks dir . --redact -v`: **17.63 MB, 0 leaks**.
+- **JVM suite** — `:app:testDebugUnitTest`: **295 classes / 2,831 tests / 0 failures / 0
+  errors / 0 skipped**, BUILD SUCCESSFUL (the v36 count; the change adds no tests).
+- **Android lint** — `:app:lintDebug` alone (ADR #208), on the final tree: **"No issues
+  found."**
+- **Device** — .107 (X6532C) on v37/1.1.35: Pairing page shows the server's connection
+  verdict (red "No check-in for over 90 minutes." + silence note) instead of the routine
+  delivery line; screenshot `/tmp/partner107_v37_pairing.png`.
