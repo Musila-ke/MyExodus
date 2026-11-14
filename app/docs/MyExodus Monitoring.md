@@ -401,9 +401,19 @@ every 900 s probe re-encrypted and resent) and the probe ran with a null authori
 ("every local enrollment"), which includes the key of a **terminated** pair that is still
 `ACTIVE` server-side — a row the server can never accept. Fixed in ADR #309: a stale answer
 whose authorized set names none of the row's readable local keys terminally rejects the row
-(`RECIPIENT_KEY_REVOKED`), and unpair purges the pair's delivery outbox (`PAIR_REVOKED`). After
-v32/1.1.30 installs, expect one final burst of up to ~46 terminal rejections and then silence;
-the storm policy auto-resolves 30 minutes after the last violation.
+(`RECIPIENT_KEY_REVOKED`), and unpair purges the pair's delivery outbox (`PAIR_REVOKED`).
+**Measured outcome after v32/1.1.30 installed (10:17:25Z):** 49 rejection entries between
+10:17:50Z and 10:29:38Z, all 49 with distinct event IDs, each on exactly one installation
+(`ae3926b5-e7a1-454d-ab32-4355f6288dfa`) — one final rejection per parked row as its 900 s
+attempt became due, converted to a terminal verdict, never repeated. No rejection entry after
+10:29:38Z through the 10:52Z re-query (>22 min, past both the cadence and the ingestion lag).
+The count exceeded the 46 IDs seen pre-install because the earlier query window cut off mid-flight.
+**Ingestion-lag caveat (learned the hard way):** a Logging query taken minutes after emission can
+under-count a live burst — an early 10:22Z read showed 2 entries where 49 eventually existed. Do
+not declare silence from a window that ends within a few minutes of the install; re-query after
+the window has aged. The incident that had been open since 07:38:32Z **closed at 10:47:45Z**
+(policy `autoClose` 1800 s); the project had zero open alerts at the 10:55:40Z re-query, and no
+new alert class has fired since the 11-13 read above.
 
 **5. What the rails cannot see.** A device that opted out of diagnostics; anything local-only
 (vault, App Lock, rules UI state); OEM-specific behavior with no server call. For those, ask the
