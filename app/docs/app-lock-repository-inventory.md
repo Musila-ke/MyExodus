@@ -772,3 +772,33 @@ pass as recorded in §15; only the owner-gated physical-device and API 26-29 leg
   the stores opened fresh.
 - BLOCKED (unchanged): physical-device release run of the reset flow (owner window) and the
   API 26-29 tier (§12.2 release blocker).
+
+**Intent-first surface redesign (ADR #306) — 2026-11-13, task #208**
+
+- What shipped: `AppLockRootGate`'s shell now leads with the brand mark (52 dp), a Fraunces
+  `headlineLarge` title, ONE `bodyLarge` sentence, and one 52 dp full-width action. The
+  SETUP_REQUIRED state keeps exactly two one-line notes (locks on leave + screenshots blocked;
+  unsynced-data loss if the screen lock is reset). There is still no in-app PIN keypad: the OS
+  owns credential entry, and the setup line says so ("My Exodus never stores its own PIN").
+- `AppLockPane` (Settings): `surfaceContainerLow` hero with On/Off (`headlineMedium`) and one
+  consequence line ("Locks whenever you leave the app." / "Anyone who unlocks this phone can
+  open My Exodus."), then Lock now / Turn off App Lock (error color) or Enable, then a single
+  `bodySmall` footnote. The former six-sentence description became one line.
+- Arriving LOCKED auto-opens the OS prompt once (`LaunchedEffect(state)` + a `prompted` guard
+  that is scoped to the shell's composition lifetime, so the next arrival prompts again). A
+  cancelled or failed prompt lands back on the shell with the Unlock action and no repeat
+  attempt; §8.8's ban on repeated automatic prompts still holds.
+- Plan §13.10 disclosure items survive as one-liners at the point of enrollment. The
+  rooted-device caveat was dropped from the copy by owner direction (ADR #306); it remains
+  documented here and in the risk register, so no acceptance item changes.
+- Evidence (device, emulator-5554 API 37, 360 dp, signed release build): dark pane Off +
+  NoScreenLock failure + setup shell; enrollment through the OS prompt lands LOCKED with the
+  auto-prompt shown zero-tap; cancel returns to the concise shell with no repeat after 3 s+;
+  Unlock → PIN → Home; enabled pane renders ("On", "Lock now", "Turn off App Lock", footnote);
+  "Lock now" and a cold start after `am force-stop` both auto-prompt; disable flow (confirm →
+  OS prompt) clears the lock. Light-mode pane and setup shell captured.
+- Gates on that change set: full JVM suite green; `:app:lintDebug` alone (ADR #208) 0 errors /
+  3 known warnings. Code review 2026-11-14: no defects; the disclosure reduction is the ADR's
+  intended trade-off.
+- BLOCKED (unchanged): biometric and physical-device release-build legs (owner), API 26-29
+  tier (§12.2 release blocker).
