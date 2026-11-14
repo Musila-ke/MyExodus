@@ -7,6 +7,9 @@ import com.example.myexodus.account.AuthCoordinator
 import com.example.myexodus.account.AuthIdentity
 import com.example.myexodus.account.AuthOperations
 import com.example.myexodus.account.SessionFingerprint
+import com.example.myexodus.backup.BackupAbk
+import com.example.myexodus.backup.BackupAutoRecord
+import com.example.myexodus.backup.BackupAutoStateStore
 import com.example.myexodus.backup.BackupCrypto
 import com.example.myexodus.backup.BackupKeyApi
 import com.example.myexodus.backup.BackupKeyBundle
@@ -224,11 +227,18 @@ class BackupKeyViewModelTest {
         val manager = BackupKeyManager(api, FakeRevisions(), BackupWordlists(context))
         val vm = BackupKeyViewModel(
             manager, uploads, AuthCoordinator(FakeOperations()), restores, marks,
+            autoState = FakeAutoState(),
+            deviceKey = BackupAbk.None,
             ioDispatcher = mainDispatcherRule.testDispatcher,
             workDispatcher = mainDispatcherRule.testDispatcher,
         )
         pumpUntil { vm.status.value !is BackupKeyViewModel.Status.Loading }
         return vm
+    }
+
+    private class FakeAutoState : BackupAutoStateStore {
+        override suspend fun read(uid: String) = BackupAutoRecord(null, null)
+        override suspend fun recordSuccess(uid: String, contentSha256: String?, atEpochMillis: Long) = Unit
     }
 
     /** The KDF runs on a real dispatcher; drain the test scheduler while waiting for it. */

@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.myexodus.account.AuthCoordinator
 import com.example.myexodus.account.AuthState
+import com.example.myexodus.backup.BackupAbk
+import com.example.myexodus.backup.BackupAutoStateStore
 import com.example.myexodus.backup.BackupKeyException
 import com.example.myexodus.backup.BackupKeyFailure
 import com.example.myexodus.backup.BackupKeyManager
@@ -48,6 +50,8 @@ class BackupKeyViewModel @Inject constructor(
     private val auth: AuthCoordinator,
     private val restores: BackupRestores,
     private val marks: BackupRestoreMarkStore,
+    private val autoState: BackupAutoStateStore,
+    private val deviceKey: BackupAbk,
     @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
     @WorkDispatcher private val workDispatcher: CoroutineDispatcher,
 ) : ViewModel() {
@@ -108,6 +112,18 @@ class BackupKeyViewModel @Inject constructor(
     private val _completedRestore = MutableStateFlow<BackupRestoreMark?>(null)
     val completedRestore: StateFlow<BackupRestoreMark?> = _completedRestore.asStateFlow()
 
+    /**
+     * ADR #310: what the pane can promise about the daily automatic pass — the last committed
+     * snapshot this phone recorded, and whether the Keystore-wrapped key is ready to run it.
+     */
+    data class AutoBackup(
+        val lastSuccessEpochMillis: Long?,
+        val deviceReady: Boolean,
+    )
+
+    private val _autoBackup = MutableStateFlow(AutoBackup(null, deviceReady = false))
+    val autoBackup: StateFlow<AutoBackup> = _autoBackup.asStateFlow()
+
     val authState: StateFlow<AuthState> = auth.state
 
     private var remote: RemoteBundle? = null
@@ -141,8 +157,10 @@ class BackupKeyViewModel @Inject constructor(
             val uid = persistentUid()
             if (uid == null) {
                 _status.value = Status.Unavailable(BackupKeyFailure.PERSISTENT_ACCOUNT_REQUIRED)
+                _autoBackup.value = AutoBackup(null, deviceReady = false)
             } else {
                 statusFromServer(uid)
+                loadAuto(uid)
             }
         }
     }
@@ -374,6 +392,7 @@ class BackupKeyViewModel @Inject constructor(
                     }
                 }
                 clearBackupSecrets()
+                loadAuto(uid)
                 _backup.value = Backup.Succeeded(result.revision)
             } catch (e: CancellationException) {
                 throw e
@@ -420,6 +439,7 @@ class BackupKeyViewModel @Inject constructor(
             try {
                 // Argon2 is CPU-heavy and the callables suspend: neither runs on the main thread.
                 withContext(workDispatcher) { block(uid) }
+                loadAuto(uid)
                 if (_operation.value is Operation.Working) _operation.value = Operation.Idle
             } catch (e: BackupKeyException) {
                 _operation.value = Operation.Failed(e.failure)
@@ -436,6 +456,21 @@ class BackupKeyViewModel @Inject constructor(
                     else -> Unit
                 }
             }
+        }
+    }
+
+    private suspend fun loadAuto(uid: String) {
+        _autoBackup.value = try {
+            withContext(ioDispatcher) {
+                AutoBackup(
+                    lastSuccessEpochMillis = autoState.read(uid).lastSuccessEpochMillis,
+                    deviceReady = deviceKey.has(uid),
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AutoBackup(null, deviceReady = false)
         }
     }
 

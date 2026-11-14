@@ -322,6 +322,71 @@ class BackupKeyManagerTest {
     }
 
     @Test
+    fun create_adoptsTheAbkForTheDeviceKeyUnlock() = runBlocking {
+        val deviceKey = FakeDeviceKey()
+        val manager = BackupKeyManager(api, revisions, BackupWordlists(context()), deviceKey)
+        val created = manager.create(uid, passphrase)
+
+        assertEquals(uid, deviceKey.uid)
+        assertTrue(created.remote.bundle.keyId.contentEquals(deviceKey.keyId))
+        val viaPassphrase = ByteArray(BackupCrypto.ABK_BYTES)
+        val viaDeviceKey = ByteArray(BackupCrypto.ABK_BYTES)
+        manager.withAbk(uid, created.remote, BackupKeyManager.Unlock.Passphrase(passphrase)) {
+            it.copyInto(viaPassphrase)
+        }
+        manager.withAbk(uid, created.remote, BackupKeyManager.Unlock.DeviceKey) {
+            it.copyInto(viaDeviceKey)
+        }
+        org.junit.Assert.assertArrayEquals(viaPassphrase, viaDeviceKey)
+    }
+
+    @Test
+    fun laterSecretUnlock_adoptsIntoAnEmptyDeviceStore() = runBlocking {
+        val deviceKey = FakeDeviceKey()
+        val manager = BackupKeyManager(api, revisions, BackupWordlists(context()), deviceKey)
+        val created = manager.create(uid, passphrase)
+        deviceKey.clear()
+
+        assertTrue(!deviceKey.has(uid))
+        manager.withAbk(uid, created.remote, BackupKeyManager.Unlock.Passphrase(passphrase)) {}
+
+        assertTrue(deviceKey.has(uid))
+        manager.withAbk(uid, created.remote, BackupKeyManager.Unlock.DeviceKey) {}
+    }
+
+    @Test
+    fun deviceKeyUnlock_withNoAdoptedKeyIsWrongSecret() = runBlocking {
+        val created = manager.create(uid, passphrase)
+        var ran = false
+        val failure = assertFailure {
+            manager.withAbk(uid, created.remote, BackupKeyManager.Unlock.DeviceKey) { ran = true }
+        }
+        assertEquals(BackupKeyFailure.WRONG_SECRET, failure)
+        assertTrue(!ran)
+    }
+
+    @Test
+    fun deviceKeyUnlock_isBoundToTheUidAndKeyId() = runBlocking {
+        val deviceKey = FakeDeviceKey()
+        val manager = BackupKeyManager(api, revisions, BackupWordlists(context()), deviceKey)
+        val created = manager.create(uid, passphrase)
+
+        assertEquals(
+            BackupKeyFailure.WRONG_SECRET,
+            assertFailure {
+                manager.withAbk("uid-other", created.remote, BackupKeyManager.Unlock.DeviceKey) {}
+            },
+        )
+        deviceKey.keyId = ByteArray(BackupCrypto.KEY_ID_BYTES) { 0x7f }
+        assertEquals(
+            BackupKeyFailure.WRONG_SECRET,
+            assertFailure {
+                manager.withAbk(uid, created.remote, BackupKeyManager.Unlock.DeviceKey) {}
+            },
+        )
+    }
+
+    @Test
     fun load_rejectsUnexplainedRevisionRegression() = runBlocking {
         val created = manager.create(uid, passphrase)
         revisions.record(uid, 5)
@@ -350,6 +415,31 @@ class BackupKeyManagerTest {
     fun checkPassphrase_exposesThePolicy() {
         assertEquals(PassphrasePolicy.Result.Accepted, manager.checkPassphrase(passphrase))
         assertTrue(manager.checkPassphrase("short") is PassphrasePolicy.Result.TooShort)
+    }
+
+    private fun context() = ApplicationProvider.getApplicationContext<Context>()
+
+    private class FakeDeviceKey : BackupAbk {
+        var uid: String? = null
+        var keyId: ByteArray? = null
+        var abk: ByteArray? = null
+
+        fun clear() {
+            uid = null
+            keyId = null
+            abk = null
+        }
+
+        override fun save(uid: String, keyId: ByteArray, abk: ByteArray) {
+            this.uid = uid
+            this.keyId = keyId.copyOf()
+            this.abk = abk.copyOf()
+        }
+
+        override fun load(uid: String, keyId: ByteArray): ByteArray? =
+            if (has(uid) && this.keyId!!.contentEquals(keyId)) abk!!.copyOf() else null
+
+        override fun has(uid: String): Boolean = abk != null && this.uid == uid
     }
 
     private suspend fun assertFailure(block: suspend () -> Unit): BackupKeyFailure = try {

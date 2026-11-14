@@ -9,6 +9,8 @@ import com.example.myexodus.backup.BackupKeyManager.Unlock
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.security.DigestOutputStream
+import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -60,6 +62,7 @@ class BackupUploader(
     private val uploads: BackupObjectUploader,
     private val fence: SessionFence,
     private val snapshot: BackupSnapshotReader,
+    private val autoState: BackupAutoStateStore,
 ) : BackupUploads {
 
     data class Result(val revision: Long, val sha256: String, val replayed: Boolean)
@@ -161,9 +164,14 @@ class BackupUploader(
         val backupIdHex = backupId.toLowerHex()
         val compressed = staging.compressedFile(backupIdHex)
         val objectFile = staging.objectFile(backupIdHex)
+        // ADR #310: the automatic pass must compare the exact bytes this seal produced, not a
+        // separately-read snapshot that could drift between the two reads.
+        val contentDigest = MessageDigest.getInstance("SHA-256")
         val sealed = try {
             withContext(Dispatchers.IO) {
-                val sizes = FileOutputStream(compressed).use { BackupPayload.write(data, it) }
+                val sizes = FileOutputStream(compressed).use { file ->
+                    BackupPayload.write(data, DigestOutputStream(file, contentDigest))
+                }
                 val out = FileOutputStream(objectFile).use { sink ->
                     FileInputStream(compressed).use { input ->
                         BackupSnapshotCipher.seal(
@@ -199,6 +207,7 @@ class BackupUploader(
         }
         val (sealedObject, sizes) = sealed
         val sha256 = sealedObject.sha256.toLowerHex()
+        val contentSha256 = contentDigest.digest().toLowerHex()
 
         // §6.4 item 14: the compressed plaintext-equivalent leaves the disk before the upload.
         try {
@@ -241,6 +250,7 @@ class BackupUploader(
             compressedBytes = sizes.compressedBytes,
             uploaded = false,
             sessionUri = null,
+            contentSha256 = contentSha256,
         )
         try {
             sessions.save(session)
@@ -373,6 +383,7 @@ class BackupUploader(
         // guard keeps a commit that raced an identity switch from writing into the new scope.
         if (fence.isCurrent(fingerprint)) {
             anchors.recordCommitted(BackupPair(result.revision, result.sha256))
+            recordAuto(uid = fingerprint.uid, contentSha256 = session.contentSha256)
         }
         sessions.clear()
         discard(staging.objectFile(session.backupId))
@@ -466,6 +477,17 @@ class BackupUploader(
         if (latest == null || latest == persisted) return
         withContext(NonCancellable) {
             runCatching { sessions.save(session.copy(sessionUri = latest)) }
+        }
+    }
+
+    /** ADR #310: advisory last-success state; never fails a backup the server already committed. */
+    private suspend fun recordAuto(uid: String, contentSha256: String?) {
+        try {
+            autoState.recordSuccess(uid, contentSha256, System.currentTimeMillis())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // The record only drives the daily debounce and the pane's timestamp; it self-heals.
         }
     }
 

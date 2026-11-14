@@ -45,6 +45,7 @@ import com.example.myexodus.applock.AppLockState
 import com.example.myexodus.applock.VaultDekSource
 import com.example.myexodus.applock.VaultMigration
 import com.example.myexodus.backup.BackupStagingSweeper
+import com.example.myexodus.backup.enqueueAutomaticBackup
 import com.example.myexodus.blocking.AttemptRecorder
 import com.example.myexodus.blocking.BootReconciliationStore
 import com.example.myexodus.blocking.EnforcementForegroundService
@@ -339,6 +340,7 @@ class MyExodusApp : Application(), Configuration.Provider {
                 enqueuePartnerDeliveryWork()
             }
             enqueueDailyMaintenance(this)
+            enqueueAutomaticBackup(this)
             UpdateCheckWorker.enqueue(this)
             UpdateCheckWorker.enqueueForegroundIfDue(this)
             // Off the main thread: the sweep, the installer query, and the cached-envelope

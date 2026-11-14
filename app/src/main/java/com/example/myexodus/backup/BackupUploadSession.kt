@@ -16,6 +16,9 @@ import kotlinx.coroutines.flow.first
  *
  * [uploaded] records that the object finished uploading; a retry then goes straight to commit
  * instead of re-uploading an object the create-only Storage rule would reject.
+ *
+ * [contentSha256] is ADR #310's change detector: the SHA-256 of the compressed plaintext sealed
+ * into this session, recorded only once the server commits it.
  */
 data class BackupUploadSession(
     val uid: String,
@@ -27,6 +30,7 @@ data class BackupUploadSession(
     val compressedBytes: Long,
     val uploaded: Boolean,
     val sessionUri: String?,
+    val contentSha256: String? = null,
 )
 
 /** The encrypted home of the active backup operation (§6.4 items 11/14). */
@@ -53,6 +57,7 @@ class DataStoreBackupUploadSessionStore(
             compressedBytes = prefs[KEY_COMPRESSED_BYTES] ?: return null,
             uploaded = prefs[KEY_UPLOADED] ?: false,
             sessionUri = prefs[KEY_SESSION_URI],
+            contentSha256 = prefs[KEY_CONTENT_SHA256],
         )
     }
 
@@ -67,6 +72,8 @@ class DataStoreBackupUploadSessionStore(
             prefs[KEY_COMPRESSED_BYTES] = session.compressedBytes
             prefs[KEY_UPLOADED] = session.uploaded
             session.sessionUri?.let { prefs[KEY_SESSION_URI] = it } ?: prefs.remove(KEY_SESSION_URI)
+            session.contentSha256?.let { prefs[KEY_CONTENT_SHA256] = it }
+                ?: prefs.remove(KEY_CONTENT_SHA256)
         }
     }
 
@@ -89,6 +96,7 @@ class DataStoreBackupUploadSessionStore(
             prefs.remove(KEY_COMPRESSED_BYTES)
             prefs.remove(KEY_UPLOADED)
             prefs.remove(KEY_SESSION_URI)
+            prefs.remove(KEY_CONTENT_SHA256)
         }
     }
 
@@ -102,5 +110,6 @@ class DataStoreBackupUploadSessionStore(
         val KEY_COMPRESSED_BYTES = longPreferencesKey("backup_upload_compressed_bytes")
         val KEY_UPLOADED = booleanPreferencesKey("backup_upload_uploaded")
         val KEY_SESSION_URI = stringPreferencesKey("backup_upload_session_uri")
+        val KEY_CONTENT_SHA256 = stringPreferencesKey("backup_upload_content_sha256")
     }
 }

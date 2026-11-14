@@ -1937,6 +1937,11 @@
     <string name="backup_key_create_note">If you forget the passphrase, your recovery key is the only way back in. Keep both somewhere safe.</string>
     <string name="backup_key_configured_title">Backup key is set up</string>
     <string name="backup_key_configured_body">Your passphrase and recovery key unlock this account’s encrypted backups. Change either one here. Your existing backups stay readable.</string>
+    <string name="backup_auto_title">Automatic backup</string>
+    <string name="backup_auto_body">This phone backs itself up about once a day, and only when something changed. The key it uses is held in this phone’s secure keystore; your passphrase and recovery key still unlock every backup everywhere.</string>
+    <string name="backup_auto_last">Last backup: %1$s</string>
+    <string name="backup_auto_never">No automatic backup has completed from this phone yet.</string>
+    <string name="backup_auto_waiting">Automatic backup starts after your next backup or restore on this phone. Enter your passphrase or recovery key once, and this phone can back up on its own after that.</string>
     <string name="backup_key_change">Change passphrase</string>
     <string name="backup_key_rotate">Replace recovery key</string>
     <string name="backup_key_unlock_passphrase">Current passphrase</string>

@@ -7,6 +7,9 @@ import androidx.room3.withReadTransaction
 import com.example.myexodus.account.Relauncher
 import com.example.myexodus.account.SessionFence
 import com.example.myexodus.account.readGuestSnapshot
+import com.example.myexodus.backup.AutomaticBackup
+import com.example.myexodus.backup.BackupAbk
+import com.example.myexodus.backup.BackupAutoStateStore
 import com.example.myexodus.backup.BackupKeyApi
 import com.example.myexodus.backup.BackupKeyManager
 import com.example.myexodus.backup.BackupManifestApi
@@ -24,6 +27,7 @@ import com.example.myexodus.backup.BackupUploadSessionStore
 import com.example.myexodus.backup.BackupUploader
 import com.example.myexodus.backup.BackupUploads
 import com.example.myexodus.backup.BackupWordlists
+import com.example.myexodus.backup.DataStoreBackupAutoState
 import com.example.myexodus.backup.DataStoreBackupRestoreMarkStore
 import com.example.myexodus.backup.DataStoreBackupRevisionStore
 import com.example.myexodus.backup.DataStoreBackupUploadSessionStore
@@ -31,6 +35,7 @@ import com.example.myexodus.backup.FirebaseObjectDownloader
 import com.example.myexodus.backup.FirebaseObjectUploader
 import com.example.myexodus.backup.FirestoreBackupKeyApi
 import com.example.myexodus.backup.FirestoreBackupManifestApi
+import com.example.myexodus.backup.KeystoreBackupAbk
 import com.example.myexodus.backup.RemoteBackupAnchorStore
 import com.example.myexodus.backup.RoomBackupAnchorStore
 import com.example.myexodus.blocking.RulesRepository
@@ -73,13 +78,20 @@ object BackupModule {
         dataStore: DataStore<Preferences>,
     ): BackupRevisionStore = DataStoreBackupRevisionStore(dataStore)
 
+    /** ADR #310: the one persisted copy of the ABK, wrapped by a Keystore-held KEK. */
+    @Provides
+    @Singleton
+    fun provideBackupAbk(@ApplicationContext context: Context): BackupAbk =
+        KeystoreBackupAbk(context)
+
     @Provides
     @Singleton
     fun provideBackupKeyManager(
         api: BackupKeyApi,
         revisions: BackupRevisionStore,
         wordlists: BackupWordlists,
-    ): BackupKeyManager = BackupKeyManager(api, revisions, wordlists)
+        deviceKey: BackupAbk,
+    ): BackupKeyManager = BackupKeyManager(api, revisions, wordlists, deviceKey)
 
     @Provides
     @Singleton
@@ -109,6 +121,13 @@ object BackupModule {
     fun provideBackupUploadSessionStore(
         dataStore: DataStore<Preferences>,
     ): BackupUploadSessionStore = DataStoreBackupUploadSessionStore(dataStore)
+
+    /** ADR #310: the automatic pass's change detector and last-success timestamp. */
+    @Provides
+    @Singleton
+    fun provideBackupAutoState(
+        dataStore: DataStore<Preferences>,
+    ): BackupAutoStateStore = DataStoreBackupAutoState(dataStore)
 
     /** §6.4 item 14: `noBackupFilesDir` is outside Auto Backup and device transfer. */
     @Provides
@@ -186,6 +205,7 @@ object BackupModule {
         uploads: BackupObjectUploader,
         fence: SessionFence,
         snapshot: BackupSnapshotReader,
+        autoState: BackupAutoStateStore,
     ): BackupUploads = BackupUploader(
         keys = keys,
         manifest = manifest,
@@ -194,6 +214,26 @@ object BackupModule {
         staging = staging,
         uploads = uploads,
         fence = fence,
+        snapshot = snapshot,
+        autoState = autoState,
+    )
+
+    /** ADR #310: the secret-free pass the daily worker runs. */
+    @Provides
+    @Singleton
+    fun provideAutomaticBackup(
+        keys: BackupKeyManager,
+        uploads: BackupUploads,
+        fence: SessionFence,
+        state: BackupAutoStateStore,
+        deviceKey: BackupAbk,
+        snapshot: BackupSnapshotReader,
+    ): AutomaticBackup = AutomaticBackup(
+        keys = keys,
+        uploads = uploads,
+        fence = fence,
+        state = state,
+        deviceKey = deviceKey,
         snapshot = snapshot,
     )
 }

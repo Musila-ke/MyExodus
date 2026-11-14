@@ -12,6 +12,7 @@ import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -45,6 +46,7 @@ class BackupUploaderTest {
     private lateinit var anchors: FakeAnchors
     private lateinit var sessions: FakeSessions
     private lateinit var uploads: FakeUploads
+    private lateinit var autoState: FakeAutoState
     private lateinit var staging: BackupStaging
     private lateinit var uploader: BackupUploads
     private lateinit var remote: RemoteBundle
@@ -152,6 +154,20 @@ class BackupUploaderTest {
         }
     }
 
+    private class FakeAutoState : BackupAutoStateStore {
+        var uid: String? = null
+        var contentSha256: String? = null
+        var atEpochMillis: Long? = null
+
+        override suspend fun read(uid: String) = BackupAutoRecord(contentSha256, atEpochMillis)
+
+        override suspend fun recordSuccess(uid: String, contentSha256: String?, atEpochMillis: Long) {
+            this.uid = uid
+            this.contentSha256 = contentSha256
+            this.atEpochMillis = atEpochMillis
+        }
+    }
+
     private class FakeUploads : BackupObjectUploader {
         var failWith: Exception? = null
         var onUpload: (() -> Unit)? = null
@@ -191,6 +207,7 @@ class BackupUploaderTest {
         anchors = FakeAnchors()
         sessions = FakeSessions()
         uploads = FakeUploads()
+        autoState = FakeAutoState()
         stagingRoot = temp.newFolder("staging")
         staging = BackupStaging(stagingRoot)
         activeFence = SessionFingerprint(uid, 1)
@@ -204,6 +221,7 @@ class BackupUploaderTest {
             uploads = uploads,
             fence = SessionFence { fenceValue },
             snapshot = { snapshot },
+            autoState = autoState,
         )
     }
 
@@ -264,6 +282,14 @@ class BackupUploaderTest {
         assertTrue(compressedFiles().isEmpty())
         // A fresh reservation is not extended; the heartbeat only fires on a long upload.
         assertEquals(0, manifest.extendCalls)
+
+        // ADR #310: the change detector is the SHA-256 of the compressed plaintext, recorded
+        // only after the server confirmed the commit.
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        BackupPayload.write(snapshot, java.security.DigestOutputStream(java.io.ByteArrayOutputStream(), digest))
+        assertEquals(uid, autoState.uid)
+        assertEquals(digest.digest().joinToString("") { "%02x".format(it) }, autoState.contentSha256)
+        assertNotNull(autoState.atEpochMillis)
     }
 
     @Test

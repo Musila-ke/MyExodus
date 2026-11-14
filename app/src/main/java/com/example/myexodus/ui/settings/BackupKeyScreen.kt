@@ -55,6 +55,8 @@ import com.example.myexodus.backup.PassphrasePolicy
 import com.example.myexodus.backup.RestoreProgress
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.SecureSurface
+import java.text.DateFormat
+import java.util.Date
 
 /**
  * Release 2 (account plan §6.4/§6.5/§8.5): the backup-key pane. Three screens in one: first
@@ -72,6 +74,7 @@ internal fun BackupKeyScreen(
     val backup by viewModel.backup.collectAsStateWithLifecycle()
     val restore by viewModel.restore.collectAsStateWithLifecycle()
     val completedRestore by viewModel.completedRestore.collectAsStateWithLifecycle()
+    val autoBackup by viewModel.autoBackup.collectAsStateWithLifecycle()
     val auth by viewModel.authState.collectAsStateWithLifecycle()
     val active = auth as? AuthState.PersistentActive
     val verificationRequired = active != null &&
@@ -132,6 +135,7 @@ internal fun BackupKeyScreen(
                                     backup = backup,
                                     restore = restore,
                                     completedRestore = completedRestore,
+                                    autoBackup = autoBackup,
                                 )
                             }
                     }
@@ -266,6 +270,7 @@ private fun ManageFlow(
     backup: BackupKeyViewModel.Backup,
     restore: BackupKeyViewModel.Restore,
     completedRestore: BackupRestoreMark?,
+    autoBackup: BackupKeyViewModel.AutoBackup,
 ) {
     var mode by rememberSaveable { mutableStateOf(ManageMode.NONE) }
     // Collapse a finished sub-flow once its operation returns to idle (§6.5 re-unlock included).
@@ -289,6 +294,7 @@ private fun ManageFlow(
         title = stringResource(R.string.backup_key_configured_title),
         body = stringResource(R.string.backup_key_configured_body),
     )
+    AutoBackupCard(auto = autoBackup)
 
     if (completedRestore != null) {
         RestoreCompletedCard(mark = completedRestore, onDismiss = viewModel::dismissCompletedRestore)
@@ -997,6 +1003,26 @@ private fun InfoCard(title: String, body: String) {
             Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+/** ADR #310: the automatic pass's cadence and its last completed backup on this phone. */
+@Composable
+private fun AutoBackupCard(auto: BackupKeyViewModel.AutoBackup) {
+    val last = auto.lastSuccessEpochMillis
+    val lastText = remember(last) {
+        last?.let { DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(it)) }
+    }
+    InfoCard(
+        title = stringResource(R.string.backup_auto_title),
+        body = stringResource(R.string.backup_auto_body),
+    )
+    StatusCard(
+        text = when {
+            !auto.deviceReady -> stringResource(R.string.backup_auto_waiting)
+            lastText == null -> stringResource(R.string.backup_auto_never)
+            else -> stringResource(R.string.backup_auto_last, lastText)
+        },
+    )
 }
 
 @Composable

@@ -699,8 +699,8 @@ class MainActivity : FragmentActivity() {
                 LaunchedEffect(health) {
                     if (usable) rulesStore = withContext(Dispatchers.IO) { rulesStoreFactory.open() }
                 }
-                // V1 ships no onboarding; rules FK a profile row, so the single local profile
-                // is created on first launch (idempotent — see RulesRepository).
+                // Rules FK a profile row, so the single local profile is created on first
+                // launch (idempotent — see RulesRepository).
                 LaunchedEffect(health) {
                     if (usable) {
                         runCatching { withContext(Dispatchers.IO) { rulesRepository.ensureActiveProfile() } }

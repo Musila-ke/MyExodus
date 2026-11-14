@@ -7,18 +7,22 @@ import kotlinx.coroutines.ensureActive
  * Account plan §6.4/§6.5/§8.5: the client half of the key bundle. Generates the ABK and the
  * recovery key, wraps them, drives the two callables, records the high-water revision and — in
  * the only place that matters — proves a committed wrapper actually unlocks before the recovery
- * words are shown as final. Keys live in memory for one operation and are never persisted.
+ * words are shown as final. Keys live in memory for one operation; ADR #310's Keystore-wrapped
+ * copy is the one deliberate persistence, adopted only from a successful secret unlock.
  */
 class BackupKeyManager(
     private val api: BackupKeyApi,
     private val revisions: BackupRevisionStore,
     private val wordlists: BackupWordlists,
+    private val deviceKey: BackupAbk = BackupAbk.None,
 ) {
 
     /** How the caller proves it may open the current ABK (§6.5 item 1). */
     sealed interface Unlock {
         data class Passphrase(val value: String) : Unlock
         data class RecoveryWords(val value: String) : Unlock
+        /** ADR #310: the Keystore-wrapped copy this phone adopted from a prior unlock. */
+        data object DeviceKey : Unlock
     }
 
     data class Created(val remote: RemoteBundle, val recoveryWords: List<String>)
@@ -91,6 +95,7 @@ class BackupKeyManager(
         val words = Bip39.encode(recoveryKey, wordlists.bip39)
         // §6.5: nothing is shown as final until the stored wrappers are proven to open the ABK.
         verifyWrappers(remote, abk, passphrase, deriveRecoveryKey(words), uid)
+        deviceKey.save(uid, remote.bundle.keyId, abk)
         revisions.record(uid, remote.revision)
         return Created(remote, words)
     }
@@ -197,7 +202,7 @@ class BackupKeyManager(
 
     private suspend fun unlockAbk(uid: String, remote: RemoteBundle, unlock: Unlock): ByteArray {
         val bundle = remote.bundle
-        return when (unlock) {
+        val abk = when (unlock) {
             is Unlock.Passphrase -> {
                 val kek = BackupCrypto.derivePassphraseKek(unlock.value, bundle.passphraseSalt, bundle.argon2)
                 BackupCrypto.unwrap(
@@ -226,7 +231,11 @@ class BackupKeyManager(
                     null
                 }
             }
+            Unlock.DeviceKey -> deviceKey.load(uid, bundle.keyId)
         } ?: throw BackupKeyException(BackupKeyFailure.WRONG_SECRET)
+        // ADR #310: every successful secret unlock (re)adopts this phone's automatic-backup key.
+        if (unlock !is Unlock.DeviceKey) deviceKey.save(uid, bundle.keyId, abk)
+        return abk
     }
 
     private fun deriveRecoveryKey(words: List<String>): ByteArray =

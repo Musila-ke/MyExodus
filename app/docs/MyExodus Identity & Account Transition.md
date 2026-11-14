@@ -440,6 +440,17 @@ with a reason. "Where" names the primary surfaces, not every call site.
   cancel, a retry that reuses the held secret, and a Replace / Keep the cloud backup choice
   when the server names a conflicting pointer. The success copy ("restore it on a new phone")
   is backed by the R2.15 restore below.
+  **IMPLEMENTED automatic daily pass (ADR #310, 2026-11-14):** the ABK is also persisted on the
+  phone wrapped by a non-exportable Android Keystore KEK (AES-256-GCM, StrongBox opportunistic →
+  TEE, bound to UID + bundle key ID) and adopted after every successful passphrase/recovery
+  unlock, so a debounced 24-hour WorkManager pass can back up without a user secret. The change
+  detector is the SHA-256 of the exact compressed plaintext the uploader seals, recorded only
+  after `commitBackupManifest` confirms; the pass never replaces a conflicting pointer and never
+  uploads an empty snapshot. The wrapped form is never uploaded or transferred: passphrase and
+  recovery key remain the only portable unlock. Settings shows the cadence and last completed
+  backup. Honest limits: an App Lock vault lock defers the pass until the next unlock; one key
+  per phone (an account switch parks automation until a manual unlock); 24-hour WorkManager
+  timing is best effort, not a guarantee.
   **IMPLEMENTED staging restore (R2.15, 2026-10-30, ADR #243):** `BackupRestorer.prepare`
   fences the session and refuses a rollback or equivocation against this device's high-water
   pair before any download; the current pointer and manifest must describe one snapshot

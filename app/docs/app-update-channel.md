@@ -15,7 +15,7 @@ This document describes implementation plan v1.1
 
 ## 1. Repositories and release types
 
-The source repository stays private. It is never fetched by the app.
+The source repository is public (`Musila-ke/MyExodus`) but is never fetched by the app; the app only reads the releases-only repository below.
 
 The update channel uses a separate public releases-only repository, supplied at build time:
 
