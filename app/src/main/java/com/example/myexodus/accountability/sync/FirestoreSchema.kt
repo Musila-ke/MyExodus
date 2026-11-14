@@ -34,7 +34,6 @@ object FirestoreSchema {
     const val MESSAGES_COLLECTION = "messages"
     const val ACKS_COLLECTION = "acks"
     const val NUDGES_COLLECTION = "nudges"
-    const val NUDGE_SETTINGS_COLLECTION = "nudgeSettings"
 
     /** v2 `pairings/{pairId}` document — the uid-resolution read (members is the array the
      *  rules' `request.auth.uid in resource.data.members` checks). */
@@ -258,22 +257,6 @@ object FirestoreSchema {
             .orderBy("createdAt", Query.Direction.DESCENDING)
             .limit(10)
     }
-
-    /**
-     * `pairings/{pairId}/nudgeSettings/{uid}` — owner-owned block preference (plan §8.2);
-     * rules gate writes on an active pair + membership and allow exactly these two keys.
-     */
-    fun nudgeSettingsDocument(
-        firestore: FirebaseFirestore,
-        pairId: String,
-        uid: String,
-    ): DocumentReference = firestore.collection(PAIRINGS_COLLECTION).document(pairId)
-        .collection(NUDGE_SETTINGS_COLLECTION).document(uid)
-
-    fun nudgeSettingsData(blocked: Boolean): Map<String, Any> = mapOf(
-        "blocked" to blocked,
-        "updatedAt" to FieldValue.serverTimestamp(),
-    )
 
     /**
      * §10 step 1: the relay stores only SHA-256(token) as the document id — a token document

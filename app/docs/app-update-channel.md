@@ -44,7 +44,7 @@ https://github.com/<UPDATE_RELEASE_REPOSITORY>/releases/latest/download/update-m
 That `latest` link is discovery only. APK downloads always use the immutable version-pinned URL
 carried inside the signed policy.
 
-**Live status, 2026-11-13:** the channel is live at
+**Live status, 2026-11-14:** the channel is live at
 `https://github.com/Musila-ke/MyExodus-Releases`. Release immutability is enabled. All
 artifacts are signed with the release identity (certificate SHA-256
 `8f88188070952dde4c490a01ce8aa0407e9172ee4bbc035693ea795ab598854b`). Published:
@@ -66,10 +66,22 @@ artifacts are signed with the release identity (certificate SHA-256
   `f741d75279ce02a9d6fef1e9a2ca1506a63b46196a1d362275c7e5e83328701c`), built with
   `-Pmyexodus.updateRepository=Musila-ke/MyExodus-Releases` so `BuildConfig` carries the
   channel; this is the first artifact whose Settings check has a repository to read.
-- `policy-000011`, the latest release: signed `OFFER` of versionCode 31 (`1.1.29`) at 100
-  percent, cohort salt `6cbb216c55c003585c139ccf82bb00dc`. Carries the App Lock surface
-  redesign (ADR #306), the onboarding privacy/widget/account slides, the partner
-  reply-direction and sharing-revoke fixes, and the stale-key retry bound (ADR #307).
+- `policy-000011`: signed `OFFER` of versionCode 31 (`1.1.29`) at 100 percent, cohort salt
+  `6cbb216c55c003585c139ccf82bb00dc`. Carries the App Lock surface redesign (ADR #306), the
+  onboarding privacy/widget/account slides, the partner reply-direction and sharing-revoke
+  fixes, and the stale-key retry bound (ADR #307).
+- `artifact-v35` (`app-release.apk`, 39,211,713 bytes, SHA-256
+  `a4f46372f855d0585f886632d63500f54b779587d0575a6f067ca1a58f956de4`), the 1.1.33 build.
+- `policy-000012`: signed `OFFER` of versionCode 35 (`1.1.33`) at 100 percent, cohort salt
+  `becc95a282404bccb481c65544f40bd6`.
+- `artifact-v36` (`app-release.apk`, 39,211,709 bytes, SHA-256
+  `9780a193f09af70877e8c3a3ba0bc02a8ad0945aef7e7aa1a63a9b9a289b0f84`), the 1.1.34 build.
+  Carries the download-completion receiver export fix (a completed transfer stayed
+  `DOWNLOADING` because the non-exported receiver was skipped), the forward-window manual-check
+  throttle (a clock roll must not lock "Check again"), and the backup-card refresh after
+  sign-in.
+- `policy-000013`, the latest release: signed `OFFER` of versionCode 36 (`1.1.34`) at 100
+  percent, cohort salt `345876d79674f5f39c17e8a65e7a2382`.
 
 The rollout goes straight to 100 percent because the tester base is the owner and one partner:
 the 5 to 25 to 100 progression has not been rehearsed and is not claimed.
@@ -83,7 +95,18 @@ Settings → Updates on hardware reported "You're on version 1.1.29, the latest 
 forced "Check again" completed against `policy-000011` with "Last verified update check: 0
 minutes ago". Every later release reaches this phone through the in-app channel.
 
-Publisher state: highest policy sequence 11, highest versionCode 31. Tags are immutable, so
+**In-app hardware update, 2026-11-14:** the same X6532 (then 1.1.32/v34) discovered
+`policy-000013` through the live channel and replaced itself in place with `artifact-v36`
+(release-signed, exact signed SHA-256 verified before the install). The leg also caught two
+real-world conditions: a device clock rolled three days forward had left `last_success_at` in
+the future, and the pre-fix build's "Check again" silently did nothing (fixed in v36, then
+re-proven on hardware after the real clock was restored); and Android's Play Protect
+first-seen gate interrupted the first install attempt, so Retry re-downloaded and completed
+through the verify path. Package state after the update read `versionCode=36
+versionName=1.1.34` with `firstInstallTime` preserved, the one-time "now on 1.1.34" notice
+appeared, and the signed-in account and local data survived. Details in §14.
+
+Publisher state: highest policy sequence 13, highest versionCode 36. Tags are immutable, so
 `policy-000005` (an early test publication) stays burned and every new policy needs a higher
 sequence.
 
@@ -200,8 +223,10 @@ Foreground checks do not post the notification; the one-prompt-per-version dialo
 surface.
 
 Manual checks from Settings use `UpdateCoordinator.check(manual = true)`. A manual request is
-throttled for five minutes after a successful check. The five-minute throttle never applies to
-the pre-commit policy refresh.
+throttled for five minutes after a successful check, but only inside a forward window
+(`manualCheckThrottled`): when a device clock change leaves the stored success time in the
+future, the throttle does not apply, so "Check again" still runs instead of silently doing
+nothing. The five-minute throttle never applies to the pre-commit policy refresh.
 
 `HttpsPolicyClient` bounds:
 
@@ -288,11 +313,17 @@ Reconciliation sources:
 - `setDestinationInExternalFilesDir(..., "updates/<attemptId>/release.apk")`
 - neutral `VISIBILITY_VISIBLE` notification ("MyExodus update" / "Downloading an app update")
 - roaming always forbidden; metered allowed only with this attempt's consent
-- `UpdateDownloadReceiver` (non-exported, `DOWNLOAD_COMPLETE`) correlates the broadcast to the
-  owned attempt's `downloadId`, then enqueues the expedited `update_verify` work. The verify
-  worker re-reads the transfer, retries while still downloading, and posts the neutral "Update
-  ready to install" notification only once `READY_TO_INSTALL` is reached. Neither notification
-  can start an install.
+- `UpdateDownloadReceiver` (exported, `DOWNLOAD_COMPLETE`, guarded by
+  `android.permission.SEND_DOWNLOAD_COMPLETED_INTENTS`) correlates the broadcast to the owned
+  attempt's `downloadId`, then enqueues the expedited `update_verify` work. It must be exported:
+  the completion broadcast is sent by `com.android.providers.downloads`, a different UID, so a
+  non-exported receiver is silently skipped with "Permission Denial" (AVD 2026-11-14: the
+  legacy export setting came from an earlier design, the transfer completed, and the attempt
+  stayed `DOWNLOADING` forever, blocking every later attempt because only one attempt may be
+  active). The declared permission is the downloads provider's own signature permission, so no
+  other app can target the receiver. The verify worker re-reads the transfer, retries while
+  still downloading, and posts the neutral "Update ready to install" notification only once
+  `READY_TO_INSTALL` is reached. Neither notification can start an install.
 - no public Downloads fallback, no FileProvider fallback, no WorkManager or foreground-service
   transfer fallback
 
@@ -678,7 +709,8 @@ immediately before the first commit.
 - The live `/releases/latest/download/update-manifest.json` decoded to `policySequence 11`,
   `OFFER`, versionCode 31 (`1.1.29`), rollout 100, apkUrl
   `…/releases/download/artifact-v31/app-release.apk`, and the exact size and SHA-256 above.
-  The releases API reports `policy-000011` as the latest release.
+  At that time the releases API reported `policy-000011` as the latest release; it was
+  superseded by policy 12 and 13 on 2026-11-14.
 - `./gradlew :app:testDebugUnitTest --tests "com.example.myexodus.update.*"`: 48 tests across
   5 classes, 0 failures, 0 errors, after the publication.
 
@@ -727,17 +759,65 @@ v31, live channel, 2026-11-13):**
   APK URL downloads anonymously with SHA-256 equal to the signed digest.
 - `accelerometer_rotation=0` verified after the injected input (`scripts/rotation-guard.sh`).
 
+**PASSED (publication of v35 and v36, 2026-11-14):**
+
+- `:app:assembleRelease` with `-Pmyexodus.updateRepository=Musila-ke/MyExodus-Releases` built
+  `versionCode=36`, `versionName=1.1.34`, `minSdk 26`, `targetSdk 36`, signed by the release
+  identity (`apksigner verify --print-certs`, certificate SHA-256 `8f881880…854b`), with the
+  pinned repository string present in the packaged dex.
+- `artifact-v35` (39,211,713 bytes, SHA-256 `a4f46372…de4`) and `artifact-v36` (39,211,709
+  bytes, SHA-256 `9780a193…f84`) were published as immutable prereleases; the GitHub asset
+  digests equal the local SHA-256 values.
+- `policy-000012` (sequence 12, versionCode 35, rollout 100, cohort salt
+  `becc95a282404bccb481c65544f40bd6`) and `policy-000013` (sequence 13, versionCode 36,
+  rollout 100, cohort salt `345876d79674f5f39c17e8a65e7a2382`) were signed with the production
+  key and published as non-prereleases, with 000013 explicitly latest.
+- The live `/releases/latest/download/update-manifest.json` decoded anonymously to
+  `policySequence 13`, `OFFER`, versionCode 36 (`1.1.34`), rollout 100, the pinned `apkUrl`,
+  and the exact size and SHA-256 above; the downloaded envelope is byte-identical to the
+  locally signed one (SHA-256 `9bb6607f4ecdbbb018834e029e82909dbd02e17d783feb0a0b34fba1e0eb920c`).
+- The publisher refused a non-monotonic sequence and a versionCode downgrade during the run.
+  Publisher state after publication: `{"highestPolicySequence": 13, "highestVersionCode": 36}`.
+- Gate on the shipping tree: full JVM suite 2,831 tests, 0 failures; the standalone Android
+  lint gate reported "No issues found."
+
+**PASSED (physical X6532 in-app update 1.1.32/v34 → 1.1.34/v36, live channel, 2026-11-14):**
+
+- The pre-update device read `versionCode=34 versionName=1.1.32`. A device clock rolled three
+  days forward during an earlier recovery left `last_success_at` in the future; on the pre-fix
+  build, Settings showed "Up to date, checked In 2 days" and "Check again" silently did
+  nothing. With the clock moved past that stamp, the check ran against `policy-000013` and the
+  offer pane matched the signed envelope exactly: `Version 1.1.34`, `Download size: 37.4 MB`,
+  and the four v36 release-note lines.
+- The transfer downloaded and verified in under a minute. The first install attempt hit
+  Android's Play Protect first-seen gate ("Play Protect hasn't seen this app before"); the
+  attempt recorded "Android couldn't install the update" and **Retry** re-downloaded and
+  completed the replacement through the verify path (`ArtService: Dexopt`,
+  `Finsky: VerifyApps: app installation complete`). This is a real user-facing step on a
+  sideloaded release-signed app, not an updater failure.
+- `dumpsys package` after the replacement: `versionCode=36 versionName=1.1.34`,
+  `firstInstallTime=2026-11-07 14:14:43` preserved, `lastUpdateTime` recorded under the
+  forced forward clock (2026-11-17).
+- Post-replace: the one-time "MyExodus is now on version 1.1.34" notice appeared with the
+  signed notes (owner dismissed it), Home rendered on v36 with the protection-resume prompt,
+  and the app was still signed in as the same account with settings and local data intact.
+- The clock was restored (`auto_time=1`), leaving the stored success time in the future
+  relative to real time. The v36 build was then re-tested on the same stale state: the Updates
+  pane showed "Last verified update check: In 3 days" and tapping **Check again** performed a
+  real check and rewrote the line to "0 minutes ago", proving `manualCheckThrottled`'s
+  forward-window behavior on hardware.
+- `accelerometer_rotation=0` verified after the injected input (`scripts/rotation-guard.sh`).
+
 **BLOCKED (owner-gated or hardware):**
 
-- Release-signed N to N+1 install on **physical hardware**: the X6532 now runs a release-signed
-  build, but no in-place update has been performed on physical hardware yet; only the emulator
-  run above is a release-signed replacement.
 - Installer-session `fsync` with a real `openWrite` stream, duplicate and stale status intents,
-  fresh pre-commit `HALT`, protection allow-window expiry, and post-replace protection health
-  are proven on the emulator; the physical-device equivalents need a release-signed update run,
-  which is now possible on the X6532 once an N+1 artifact exists.
-- Android 13+ restricted-settings re-enable behavior after a self-update needs a sideloaded,
-  release-signed update on hardware; the fresh install above does not exercise it.
+  fresh pre-commit `HALT`, and protection allow-window expiry are proven on the emulator; the
+  physical-device equivalents need targeted fault injection. The release-signed N to N+1
+  replacement itself is now proven on physical hardware (2026-11-14).
+- Android 13+ restricted-settings re-enable behavior after a self-update: the in-app update
+  ran on hardware and the app flagged "Protection needs to be turned back on after this
+  update", but the accessibility restricted-settings re-grant path itself was not driven in
+  this leg.
 - 5 to 25 to 100 percent cohort progression has not been rehearsed on the live repository.
   Policy 9 goes straight to 100 percent for the two-tester base; GitHub immutable-release
   settings and the public `latest` mapping are configured and verified.

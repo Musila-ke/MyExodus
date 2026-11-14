@@ -16,7 +16,10 @@ import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.concurrent.TimeUnit
 
-/** Plan §8.2: metadata discovery only; this worker never downloads or installs. */
+/**
+ * Plan §8.2: metadata discovery. This worker never installs, and it starts a transfer only
+ * through [UpdateCoordinator.backgroundCheckFinished] when standing consent is on.
+ */
 @HiltWorker
 class UpdateCheckWorker @AssistedInject constructor(
     @Assisted appContext: Context,

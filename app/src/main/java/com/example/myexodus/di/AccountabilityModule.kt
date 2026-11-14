@@ -87,7 +87,6 @@ import com.example.myexodus.data.db.entity.decodeMilestoneDays
 import com.example.myexodus.secrets.SecretsRepository
 import com.example.myexodus.accountability.sos.NudgeInboxRepository
 import com.example.myexodus.accountability.sos.NudgeRepository
-import com.example.myexodus.accountability.sos.NudgeSettingsRepository
 import com.example.myexodus.ui.partner.PartnerActivityUi
 import com.example.myexodus.ui.partner.PartnerDashboardSource
 import com.example.myexodus.ui.partner.PartnerStreakUi
@@ -335,38 +334,6 @@ object AccountabilityModule {
             crashReporting.nonFatal("partner_nudge_card", cause)
         },
         cipher = eventCipher,
-    )
-
-    /**
-     * SOS §8.19 (Step 11): the recipient's block preference at
-     * `pairings/{pairId}/nudgeSettings/{uid}` — the one document the Step-11 switch reads and
-     * writes. A missing document reads as unblocked (the rules admit the read and the client
-     * treats absence as the default); the write is a full `set` of exactly
-     * [FirestoreSchema.nudgeSettingsData] — `blocked` + server-timestamp `updatedAt`, the only
-     * keys R-F6 admits. Nothing else is touched: §8.19 forbids retroactive deletion of
-     * delivered notifications, so enabling the block never cancels a tray entry and never
-     * acks a pending nudge.
-     */
-    @Provides @Singleton
-    fun provideNudgeSettingsRepository(
-        firestore: FirebaseFirestore,
-        db: AccountabilityDatabase,
-        uidResolver: PairUidResolver,
-        partnerSelection: PartnerSelection,
-        crashReporting: CrashReporting,
-    ): NudgeSettingsRepository = NudgeSettingsRepository(
-        enrollments = db.enrollmentDao()::all,
-        selectedPairId = { partnerSelection.selectedPairId },
-        ensureUid = { uidResolver.ensureUid() },
-        readBlocked = { pairId, uid ->
-            val snapshot = FirestoreSchema.nudgeSettingsDocument(firestore, pairId, uid).get().await()
-            snapshot.getBoolean("blocked") == true
-        },
-        writeBlocked = { pairId, uid, blocked ->
-            FirestoreSchema.nudgeSettingsDocument(firestore, pairId, uid)
-                .set(FirestoreSchema.nudgeSettingsData(blocked))
-                .awaitReportingDenial(crashReporting, "nudge_settings")
-        },
     )
 
     /**

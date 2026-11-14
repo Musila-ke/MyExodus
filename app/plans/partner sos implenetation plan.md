@@ -779,6 +779,10 @@ Add foreground notification handling and launcher intent handling without alteri
 
 Implement recipient block toggle and notification settings deep link.
 
+> **Amended 2026-11-14 (OPD #45, ADR #311):** the recipient block toggle is removed from the
+> client in v34; the notification-settings deep link remains. Server suppression stays for
+> pre-v34 clients.
+
 **Dependency:** Step 1.
 
 ### Step 12 — App Check and flags
@@ -1333,6 +1337,11 @@ In both `onCreate` and `onNewIntent`:
 Do not treat FCM extras as authoritative message content.
 
 ### 8.19 Step 11 — Partner settings
+
+> **Superseded in part (owner ruling 2026-11-14, OPD #45, ADR #311):** the client block switch is
+> removed in v34. The server behavior below (FR-10 acceptance-time and dispatch-time suppression)
+> is retained unchanged for pre-v34 clients that still carry the switch. No current client writes
+> the document; account deletion still removes it.
 
 Block switch:
 

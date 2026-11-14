@@ -370,8 +370,8 @@ with the same token. Useful paths: `pairings/{id}`, `users/{uid}/push_installati
 `mailboxes/...`, `config/features` (the kill switches, §7).
 
 **4. Alert policies already watching.** §4 item 8 (callable rejection storm, >=20 in 15 min),
-§5 (pairing 429s), §8 (deletion/backup rails), plus the App Check verdict metric (owner ruling
-on its threshold still pending, ADR #232 revision). A tester report that maps to one of these
+§5 (pairing 429s), §8 (deletion/backup rails), plus App Check DENY-verdict failures (>100 per
+hour; retargeted 2026-11-14 — see the ruling below). A tester report that maps to one of these
 usually has a matching incident in Cloud Monitoring.
 
    **Reading incident history.** There is no public incidents API: Monitoring v3 exposes only
@@ -414,6 +414,30 @@ not declare silence from a window that ends within a few minutes of the install;
 the window has aged. The incident that had been open since 07:38:32Z **closed at 10:47:45Z**
 (policy `autoClose` 1800 s); the project had zero open alerts at the 10:55:40Z re-query, and no
 new alert class has fired since the 11-13 read above.
+
+   **App Check alert ruling (2026-11-14).** Policy `alertPolicies/13963636721669255344` was
+created 2026-11-12 as "App Check attestation volume above 70% of Play Integrity quota"
+(`services/verdict_count` rolling-24 h SUM > 7,000). The premise did not hold. The metric
+descriptor (Monitoring v3 `metricDescriptors`, read 2026-11-14) labels every point with
+`result` = ALLOW/DENY and `security` = VALID/CONSUMED/INVALID/MISSING_OUTDATED_CLIENT/
+MISSING_UNKNOWN_ORIGIN — the properties of a presented App Check token, i.e. **verification
+verdicts on resource requests**, not Play Integrity attestation exchanges. The volume confirms
+it: 7-day totals read 2026-11-14 were 92,008 VALID/ALLOW against 351 INVALID-DENY, with daily
+totals 130 / 1,916 / 47,751 / 21,844 / 1,569 / 16,232 / 3,348 / 1,666 (today, partial). At the
+default one-hour App Check TTL two devices mint tens of attestations per day, so a 92 k weekly
+total can only be per-request verification; the 10,000/day Play Integrity quota covers
+integrity-token requests (`developer.android.com/google/play/integrity/setup`;
+`TOO_MANY_REQUESTS` error -8 in `integrity/error-codes`) and consumes that exchange count, which
+this metric does not measure. The old threshold therefore fired on ordinary request volume — it
+opened 11-12T12:44Z and auto-resolved 11-13T18:53Z on a quiet day — and could not have detected
+quota exhaustion. **Ruling:** the same policy is retargeted to the failure symptom,
+`result="DENY"` > 100 in one hour, renamed "MyExodus: App Check verification failures (DENY
+verdicts)"; notification channel and `autoClose` 604800 s unchanged, enabled = true, read back
+after the patch. The threshold sits above every healthy hour of the past week (peak 38 DENY/h,
+6-136 DENY/day, all attributable to test sessions), and a sustained breach means clients are
+presenting tokens that fail verification — the observable outcome of attestation breakage,
+including Play Integrity quota exhaustion. Coverage limit: a total token outage produces no
+verdicts at all, and is left to the callable rejection storm and Cloud Functions 5xx policies.
 
 **5. What the rails cannot see.** A device that opted out of diagnostics; anything local-only
 (vault, App Lock, rules UI state); OEM-specific behavior with no server call. For those, ask the

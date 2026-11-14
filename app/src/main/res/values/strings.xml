@@ -1305,11 +1305,6 @@
         <item quantity="one">%d batch</item>
         <item quantity="other">%d batches</item>
     </plurals>
-    <!-- The recipient's block switch (plan §8.19 Step 11): names the partner the switch
-         configures (§19.5 target), so the N-partner case is never ambiguous. -->
-    <string name="settings_partner_block_title">Block check-ins</string>
-    <string name="settings_partner_block_body">Don’t let reach-outs from %1$s reach this phone.</string>
-    <string name="settings_partner_block_failed">Couldn’t save. Check your connection and try again.</string>
     <!-- The nudge notification copy (plan §4.6, D16 rev 2026-10-23): the unlocked tray names
          the sender from this phone's pairing label; the generic pair is both the lockscreen
          public copy and the fallback when the push carries no resolvable pair. No habit

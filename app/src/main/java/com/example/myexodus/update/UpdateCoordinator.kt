@@ -53,6 +53,20 @@ internal fun shouldAutoDownload(
     !network.metered &&
     !network.roaming
 
+/**
+ * A manual check is throttled only inside a forward window. A device clock rolled backward can
+ * leave the stored success time in the future; that must not lock the button out indefinitely.
+ */
+internal fun manualCheckThrottled(
+    manual: Boolean,
+    checkStatus: CheckStatus,
+    lastSuccessAtMs: Long,
+    nowMs: Long,
+): Boolean = manual &&
+    checkStatus == CheckStatus.SUCCESS &&
+    nowMs >= lastSuccessAtMs &&
+    nowMs - lastSuccessAtMs < UpdateConfig.MANUAL_THROTTLE_MS
+
 internal data class UpdateSnapshot(
     val configured: Boolean,
     val installedVersionCode: Long,
@@ -157,10 +171,7 @@ class UpdateCoordinator @Inject constructor(
     internal suspend fun check(manual: Boolean): CheckOutcome = bus.withLock {
         if (!configured) return CheckOutcome.NOT_CONFIGURED
         val now = System.currentTimeMillis()
-        if (manual &&
-            store.checkStatus() == CheckStatus.SUCCESS &&
-            now - store.lastSuccessAtMs() < UpdateConfig.MANUAL_THROTTLE_MS
-        ) {
+        if (manualCheckThrottled(manual, store.checkStatus(), store.lastSuccessAtMs(), now)) {
             return CheckOutcome.THROTTLED
         }
         store.markChecking(now)

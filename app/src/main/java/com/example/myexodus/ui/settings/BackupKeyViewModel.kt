@@ -35,6 +35,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -142,6 +143,18 @@ class BackupKeyViewModel @Inject constructor(
 
     init {
         refresh()
+        // The pane is activity-scoped and outlives a sign-in: a status read while signed out
+        // must not stick after the account changes.
+        viewModelScope.launch {
+            var uid = persistentUid()
+            auth.state.collect { state ->
+                val current = (state as? AuthState.PersistentActive)?.uid
+                if (current != uid) {
+                    uid = current
+                    refresh()
+                }
+            }
+        }
         viewModelScope.launch {
             _completedRestore.value = withContext(ioDispatcher) {
                 runCatching { marks.get() }.getOrNull()

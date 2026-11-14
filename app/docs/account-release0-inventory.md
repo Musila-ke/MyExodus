@@ -66,7 +66,7 @@ journal committed, legacy copies retained).
 | `pairing_tokens/{sha256(token)}` | `PairingExchange.kt:84, 173, 257` | any authenticated client; creatorUid pinned; expiry checked; single-use update |
 | `users/{uid}/push_installations/{installationId}` | `PushInstallationRegistrar` | owner only, field allowlist, ≤ 4096-char token |
 | `pairings/{pairId}/nudges/{nudgeId}` update | nudge inbox ack (`AccountabilityModule.kt:308-309`) | recipient only, ackedAt only |
-| `pairings/{pairId}/nudgeSettings/{uid}` | `AccountabilityModule` | owner-member, active pair, two fields |
+| `pairings/{pairId}/nudgeSettings/{uid}` | **none since v34** (was `AccountabilityModule`; removed by ADR #311, pre-v34 clients can still write it) | owner-member, active pair, two fields |
 
 Everything else is denied explicitly or by default: `relay-dispatch`, `rate-limits`,
 `idempotency`, `dms_install_state`, `dms_notification_outbox`, `dms_ingestion_outages`,

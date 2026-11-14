@@ -16,7 +16,6 @@ import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Visibility
@@ -97,11 +96,7 @@ fun SettingsScreen(
     /** App Lock plan §5: the feature's current on/off state and its enable/disable driver. */
     appLockEnabled: Boolean,
     appLockController: AppLockController,
-    /** SOS §8.19 (Step 11): the recipient's block switch — null hides the row (no partner). */
     modifier: Modifier = Modifier,
-    partnerBlock: NudgeSettingsViewModel.UiState? = null,
-    onPartnerBlockRefresh: () -> Unit = {},
-    onPartnerBlockChange: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -127,7 +122,6 @@ fun SettingsScreen(
                 monitor.refresh()
                 scope.launch { checks = withContext(Dispatchers.IO) { readProtectionChecks(context) } }
                 scope.launch { outage = withContext(Dispatchers.IO) { accountingOutageSource.current() } }
-                onPartnerBlockRefresh()
                 update.onResume()
             }
         }
@@ -135,11 +129,8 @@ fun SettingsScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // SOS §8.19: tab entry is not a resume (the activity never left), so the switch's state is
-    // also re-read here — a pairing finished elsewhere in the app must land before this
-    // composition shows the row.
+    // Tab entry is not a resume (the activity never left).
     LaunchedEffect(Unit) {
-        onPartnerBlockRefresh()
         update.onResume()
     }
 
@@ -204,8 +195,6 @@ fun SettingsScreen(
             onWidgetSettingsChanged = onWidgetSettingsChanged,
             themeMode = themeMode,
             onThemeModeChange = onThemeModeChange,
-            partnerBlock = partnerBlock,
-            onPartnerBlockChange = onPartnerBlockChange,
             onOpenPane = { pane = it },
         )
     }
@@ -231,8 +220,6 @@ private fun SettingsIndex(
     onWidgetSettingsChanged: () -> Unit,
     themeMode: ThemeMode,
     onThemeModeChange: (ThemeMode) -> Unit,
-    partnerBlock: NudgeSettingsViewModel.UiState?,
-    onPartnerBlockChange: (Boolean) -> Unit,
     onOpenPane: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -355,29 +342,6 @@ private fun SettingsIndex(
                     ),
                     onClick = { themeDialogOpen = true },
                 )
-
-                // SOS §8.19 (Step 11): the recipient's block switch — it configures exactly
-                // the pair the inbox listens on (§19.5 rule) and names that partner, and the
-                // write is one document: already-delivered notifications are never retracted.
-                partnerBlock?.let { block ->
-                    RowDivider()
-                    ToggleRow(
-                        icon = Icons.Outlined.NotificationsOff,
-                        title = stringResource(R.string.settings_partner_block_title),
-                        subtitle = stringResource(
-                            R.string.settings_partner_block_body,
-                            block.partnerName,
-                        ),
-                        checked = block.blocked,
-                        enabled = !block.saving,
-                        onCheckedChange = onPartnerBlockChange,
-                        warning = if (block.saveFailed) {
-                            stringResource(R.string.settings_partner_block_failed)
-                        } else {
-                            null
-                        },
-                    )
-                }
 
                 RowDivider()
                 ToggleRow(

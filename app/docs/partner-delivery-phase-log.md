@@ -1264,7 +1264,7 @@ the limit of the hardware actually present (two Transsion X6532, API 34); every 
 | `partnerDeviceLiveness` | 1 doc (`.106`): `status = MONITORING_UNAVAILABLE`, `enforcementState = HEALTHY`, `lastHeartbeatCounter = 1` — contact stored with the alert flag off, matching plan §13.6 |
 | `config/device_liveness_incident` | absent (404) |
 | Cloud Logging | 0 ERROR entries in the last 8 h (`entries:list`) |
-| App Check quota (7 d) | 5 `serviceruntime.googleapis.com/quota/rate/net_usage` series; peak/day 184 debug-token exchanges, 75 / 59 integrity exchanges. No 70 % quota alert policy exists — see Gaps |
+| App Check quota (7 d) | 5 `serviceruntime.googleapis.com/quota/rate/net_usage` series; peak/day 184 debug-token exchanges, 75 / 59 integrity exchanges. A quota-named alert policy created 2026-11-12 was retargeted 2026-11-14 to DENY-verdict failures, because `verdict_count` is verification-side, not attestation exchanges — see `MyExodus Monitoring.md`, "App Check alert ruling (2026-11-14)" |
 
 ### Test tiers (final tree)
 

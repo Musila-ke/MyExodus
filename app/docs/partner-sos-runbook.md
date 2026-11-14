@@ -20,7 +20,7 @@ All commands run from the repo root. Nothing here is run automatically.
 | Repair sweep | `resumePendingNudges` — Cloud Scheduler job `firebase-schedule-resumePendingNudges-us-central1`, **every 5 minutes**, `SWEEP_LIMIT = 50`, `maxInstances 1` |
 | Nudge record | `pairings/{pairId}/nudges/{nudgeId}` |
 | Rate state | `pairings/{pairId}/nudgeState/{senderUid}` (cooldown + daily cap) |
-| Recipient block | `pairings/{pairId}/nudgeSettings/{recipientUid}` → `blocked` |
+| Recipient block (legacy) | `pairings/{pairId}/nudgeSettings/{recipientUid}` → `blocked`; honored by the server, but no client has written it since v34 (ADR #311) |
 | Device registry | `users/{uid}/push_installations/{installId}` (`token`, `pushEligible`, `platform`, `updatedAt`) |
 | Kill switch | `config/features.partnerSosEnabled` (server-only; rules deny client read and write) |
 | Client channel / tray entry | channel `partner_nudges_v3` (IMPORTANCE_HIGH), notification id `2005`, tag `partner_nudge` |

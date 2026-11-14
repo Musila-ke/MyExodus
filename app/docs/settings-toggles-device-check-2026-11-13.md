@@ -134,3 +134,12 @@ only with the platform grants. Strict Mode is deleted with it — it had nothing
 AAPM explanation from the deleted screen moved to the Protection pane's accessibility row. Block
 check-ins were not part of this ruling and keep their Settings row. The sections above remain the
 record of the pre-removal behavior and its v31 evidence.
+
+## Outcome addendum (owner ruling 2026-11-14, OPD #45, ADR #311)
+
+The Block check-ins row is **removed** in v34/1.1.32 (OPD #45: "those three toggles shouldn't be
+there"). The client surface is deleted: the Settings row, `NudgeSettingsViewModel`,
+`NudgeSettingsRepository`, the DI provider, the `FirestoreSchema` helpers, the three strings and
+their tests. The server-side suppression read stays deployed unchanged for pre-v34 clients that
+still carry the switch; no current client writes the settings document. The "Block check-ins"
+paragraph above is a record of the pre-v34 client.

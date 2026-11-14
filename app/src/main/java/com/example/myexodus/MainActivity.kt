@@ -128,7 +128,6 @@ import com.example.myexodus.ui.SecureSurfaces
 import com.example.myexodus.ui.home.NudgeInboxViewModel
 import com.example.myexodus.ui.settings.AccountViewModel
 import com.example.myexodus.ui.settings.BackupKeyViewModel
-import com.example.myexodus.ui.settings.NudgeSettingsViewModel
 import com.example.myexodus.ui.settings.UpdateViewModel
 import com.example.myexodus.ui.home.SosViewModel
 import com.example.myexodus.ui.partner.PairingCeremonyDeps
@@ -344,9 +343,6 @@ class MainActivity : FragmentActivity() {
      *  Home tab inside the shell. */
     private val nudgeInboxViewModel: NudgeInboxViewModel by viewModels()
 
-    /** SOS §8.19 (Step 11): the recipient's block switch on the Settings row. */
-    private val nudgeSettingsViewModel: NudgeSettingsViewModel by viewModels()
-
     /** Account plan §8.3 (R1.8): the optional-account pane's driver. */
     private val accountViewModel: AccountViewModel by viewModels()
 
@@ -366,10 +362,6 @@ class MainActivity : FragmentActivity() {
         // The unlock transition re-runs them (setContent's App Lock effect).
         if (appLockCoordinator.state.value.allowsVaultAccess) {
             streaksViewModel.refresh()
-            // SOS §8.19: the block switch's state is re-read at the same boundary (a pair
-            // change or a write from elsewhere lands the fresh value on the way back to
-            // Settings).
-            nudgeSettingsViewModel.refresh()
         }
         // §8.2: enrollment changes cannot invalidate the key itself (time-bound keys sit
         // outside setInvalidatedByBiometricEnrollment's scope — android-36 javadoc), so the
@@ -592,7 +584,6 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(appLockState) {
                 if (appLockState != AppLockState.UNLOCKED) return@LaunchedEffect
                 streaksViewModel.refresh()
-                nudgeSettingsViewModel.refresh()
                 refreshWebsiteLimitTunnel()
             }
             MyExodusTheme(darkTheme = rememberDarkTheme(themeMode)) {
@@ -795,7 +786,6 @@ class MainActivity : FragmentActivity() {
                         insights = insightsViewModel,
                         sos = sosViewModel,
                         nudgeInbox = nudgeInboxViewModel,
-                        nudgeSettings = nudgeSettingsViewModel,
                         account = accountViewModel,
                         backupKey = backupKeyViewModel,
                         update = updateViewModel,

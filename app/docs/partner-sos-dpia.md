@@ -16,8 +16,11 @@ sender device ──callable (auth + App Check)──► Firestore (pairings/{pa
         │ accepted (no read state)                           ▼
 sender device ◄──── nothing further              FCM (Google) ──► recipient device
                                                                       │
-recipient device ──ack mutation (ackedAt) / block switch (nudgeSettings)──► Firestore
+recipient device ──ack mutation (ackedAt)──► Firestore
 ```
+
+The recipient-side block switch was removed in v34 (OPD #45, ADR #311); the server suppression
+path remains deployed for pre-v34 clients, which can still write the legacy document.
 
 Two devices hold the pair CEK; the envelope is decrypted only on the recipient device. The server stores and forwards ciphertext.
 
@@ -31,7 +34,7 @@ Two devices hold the pair CEK; the envelope is decrypted only on the recipient d
 | `status`, `suppressedAt`, `ackedAt`, `terminalAt` | nudge doc | suppression-before-send; ack exactly-once; recovery | 7 days |
 | `pushAttempts`, `lastPushAtMs`, `targetDeviceCount`, `sentDeviceCount`, `lastPushErrorCode` | nudge doc + queue doc | at-least-once dispatch lease, backoff, dead-lettering | 7 days |
 | rate state (`dayKey`, `dayCount`, `lastAcceptedAtMs`, `lastNudgeId`) | `nudgeState` | abuse caps (per-partner cooldown, daily cap) | overwritten per send; deleted with pair |
-| block state (`blocked`, `updatedAt`) | `nudgeSettings` | recipient's own control (§8.19) | until changed |
+| block state (`blocked`, `updatedAt`) | `nudgeSettings` | legacy recipient control (§8.19); writable only by pre-v34 clients since ADR #311 | until changed; deleted with pair/account |
 | `pushEligible` | push installation registry | deliverability routing | registry lifetime (pre-existing) |
 | FCM payload metadata | Google FCM | transport (data-only wake, no content copy in the payload besides nudge id + type) | per Google FCM policy |
 | operational logs (short hashes only — never uid/pairId/nudgeId/envelope in clear) | Cloud Logging | debugging, monitoring | 30 days |
@@ -40,7 +43,7 @@ Two devices hold the pair CEK; the envelope is decrypted only on the recipient d
 
 ## 4. Lawful basis and proportionality
 
-- **Basis (draft view):** the recipient's and sender's **consent and voluntary pairing** — the feature is opt-in per nudge, partner pairing is explicit and revocable (unpair), the recipient can block at any time, and the sender can choose never to use it. The nudge is an expressive act by the sender, addressed to a person they chose.
+- **Basis (draft view):** the recipient's and sender's **consent and voluntary pairing** — the feature is opt-in per nudge, partner pairing is explicit and revocable (unpair), and the sender can choose never to use it. The nudge is an expressive act by the sender, addressed to a person they chose.
 - **Implication of recovery context:** the existence of a nudge implies an accountability relationship around behavior change. The metadata does not name the addiction domain, but the context is inferable to someone with server access (ADR #133 honest limit (b)). Minimization keeps the exposure to metadata; content confidentiality is cryptographic.
 - **Proportionality:** every server-visible field is load-bearing for delivery, abuse resistance, or recovery — enumerated in ADR #133; nothing analytical, nothing for profiling, nothing sold or shared beyond the FCM transport.
 
@@ -52,15 +55,15 @@ Two devices hold the pair CEK; the envelope is decrypted only on the recipient d
 | Server operator infers relationship/context from metadata | Low | Medium | Metadata-only by design; retention 7 days; ADR #133 records and ratifies the exposure |
 | Cross-border processing (FCM/Google, non-Kenya servers) | Certain | Low–Medium | Disclosed in this DPIA + notice; data-only payloads minimized; no content |
 | Notification content visible on a locked screen | Low | Medium | Channel `VISIBILITY_PRIVATE`; in-app card only (no content in tray beyond generic copy — fixed generic text by design) |
-| Nudge used to harass | Medium | Medium | Per-partner cooldown + daily cap server-side; recipient block switch suppresses not-yet-sent nudges; X / acknowledge paths; report-free by design (unpair is the exit) |
+| Nudge used to harass | Medium | Medium | Per-partner cooldown + daily cap server-side; X / acknowledge paths; unpair is the exit; the recipient block switch was removed in v34 (server suppression stays for pre-v34 clients) |
 | Device compromise (recipient's own device) | Low | Medium | App-level encryption at rest (SQLCipher), OS keystore binding — pre-existing app posture |
 | Log leakage | Low | Medium | Hash-only log discipline (§9.4), grep-verified; 30-day retention |
 
 ## 6. Data subject rights (as implemented)
 
-- **Access / portability:** the in-app data (habit, sessions, partner activity) is user-visible; SOS metadata is minimal and behaviorally visible (sent/received nudges, block state).
-- **Erasure:** unpair shreds the pair keys (rendering stored ciphertext undecryptable) and the SOS documents age out via 7-day TTL; the block switch is user-controlled at all times.
-- **Objection/withdrawal:** block incoming nudges (one switch); stop sending (never tap); exit entirely (unpair / app uninstall).
+- **Access / portability:** the in-app data (habit, sessions, partner activity) is user-visible; SOS metadata is minimal and behaviorally visible (sent/received nudges).
+- **Erasure:** unpair shreds the pair keys (rendering stored ciphertext undecryptable) and the SOS documents age out via 7-day TTL; account deletion also removes any legacy block document.
+- **Objection/withdrawal:** stop sending (never tap); exit entirely (unpair / app uninstall). The recipient-side block switch no longer ships (v34, ADR #311).
 - **No automated decision-making** about users; rate limits are mechanical abuse caps.
 
 ## 7. Retention schedule (live)

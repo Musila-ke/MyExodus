@@ -119,7 +119,6 @@ import com.example.myexodus.ui.recovery.UrgeLogSheet
 import com.example.myexodus.ui.rules.RulesScreen
 import com.example.myexodus.ui.settings.AccountViewModel
 import com.example.myexodus.ui.settings.BackupKeyViewModel
-import com.example.myexodus.ui.settings.NudgeSettingsViewModel
 import com.example.myexodus.ui.settings.SettingsScreen
 import com.example.myexodus.ui.settings.UpdateAvailablePrompt
 import com.example.myexodus.ui.settings.UpdateNoticeDialog
@@ -191,8 +190,6 @@ fun AppShell(
     sos: SosViewModel,
     /** SOS §8.16 (Step 9): the recipient inbox — listener follows the Home surface. */
     nudgeInbox: NudgeInboxViewModel,
-    /** SOS §8.19 (Step 11): the recipient block switch behind the Settings row. */
-    nudgeSettings: NudgeSettingsViewModel,
     /** Account plan §8.3: the optional-account pane. */
     account: AccountViewModel,
     /** Account plan §7 Release 2 step 12: the ABK key-bundle pane. */
@@ -376,9 +373,6 @@ fun AppShell(
     LaunchedEffect(contentTab) {
         if (contentTab == 0) nudgeInbox.start() else nudgeInbox.stop()
     }
-
-    // SOS §8.19 (Step 11): the block switch's state — null hides the row (no live partner).
-    val partnerBlock by nudgeSettings.state.collectAsStateWithLifecycle()
 
     // Interception Escape Hatch lands here: the intent extra carries a NavKeys constant.
     LaunchedEffect(requestedTab) {
@@ -659,10 +653,6 @@ fun AppShell(
                         onReenable = onReenable,
                         appLockEnabled = appLockEnabled,
                         appLockController = appLockController,
-                        // SOS §8.19 (Step 11): the block switch's state + refresh/write paths.
-                        partnerBlock = partnerBlock,
-                        onPartnerBlockRefresh = nudgeSettings::refresh,
-                        onPartnerBlockChange = nudgeSettings::setBlocked,
                         modifier = contentModifier,
                     )
                 }

@@ -169,10 +169,15 @@
         </receiver>
 
         <!-- Plan revision 2026-11-06: DownloadManager's completion broadcast is the only
-            wake-up for a finished transfer; verification runs in an expedited worker. -->
+            wake-up for a finished transfer; verification runs in an expedited worker.
+            Exported because the sender (com.android.providers.downloads) is a different UID:
+            Android skipped a non-exported receiver with "Permission Denial" (AVD 2026-11-14 —
+            the transfer completed yet the attempt stayed DOWNLOADING forever). Only holders of
+            the provider's signature permission can target it. -->
         <receiver
             android:name=".update.UpdateDownloadReceiver"
-            android:exported="false">
+            android:exported="true"
+            android:permission="android.permission.SEND_DOWNLOAD_COMPLETED_INTENTS">
             <intent-filter>
                 <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
             </intent-filter>

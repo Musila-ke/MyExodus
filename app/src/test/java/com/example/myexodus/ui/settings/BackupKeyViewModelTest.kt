@@ -13,6 +13,7 @@ import com.example.myexodus.backup.BackupAutoStateStore
 import com.example.myexodus.backup.BackupCrypto
 import com.example.myexodus.backup.BackupKeyApi
 import com.example.myexodus.backup.BackupKeyBundle
+import com.example.myexodus.backup.BackupKeyFailure
 import com.example.myexodus.backup.BackupKeyManager
 import com.example.myexodus.backup.BackupKeyManager.Unlock
 import com.example.myexodus.backup.BackupPair
@@ -48,6 +49,14 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+
+private fun persistentIdentity() = AuthIdentity(
+    uid = "uid-fixture",
+    isAnonymous = false,
+    email = "member@example.com",
+    emailVerified = true,
+    providerIds = setOf("password"),
+)
 
 /**
  * Account plan §6.4/§6.5: Cancel is reachable only while the operation is working, and a
@@ -98,19 +107,15 @@ class BackupKeyViewModelTest {
     }
 
     private class FakeOperations : AuthOperations {
-        val identity = AuthIdentity(
-            uid = "uid-fixture",
-            isAnonymous = false,
-            email = "member@example.com",
-            emailVerified = true,
-            providerIds = setOf("password"),
-        )
+        var identity: AuthIdentity? = persistentIdentity()
+        var signInResult: AuthIdentity? = null
 
-        override fun currentIdentity(): AuthIdentity = identity
+        override fun currentIdentity(): AuthIdentity? = identity
         override fun observeIdentity(onChange: (AuthIdentity?) -> Unit): () -> Unit = {}
 
         override suspend fun createWithEmail(email: String, password: String) = error("unused")
-        override suspend fun signInWithEmail(email: String, password: String) = error("unused")
+        override suspend fun signInWithEmail(email: String, password: String): AuthIdentity =
+            signInResult ?: error("unused")
         override suspend fun linkWithEmail(email: String, password: String) = error("unused")
         override suspend fun signInWithGoogle(idToken: String) = error("unused")
         override suspend fun linkWithGoogle(idToken: String) = error("unused")
@@ -222,11 +227,12 @@ class BackupKeyViewModelTest {
         uploads: FakeUploads = FakeUploads(),
         restores: FakeRestores = FakeRestores(),
         marks: FakeMarks = FakeMarks(),
+        auth: AuthCoordinator = AuthCoordinator(FakeOperations()),
     ): BackupKeyViewModel {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val manager = BackupKeyManager(api, FakeRevisions(), BackupWordlists(context))
         val vm = BackupKeyViewModel(
-            manager, uploads, AuthCoordinator(FakeOperations()), restores, marks,
+            manager, uploads, auth, restores, marks,
             autoState = FakeAutoState(),
             deviceKey = BackupAbk.None,
             ioDispatcher = mainDispatcherRule.testDispatcher,
@@ -249,6 +255,26 @@ class BackupKeyViewModelTest {
             advanceUntilIdle()
             Thread.sleep(5)
         }
+    }
+
+    @Test
+    fun signInAfterAnAccountRequiredAnswer_reloadsTheStatusForTheAccount() = runTest {
+        val operations = FakeOperations().apply {
+            identity = null
+            signInResult = persistentIdentity()
+        }
+        val auth = AuthCoordinator(operations)
+        val api = FakeApi()
+        val vm = viewModel(api, auth = auth)
+        assertEquals(
+            BackupKeyViewModel.Status.Unavailable(BackupKeyFailure.PERSISTENT_ACCOUNT_REQUIRED),
+            vm.status.value,
+        )
+
+        auth.signInWithEmail("member@example.com", "password")
+        pumpUntil { vm.status.value !is BackupKeyViewModel.Status.Unavailable }
+
+        assertEquals(BackupKeyViewModel.Status.NotSetUp, vm.status.value)
     }
 
     @Test

@@ -728,6 +728,9 @@ pass as recorded in §15; only the owner-gated physical-device and API 26-29 leg
   `nudgeSettingsViewModel.refresh()` and `refreshWebsiteLimitTunnel()` on the transition to
   `AppLockState.UNLOCKED`, the first state that admits the stores. With App Lock DISABLED the
   resume reads still run unchanged (`allowsVaultAccess` is true).
+- **Note (2026-11-14, ADR #311):** the `nudgeSettingsViewModel` half of this fix is gone — the
+  recipient block switch was removed in v34. The `streaksViewModel` and tunnel refresh logic is
+  unchanged.
 - Evidence: full JVM suite green on the fixed tree (BUILD SUCCESSFUL 7m22s, exit 0).
   Device, emulator-5558 API 34 debug, App Lock on, PIN 1234: app cold-started behind the gate
   ("My Exodus is locked"), Unlock → system credential "Unlock My Exodus" → PIN →

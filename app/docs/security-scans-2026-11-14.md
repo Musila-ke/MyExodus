@@ -159,6 +159,22 @@ unchanged. Gates re-run on that tree: suite **2,840 tests / 0 failures / 0 error
 `:app:lintDebug` alone **"No issues found."** (exit 0), gitleaks staged **0 leaks**, opengrep
 repo rules on the changed backup code **0 findings**.
 
+## Final-wrap re-run (v36 / 1.1.34 tree, 2026-11-14 ~21:00 EAT)
+
+Re-ran at the final wrap after the v34-v36 change set (ADR #311 NudgeSettings removal, the
+`UpdateDownloadReceiver` export, and the manual-throttle forward-window fix):
+
+- **Opengrep, project rules** — repo-rooted scan (`opengrep scan --config
+  scripts/myexodus-opengrep-rules.yml .`, so gitignored and deleted files are excluded; the
+  tracked-file list form errors on deleted paths): **0 findings on 576 files**, 30 Kotlin parser
+  skips (same limitation as above, e.g. trailing commas before `->` in multi-condition `when`
+  branches — the code compiles green). Output: `/private/tmp/opengrep-custom-v36.json`.
+- **Gitleaks** — `git`: **221 commits / 20.69 MB, 0 leaks**; `dir`: **17.63 MB, 0 leaks**.
+- **Trivy, app lockfile** — **identical to the earlier run: 45 findings (41 HIGH, 4 CRITICAL),
+  no new findings**; the same configuration-scoped netty/bcprov rows and the one accepted shipped
+  guava CVE. Output: `/private/tmp/trivy-app-v36.json`.
+- **Trivy, Functions lockfile** — **0 HIGH/CRITICAL**. Output: `/private/tmp/trivy-functions-v36.json`.
+
 ## Honest limits
 
 - SonarQube analysis had no test classpath (unresolved-import warnings), so its rule coverage on
