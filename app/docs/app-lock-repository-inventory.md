@@ -802,3 +802,54 @@ pass as recorded in §15; only the owner-gated physical-device and API 26-29 leg
   intended trade-off.
 - BLOCKED (unchanged): biometric and physical-device release-build legs (owner), API 26-29
   tier (§12.2 release blocker).
+
+**Physical-device enrollment and lock cycle (X6532, Android 14) — 2026-11-14, task #149**
+
+Owner direction ("proceed and dont skip any task") opened the owner-attended physical leg on
+the release build v31/1.1.29 installed on the X6532. The owner entered their real device
+credential at every OS prompt; the app itself never saw credential input.
+
+- **Enrollment on hardware, both authorizations.** Window-manager focus logs show four
+  successive `BiometricPrompt` windows: 11:43:09.9 and 11:43:12.6 (the two enrollment
+  `authorize` calls — wrapping encryption, then the independent decrypt verification, plan
+  §8.4/§17), 11:43:15.4 (the zero-tap auto-prompt on arriving LOCKED after commit), and
+  11:43:34.5 (the auto-prompt after an activity relaunch). Each prompt was answered: the
+  second enrollment window can only appear after the first `authorize` returns Authorized
+  (2.7 s later) and the post-enroll/relaunch windows exist only once the state reaches
+  LOCKED. The app proceeded to Home with the migrated vault open. This is the §12.2 API 30+
+  strong-biometric mechanism and
+  the §17 "authorization of encryption during enrollment and separate decrypt verification"
+  criterion, on physical hardware.
+- **An earlier anomaly resolved as owner interaction, not a defect.** After a BACK sent while
+  the enrollment flow was mid-prompt, the Settings pane later read "On". The log evidence
+  shows all three prompts had already been authenticated by the owner before that BACK landed
+  on the unlocked app and finished it; enrollment committed fully. No cancel path can reach
+  the enabled status: `VaultMigration.enroll` only reaches `commitEnrollmentActive()`
+  (VaultMigration.kt:128) after both authorizations and every verification pass, and every
+  null/exception path rolls back to disabled.
+- **FLAG_SECURE.** Every enabled state is uncapturable (`screencap` 0 bytes): the credential
+  sheet, the enabled-and-unlocked Home, the Settings pane once enabled, the locked shell, and
+  the OS prompt. Pre-enable captures of the Off pane and the SETUP_REQUIRED shell succeeded
+  (73 KB / 88 KB), so the flag engages with the feature, not with the screen.
+- **Intent-first lock cycle on hardware.** "Lock now" in the pane → shell plus the OS prompt
+  with zero further taps (11:47:39 window). BACK-cancelling that prompt returned the concise
+  shell ("My Exodus is locked" / "Your data stays encrypted until you unlock." / one Unlock
+  action) with no automatic repeat (verified 2 s later, §8.8 held). The Unlock action
+  presents the OS prompt again, and the sheet offers "Use pattern" — the device-credential
+  fallback is present in the OS UI.
+- **No defects observed.** No `FATAL EXCEPTION` or app ANR in any log buffer across the pass.
+- **State at hand-back.** App Lock is enabled and LOCKED on the X6532. After the final
+  Unlock-button prompt was dismissed, the BACK propagated to the activity and closed it; the
+  durable state is LOCKED, so the next launch presents the lock and its auto-prompt. The
+  owner's device credential is required to reopen or to turn the feature off.
+- **Still owner-attended (BLOCKED, not dropped).** (1) Authenticating by choosing "Use
+  pattern" — the device-credential side of §12.2's "both mechanisms" — at the enrollment or
+  unlock prompt. (2) Screen-off/keyguard auto-prompt and the dimmed-prompt observation; the
+  power button is the owner's, and injected sleep is forbidden. (3) Turn off App Lock with
+  the owner credential. (4) Biometric-enrollment invalidation and OS lockout recovery.
+  (5) TalkBack and rotation-during-prompt (§12.2). (6) The API 26-29 physical tier remains an
+  unresolved release blocker — no such device exists on hand.
+- **Honest limit.** The release APK's prefs are unreadable without root, so the migration
+  journal value (`active_pending_first_unlock` vs `first_unlock_verified`) is inferred from
+  behavior (the post-enrollment unlock rendered the migrated vault, and a later cold launch
+  still presented LOCKED), not read directly.
