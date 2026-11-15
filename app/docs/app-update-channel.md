@@ -44,7 +44,7 @@ https://github.com/<UPDATE_RELEASE_REPOSITORY>/releases/latest/download/update-m
 That `latest` link is discovery only. APK downloads always use the immutable version-pinned URL
 carried inside the signed policy.
 
-**Live status, 2026-11-14:** the channel is live at
+**Live status, 2026-11-16:** the channel is live at
 `https://github.com/Musila-ke/MyExodus-Releases`. Release immutability is enabled. All
 artifacts are signed with the release identity (certificate SHA-256
 `8f88188070952dde4c490a01ce8aa0407e9172ee4bbc035693ea795ab598854b`). Published:
@@ -86,13 +86,27 @@ artifacts are signed with the release identity (certificate SHA-256
   `259c981b82c34ea193e5fb4b50ba12c49ddb9aa86e8114838c389bd95d546fc1`), the 1.1.35 build.
   Carries ADR #312: the Pairing page shows the same server-derived partner connection verdict
   as the hub instead of promising routine delivery while the partner's phone is silent.
-- `policy-000014`, the latest release: signed `OFFER` of versionCode 37 (`1.1.35`) at 100
+- `policy-000014`: signed `OFFER` of versionCode 37 (`1.1.35`) at 100
   percent, cohort salt `8687e498e832465e4dbdd47c2e3751a1`. Anonymous latest manifest
   SHA-256 `e7eb2454eb15facb33c59f8cf29c470c917d83f4aadbbfa0ece1a461ecb40d62`, byte-identical
   to the signed envelope; both asset digests match. Both handsets already ran 1.1.35 by
   direct `install -r` when this policy was published, so an in-app replacement *by* 1.1.35
   was not exercised — the publication is verified at the manifest and asset-digest level, and
   the in-app path itself is proven by the v34→v36 leg above.
+- `artifact-v40` (`app-release.apk`, 39,251,849 bytes, SHA-256
+  `219c6ea0387c455dac08ab341eb526922b39a15ff15c7e0635e150706bde7b10`), the 1.1.38 build.
+  Carries the identity-crossed partner-delivery fix (receiver authorization follows the device
+  registration), the guest-transition callables, ADR #313 (sign-out announces an
+  accountability pause; the offline push unregister is bounded so a sign-out cannot hang),
+  the partner paused-state card, and the staged-activity feed rows.
+- `policy-000015`, the latest release: signed `OFFER` of versionCode 40 (`1.1.38`) at 100
+  percent, cohort salt `62ac06df3dfd87557e4dc6a2f4404fe1`. Anonymous latest manifest
+  SHA-256 `10ca00309d53eb37a997fcc708ecc020bbac9d8bd39edf846034c278764ba6d8`, byte-identical
+  to the signed envelope; the anonymous APK download from the version-pinned URL matched
+  exactly (39,251,849 bytes, signed digest). CDN lag was observed live: the previous policy
+  was served for about two minutes before `/releases/latest/download/` switched. The X6532
+  already ran 1.1.38 by direct `install -r` at publication, so an in-app replacement *by*
+  1.1.38 was not exercised; the in-app path is proven by the v34→v36 physical leg above.
 
 The rollout goes straight to 100 percent because the tester base is the owner and one partner:
 the 5 to 25 to 100 progression has not been rehearsed and is not claimed.
@@ -818,6 +832,29 @@ v31, live channel, 2026-11-13):**
   real check and rewrote the line to "0 minutes ago", proving `manualCheckThrottled`'s
   forward-window behavior on hardware.
 - `accelerometer_rotation=0` verified after the injected input (`scripts/rotation-guard.sh`).
+
+**PASSED (publication of v40, 2026-11-16):**
+
+- The release APK from the final v40 tree (`versionCode=40`, `versionName=1.1.38`, `minSdk
+  26`, `targetSdk 36`, 39,251,849 bytes, SHA-256
+  `219c6ea0387c455dac08ab341eb526922b39a15ff15c7e0635e150706bde7b10`) was signed elsewhere in
+  this wrap by the release identity and installed on the X6532 by `install -r`.
+- `artifact-v40` was published as an immutable prerelease with `app-release.apk`; the GitHub
+  asset digest equals the local SHA-256.
+- `policy-000015` (sequence 15, versionCode 40, rollout 100, cohort salt
+  `62ac06df3dfd87557e4dc6a2f4404fe1`) was signed with the production key and published as
+  the latest non-prerelease. Publisher state after publication:
+  `{"highestPolicySequence": 15, "highestVersionCode": 40}`.
+- The live `/releases/latest/download/update-manifest.json` decoded anonymously to
+  `policySequence 15`, `OFFER`, versionCode 40 (`1.1.38`), rollout 100, the pinned `apkUrl`,
+  and the exact size and SHA-256 above; the downloaded envelope is byte-identical to the
+  locally signed one (SHA-256
+  `10ca00309d53eb37a997fcc708ecc020bbac9d8bd39edf846034c278764ba6d8`). CDN lag was observed
+  live: the previous policy envelope was served for about two minutes before the `latest`
+  mapping switched.
+- The version-pinned APK URL downloaded anonymously with the exact size and signed digest.
+- The X6532 already ran 1.1.38 by direct install at publication, so an in-app replacement
+  *by* 1.1.38 was not exercised; the in-app path is proven by the v34→v36 physical leg above.
 
 **BLOCKED (owner-gated or hardware):**
 
