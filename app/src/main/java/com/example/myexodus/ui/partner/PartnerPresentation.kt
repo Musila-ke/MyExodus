@@ -6,6 +6,7 @@ import com.example.myexodus.accountability.serialization.RuleIdentity
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.accountability.serialization.MonitoringCapability
+import com.example.myexodus.data.db.entity.PartnerActivityAlert
 import com.example.myexodus.data.db.entity.PartnerAttemptAlert
 import com.example.myexodus.data.db.entity.PartnerProtectionGap
 import com.example.myexodus.data.db.entity.PartnerRuleChange
@@ -141,11 +142,13 @@ sealed interface PartnerAlert {
 }
 
 /** The consent revokes this build can name; an unknown wire kind (a newer sender) is dropped
- *  rather than rendered as a wrong switch. */
+ *  rather than rendered as a wrong switch. [accountabilityPaused] is not a revoke: it is the
+ *  owner's account signing out, announced at the moment delivery stops. */
 enum class SharingChange(val wire: String) {
     STREAK_STOPPED(EventPayload.TYPE_STREAK_SHARING_STOPPED),
     CHECKINS_STOPPED(EventPayload.TYPE_CHECKINS_SHARING_STOPPED),
     AVAILABILITY_STOPPED(EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED),
+    ACCOUNTABILITY_PAUSED(EventPayload.TYPE_ACCOUNTABILITY_PAUSED),
     ;
 
     companion object {
@@ -158,6 +161,15 @@ fun sharingAlert(row: PartnerSharingAlert): PartnerAlert? =
     SharingChange.fromWire(row.kind)?.let {
         PartnerAlert.SharingChanged(it, row.occurredAtMs, row.label)
     }
+
+/**
+ * Owner ruling 2026-11-15 (#246): while the newest thing the partner has heard is the
+ * sender's sign-out pause, the dashboard says "paused" outright — an aging timestamp alone
+ * reads as ordinary silence. Any later received event clears it, so no resume event is
+ * needed; the paused state is derived here, never persisted.
+ */
+fun stillPausedSince(pauseAtMillis: Long?, newestAlertAtMillis: Long?): Long? =
+    pauseAtMillis?.takeIf { newestAlertAtMillis == null || it >= newestAlertAtMillis }
 
 /** A stored protection-gap row as a feed entry; an unknown grant token (a newer sender's
  *  capability this build cannot name) is dropped rather than rendered as a wrong one. */
@@ -178,6 +190,17 @@ fun ruleChangeAlert(row: PartnerRuleChange): PartnerAlert? =
 fun attemptAlert(row: PartnerAttemptAlert): PartnerAlert? =
     (parseActivityText(row.text, row.occurredAtMs) as? PartnerAlert.AppActivity)
         ?.copy(appLabel = row.appLabel)
+
+/** A stored staged relapse/milestone row as a feed entry — the same shapes `alertOf` renders
+ *  from a legacy chain row, so both transports read identically. An unknown kind (a newer
+ *  sender) is dropped rather than rendered as a wrong event. */
+fun receivedActivityAlert(row: PartnerActivityAlert): PartnerAlert? = when (row.kind) {
+    EventPayload.TYPE_RELAPSE_RECORDED ->
+        PartnerAlert.Relapse(row.habitLabel, row.endedDays, row.occurredAtMs)
+    EventPayload.TYPE_MILESTONE_REACHED ->
+        PartnerAlert.Milestone(row.habitLabel, row.milestoneDay, row.occurredAtMs)
+    else -> null
+}
 
 /**
  * The activity texts the app writes: "blocked:<pkg>" / "override:<pkg>" (§6) and
@@ -229,6 +252,10 @@ fun alertOf(payload: EventPayload, atEpochMillis: Long): PartnerAlert? = when (p
         PartnerAlert.SharingChanged(SharingChange.CHECKINS_STOPPED, atEpochMillis)
     EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED ->
         PartnerAlert.SharingChanged(SharingChange.AVAILABILITY_STOPPED, atEpochMillis)
+    // Owner ruling 2026-11-15: the pause is sent at sign-out, before credential teardown, so
+    // the partner hears "paused" instead of inferring it from silence.
+    EventPayload.TYPE_ACCOUNTABILITY_PAUSED ->
+        PartnerAlert.SharingChanged(SharingChange.ACCOUNTABILITY_PAUSED, atEpochMillis)
     else -> parseActivityText(payload.text, atEpochMillis)?.let {
         if (it is PartnerAlert.AppActivity) it.copy(appLabel = payload.appLabel) else it
     }

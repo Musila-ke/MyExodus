@@ -127,7 +127,7 @@ class PartnerSyncCoordinatorTest {
     private val uids = mutableMapOf<String, Pair<String, String>>()
 
     /** OPD #43: the pair document reports the partner's account deleted. */
-    private var partnerAccountDeleted = false
+    private var partnerTerminated = false
 
     /** OPD #43: pairs whose account-deleted purge ran, and whether the shred succeeded. */
     private val purgedPairs = mutableListOf<String>()
@@ -175,9 +175,9 @@ class PartnerSyncCoordinatorTest {
      *  pair document's termination reason — the pass must erase this device's copy and touch
      *  no remote step the terminated pair would refuse. */
     @Test
-    fun partnerAccountDeleted_purgesLocallyWithoutRemoteSteps() = runTest {
+    fun partnerTerminated_purgesLocallyWithoutRemoteSteps() = runTest {
         enroll()
-        partnerAccountDeleted = true
+        partnerTerminated = true
 
         val report = coordinator.syncOnce()
 
@@ -192,9 +192,9 @@ class PartnerSyncCoordinatorTest {
     }
 
     @Test
-    fun partnerAccountDeleted_failedPurge_reportsNoAdvance() = runTest {
+    fun partnerTerminated_failedPurge_reportsNoAdvance() = runTest {
         enroll()
-        partnerAccountDeleted = true
+        partnerTerminated = true
         purgeSucceeds = false
 
         val report = coordinator.syncOnce()
@@ -208,12 +208,12 @@ class PartnerSyncCoordinatorTest {
      *  partner's pinned message. The pre-loop sweep saw the pair as enrolled; the purge must
      *  prune the pair's content rows itself, not leave them for the next pass. */
     @Test
-    fun partnerAccountDeleted_prunesThePairsActivityInTheSamePass() = runTest {
+    fun partnerTerminated_prunesThePairsActivityInTheSamePass() = runTest {
         enroll()
         val store = factory.open()!!
         store.partnerActivityDao().pinMessage(pairId, "Composer leg 2026-11-05.", ENROLLMENT_AT + 1)
         assertNotNull(store.partnerActivityDao().projection(pairId))
-        partnerAccountDeleted = true
+        partnerTerminated = true
 
         coordinator.syncOnce()
 
@@ -1683,9 +1683,9 @@ class PartnerSyncCoordinatorTest {
         chain = store,
         signer = signer,
         resolveUids = { pId ->
-            uids[pId]?.let { PairUidResolver.Resolved(it.first, it.second, partnerAccountDeleted) }
+            uids[pId]?.let { PairUidResolver.Resolved(it.first, it.second, partnerTerminated) }
         },
-        purgeAccountDeletedPair = { pId ->
+        handleTerminatedPair = { pId ->
             purgedPairs += pId
             // The real seam shreds the pair; deleting the enrollment models the state the
             // cleanup steps downstream observe.

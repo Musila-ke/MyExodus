@@ -55,7 +55,7 @@ merge into this phone only, or decide later — with a hard stop on rollback/equ
 | Names | **Self-chosen labels only.** My own name = `user_profile.name` (default "You"), sent as my pairing label; the partner's name = a label **I typed**, stored on-device in `EnrollmentRecord.partnerLabel` (renamable via `updatePartnerLabel`). **The server stores no names.** | `RulesRepository.updateProfileName`, `PairingFlow.initiate/join(myLabel)`, `PartnerNotifications.displayNameOf` |
 | Local profile | Fixed row `user_profile` id `"local"`, name `"You"`, email `""` — a placeholder, never linked to the uid; also carries the permission flags | `blocking/RulesRepository.kt:148-177`, `data/db/entity/UserProfile.kt` |
 | Behavioral data | Rules, usage, streaks, enrollments are **device-local** (Room/SQLCipher). Only consented partner events travel (signed relay + DMS snapshots) | `AppRulesStoreFactory.kt`, partner sync |
-| Deletion | Account-level deletion exists (ADR #244) and now reaches the partner's copy: the server's `terminationReason` on the pair document drives the partner device to shred and show Ended (ADR #280, OPD #43). Pair-level bilateral deletion remains the in-app unpair path | `DeletionCoordinator`, `BilateralDeletion.kt`, `PartnerSyncCoordinator` |
+| Deletion | Account-level deletion exists (ADR #244) and reaches the partner's copy: **any** server-side termination of a pair a member still holds (account deletion, guest identity switch, or a plain end) drives that device to shred locally, show Ended, and post the named "ended the partnership" notification (ADR #280 + 2026-11-15 amendment, OPD #43; `isServerTermination(status) = status == "terminated"`, reasons diagnostic only). Pair-level bilateral deletion remains the in-app unpair path | `DeletionCoordinator`, `BilateralDeletion.handleServerTermination`, `PartnerSyncCoordinator` |
 
 Consequences that follow directly: identity is device-bound, not person-bound; a reinstall is an
 identity loss; the partner cannot verify who the uid belongs to beyond the pairing transcript.
@@ -142,6 +142,16 @@ with a reason. "Where" names the primary surfaces, not every call site.
   unsent outbox events and the last known backup revision before the destructive button.
   Sign-out deletes no key; only this removal action deletes the encrypted database and its
   UID-scoped Keystore alias.
+  **Partnership pause on sign-out IMPLEMENTED (2026-11-15, ADR #313):** an accepted sign-out
+  first records and drains one signed `accountability_paused` event through the normal partner
+  pipeline while the credentials are still live (nothing can be delivered after sign-out —
+  the drain's `ownerUid()` is null and the ingest backend rejects unauthenticated calls). If the
+  pause cannot be confirmed within the bounded drain, the row is terminally retired and the
+  sign-out is refused with `PARTNER_NOT_NOTIFIED`: the pane shows an error card with retry and
+  the session stays signed in. Deletion and local removal call `auth.signOut()` with the
+  default callback and are unaffected. A pause parked for a missing partner key
+  (`WAITING_FOR_RECIPIENT_KEY`) is retired before signing out: there is nobody to tell now, and
+  a row left behind would deliver "paused" on a later sign-in while the owner is back.
 - **A4. Account switching.** Recommended: single account per install; switching wipes local data and
   re-syncs from the account. Multi-account profiles would require a Room schema change and are
   rejected unless a real need appears.
@@ -305,10 +315,13 @@ with a reason. "Where" names the primary surfaces, not every call site.
   atomically by a fresh QUEUED job, and a `PENDING_DELETION` profile with no job gets the missing
   job — both alert through `auth_profile_mismatches`. Device-proven on the disposable API-37 AVD (three COMPLETED jobs,
   client Working → sign-out → relaunch → purge); every identity-destructive leg stays off the
-  X6532 by owner ruling. The two-phone partner leg now exists: a terminated pair carrying the
-  account-deletion worker's `terminationReason` drives the partner device to shred locally and
-  show Ended on its next sync pass (ADR #280, OPD #43), device-proven 2026-11-08 on the X6532C
-  against a live `ACCOUNT_DELETED` pair. Honest limits: the 30-day tombstone is retained
+  X6532 by owner ruling. The two-phone partner leg now exists: any pair terminated server-side
+  (account deletion, guest transition, or plain end) drives the surviving device to shred
+  locally, show Ended, and post the named high-importance "ended the partnership" notification
+  on its next sync pass (ADR #280 + 2026-11-15 amendment, OPD #43) — device-proven 2026-11-08
+  on the X6532C (`ACCOUNT_DELETED`) and 2026-11-15 on the local two-AVD rig
+  (`GUEST_ACCOUNT_TRANSITION`, full notification text + Ended card + Home prune captured).
+  Honest limits: the 30-day tombstone is retained
   metadata by design, a callable cold start can outlive the client's 60 s window (the job, not
   the client, is authoritative), and the partner purge covers the pair's cached content, not a
   partner that never syncs again.

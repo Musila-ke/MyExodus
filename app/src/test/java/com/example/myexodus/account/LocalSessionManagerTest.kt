@@ -2,7 +2,9 @@ package com.example.myexodus.account
 
 import android.app.Application
 import com.example.myexodus.data.db.LocalDatabaseMigration
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -114,12 +116,17 @@ class LocalSessionManagerTest {
         }
     }
 
-    private class RecordingPush(private val fail: Boolean = false) : PushMapping {
+    private class RecordingPush(
+        private val fail: Boolean = false,
+        private val hang: Boolean = false,
+    ) : PushMapping {
         val unregistered = mutableListOf<String>()
 
         override suspend fun unregister(uid: String) {
             unregistered += uid
             if (fail) error("offline")
+            // Offline, the Firestore delete's Task never completes.
+            if (hang) awaitCancellation()
         }
     }
 
@@ -170,6 +177,7 @@ class LocalSessionManagerTest {
         purged: Boolean = true,
         flushOk: Boolean = true,
         pushFails: Boolean = false,
+        pushHangs: Boolean = false,
     ) {
         val operations = FakeOperations(initial)
         val store = InMemoryStore(
@@ -179,7 +187,7 @@ class LocalSessionManagerTest {
             purged = purged,
         )
         val scopes = RecordingScopes(scopeUid)
-        val push = RecordingPush(fail = pushFails)
+        val push = RecordingPush(fail = pushFails, hang = pushHangs)
         val work = RecordingWork()
         val relauncher = RecordingRelauncher()
         val telemetry = RecordingTelemetry()
@@ -317,6 +325,18 @@ class LocalSessionManagerTest {
         assertEquals(1, h.relauncher.relaunched)
         assertTrue(h.scopes.switches.isEmpty())
         assertTrue("the retained database stays the signed-out account's", h.store.signedOutValue)
+    }
+
+    @Test
+    fun beginTransition_doesNotHangWhenThePushUnregisterNeverCompletes() = runTest {
+        // Offline the Firestore delete never acks; a sign-out must stay bounded and retain it.
+        val h = Harness(member, scopeUid = "member-1", pushHangs = true)
+        h.manager.onAppStart(this)
+
+        assertEquals(TransitionStart.Started, h.manager.beginTransition(signOut = true))
+        assertEquals(listOf("member-1"), h.push.unregistered)
+        assertEquals("member-1", h.store.pendingUnregisterValue)
+        h.manager.abortTransition()
     }
 
     @Test

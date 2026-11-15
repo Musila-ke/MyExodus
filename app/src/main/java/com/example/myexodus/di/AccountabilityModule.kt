@@ -33,6 +33,7 @@ import com.example.myexodus.accountability.state.ChainEventDao
 import com.example.myexodus.accountability.state.ChainStateStore
 import com.example.myexodus.accountability.state.LocalWipeDetector
 import com.example.myexodus.accountability.state.SessionKeyManager
+import com.example.myexodus.accountability.state.UnpairState
 import com.example.myexodus.accountability.sync.AccountCallables
 import com.example.myexodus.accountability.sync.AppCheckInstaller
 import com.example.myexodus.accountability.sync.ChainRepairCoordinator
@@ -823,6 +824,13 @@ object AccountabilityModule {
                     ?.recent(pairId, System.currentTimeMillis(), RULE_FEED_LIMIT)
                     ?: emptyList()
             },
+            // Rig finding 2026-11-15: delivered relapses/milestones write no chain rows —
+            // these are their "Recent activity" rows and the per-day chart's source.
+            activityAlerts = { pairId ->
+                storeFactory.open()?.partnerActivityAlertDao()
+                    ?.recent(pairId, System.currentTimeMillis(), RULE_FEED_LIMIT)
+                    ?: emptyList()
+            },
             decoderFor = { enrollment ->
                 val cek = cekDerivation.deriveCek(
                     enrollment.pairId,
@@ -863,6 +871,7 @@ object AccountabilityModule {
     @Provides @Singleton
     fun providePartnerSyncCoordinator(
         @ApplicationContext context: Context,
+        db: AccountabilityDatabase,
         enrollmentDao: EnrollmentDao,
         storeFactory: AppRulesStoreFactory,
         creator: EventCreator,
@@ -894,7 +903,26 @@ object AccountabilityModule {
         repairPass = repair::repairPass,
         expireApprovals = approval::expireDue,
         resumeUnpairs = deletion::resumePending,
-        purgeAccountDeletedPair = deletion::handleAccountDeleted,
+        // Owner mandate 2026-11-15: a pair the server ended (partner deleted their account,
+        // switched a guest identity, or ended the partnership) must tell this user immediately
+        // instead of silently going quiet. Name first (the shred destroys the enrollment), then
+        // the shred, then the post — a notification failure never flips the shred result. A
+        // REQUESTER journal row means this user ended it themselves and already has the card.
+        handleTerminatedPair = { pairId ->
+            val name = runCatching { enrollmentDao.getByPairId(pairId)?.let(::displayNameOf) }.getOrNull()
+            val userInitiated = runCatching {
+                db.unpairStateDao().get(pairId)?.role == UnpairState.ROLE_REQUESTER
+            }.getOrDefault(false)
+            val shredded = deletion.handleServerTermination(pairId)
+            if (shredded && !userInitiated && name != null) {
+                runCatching {
+                    PartnerNotifications.notifyPartnershipEnded(
+                        context, pairId, name, System.currentTimeMillis(),
+                    )
+                }.onFailure { Log.w(TAG, "partnership-ended notification failed pairId=$pairId", it) }
+            }
+            shredded
+        },
         ruleChangeTransport = eventProducer::transport,
         stageEvent = eventProducer::stage,
         rotateKeys = { pairId, senderKeyId ->

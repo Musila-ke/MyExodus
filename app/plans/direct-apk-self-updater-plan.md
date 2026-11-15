@@ -1,5 +1,7 @@
 # MyExodus Direct-APK Self-Updater — Implementation Plan
 
+*Status (2026-11-15, plan-fidelity sweep): **✅ BUILT — the updater shipped and is device-proven (ADR #171; tasks #15–#28, emulator end-to-end leg #209, first physical in-app update #231). The implementation contract and release runbook are `app/docs/app-update-channel.md`; this file is the design record.***
+
 **Document status:** Build specification · **Version:** 1.1 · **Revised:** 2026-11-06  
 **Audience:** Android implementation agent, release engineer, QA engineer  
 **Distribution:** Direct APK only; no Google Play distribution, MDM, device-owner privileges, or custom update backend.

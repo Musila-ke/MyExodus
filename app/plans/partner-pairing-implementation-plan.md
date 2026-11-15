@@ -1,5 +1,7 @@
 # Partner Pairing — Implementation Specification (v2)
 
+*Status (2026-11-15, plan-fidelity sweep): **✅ BUILT — this is the spec of record.** Every §19 item carries its own DONE record (ADR #96–#101, #111, #121: typed-code pairing, server attestation, pairing rate limits/idempotency, ceremony UI, multi-partner roster and per-view switcher). Device legs are recorded in the §19.5 revisions. Source wins over this line if they ever disagree.*
+
 **Feature:** Out-of-band partner enrollment & device pairing (ũtethyo / MyExodus)
 **Scope of this document:** V1 — typed-code pairing only. Optical (QR/CameraX) pairing is explicitly out of scope for this build and is deferred to V1.1 (see §4 and §16).
 **Audience:** an engineer implementing this feature with no other context than this document.

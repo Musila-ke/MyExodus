@@ -7,6 +7,8 @@ import com.example.myexodus.BuildConfig
 import com.example.myexodus.account.AccountOperation
 import com.example.myexodus.account.AuthCoordinator
 import com.example.myexodus.account.AuthEvent
+import com.example.myexodus.account.AuthFailure
+import com.example.myexodus.account.AuthOperationException
 import com.example.myexodus.account.AuthState
 import com.example.myexodus.account.DeletionCoordinator
 import com.example.myexodus.account.DeletionCredential
@@ -25,21 +27,38 @@ import com.example.myexodus.account.RecoveryStage
 import com.example.myexodus.account.ScopeRecoveryImporter
 import com.example.myexodus.account.TransitionIntent
 import com.example.myexodus.account.TransitionStep
+import com.example.myexodus.accountability.delivery.PartnerDeliveryCoordinator
+import com.example.myexodus.accountability.delivery.PartnerEventKind
+import com.example.myexodus.accountability.delivery.PartnerEventRecorder
+import com.example.myexodus.accountability.delivery.PartnerRegistrationBlock
+import com.example.myexodus.accountability.delivery.PendingPartnerEvent
+import com.example.myexodus.accountability.delivery.ServiceEventOutbox
+import com.example.myexodus.accountability.serialization.EventPayload
+import com.example.myexodus.accountability.serialization.encodePayload
 import com.example.myexodus.accountability.sync.AccountCallables
 import com.google.firebase.functions.FirebaseFunctions
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.util.UUID
 import javax.inject.Inject
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** ADR #239: a retained scope this account never imported, offered as a one-time import. */
 data class RecoveryUiState(
     val offered: Boolean = false,
     val failure: RecoveryFailure? = null,
 )
+
+/** Owner ruling 2026-11-15 (#245): what the pane can say about the sign-out pause notice.
+ *  An unconfirmed pause never reaches [SENT] — it refuses the sign-out instead. */
+enum class PauseNotice { SENDING, SENT }
 
 /**
  * Release 1 (account plan §8.3): the Account pane's driver. Holds no identity state of its own —
@@ -57,10 +76,19 @@ class AccountViewModel @Inject constructor(
     private val sessions: LocalSessionManager,
     private val recoveryImporter: ScopeRecoveryImporter,
     private val deletion: DeletionCoordinator,
+    private val delivery: PartnerDeliveryCoordinator,
+    private val recorder: PartnerEventRecorder,
+    private val outbox: ServiceEventOutbox,
 ) : ViewModel() {
 
     val state: StateFlow<AuthState> = coordinator.state
     val events: Flow<AuthEvent> = coordinator.events
+
+    /** §8.3.1: partner-event registration is blocked; REAUTH_REQUIRED drives the prompt card. */
+    val deliveryBlock: StateFlow<PartnerRegistrationBlock?> = delivery.registrationBlock
+
+    /** Opens the existing reauth card; a completed reauth retries enrollment automatically. */
+    fun requireDeliveryReauth() = coordinator.requireReauth(AccountOperation.REAUTHENTICATE)
     val transition: StateFlow<GuestTransitionState> = guestTransition.state
     val importState: StateFlow<GuestImportState> = guestImport.state
 
@@ -139,6 +167,12 @@ class AccountViewModel @Inject constructor(
     /** Plan §8.7: the user explicitly chose to discard queued SDK writes, then retry. */
     fun discardPendingWritesAndRetry() {
         coordinator.approvePendingWriteDiscard()
+        val retry = lastAttempt
+        if (retry != null) retry() else dismissTransient()
+    }
+
+    /** Owner ruling 2026-11-15: replays the refused sign-out after the pause gets through. */
+    fun retryLastAttempt() {
         val retry = lastAttempt
         if (retry != null) retry() else dismissTransient()
     }
@@ -224,9 +258,76 @@ class AccountViewModel @Inject constructor(
         coordinator.reauthenticateWithGoogle(idToken)
     }
 
+    /** Owner ruling 2026-11-15: outlives the transition into SignedOut so the pane can say
+     *  whether the pause actually reached the partner. Null = nothing to announce. */
+    private val _pauseNotice = MutableStateFlow<PauseNotice?>(null)
+    val pauseNotice: StateFlow<PauseNotice?> = _pauseNotice.asStateFlow()
+
     fun signOut() {
         lastAttempt = { signOut() }
-        viewModelScope.launch { coordinator.signOut() }
+        _pauseNotice.value = null
+        // §8.7: runs after the transition was accepted and before the credentials leave, so a
+        // refused sign-out announces nothing.
+        viewModelScope.launch { coordinator.signOut { announceAccountabilityPause() } }
+    }
+
+    /**
+     * Owner ruling 2026-11-15 (#245): signing out must not end accountability in silence. One
+     * signed pause event goes through the same E2EE pipeline as every other partner event and
+     * is drained while the credentials still exist. The queue only moves under an active
+     * identity, so a row left behind could never deliver while signed out — and delivering it
+     * after a later sign-in would tell the partner "paused" when the owner is back. An
+     * unconfirmed pause is therefore retired and the sign-out is refused: the session stays
+     * signed in, accountability stays on, and the user retries once the network is back.
+     */
+    private suspend fun announceAccountabilityPause() {
+        // Pre-allocated so a cancellation mid-announce can still retire the row: a pause staged
+        // for a sign-out that never completed would later claim a pause that is not in effect.
+        val eventId = UUID.randomUUID().toString()
+        val payload = EventPayload(
+            type = EventPayload.TYPE_ACCOUNTABILITY_PAUSED,
+            text = "",
+            protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
+            schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,
+        )
+        val recorded = try {
+            recorder.record(
+                kind = PartnerEventKind.ACCOUNTABILITY_UPDATE,
+                sensitivePayload = encodePayload(payload),
+                requestedEventId = eventId,
+            )
+        } catch (e: CancellationException) {
+            retireUnconfirmedPause(eventId)
+            throw e
+        } as? PartnerEventRecorder.RecordResult.Recorded
+        // Nothing recorded: no account, no partner, or the outbox refused. A row parked for a
+        // recipient key must not survive the sign-out either — it would deliver "paused" the
+        // next time this account signs in, and no key exists to tell anybody now.
+        if (recorded == null) return
+        if (recorded.status != PendingPartnerEvent.STATUS_PENDING) {
+            retireUnconfirmedPause(recorded.eventId)
+            return
+        }
+        _pauseNotice.value = PauseNotice.SENDING
+        val delivered = try {
+            withTimeoutOrNull(PAUSE_DRAIN_TIMEOUT_MS) {
+                delivery.drainInProcess(allowRegistration = false)
+                outbox.event(recorded.eventId)?.status == PendingPartnerEvent.STATUS_ACKED
+            } ?: false
+        } catch (e: CancellationException) {
+            retireUnconfirmedPause(eventId)
+            throw e
+        }
+        if (!delivered) {
+            retireUnconfirmedPause(eventId)
+            _pauseNotice.value = null
+            throw AuthOperationException(AuthFailure.PARTNER_NOT_NOTIFIED)
+        }
+        _pauseNotice.value = PauseNotice.SENT
+    }
+
+    private suspend fun retireUnconfirmedPause(eventId: String) = withContext(NonCancellable) {
+        runCatching { outbox.rejectUnconfirmedPause(eventId, System.currentTimeMillis()) }
     }
 
     fun requireReauth(operation: AccountOperation) = coordinator.requireReauth(operation)
@@ -246,5 +347,10 @@ class AccountViewModel @Inject constructor(
             // profile call; with no journal this is a no-op.
             guestTransition.resumeFinalize()
         }
+    }
+
+    private companion object {
+        /** Bounded: sign-out keeps its own prompt teardown even on a dead network. */
+        const val PAUSE_DRAIN_TIMEOUT_MS = 8_000L
     }
 }

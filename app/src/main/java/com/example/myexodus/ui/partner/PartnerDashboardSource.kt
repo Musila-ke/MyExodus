@@ -5,6 +5,7 @@ import com.example.myexodus.accountability.enrollment.targetEnrollment
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.serialization.OutboxAgeBucket
+import com.example.myexodus.data.db.entity.PartnerActivityAlert
 import com.example.myexodus.data.db.entity.PartnerAttemptAlert
 import com.example.myexodus.data.db.entity.PartnerMonitoringSnapshot
 import com.example.myexodus.data.db.entity.PartnerProtectionGap
@@ -87,6 +88,9 @@ class PartnerDashboardSource(
     /** Owner ask 2026-11-13: sharing-switch revokes delivered on the staged transport — the
      *  notification used to be the only surface; this row is their feed/Rules source. */
     private val sharingAlerts: suspend (pairId: String) -> List<PartnerSharingAlert> = { emptyList() },
+    /** Rig finding 2026-11-15: relapses and milestones delivered on the staged transport —
+     *  those write no chain rows, so without these rows the feed and its chart lost them. */
+    private val activityAlerts: suspend (pairId: String) -> List<PartnerActivityAlert> = { emptyList() },
 ) {
 
     /**
@@ -137,17 +141,42 @@ class PartnerDashboardSource(
         val gapRows = runCatching { protectionGaps(enrollment.pairId) }.getOrElse { emptyList() }
         val attemptRows = runCatching { attemptAlerts(enrollment.pairId) }.getOrElse { emptyList() }
         val sharingRows = runCatching { sharingAlerts(enrollment.pairId) }.getOrElse { emptyList() }
+        val activityRows = runCatching { activityAlerts(enrollment.pairId) }.getOrElse { emptyList() }
         val receivedAlerts = rows.mapNotNull { row ->
             runCatching { decode(row.envelope) }
                 .getOrNull()
                 ?.let { alertOf(it, row.createdAtEpochMillis) }
-        }
+        } + activityRows.mapNotNull(::receivedActivityAlert)
+            // Same week window the legacy chain query applies to these kinds (receivedSince).
+            .filter { it.atEpochMillis >= nowMillis - WEEK_MILLIS }
         val ruleAlerts = ruleRows.mapNotNull(::ruleChangeAlert) +
             gapRows.mapNotNull(::protectionGapAlert) +
             attemptRows.mapNotNull(::attemptAlert) +
             sharingRows.mapNotNull(::sharingAlert)
         val alerts = receivedAlerts + ruleAlerts
             .filter { it.atEpochMillis >= nowMillis - WEEK_MILLIS }
+        val partnerActivity = runCatching { partnerActivity(enrollment.pairId) }.getOrNull()
+        // Owner ruling 2026-11-15 (#246): the partner's latest word was the sign-out pause and
+        // nothing has arrived since — the hub says "paused" outright. Derived from the stored
+        // rows (30-day retention, not the feed's week window: a pause must not decay back to an
+        // aging timestamp after seven days); any later event clears it, so no resume event exists.
+        val pausedSince = stillPausedSince(
+            sharingRows.filter { it.kind == EventPayload.TYPE_ACCOUNTABILITY_PAUSED }
+                .maxOfOrNull { it.occurredAtMs },
+            listOfNotNull(
+                alerts.maxOfOrNull { it.atEpochMillis },
+                sharingRows.maxOfOrNull { it.occurredAtMs },
+                activityRows.maxOfOrNull { it.occurredAtMs },
+                ruleRows.maxOfOrNull { it.occurredAtMinute * 60_000L },
+                gapRows.maxOfOrNull { it.occurredAtMs },
+                attemptRows.maxOfOrNull { it.occurredAtMs },
+                // The staged transport's activity projection: a delivered message or check-in
+                // writes no chain row and no alert row, so without these a stale pause outlived
+                // the partner's next word (rig 2026-11-15).
+                partnerActivity?.pinnedMessageAtEpochMillis,
+                partnerActivity?.lastEventOccurredAtEpochMillis,
+            ).maxOrNull(),
+        )
         val chainHead = head(enrollment.pairId, enrollment.partnerSigningKeyId)
         val approvalRows = runCatching { approvals(enrollment.pairId) }.getOrElse { emptyList() }
             .map {
@@ -193,6 +222,7 @@ class PartnerDashboardSource(
                 forked = chainHead?.forked ?: false,
             ),
             alerts = summarizeAlerts(alerts, startOfLocalDay(nowMillis, zone), zone),
+            accountabilityPausedSinceEpochMillis = pausedSince,
             // The dedicated rules page (owner mandate 2026-10-31: "an organized page listing
             // rules/batches") shows the full 30-day retention, not the feed's week preview.
             // Owner report 2026-11-10: a block or override is listed here too, not only in
@@ -203,7 +233,7 @@ class PartnerDashboardSource(
                 .sortedByDescending { it.atEpochMillis },
             sentMessageText = runCatching { latestSentMessage(enrollment.pairId) }.getOrNull(),
             approvals = approvalRows,
-            activity = runCatching { partnerActivity(enrollment.pairId) }.getOrNull(),
+            activity = partnerActivity,
             rateLimitedRecently = runCatching {
                 rejectionsSince(enrollment.pairId, nowMillis - REJECTION_WINDOW_MILLIS) > 0
             }.getOrDefault(false),
@@ -334,6 +364,10 @@ sealed interface PartnerDashboardUi {
         val pairingUnreachable: Boolean = false,
         /** §7 Step 7: the partner's device-monitoring report; null = nothing received yet. */
         val monitoring: PartnerMonitoringUi? = null,
+        /** Owner ruling 2026-11-15 (#246): when the partner's own device announced a sign-out
+         *  pause and no event has arrived since — the hub shows this instead of letting an
+         *  aging "last synced" line read as ordinary silence. Null = not paused. */
+        val accountabilityPausedSinceEpochMillis: Long? = null,
     ) : PartnerDashboardUi
 
     /**

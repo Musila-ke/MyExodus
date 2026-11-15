@@ -173,8 +173,15 @@ class AuthCoordinator @Inject constructor(
     /**
      * Firebase sign-out only. The encrypted local database is retained (plan §6.9); worker and
      * listener teardown belongs to LocalSessionManager.
+     *
+     * [beforeCredentialTeardown] runs while the credentials still exist and only after the
+     * transition was accepted — owner ruling 2026-11-15: the partner is told accountability
+     * paused, and a sign-out refused here never announces anything. An [AuthOperationException]
+     * from it refuses the sign-out (owner ruling 2026-11-15: the partner damn well gets told —
+     * an unconfirmed pause must not end accountability silently). Any other failure is
+     * swallowed: an unexpected announcement fault must not trap the user in the session.
      */
-    suspend fun signOut() {
+    suspend fun signOut(beforeCredentialTeardown: suspend () -> Unit = {}) {
         if (_state.value is AuthState.Authenticating) return
         _state.value = AuthState.Authenticating(AccountOperation.SIGN_OUT)
         try {
@@ -183,6 +190,18 @@ class AuthCoordinator @Inject constructor(
             // while the UID still owns them; the local database is retained, not deleted.
             if (base is AuthState.GuestActive || base is AuthState.PersistentActive) {
                 startTransition(signOut = true)
+            }
+            try {
+                beforeCredentialTeardown()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: AuthOperationException) {
+                // An announcement refusal is user-facing: the journal is released and the
+                // outer catch turns the failure into SIGN_OUT's error, session still live.
+                runCatching { sessions.abortTransition() }
+                throw e
+            } catch (_: Exception) {
+                // Best-effort announcement; never block the sign-out itself.
             }
             try {
                 operations.signOut()

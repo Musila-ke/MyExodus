@@ -1,5 +1,7 @@
 # MyExodus Optional Accounts, Encrypted Backup/Restore, and Account Lifecycle — Implementation Plan
 
+*Status (2026-11-15, plan-fidelity sweep): **✅ BUILT — this is the spec of record, not a build queue.** Releases 0–3 shipped across the account work and ADRs #239–#248. §18's items are evidenced in the shipped code and suites it names: rules/emulator tests under `functions/test/` (`pairing-guards`, `guest-transition-logic`, `backup-manifest-logic`, `account-deletion-logic`), the two-phase identity switch in `LocalSessionManager`, guest quarantine (`GuestQuarantine`/`GuestImportCoordinator`), and server manifest SHA-256/generation verification (`functions/backup-manifest-logic.js`). DoD items 14 and 30 carry ADR #248's App Check amendment below. Source wins over this line if they ever disagree.*
+
 ## 1. Feature Overview
 
 Build optional persistent accounts for MyExodus while preserving anonymous guest use. V1 includes account authentication, safe guest-to-account transition, client-side encrypted backup/restore, local account isolation, secure pair lifecycle operations, and durable account deletion.

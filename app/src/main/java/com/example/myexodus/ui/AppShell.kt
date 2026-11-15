@@ -39,6 +39,8 @@ import androidx.compose.material.icons.outlined.SelfImprovement as LotusOutlined
 import androidx.compose.material.icons.outlined.Settings as SettingsOutlined
 import androidx.compose.material.icons.outlined.Shield as ShieldOutlined
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -83,6 +85,7 @@ import com.example.myexodus.blocking.recovery.RecoveryStateStore
 import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.blocking.usage.PlatformUsageReader
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
+import com.example.myexodus.accountability.delivery.PartnerRegistrationBlock
 import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.sos.NudgeEnvelope
 import com.example.myexodus.accountability.sos.NudgeRepository
@@ -254,6 +257,13 @@ fun AppShell(
     // A saved index can outlive the tab list (restored state after a tab is removed), and every
     // tab below is enumerated — the clamp keeps that exhaustive `when` from needing a fallback.
     val contentTab = tab.coerceIn(0, Tabs.lastIndex)
+    // Fix A discoverability (owner 2026-11-15): a paused partner registration marks the
+    // Settings tab itself, so the reauth prompt is visible from anywhere in the app.
+    val deliveryBlock by account.deliveryBlock.collectAsStateWithLifecycle()
+    // Only the block the Account pane can resolve earns a dot; the rest clear on their own.
+    val attentionTabs =
+        if (deliveryBlock == PartnerRegistrationBlock.REAUTH_REQUIRED) setOf(NavKeys.SETTINGS)
+        else emptySet()
     var pickerOpen by rememberSaveable { mutableStateOf(false) }
     var openRuleId by rememberSaveable { mutableStateOf<String?>(null) }
     // Phase 4: the Recovery spoke to open next — set by the block screen, the widget, or the
@@ -441,6 +451,7 @@ fun AppShell(
                     tabs = Tabs,
                     selectedIndex = contentTab,
                     onSelect = { tab = it },
+                    attentionKeys = attentionTabs,
                 )
             }
         },
@@ -453,10 +464,18 @@ fun AppShell(
                             selected = contentTab == index,
                             onClick = { tab = index },
                             icon = {
-                                Icon(
-                                    imageVector = if (contentTab == index) navTab.selectedIcon else navTab.icon,
-                                    contentDescription = stringResource(navTab.labelRes),
-                                )
+                                val glyph = if (contentTab == index) navTab.selectedIcon else navTab.icon
+                                if (navTab.key in attentionTabs) {
+                                    BadgedBox(
+                                        badge = {
+                                            Badge(containerColor = MaterialTheme.colorScheme.error)
+                                        },
+                                    ) {
+                                        Icon(glyph, contentDescription = stringResource(navTab.labelRes))
+                                    }
+                                } else {
+                                    Icon(glyph, contentDescription = stringResource(navTab.labelRes))
+                                }
                             },
                             label = {
                                 Text(stringResource(navTab.labelRes), maxLines = 1, softWrap = false)

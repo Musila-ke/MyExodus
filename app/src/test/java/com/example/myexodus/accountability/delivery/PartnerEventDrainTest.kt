@@ -319,11 +319,13 @@ class PartnerEventDrainTest {
     }
 
     @Test
-    fun staleKey_withEmptyAuthorizedSet_rejectsTerminally_andNeverReencryptsForALocalEnrollment() = runBlocking {
+    fun staleKey_withEmptyAuthorizedSet_parksWaiting_neverFallsBackToLocalEnrollments() = runBlocking {
         registered()
         val recorded = record()
-        // A local enrollment exists (`records` seeds one): if the empty server set were passed
-        // as `null`, the encryptor would fall back to every local key, revoked or not.
+        // A local enrollment exists (`records` seeds one) and the server authorizes none:
+        // the partner has no ACTIVE recipient key yet. That is "key unavailable" (§6.1
+        // step 3), not revocation — the row must stay deliverable, and must never
+        // re-encrypt for the local key as if the server had authorized it.
         transport.responder = { batch ->
             PartnerEventBatchResultV1(
                 listOf(
@@ -339,12 +341,56 @@ class PartnerEventDrainTest {
 
         val result = drain.run(allowRegistration = false)
 
-        assertEquals(1, result.rejected)
+        assertEquals(0, result.rejected)
+        assertEquals(1, result.retried)
         val row = checkNotNull(outbox.event(recorded.eventId))
-        assertEquals(PendingPartnerEvent.STATUS_PERMANENT_REJECTED, row.status)
-        assertEquals(PendingPartnerEvent.ERROR_RECIPIENT_KEY_REVOKED, row.lastErrorCode)
+        assertEquals(PendingPartnerEvent.STATUS_WAITING_FOR_RECIPIENT_KEY, row.status)
         assertNull("no envelopes may be minted without an authorized key", row.recipientEnvelopesBlob)
-        assertNull("nothing resendable survives a terminal stale", row.temporaryLocalCiphertext)
+        assertTrue(
+            "the sealed source survives for the partner's enrollment",
+            row.temporaryLocalCiphertext != null,
+        )
+        assertEquals(clock.nowMs + 900_000, row.nextAttemptAtMs)
+
+        clock.nowMs += 899_999
+        drain.run(allowRegistration = false)
+        assertEquals("no resend inside the waiting backoff", 1, transport.submitted.size)
+    }
+
+    @Test
+    fun staleKey_withEmptyAuthorizedSet_deliversOnceThePartnerKeyAppears() = runBlocking {
+        registered()
+        val recorded = record()
+        transport.responder = { batch ->
+            PartnerEventBatchResultV1(
+                listOf(
+                    PartnerEventResultV1(
+                        index = 0,
+                        eventId = batch.events[0].event.eventId,
+                        code = PartnerEventResultCode.RECIPIENT_KEY_STALE,
+                        currentRecipientKeys = emptyList(),
+                    ),
+                ),
+            )
+        }
+        drain.run(allowRegistration = false)
+
+        // The partner's app enrolled; its key is now the local record the probe re-encrypts for.
+        val enrolledKeyId = ExistingE2eeRecipientEncryptor.recipientKeyIdOf(byteArrayOf(9))
+        records.clear()
+        records += enrollment(9)
+        clock.nowMs += 900_000
+        transport.responder = ScriptedTransport.ACCEPT_ALL
+
+        val result = drain.run(allowRegistration = false)
+
+        assertEquals(1, result.accepted)
+        assertEquals(PendingPartnerEvent.STATUS_ACKED, checkNotNull(outbox.event(recorded.eventId)).status)
+        assertEquals(
+            listOf(enrolledKeyId),
+            transport.submitted[1].events.single().event.recipientEnvelopes
+                .map { it.recipientEncryptionKeyId },
+        )
     }
 
     @Test
@@ -680,6 +726,41 @@ class PartnerEventDrainTest {
 
         assertEquals(0, result.claimed)
         assertEquals(0, transport.submitted.size)
+    }
+
+    @Test
+    fun backgroundRegistrationNeed_isSurfacedAsNeedsForeground() = runBlocking {
+        outbox.ensureInstallation("uid-1")
+
+        val result = drain.run(allowRegistration = false)
+
+        assertTrue(result.registrationRequired)
+        assertEquals(PartnerRegistrationBlock.NEEDS_FOREGROUND, result.registrationBlock)
+    }
+
+    @Test
+    fun staleAuth_duringEnrollment_isSurfacedAsReauthRequired() = runBlocking {
+        outbox.ensureInstallation("uid-1")
+        registrar.refreshOverride = PartnerEventRegistrar.Outcome.AuthNotFresh
+
+        val result = drain.run(allowRegistration = true)
+
+        assertTrue(result.registrationRequired)
+        assertEquals(PartnerRegistrationBlock.REAUTH_REQUIRED, result.registrationBlock)
+    }
+
+    @Test
+    fun failedEnrollmentRefresh_surfacesTheBlock_andStillDeliversOutboundRows() = runBlocking {
+        registered()
+        // The pairing minted a new agreement key the server has not been told about.
+        enrollmentRecipientKeyId = "the-pair-minted-a-new-key"
+        registrar.refreshOverride = PartnerEventRegistrar.Outcome.AuthNotFresh
+        record()
+
+        val result = drain.run(allowRegistration = true)
+
+        assertEquals("outbound rows do not depend on the refresh", 1, result.accepted)
+        assertEquals(PartnerRegistrationBlock.REAUTH_REQUIRED, result.registrationBlock)
     }
 
     private suspend fun registered(): InstallationState {

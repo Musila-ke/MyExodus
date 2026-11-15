@@ -289,15 +289,16 @@ class BilateralDeletion(
     }
 
     /**
-     * OPD #43: the partner's account was deleted and the server terminated this pair. This
-     * device runs the responder half without a mailbox message — the deletion request is the
-     * pair document's own `terminationReason` (the E2EE keys died with the account, so no
-     * mailbox payload for that event can exist; plan §17's server-originated notices live in
-     * `system_events`). Journal first, then shred; no AD-18b ack is owed because no message
-     * was received ([UnpairState.isDismissible] treats the empty message id as nothing to ack).
-     * Returns false when the shred failed — the enrollment survives, so the next pass retries.
+     * OPD #43: the server terminated this pair (partner deleted their account, switched a
+     * guest identity, or ended the partnership). This device runs the responder half without a
+     * mailbox message — the delivery is the pair document's own `status` (the pair is refused
+     * server-side from here on; when the partner's account died their E2EE keys died with it,
+     * so no mailbox payload for any of these endings can exist). Journal first, then shred; no
+     * AD-18b ack is owed because no message was received ([UnpairState.isDismissible] treats
+     * the empty message id as nothing to ack). Returns false when the shred failed — the
+     * enrollment survives, so the next pass retries.
      */
-    suspend fun handleAccountDeleted(pairId: String): Boolean {
+    suspend fun handleServerTermination(pairId: String): Boolean {
         if (enrollmentDao.getByPairId(pairId) == null) return true
         journal.upsert(
             UnpairState(
@@ -314,7 +315,7 @@ class BilateralDeletion(
             shredPair(pairId)
             true
         } catch (e: Exception) {
-            Log.w(TAG, "account-deleted shred failed pairId=$pairId — retried next pass", e)
+            Log.w(TAG, "server-terminated shred failed pairId=$pairId — retried next pass", e)
             false
         }
     }

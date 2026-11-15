@@ -10,6 +10,7 @@ import com.example.myexodus.accountability.state.ChainEvent
 import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.accountability.state.UnpairPhase
 import com.example.myexodus.accountability.state.UnpairState
+import com.example.myexodus.data.db.entity.PartnerActivityAlert
 import com.example.myexodus.data.db.entity.PartnerAttemptAlert
 import com.example.myexodus.data.db.entity.PartnerSharingAlert
 import com.example.myexodus.data.db.entity.PartnerMonitoringSnapshot
@@ -121,6 +122,8 @@ class PartnerDashboardSourceTest {
         pairingContactAt: (String) -> Long? = { null },
         /** Step 7: the partner's latest decrypted monitoring snapshot, if any arrived. */
         monitoring: (String) -> PartnerMonitoringSnapshot? = { null },
+        /** Rig 2026-11-15: the staged activity projection (pinned message + last state event). */
+        partnerActivity: (String) -> PartnerActivityUi? = { null },
         /** §8.4 RULE_CONTROL: the receiver's stored rule-lifecycle rows for this pair. */
         ruleChangeRows: List<PartnerRuleChange> = emptyList(),
         /** Owner directive 2026-11-10: stored permission-loss rows for this pair. */
@@ -129,6 +132,8 @@ class PartnerDashboardSourceTest {
         attemptRows: List<PartnerAttemptAlert> = emptyList(),
         /** Owner ask 2026-11-13: staged sharing-revoke rows for this pair. */
         sharingRows: List<PartnerSharingAlert> = emptyList(),
+        /** Rig finding 2026-11-15: staged relapse/milestone rows for this pair. */
+        activityRows: List<PartnerActivityAlert> = emptyList(),
     ): RecordingSource {
         val sinceArgs = mutableListOf<Long>()
         val sincePairIds = mutableListOf<String>()
@@ -168,12 +173,63 @@ class PartnerDashboardSourceTest {
                 }
             },
             monitoring = { pairId -> monitoring(pairId) },
+            partnerActivity = { pairId -> partnerActivity(pairId) },
             ruleChanges = { ruleChangeRows },
             protectionGaps = { gapRows },
             attemptAlerts = { attemptRows },
             sharingAlerts = { sharingRows },
+            activityAlerts = { activityRows },
         )
         return RecordingSource(source, sinceArgs, sincePairIds, headPairIds, approvalPairIds, rejectionPairIds)
+    }
+
+    /** Owner ruling 2026-11-15 (#246): the newest sharing row being a sign-out pause with no
+     *  later alert derives the paired screen's hard paused state; a later alert clears it. */
+    @Test
+    fun accountabilityPause_derivesThePausedState_untilALaterAlert() = runTest {
+        val pauseAt = now - 60_000L
+        val pause = PartnerSharingAlert(
+            pairId = "pair-1", eventId = "evt-pause",
+            kind = EventPayload.TYPE_ACCOUNTABILITY_PAUSED, label = null,
+            occurredAtMs = pauseAt, expiresAtMs = now + 86_400_000L,
+        )
+        val paused = source(sharingRows = listOf(pause)).source.load(now) as PartnerDashboardUi.Paired
+        assertEquals(pauseAt, paused.accountabilityPausedSinceEpochMillis)
+
+        val later = PartnerRuleChange(
+            pairId = "pair-1", eventId = "evt-rule", ruleId = "uuid",
+            ruleChange = "DISABLED", occurredAtMinute = (pauseAt + 60_000L) / 60_000L,
+            receivedAtMs = now, expiresAtMs = now + 1,
+        )
+        val resumed = source(sharingRows = listOf(pause), ruleChangeRows = listOf(later))
+            .source.load(now) as PartnerDashboardUi.Paired
+        assertNull(resumed.accountabilityPausedSinceEpochMillis)
+    }
+
+    /** Rig 2026-11-15: a delivered message or check-in lands only in the activity projection
+     *  (no chain row, no alert row), so the pause must clear on that newer timestamp too. */
+    @Test
+    fun accountabilityPause_clearsWhenANewerStagedEventArrives() = runTest {
+        val pauseAt = now - 60_000L
+        val pause = PartnerSharingAlert(
+            pairId = "pair-1", eventId = "evt-pause",
+            kind = EventPayload.TYPE_ACCOUNTABILITY_PAUSED, label = null,
+            occurredAtMs = pauseAt, expiresAtMs = now + 86_400_000L,
+        )
+        val newerMessage = PartnerActivityUi(
+            daysFree = 0, milestonesReached = emptyList(), relapseCount = 0,
+            lastEventOccurredAtEpochMillis = null,
+            pinnedMessageText = "Thinking of you today.",
+            pinnedMessageAtEpochMillis = pauseAt + 60_000L,
+        )
+        val resumed = source(sharingRows = listOf(pause), partnerActivity = { newerMessage })
+            .source.load(now) as PartnerDashboardUi.Paired
+        assertNull(resumed.accountabilityPausedSinceEpochMillis)
+
+        val olderMessage = newerMessage.copy(pinnedMessageAtEpochMillis = pauseAt - 60_000L)
+        val paused = source(sharingRows = listOf(pause), partnerActivity = { olderMessage })
+            .source.load(now) as PartnerDashboardUi.Paired
+        assertEquals(pauseAt, paused.accountabilityPausedSinceEpochMillis)
     }
 
     @Test
@@ -269,6 +325,38 @@ class PartnerDashboardSourceTest {
         )
         assertEquals(expected, paired.alerts.recent.single())
         assertEquals(listOf(expected), paired.ruleHistory)
+    }
+
+    /** Rig finding 2026-11-15: a staged milestone (no chain row) lands in the week preview and
+     *  the per-day chart — the dashboard used to show "Milestones met 7" with an empty feed. */
+    @Test
+    fun stagedRelapsesAndMilestones_feedTheAlertsAndChart() = runTest {
+        val relapseAt = now - 2 * 86_400_000L
+        val rows = listOf(
+            PartnerActivityAlert(
+                pairId = "pair-1", eventId = "evt-1", kind = EventPayload.TYPE_RELAPSE_RECORDED,
+                habitLabel = "No porn", endedDays = 12, milestoneDay = null,
+                occurredAtMs = relapseAt, expiresAtMs = now + 86_400_000L,
+            ),
+            PartnerActivityAlert(
+                pairId = "pair-1", eventId = "evt-2", kind = EventPayload.TYPE_MILESTONE_REACHED,
+                habitLabel = "No porn", endedDays = null, milestoneDay = 7,
+                occurredAtMs = now - 60_000L, expiresAtMs = now + 86_400_000L,
+            ),
+        )
+        val paired = source(activityRows = rows).source.load(now) as PartnerDashboardUi.Paired
+
+        assertEquals(
+            listOf(
+                PartnerAlert.Milestone("No porn", 7, now - 60_000L),
+                PartnerAlert.Relapse("No porn", 12, relapseAt),
+            ),
+            paired.alerts.recent,
+        )
+        assertEquals(2, paired.alerts.weekCount)
+        assertEquals(listOf(0, 0, 0, 0, 1, 0, 1), paired.alerts.dailyCounts)
+        // The activity kinds are not rule activity — Rules & blocks history stays untouched.
+        assertTrue(paired.ruleHistory.isEmpty())
     }
 
     private fun journalRow(pairId: String = "pair-1", requestedAt: Long = 500L) = UnpairState(

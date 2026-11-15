@@ -97,6 +97,10 @@ data class PendingPartnerEvent(
         /** Terminal: the row's pair was shredded; nothing queued for it may ever send. */
         const val ERROR_PAIR_REVOKED = "PAIR_REVOKED"
 
+        /** Terminal: a sign-out pause that could not be confirmed before the credentials left.
+         *  Delivering it later would tell the partner the account is paused when it is not. */
+        const val ERROR_PAUSE_UNCONFIRMED = "PAUSE_UNCONFIRMED"
+
         /** §8.1 retention: ACKED rows live empty for seven days, then are deleted. */
         const val ACKED_RETENTION_MILLIS = 7L * 24 * 60 * 60 * 1000
 

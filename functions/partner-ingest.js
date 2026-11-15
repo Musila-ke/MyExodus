@@ -55,29 +55,50 @@ const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 const REQUEST_KEYS = ['installationId', 'events'];
 
 /**
- * Currently authorized recipient keys for `uid`: every ACTIVE recipient key of every
- * active partner. Two single-field queries, no composite index needed.
+ * Every currently authorized recipient of `uid`, keyed by recipient key id. The binding is
+ * the partner's ACTIVE device registration, not the recipient key doc's `ownerUid`: two
+ * identities on one physical device share the key material, and whichever identity
+ * registered last overwrites that field (so a signed-out account's pair would go stale).
+ * The registration also names the installation whose mailbox the event must land in.
+ * Two single-field queries per partner, no composite index needed.
  */
-async function currentAuthorizedKeys(tx, db, uid) {
+async function authorizedRecipients(tx, db, uid) {
+  const recipients = new Map();
   const pairings = await tx.get(db.collection('pairings').where('members', 'array-contains', uid));
-  const keys = [];
   for (const doc of pairings.docs) {
     if (doc.get('status') !== 'active') continue;
     const partnerUid = doc.get('uidA') === uid ? doc.get('uidB') : doc.get('uidA');
     if (typeof partnerUid !== 'string' || partnerUid === uid) continue;
-    const recipientKeys = await tx.get(
-      db.collection(COLLECTIONS.recipientKeys).where('ownerUid', '==', partnerUid),
+    const registrations = await tx.get(
+      db.collection(COLLECTIONS.deviceRegistrations).where('ownerUid', '==', partnerUid),
     );
-    for (const keyDoc of recipientKeys.docs) {
-      if (keyDoc.get('status') !== 'ACTIVE') continue;
-      keys.push({
-        keyId: keyDoc.id,
-        revision: keyDoc.get('revision'),
-        installationId: keyDoc.get('installationId'),
+    for (const reg of registrations.docs) {
+      if (reg.get('status') !== 'ACTIVE') continue;
+      const keyId = reg.get('recipientKeyId');
+      const installationId = reg.get('installationId');
+      if (typeof keyId !== 'string' || typeof installationId !== 'string') continue;
+      if (recipients.has(keyId)) continue;
+      const keySnap = await tx.get(db.doc(`${COLLECTIONS.recipientKeys}/${keyId}`));
+      if (!keySnap.exists || keySnap.get('status') !== 'ACTIVE') continue;
+      recipients.set(keyId, {
+        recipientUid: partnerUid,
+        installationId,
+        revision: keySnap.get('revision'),
+        key: keySnap.data(),
       });
     }
   }
-  return keys;
+  return recipients;
+}
+
+/** The diagnostic projection of [authorizedRecipients] carried by RECIPIENT_KEY_STALE. */
+async function currentAuthorizedKeys(tx, db, uid) {
+  return [...(await authorizedRecipients(tx, db, uid)).entries()]
+    .map(([keyId, recipient]) => ({
+      keyId,
+      revision: recipient.revision,
+      installationId: recipient.installationId,
+    }));
 }
 
 /** §8.4 contact: at most once per accepted batch, only when the liveness row is this device. */
@@ -144,44 +165,26 @@ async function processEvent({ db, uid, installationId, wire, at }) {
       };
     }
 
-    const keySnaps = await Promise.all(event.recipientEnvelopes.map(
-      (envelope) => tx.get(
-        db.doc(`${COLLECTIONS.recipientKeys}/${envelope.recipientEncryptionKeyId}`),
-      ),
-    ));
-    const recipientUids = new Set();
-    for (const snap of keySnaps) {
-      if (snap.exists && snap.get('status') === 'ACTIVE' &&
-          typeof snap.get('ownerUid') === 'string' && snap.get('ownerUid') !== uid) {
-        recipientUids.add(snap.get('ownerUid'));
-      }
-    }
-    const pairingSnaps = new Map();
-    for (const recipientUid of recipientUids) {
-      pairingSnaps.set(
-        recipientUid,
-        await tx.get(db.doc(`pairings/${pairIdOf(uid, recipientUid)}`)),
-      );
-    }
+    const authorized = await authorizedRecipients(tx, db, uid);
 
     const entries = [];
     let stale = false;
-    event.recipientEnvelopes.forEach((envelope, index) => {
-      const keySnap = keySnaps[index];
-      if (!keySnap.exists || keySnap.get('status') !== 'ACTIVE') {
-        stale = true;
-        return;
-      }
-      const recipientUid = keySnap.get('ownerUid');
-      const pairing = pairingSnaps.get(recipientUid);
-      // A revoked partnership is a stale registry view too: the client must re-encrypt for
-      // its remaining partners, which is exactly RECIPIENT_KEY_STALE's contract. Using
+    event.recipientEnvelopes.forEach((envelope) => {
+      const recipient = authorized.get(envelope.recipientEncryptionKeyId);
+      // The partner's ACTIVE registration is the authorization. A key that no such
+      // registration references is a stale registry view, and the client must re-encrypt
+      // for its remaining partners (RECIPIENT_KEY_STALE's contract). Using
       // PERMANENT_REJECTED here would strand the event with no allowed regeneration path.
-      if (recipientUid === uid || !pairing || !pairing.exists || pairing.get('status') !== 'active') {
+      if (!recipient) {
         stale = true;
         return;
       }
-      entries.push({ envelope, key: keySnap.data(), recipientUid });
+      entries.push({
+        envelope,
+        key: recipient.key,
+        recipientUid: recipient.recipientUid,
+        recipientInstallationId: recipient.installationId,
+      });
     });
 
     if (stale) {
@@ -219,7 +222,7 @@ async function processEvent({ db, uid, installationId, wire, at }) {
         sequence: event.sequence,
         recipients: entries.map((entry) => ({
           recipientUid: entry.recipientUid,
-          recipientInstallationId: entry.key.installationId,
+          recipientInstallationId: entry.recipientInstallationId,
           recipientKeyId: entry.envelope.recipientEncryptionKeyId,
           recipientKeyRevision: entry.key.revision,
           payload: entry.envelope.payload,
@@ -233,7 +236,7 @@ async function processEvent({ db, uid, installationId, wire, at }) {
     }
 
     for (const entry of entries) {
-      const recipientInstallationId = entry.key.installationId;
+      const recipientInstallationId = entry.recipientInstallationId;
       // §8.6: one mailbox record ↔ one notification job, both keyed by
       // (eventId, recipient installation). A recipient account with two enrolled devices
       // gets two mailbox records, each readable only by the device holding that key.

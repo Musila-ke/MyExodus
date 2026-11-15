@@ -659,11 +659,11 @@ class BilateralDeletionTest {
         assertNull(db.unpairStateDao().get(pairId))
     }
 
-    // --- OPD #43: the partner's account was deleted (server wrote terminationReason) ---
+    // --- OPD #43: the server terminated the pair (partner account deleted / guest switch) ---
 
     @Test
-    fun accountDeleted_shredsWithoutAck_andIsDismissible() = runTest {
-        assertTrue(deletion.handleAccountDeleted(pairId))
+    fun serverTerminated_shredsWithoutAck_andIsDismissible() = runTest {
+        assertTrue(deletion.handleServerTermination(pairId))
 
         assertTrue("last enrollment gone — device key destroyed", destroyedDeviceKey)
         assertNull(db.enrollmentDao().getByPairId(pairId))
@@ -687,10 +687,10 @@ class BilateralDeletionTest {
     }
 
     @Test
-    fun accountDeleted_shredsOnlyThatPair() = runTest {
+    fun serverTerminated_shredsOnlyThatPair() = runTest {
         seedSecondPair()
 
-        assertTrue(deletion.handleAccountDeleted(pairId))
+        assertTrue(deletion.handleServerTermination(pairId))
 
         assertNotNull("the sibling pair keeps working", db.enrollmentDao().getByPairId(otherPairId))
         assertFalse("the shared device key survives while a pair remains", destroyedDeviceKey)

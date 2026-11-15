@@ -262,7 +262,10 @@ test('finalize terminates each active guest pair once, emits deterministic event
   assert.strictEqual(result.cleanupJobId, GUEST);
 
   for (const pairId of [`pair-a-${GUEST}`, `pair-b-${GUEST}`]) {
-    assert.strictEqual((await db.doc(`pairings/${pairId}`).get()).get('status'), 'terminated');
+    const pair = (await db.doc(`pairings/${pairId}`).get());
+    assert.strictEqual(pair.get('status'), 'terminated');
+    assert.strictEqual(pair.get('terminationReason'), 'GUEST_ACCOUNT_TRANSITION');
+    assert.strictEqual(pair.get('terminatedBy'), GUEST);
     const event = (await db.doc(`pairings/${pairId}/system_events/guest_transition_terminated`).get()).data();
     assert.strictEqual(event.type, 'PAIR_TERMINATED');
     assert.strictEqual(event.actorUid, GUEST);

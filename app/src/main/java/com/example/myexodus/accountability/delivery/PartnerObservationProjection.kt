@@ -15,6 +15,7 @@ import com.example.myexodus.accountability.sync.PartnerNotifications
 import com.example.myexodus.accountability.sync.displayNameOf
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.entity.PartnerActivityAlert
 import com.example.myexodus.data.db.entity.PartnerAttemptAlert
 import com.example.myexodus.data.db.entity.PartnerEventJournal
 import com.example.myexodus.data.db.entity.PartnerSharingAlert
@@ -74,6 +75,14 @@ class PartnerObservationProjection(
         if (payload.type in EventPayload.SHARING_STOPPED_TYPES) {
             persistSharingAlert(store, pairId, document, payload)
         }
+        // And the same gap for the two activity kinds the feed renders as history rows: a
+        // delivered relapse/milestone reached the tray and the state snapshot only, so the
+        // "Recent activity" feed and its per-day chart silently lost them (rig 2026-11-15).
+        if (payload.type == EventPayload.TYPE_RELAPSE_RECORDED ||
+            payload.type == EventPayload.TYPE_MILESTONE_REACHED
+        ) {
+            persistActivityAlert(store, pairId, document, payload)
+        }
         if (payload.type == PlanWire.TYPE_PLAN_PUBLISHED || payload.type == PlanWire.TYPE_PLAN_PROGRESS) {
             planReceiver.applyAppended(pairId, payload)
         } else {
@@ -121,6 +130,35 @@ class PartnerObservationProjection(
                 ),
             )
         }.onFailure { Log.w(TAG, "attempt alert store failed pairId=$pairId", it) }
+    }
+
+    private suspend fun persistActivityAlert(
+        store: AppRulesStore,
+        pairId: String,
+        document: PartnerMailboxDocument,
+        payload: EventPayload,
+    ) {
+        val eventId = document.eventId ?: return
+        // The feed renders these two kinds from their stateAfter only (alertOf returns null
+        // without it); a body that lacks one has no row to restore.
+        val state = payload.stateAfter ?: return
+        runCatching {
+            val nowMs = now()
+            val dao = store.partnerActivityAlertDao()
+            dao.deleteExpired(nowMs)
+            dao.insert(
+                PartnerActivityAlert(
+                    pairId = pairId,
+                    eventId = eventId,
+                    kind = payload.type,
+                    habitLabel = state.habitLabel,
+                    endedDays = state.endedDays,
+                    milestoneDay = state.milestoneDay,
+                    occurredAtMs = state.eventOccurredAtMs,
+                    expiresAtMs = nowMs + PartnerEventJournal.RETENTION_MILLIS,
+                ),
+            )
+        }.onFailure { Log.w(TAG, "activity alert store failed pairId=$pairId", it) }
     }
 
     private suspend fun persistSharingAlert(

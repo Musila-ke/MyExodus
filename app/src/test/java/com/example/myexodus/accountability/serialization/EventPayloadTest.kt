@@ -391,6 +391,36 @@ class EventPayloadTest {
         assertEquals(ActivityEvent.Valid(p), classifyActivity(p))
     }
 
+    /** Owner ruling 2026-11-15: the sign-out pause is the same snapshot-less consent shape —
+     *  a suspension announcement with no state, and it must classify Valid or the partner
+     *  never hears that accountability went quiet. */
+    @Test
+    fun classify_accountabilityPausedWithoutStateAfter_isValid() {
+        val p = EventPayload(
+            type = EventPayload.TYPE_ACCOUNTABILITY_PAUSED,
+            text = "",
+            protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
+            schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,
+        )
+        assertEquals(ActivityEvent.Valid(p), classifyActivity(p))
+    }
+
+    @Test
+    fun accountabilityPaused_roundTrips() {
+        val p = EventPayload(
+            type = EventPayload.TYPE_ACCOUNTABILITY_PAUSED,
+            text = "",
+            protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
+            schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,
+        )
+        assertEquals(p, decodePayload(encodePayload(p)))
+    }
+
+    @Test
+    fun accountabilityPaused_isASharingStoppedType() {
+        assertTrue(EventPayload.TYPE_ACCOUNTABILITY_PAUSED in EventPayload.SHARING_STOPPED_TYPES)
+    }
+
     /** ADR #285: the snapshot-less message's send time rides its own optional key, and unset
      *  payloads (every existing snapshot-carrying message) keep their exact prior encoding. */
     @Test

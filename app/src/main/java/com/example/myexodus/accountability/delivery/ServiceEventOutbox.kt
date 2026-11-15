@@ -227,6 +227,13 @@ class ServiceEventOutbox(
             eventId, PendingPartnerEvent.ERROR_RECIPIENT_KEY_REVOKED, terminalAtMs,
         ) > 0
 
+    /** Owner ruling 2026-11-15: retires a sign-out pause the drain could not confirm, so it
+     *  can never surface for a partner after the owner has signed back in. */
+    suspend fun rejectUnconfirmedPause(eventId: String, terminalAtMs: Long): Boolean =
+        dao.rejectUnconfirmedPause(
+            eventId, PendingPartnerEvent.ERROR_PAUSE_UNCONFIRMED, terminalAtMs,
+        ) > 0
+
     /** Step 10: a shredded pair's queued events are cancelled, never delivered or retried. */
     suspend fun rejectUnsentForPair(pairId: String, terminalAtMs: Long): Int =
         dao.rejectPairRows(pairId, PendingPartnerEvent.ERROR_PAIR_REVOKED, terminalAtMs)

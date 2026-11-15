@@ -5,6 +5,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -44,6 +46,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -125,6 +129,9 @@ internal fun NotchedNavBar(
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    /** Fix A discoverability (owner 2026-11-15): tabs holding an unresolved blocker get a
+     *  red dot, so the prompt is not buried behind two taps. */
+    attentionKeys: Set<String> = emptySet(),
 ) {
     val scheme = MaterialTheme.colorScheme
     val density = LocalDensity.current
@@ -256,6 +263,7 @@ internal fun NotchedNavBar(
                     tab = tab,
                     label = labels[index],
                     selected = index == selectedIndex,
+                    attention = tab.key in attentionKeys,
                     showLabel = showAllLabels || index == selectedIndex,
                     labelStyle = labelStyle,
                     scale = scale,
@@ -276,6 +284,7 @@ private fun NavItem(
     tab: NavTab,
     label: String,
     selected: Boolean,
+    attention: Boolean,
     showLabel: Boolean,
     labelStyle: TextStyle,
     scale: Float,
@@ -288,6 +297,7 @@ private fun NavItem(
 ) {
     val iconSize = IconSize * scale
     val iconCentreY = IconCentreY * scale
+    val attentionText = stringResource(R.string.account_delivery_reauth_title)
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val lift by animateDpAsState(
@@ -304,6 +314,8 @@ private fun NavItem(
     Box(
         modifier
             .fillMaxHeight()
+            // The dot is decorative; the state wording is what TalkBack reads on the tab.
+            .semantics { if (attention) stateDescription = attentionText }
             .selectable(
                 selected = selected,
                 interactionSource = interaction,
@@ -314,15 +326,28 @@ private fun NavItem(
             ),
         contentAlignment = Alignment.TopCenter,
     ) {
-        Icon(
-            imageVector = if (selected) tab.selectedIcon else tab.icon,
-            contentDescription = null,
-            tint = if (selected) activeTint else idleTint,
-            modifier = Modifier
+        Box(
+            Modifier
                 .offset { IntOffset(0, (iconCentreY - iconSize / 2 + lift).roundToPx()) }
                 .size(iconSize)
                 .scale(pressScale),
-        )
+        ) {
+            Icon(
+                imageVector = if (selected) tab.selectedIcon else tab.icon,
+                contentDescription = null,
+                tint = if (selected) activeTint else idleTint,
+                modifier = Modifier.fillMaxSize(),
+            )
+            if (attention) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(x = 2.dp, y = (-2).dp)
+                        .size(8.dp)
+                        .background(MaterialTheme.colorScheme.error, CircleShape),
+                )
+            }
+        }
         Text(
             text = label,
             style = labelStyle,

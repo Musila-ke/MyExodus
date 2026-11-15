@@ -2,10 +2,16 @@ package com.example.myexodus.accountability.delivery
 
 import android.content.Context
 import android.util.Log
+import com.example.myexodus.account.AuthCoordinator
+import com.example.myexodus.account.AuthState
+import com.example.myexodus.accountability.sync.PartnerNotifications
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -19,9 +25,37 @@ class PartnerDeliveryCoordinator(
     private val outbox: ServiceEventOutbox,
     private val drain: PartnerEventDrain,
     private val ownerUid: () -> String?,
+    auth: AuthCoordinator,
+    /** §8.3.1: registration/rotation only while the vault-access gate is open. */
+    private val registrationAllowed: () -> Boolean,
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val _registrationBlock = MutableStateFlow<PartnerRegistrationBlock?>(null)
+
+    /** Last foreground drain's registration verdict; the Account pane prompts on it. Only a
+     *  foreground drain may update it — the worker cannot register, so its null is not proof. */
+    val registrationBlock: StateFlow<PartnerRegistrationBlock?> = _registrationBlock.asStateFlow()
+
+    init {
+        // §8.3.1 recovery: a completed reauthentication makes `auth_time` fresh, but the user
+        // is already foregrounded, so no lifecycle transition would retry. Drain right away.
+        scope.launch {
+            var reauthSeen = false
+            auth.state.collect { state ->
+                when (state) {
+                    is AuthState.ReauthRequired -> reauthSeen = true
+                    is AuthState.PersistentActive -> if (reauthSeen) {
+                        reauthSeen = false
+                        if (registrationAllowed()) drainInProcess(allowRegistration = true)
+                    }
+                    is AuthState.GuestActive, is AuthState.SignedOut -> reauthSeen = false
+                    else -> Unit
+                }
+            }
+        }
+    }
 
     /**
      * The recorder's post-commit kick. `requestWake` returns true only for false→true, so a
@@ -44,6 +78,18 @@ class PartnerDeliveryCoordinator(
         } catch (e: Exception) {
             Log.w(TAG, "foreground drain failed", e)
             return
+        }
+        // Plan Phase 1 diagnostics: a stalled registration must leave a trace, not just silence.
+        if (result.claimed > 0 || result.registrationRequired) Log.i(TAG, "foreground drain: $result")
+        if (allowRegistration) {
+            _registrationBlock.value = result.registrationBlock
+            // Fix A discoverability (owner 2026-11-15): the prompt also persists in the tray,
+            // so a stalled registration is visible without opening Settings → Account.
+            if (result.registrationBlock == PartnerRegistrationBlock.REAUTH_REQUIRED) {
+                PartnerNotifications.notifyRegistrationPaused(context)
+            } else {
+                PartnerNotifications.cancelRegistrationPaused(context)
+            }
         }
         scheduleNextRetry(context, result.earliestNextAttemptMs)
     }

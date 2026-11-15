@@ -2,6 +2,8 @@ package com.example.myexodus.di
 
 import android.content.Context
 import com.example.myexodus.BuildConfig
+import com.example.myexodus.account.AuthCoordinator
+import com.example.myexodus.applock.AppLockCoordinator
 import com.example.myexodus.accountability.crypto.AccountabilityKeyStore
 import com.example.myexodus.accountability.crypto.EventCipher
 import com.example.myexodus.accountability.delivery.DeviceContactClient
@@ -238,7 +240,8 @@ object PartnerDeliveryModule {
         currentAuth = currentAuth@{
             val user = FirebaseAuth.getInstance().currentUser ?: return@currentAuth null
             // §8.3.1's five-minute window. Anonymous sessions have no reauthentication
-            // concept; both physical test devices run anonymous accounts (documented).
+            // concept; a persistent account with an older `auth_time` must reauthenticate
+            // before enrollment/rotation (surfaced in Settings → Account).
             val fresh = user.isAnonymous || runCatching {
                 val token = user.getIdToken(false).await()
                 System.currentTimeMillis() / 1000 - token.authTimestamp <= 300
@@ -314,11 +317,15 @@ object PartnerDeliveryModule {
         @ApplicationContext context: Context,
         outbox: ServiceEventOutbox,
         drain: PartnerEventDrain,
+        auth: AuthCoordinator,
+        appLock: Provider<AppLockCoordinator>,
     ): PartnerDeliveryCoordinator = PartnerDeliveryCoordinator(
         context = context,
         outbox = outbox,
         drain = drain,
         ownerUid = { FirebaseAuth.getInstance().currentUser?.uid },
+        auth = auth,
+        registrationAllowed = { appLock.get().state.value.allowsVaultAccess },
     )
 }
 

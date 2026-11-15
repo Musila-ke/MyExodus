@@ -34,6 +34,7 @@ import androidx.compose.material.icons.outlined.Handshake
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.RestartAlt
@@ -852,6 +853,12 @@ fun PartnerScreen(
                 // person you are viewing opens "People you support" — switch, rename, or add
                 // someone — so the roster no longer spends its own card on the hub.
                 PartnerIdentityCard(current, onOpenSwitcher = { switching = true })
+                // Owner ruling 2026-11-15 (#246): their own device said accountability is
+                // paused and nothing has arrived since — the hub states it outright instead
+                // of leaving an aging sync line to read as ordinary silence.
+                current.accountabilityPausedSinceEpochMillis?.let {
+                    AccountabilityPausedCard(sinceEpochMillis = it)
+                }
                 // Owner ask 2026-10-21 ("everything is screaming for my attention"): every
                 // time-boxed card now shares one labelled group, so the hub reads as identity,
                 // then "Needs you", then the partner's state — instead of six equal-weight
@@ -2682,6 +2689,8 @@ private fun AlertRow(alert: PartnerAlert) {
             SharingChange.CHECKINS_STOPPED -> stringResource(R.string.partner_alert_checkins_switch)
             SharingChange.AVAILABILITY_STOPPED ->
                 stringResource(R.string.settings_sharing_availability_title)
+            SharingChange.ACCOUNTABILITY_PAUSED ->
+                stringResource(R.string.partner_alert_accountability)
         }
     }
     val kind = when (alert) {
@@ -2706,7 +2715,13 @@ private fun AlertRow(alert: PartnerAlert) {
             }
         }
         is PartnerAlert.PermissionLost -> stringResource(permissionEffectRes(alert.capability))
-        is PartnerAlert.SharingChanged -> stringResource(R.string.partner_alert_sharing_stopped)
+        is PartnerAlert.SharingChanged -> stringResource(
+            if (alert.change == SharingChange.ACCOUNTABILITY_PAUSED) {
+                R.string.partner_alert_paused
+            } else {
+                R.string.partner_alert_sharing_stopped
+            },
+        )
     }
     Row(
         Modifier.fillMaxWidth(),
@@ -2750,7 +2765,11 @@ private fun AlertRow(alert: PartnerAlert) {
             )
             is PartnerAlert.SharingChanged -> AppMark(
                 packageName = null,
-                fallback = Icons.Outlined.VisibilityOff,
+                fallback = if (alert.change == SharingChange.ACCOUNTABILITY_PAUSED) {
+                    Icons.Outlined.Pause
+                } else {
+                    Icons.Outlined.VisibilityOff
+                },
                 size = 28.dp,
             )
         }
@@ -3065,6 +3084,28 @@ private fun ChainStatusCard(status: PartnerChainStatus) {
     ) {
         Text(stringResource(titleRes), style = MaterialTheme.typography.titleSmall)
         Text(stringResource(bodyRes), style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+/**
+ * Owner ruling 2026-11-15 (#246): the partner's device announced a sign-out pause at the
+ * moment delivery stopped, and nothing has arrived since. A hard state, not an inferred one —
+ * it clears on the next received event.
+ */
+@Composable
+private fun AccountabilityPausedCard(sinceEpochMillis: Long) {
+    PartnerSurface(tone = CardTone.NOTICE, spacing = 4.dp) {
+        Text(
+            stringResource(R.string.partner_paused_card_title),
+            style = MaterialTheme.typography.titleSmall,
+        )
+        Text(
+            stringResource(
+                R.string.partner_paused_card_body,
+                relativeTimeText(LocalPartnerNowMillis.current, sinceEpochMillis),
+            ),
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }
 

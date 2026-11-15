@@ -6,6 +6,7 @@ import com.example.myexodus.accountability.serialization.MonitoringCapability
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainHead
+import com.example.myexodus.data.db.entity.PartnerActivityAlert
 import com.example.myexodus.data.db.entity.PartnerProtectionGap
 import com.example.myexodus.data.db.entity.PartnerRuleChange
 import com.example.myexodus.data.db.entity.PartnerSharingAlert
@@ -136,6 +137,52 @@ class PartnerPresentationTest {
             sharingAlert(row),
         )
         assertNull(sharingAlert(row.copy(kind = "something_else")))
+    }
+
+    /** Owner ruling 2026-11-15 (#246): the sign-out pause is a feed row like every revoke. */
+    @Test
+    fun accountabilityPaused_mapsBothTransports() {
+        assertEquals(
+            PartnerAlert.SharingChanged(SharingChange.ACCOUNTABILITY_PAUSED, 42L),
+            alertOf(EventPayload(type = EventPayload.TYPE_ACCOUNTABILITY_PAUSED, text = ""), 42L),
+        )
+        assertEquals(
+            SharingChange.ACCOUNTABILITY_PAUSED,
+            sharingAlert(
+                PartnerSharingAlert(
+                    pairId = "pair", eventId = "evt",
+                    kind = EventPayload.TYPE_ACCOUNTABILITY_PAUSED, label = null,
+                    occurredAtMs = now, expiresAtMs = now,
+                ),
+            )?.let { (it as PartnerAlert.SharingChanged).change },
+        )
+    }
+
+    /** The derived paused state: newest alert at or before the pause means still paused; any
+     *  later alert clears it; with nothing newer, the pause stands. */
+    @Test
+    fun stillPausedSince_onlyUntilSomeLaterAlertArrives() {
+        assertEquals(null, stillPausedSince(null, null))
+        assertEquals(100L, stillPausedSince(100L, null))
+        assertEquals(100L, stillPausedSince(100L, 100L))
+        assertEquals(null, stillPausedSince(100L, 200L))
+    }
+
+    @Test
+    fun receivedActivityAlert_mapsTheStoredRelapseAndMilestone_andDropsOtherKinds() {
+        val relapse = PartnerActivityAlert(
+            pairId = "pair", eventId = "evt-1", kind = EventPayload.TYPE_RELAPSE_RECORDED,
+            habitLabel = "No porn", endedDays = 12, milestoneDay = null,
+            occurredAtMs = now, expiresAtMs = now,
+        )
+        val milestone = PartnerActivityAlert(
+            pairId = "pair", eventId = "evt-2", kind = EventPayload.TYPE_MILESTONE_REACHED,
+            habitLabel = "No porn", endedDays = null, milestoneDay = 7,
+            occurredAtMs = now, expiresAtMs = now,
+        )
+        assertEquals(PartnerAlert.Relapse("No porn", 12, now), receivedActivityAlert(relapse))
+        assertEquals(PartnerAlert.Milestone("No porn", 7, now), receivedActivityAlert(milestone))
+        assertNull(receivedActivityAlert(relapse.copy(kind = "something_else")))
     }
 
     @Test

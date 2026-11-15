@@ -127,9 +127,10 @@ class PartnerSyncCoordinator(
      *  the identity upgrade need it — v2 rows carry their label, and a rule that no longer
      *  exists keeps the contract's neutral fallback. */
     private val resolveRuleLabel: (targetType: String, target: String) -> String = { _, target -> target },
-    /** OPD #43: the partner's account was deleted — erase this device's copy of the pair
-     *  (journal a terminal responder row + shred). True = the pair is gone. */
-    private val purgeAccountDeletedPair: suspend (pairId: String) -> Boolean = { false },
+    /** OPD #43: the server terminated this pair (partner deleted their account, switched a
+     *  guest identity, or ended the partnership) — erase this device's copy (journal a
+     *  terminal responder row + shred) and tell the user. True = the pair is gone. */
+    private val handleTerminatedPair: suspend (pairId: String) -> Boolean = { false },
     /** §13.3 Phase 7 staged transport for journaled rule-lifecycle rows. The default keeps
      *  every production and test caller on the shipped signed-chain path until the producer
      *  is wired and its flag is on. */
@@ -301,14 +302,15 @@ class PartnerSyncCoordinator(
         val myUid = resolved.myUid
         val partnerUid = resolved.partnerUid
 
-        // OPD #43: the partner deleting their account is the server's own termination event
-        // (`terminationReason`), read from the document this pass already fetched. The mailbox
-        // cannot carry it — the E2EE keys died with the account — so this is the deletion
-        // request's delivery. Erase this device's copy and stop: every remote step below is
-        // exactly what a terminated pair refuses.
-        if (resolved.partnerAccountDeleted) {
-            val purged = runCatching { purgeAccountDeletedPair(enrollment.pairId) }
-                .onFailure { Log.w(TAG, "account-deleted purge failed", it) }
+        // OPD #43: the server terminating this pair is a server-originated event, read from
+        // the document this pass already fetched. When this device still holds the enrollment
+        // the end came from the other side and the mailbox cannot carry it (an account
+        // deletion's E2EE keys died with the account; a guest switch's pair is severed), so
+        // this read IS the delivery: erase the local copy and tell the user. Every remote
+        // step below is exactly what a terminated pair refuses.
+        if (resolved.partnerTerminated) {
+            val purged = runCatching { handleTerminatedPair(enrollment.pairId) }
+                .onFailure { Log.w(TAG, "terminated-pair purge failed", it) }
                 .getOrDefault(false)
             // The pre-loop orphan sweep still saw this pair as enrolled. Its projections carry
             // the partner's content (the Home pinned card reads them), so they must fall with
@@ -1096,12 +1098,11 @@ class PartnerSyncCoordinator(
     }
 }
 
-/** OPD #43: the server terminated this pair because the other member's account was deleted
- *  (the account-deletion worker's `terminationReason`). A normal unpair leaves it unset. */
-internal fun isAccountDeletionTermination(status: String?, terminationReason: String?): Boolean =
-    status == "terminated" && terminationReason in ACCOUNT_DELETION_REASONS
-
-private val ACCOUNT_DELETION_REASONS = setOf("ACCOUNT_DELETED", "GUEST_ACCOUNT_DELETION")
+/** OPD #43: the server terminated this pair. A terminated status seen by a member that still
+ *  holds its enrollment means the end came from the other side — whichever reason (account
+ *  deleted, guest identity switched, partnership ended). The reasons ride along on the pair
+ *  document for diagnosis only; the survivor's reaction is the same for all of them. */
+internal fun isServerTermination(status: String?): Boolean = status == "terminated"
 
 /**
  * Resolves (myUid, partnerUid) for a pair: anonymous sign-in if needed, then the v2
@@ -1128,12 +1129,11 @@ class PairUidResolver(
      */
     private val fence: SessionFence = SessionFence.Unfenced,
 ) {
-    /** A resolved pairing: its two uids, plus whether the server ended it because the other
-     *  member deleted their account (OPD #43). */
+    /** A resolved pairing: its two uids, plus whether the server terminated it (OPD #43). */
     data class Resolved(
         val myUid: String,
         val partnerUid: String,
-        val partnerAccountDeleted: Boolean,
+        val partnerTerminated: Boolean,
     )
 
     /** Uid whose profile this process has already ensured; rotation/reset re-runs it. */
@@ -1229,10 +1229,7 @@ class PairUidResolver(
         return Resolved(
             myUid = uid,
             partnerUid = partner,
-            partnerAccountDeleted = isAccountDeletionTermination(
-                snapshot.getString("status"),
-                snapshot.getString("terminationReason"),
-            ),
+            partnerTerminated = isServerTermination(snapshot.getString("status")),
         )
     }
 

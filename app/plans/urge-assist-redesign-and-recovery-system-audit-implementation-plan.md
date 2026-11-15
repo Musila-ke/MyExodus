@@ -1,6 +1,6 @@
 # MyExodus: Urge Assist Redesign and Recovery System Audit
 
-**Status:** Awaiting owner approval. No application code has been modified.
+**Status (revision 2026-11-15, plan-fidelity sweep): ✅ BUILT — the owner approved and §J's phased plan shipped across the Recovery/Urge Assist builds (tasks #35–#51 and the Assist v2 pass: `UrgeAssistScreen`+`SuggestionPanel`, `UrgeCatalog`/`UrgeSelectionEngine`, `RecoveryResourceCatalog`, `CrisisChannels`, risk windows, friction timer). ADR #304 later removed recovery-session sharing; coaching edits still share. The 2026-11-07 status line below is the record at writing.**
 **Date:** 2026-11-07
 **Research foundation:** `app/plans/My_Exodus_Urge_Assist_Audited_Consolidated_Research.docx` (read in full: 1,228 extracted lines / 13,488 words)
 **Scope owner note (2026-11-07):** the redesign covers every page and subpage under Recovery: the hub, the new Urge Assist flow, Techniques and all four technique runners, My plan and its editor, Risk windows, Friction timer, Get help now, and the History rows that new events produce. Settings entries that currently host recovery content are part of the move.

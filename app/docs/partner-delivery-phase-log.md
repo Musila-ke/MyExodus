@@ -529,9 +529,9 @@ rotation, §8.5 WorkManager and triggers, §9 whole-request failures, and Phase 
 | Partial-response reconciliation | Accepted index ACKed; an index with no result stays `PENDING`, records `RESULT_MISSING`/`WIRE_UNKNOWN`, and resends the identical JCS bytes and signature (`partialResponse_defersOnlyTheMissingIndex_asUnknown_andResendsTheExactBytes`) |
 | Backoff | 30 s base doubling to the 30 min cap with jitter (`transportFailure_backsOffExponentially_andKeepsTheSignature`); `RESOURCE_EXHAUSTED` uses the fixed 300 s defer because callables expose no `Retry-After` (`quotaRejection_usesTheFixedLongDefer_withNoRetryAfterOnCallables`) |
 | Outage recovery | A thrown whole-request failure schedules every row and keeps the exact signed bytes; an ambiguous outcome is never treated as acceptance (`transportFailure...`); waiting rows re-probe once per drain and are never submitted without ciphertext (`waitingRow_isReprobedOnceAnEnrollmentExists_thenDelivered`, `staleKey_withNoLocalEnrollment_parksTheRowWaiting`) |
-| Key invalidation states | `RECIPIENT_KEY_STALE` re-encrypts only for the server's authorized keys and makes the row immediately due (`staleKey_regeneratesForTheAuthorizedKey_andIsDueAgainImmediately`); an EMPTY authorized set is passed through as an empty set, never `null` ("every local enrollment"), so the row parks `WAITING_FOR_RECIPIENT_KEY` instead of re-encrypting for revoked keys (`staleKey_withEmptyAuthorizedSet_parksWaiting_andNeverReencryptsForALocalEnrollment`); `REENROLL_REQUIRED` and a missing/mismatched signing key suspend the installation and keep every row, then a foreground-registered drain resumes (`reenrollRequired_suspendsTheInstallation_thenARegisteredDrainResumesEveryRow`, `missingSigningKey_waitsForAForegroundRegistration_andThenDelivers`) |
+| Key invalidation states | `RECIPIENT_KEY_STALE` re-encrypts only for the server's authorized keys and makes the row immediately due (`staleKey_regeneratesForTheAuthorizedKey_andIsDueAgainImmediately`); an EMPTY authorized set is passed through as an empty set, never `null` ("every local enrollment"), so the row parks `WAITING_FOR_RECIPIENT_KEY` instead of re-encrypting for revoked keys (`staleKey_withEmptyAuthorizedSet_parksWaiting_neverFallsBackToLocalEnrollments`) and delivers once a key appears (`staleKey_withEmptyAuthorizedSet_deliversOnceThePartnerKeyAppears`); `REENROLL_REQUIRED` and a missing/mismatched signing key suspend the installation and keep every row, then a foreground-registered drain resumes (`reenrollRequired_suspendsTheInstallation_thenARegisteredDrainResumesEveryRow`, `missingSigningKey_waitsForAForegroundRegistration_andThenDelivers`) |
 | Registration intent preconditions | `ROTATION_REQUIRED` and `ROTATION_NOT_ENROLLED` are each retried once with the other intent, with a challenge for that intent and a fresh key (`rotationPrecondition_isRetriedWithTheOtherIntent`, `rotationNotEnrolled_isRetriedAsEnroll_whenLocalStateClaimedActive`) |
-| §8.3.1 foreground gate | The worker drains with `allowRegistration = false`; only the foreground pass carries the App Lock verdict, and a stale/absent auth makes no network call (`staleAuth_makesNoNetworkCall`) |
+| §8.3.1 foreground gate | The worker drains with `allowRegistration = false`; only the foreground pass carries the App Lock verdict, and a stale/absent auth makes no network call (`staleAuth_makesNoNetworkCall`). A foreground drain that cannot register publishes the reason (`PartnerRegistrationBlock`) so Settings → Account can prompt instead of stalling silently (`staleAuth_duringEnrollment_isSurfacedAsReauthRequired`, `backgroundRegistrationNeed_isSurfacedAsNeedsForeground`, `failedEnrollmentRefresh_surfacesTheBlock_andStillDeliversOutboundRows`) |
 | §8.1 terminal retention (Phase 3 carry #1) | The terminal UPDATE erases source, envelopes, signed envelope and signature in the same write and records `terminal_at_ms`; the empty shell is deleted only after seven days in bounded batches (`serverPermanentRejection_erasesTheSource_keepsTheShell_andNeverResubmits`, `terminalShell_isDeletedOnlyAfterTheSevenDayWindow`) |
 | Unreadable rows | An unsupported kind is `PERMANENT_REJECTED` without signing or sending anything (`unreadableRow_isPermanentlyRejected_withoutSigningAnything`) |
 | Signed-out no-op | No owner means no claim, no signing, no network (`noSignedInOwner_isANoOp`) |
@@ -1647,3 +1647,270 @@ until the owner-gated legs run; the liveness flag is OFF and the producer flags 
 unconditional per the 2026-11-13 Remote Config removal above. The software-verifiable work
 of Phase 8 (unit/emulator tiers, E2EE, latency, runbooks, evidence) is complete; only the
 owner/device-gated legs are open, and they are recorded as such rather than claimed.
+
+## Post-v32 fix — 2026-11-15 (v39, task #243)
+
+### Delivered relapses and milestones never reached the partner's feed or chart
+
+**Symptom (rig finding 2026-11-15).** On the local two-AVD rig, a milestone delivered at
+05:16 (event `d8c9a933-…`) updated the partner's "How they're doing" hero ("Milestones met
+7") but the "Shared events per day" chart still read Today = 2 with only the two Chrome rule
+rows from S7 — the milestone itself was absent from Recent activity and the chart.
+
+**Root cause.** `PartnerDashboardSource.load()` reads received events exclusively through
+`ChainEventDao.receivedSince` (`direction='RECEIVED'`), whose only writer is the legacy
+`ChainStateStore.receiveRemote` path. Since the staged producer became unconditional
+(ADR #171) and `PartnerObservationProjection` writes no chain rows, the only place `alertOf`
+renders `TYPE_RELAPSE_RECORDED` / `TYPE_MILESTONE_REACHED` never saw those events. The
+streak state (`PartnerActivityReceiver.applyAppended`) and the tray were the only surfaces;
+the feed, the week counts and the chart silently lost them — while the caption explicitly
+promised they were counted.
+
+**Fix (mirrors the attempt/sharing parity precedent).**
+- `data/db/entity/PartnerActivityAlert.kt` + `dao/PartnerActivityAlertDao.kt` — pair-scoped
+  `partner_activity_alert` (primary key `(pair_id, event_id)`, `IGNORE` on conflict so a
+  redelivery dedupes; `kind` holds the wire activity type, `habit_label`/`ended_days`/
+  `milestone_day` the wire-v2 detail, `occurred_at_ms` the sender's own occurrence time).
+  `AppRulesStore` v32 with `MIGRATION_31_32`/`MIGRATION_32_31`, schema `32.json`.
+- `accountability/delivery/PartnerObservationProjection.kt` — every delivered relapse or
+  milestone with a `stateAfter` persists the row before the notification path runs (30-day
+  `PartnerEventJournal` retention). A body without `stateAfter` has no feed shape to restore
+  and writes nothing.
+- `ui/partner/PartnerPresentation.kt` — `receivedActivityAlert(row)` maps the stored row to
+  the same `PartnerAlert.Relapse` / `PartnerAlert.Milestone` the legacy chain path renders.
+- `ui/partner/PartnerDashboardSource.kt` + `di/AccountabilityModule.kt` — stored rows fold
+  into `receivedAlerts` (week-windowed like the legacy query) so they land in the week
+  preview, the chart buckets and the today count, and — deliberately — **not** in
+  `ruleHistory`: relapses/milestones are not rule activity, matching the legacy behavior.
+- `data/db/PartnerActivityPrune.kt` — the new table joins the orphan/unpair/purge sweep.
+- `values/strings.xml` — `partner_activity_counted` loses "recovery steps": stale since
+  ADR #304 removed recovery-session sharing entirely, so the caption claimed a category the
+  app can no longer send.
+
+**Scope ruling (recorded, not silent).** No chain rows are fabricated (that would corrupt
+chain repair) and no sealed envelopes are replayed; the table stores only what the feed
+renders — the same boundary `PartnerAttemptAlert` and `PartnerSharingAlert` already set.
+Legacy and staged transports never carry the same event (old APKs emit legacy only, current
+builds stage only), so the merged feed cannot double-count.
+
+**Tests.** `PartnerObservationProjectionTest`: a delivered relapse and milestone each persist
+exactly one row with label/endedDays/milestoneDay, the sender's backdated occurrence time,
+and the retention expiry; redelivery dedupes; a daily `STREAK_UPDATED` writes nothing.
+`PartnerPresentationTest`: `receivedActivityAlert` maps both kinds, unknown kind → null.
+`PartnerDashboardSourceTest`: stored rows land in `alerts.recent` (newest first), the week
+count, the per-day buckets, and leave `ruleHistory` empty.
+`AppRulesStoreMigrationTest`: 31→32 creates the table, rollback drops only it and keeps
+sentinel rows.
+
+**Device re-proof (rig, 2026-11-15 05:53–05:55).** Fresh milestone seeded on A
+(`abc75913-d281-4d47-9e0e-2a23e77a10fe`, `daysFree=7`, `milestoneDay=7`, queued 05:53:43;
+the harness window was warmed by an OS lockscreen unlock with the AVD PIN — an in-app
+BiometricPrompt send does not carry its auth token to the instrumentation process,
+keystore2 logs `matching auth token is expired`). Sender pass `drain: Result(claimed=1,
+accepted=1, …)` 05:54:06.452; B `recipientEventsPulled=1` 05:54:11.015. B's "How they're
+doing" then rendered the milestone row "RigStreak — reached 7 days · 2m ago" in Recent
+activity, Events today went 2 → 3, and the "Shared events per day" chart's Today bucket
+went 2 → 3 under the corrected caption. The pre-fix 05:16 milestone `d8c9a933-…` stays
+absent — no backfill by design.
+
+## 2026-11-15 12:04 EAT — receiver authorization follows the device registration (identity-crossed key)
+
+**Symptom.** A .107→.106 message ("RcvOut leg 11-15", composed 11:27:21) was rejected
+`RECIPIENT_KEY_STALE` with an empty authorized set, parked WAITING, and would have stayed
+undeliverable even after .106 signed back in. A fresh send after the fix delivered in 7 s.
+
+**Root cause.** `ingestPartnerEvents` authorized recipients through the recipient key doc's
+`ownerUid` (`partnerRecipientKeys.where('ownerUid','==',partnerUid)` and a key-doc →
+pairing lookup in the stale check). Two identities on one physical device share the
+recipient keypair, and `registerOrRotateDevice` writes the key doc `{merge:false}` — so the
+identity that registered last owns the key doc. .106's guest identity (`aHf0aks…`)
+re-registered after the account (`uJWm5Z9…`), leaving the account's pair with an empty
+authorized set forever and the mailbox unreachable.
+
+**Fix (`functions/partner-ingest.js`).**
+- New `authorizedRecipients(tx, db, uid)`: for each active pairing, read the partner's
+  ACTIVE `partnerDeviceSigningRegistrations`, follow `recipientKeyId` to the key doc
+  (must be ACTIVE), and address the recipient by the registration's `installationId` —
+  never the key doc's. `currentAuthorizedKeys` is now its diagnostic projection.
+- Stale check and fanout/mailbox writes use that map. A lost-response retry, an accepted
+  event under a rotated key, and the no-write `RECIPIENT_KEY_STALE` contract are unchanged.
+- `partnerRecipientKeys` has exactly one writer (`registerOrRotateDevice`), which writes the
+  registration and key in one transaction — every production recipient key has a registration.
+
+**Tests.** `functions/emulator-test/partner-ingest.emulator.js`: `seedRecipient` now seeds
+the ACTIVE registration (production shape); new regression "a recipient key owned by another
+identity on the same device stays authorized" (key doc ownerUid/installationId overwritten
+by a guest identity → ACCEPTED, mailbox and job at the registration installation, never the
+key doc's). Suite 17/17 on an isolated emulator (port 8090; the live rig holds 8080).
+Logic suite 271/271.
+
+**Deploy + device proof (production, 2026-11-15).** `firebase deploy --only
+functions:ingestPartnerEvents` succeeded at ~11:58 EAT; clients unchanged (backward
+compatible). The parked row was re-probed by the .107 foreground pass: ledger
+`partnerEvents/Q6TjmyFs…/installations/ea93a071…/events/34916734-…` ACCEPTED `receivedAt`
+1794733177049 (11:59:37 EAT), job `SENT_TO_FCM` at 11:59:41, 1 attempt; mailbox row under
+`uJWm5Z9…` addressed to `e7d2a26d…` (the account registration's installation). Post-fix
+fresh send "Post fix check 1207": Send tap 12:04:25 → accepted 12:04:30.901 → FCM
+12:04:32.404 (7.4 s), .106 Home pinned it "Sent just now". The 32-minute first leg is the
+bug + fix window, not normal latency: the card correctly shows the sender's compose time.
+
+## 2026-11-15 — sign-out announces an accountability pause (ADR #313, owner ruling)
+
+**Symptom.** Owner escalation: "all they have to do is sign out and boom they can relapse
+and partner will never be informed immediately." Verified from source that nothing tells
+the partner on sign-out and nothing CAN after it: `PartnerEventDrain.run()` returns when
+`ownerUid()` is null (`PartnerEventDrain.kt:89`), the DI binding reads the live
+`FirebaseAuth.currentUser`, and `ingestPartnerEvents` rejects unauthenticated calls
+(`functions/partner-ingest.js:291-292`). `beginTransition(signOut = true)` leaves the
+Firebase user and the outbox intact until `operations.signOut()` runs.
+
+**Fix.** `AccountViewModel.announceAccountabilityPause()` runs inside the accepted
+sign-out, before credentials leave: one signed `TYPE_ACCOUNTABILITY_PAUSED` event (joins
+`ACTIVITY_TYPES` and `SHARING_STOPPED_TYPES`, snapshot-less) through the normal recorder →
+E2EE envelope → outbox → drain. A pause not ACKed within 8 s is terminally retired
+(`outbox.rejectUnconfirmedPause`, guarded to non-ACK states) and the sign-out is refused
+with `PARTNER_NOT_NOTIFIED`; the session stays signed in and the pane's retry replays.
+The event id is pre-allocated and a `CancellationException` mid-announce retires the row
+under `NonCancellable` so an aborted sign-out cannot claim a later false pause. Receiver
+side: `PartnerDashboardSource` derives `accountabilityPausedSinceEpochMillis` from the
+newest pause row against the newest other retained row (`stillPausedSince`) over the
+journal's 30-day retention, so the hub shows a hard paused state instead of an aging
+timestamp; any later event clears it. `WAITING_FOR_RECIPIENT_KEY` and record-level
+failures proceed without a notice — the pipeline cannot deliver any event kind for that
+pair, and refusing would trap the user (honest limit, ADR #313).
+
+**Tests.** `EventPayloadTest` (round-trip, classification, stopped-type membership),
+`PartnerPresentationTest` (both transports, `stillPausedSince` truth table),
+`PartnerDashboardSourceTest` (pause derives the state; a later alert clears it). JVM
+suite green.
+
+**Physical legs (2026-11-15).** Leg A on v39/1.1.37: .106 signed out → the sign-out
+completed only after the in-process drain ACKed; .107 received the tray notification
+"Musila_Beta paused accountability", the hard hub card "Accountability is paused", and
+the "Accountability · Paused" activity row. Leg B on v40/1.1.38: with airplane mode ON
+the sign-out was refused (`PARTNER_NOT_NOTIFIED` card, session stayed signed in);
+network restored, "Try again" replayed and completed the sign-out, drain `accepted=1`
+at 14:18:12. Leg B exposed a real hang: offline, the §4.3 Firestore push-unregister
+delete never acks, so `beginTransition` suspended forever and the refusal card was
+unreachable. Fix: `unregisterBounded` wraps the unregister in a 3 s
+`withTimeoutOrNull`; a timed-out row is retained in `pendingUnregisterUid` and replayed
+at the next start (JVM regression
+`beginTransition_doesNotHangWhenThePushUnregisterNeverCompletes`). The fixed build
+re-ran Leg B to the evidence above. Leg C on v40: the paused card on .107 persisted
+while .106 was signed out and through a sign-in that emitted nothing; a rule-change
+event from .106 (`claimed=1, accepted=1` at 14:26:36) cleared it — .107 dropped the
+card, "Their phone" read "Checking in", and the rule-update notification/feed rows
+arrived. This is the derived-state design working: no resume event, any newer received
+event clears the pause.
+
+## 2026-11-15 17:05 EAT — uninstall notice (legacy DMS liveness path) observed in production
+
+**Setup.** .106 (X6532) uninstalled MyExodus at 16:24:54 EAT while signed in as Musila_Beta
+(account `x6532.auto.backup.20261114@example.com`, uid `uJWm5Z9Au5eNtmPjNrAU9giZpQu2`), paired
+(active) with `Q6TjmyFsPUccwVDlnUaiKBuEDPP2`. There is no immediate uninstall signal; the path
+is the ADR #300/#301 liveness window — 45 min (`LATE_AFTER_MS`, `functions/dms-logic.js`) after
+the last accepted heartbeat, evaluated by the `*/5` `dmsDeadlineWorker`.
+
+**Server evidence (Firestore, read ~18:00 EAT today).**
+- `dms_install_state/uJWm5Z9Au5eNtmPjNrAU9giZpQu2_cz_73PwVQGibuwSQBHt9jt`: last accepted
+  heartbeat `2026-11-15T13:16:45.361Z` (16:16:45 EAT) → deadline 17:01:45 EAT; row now
+  `notice_state=NOTIFIED`, `notified_at_ms=1794751502787` (17:05:02.787 EAT).
+- Sibling install row `…_e7d2a26d-c29b-4c36-9e15-90babf908109` (last heartbeat 16:20:57 EAT):
+  `notice_state=SUPERSEDED` at the same instant — the ADR #301 duplicate-install handling
+  working: neither row's silence suppresses the other's notice.
+- `dms_notification_outbox/cz_73PwVQGibuwSQBHt9jt.…_….1.AVAILABILITY_6H`: `notice_type=
+  AVAILABILITY_6H`, `status=SENT`, `attempts=1`, `provider_accepted=2`,
+  created=dispatch_started=dispatched=updated=`1794751502787`, `recipient_uid=
+  Q6TjmyFsPUccwVDlnUaiKBuEDPP2`, `monitored_uid=uJWm5…`, `expected_notified_generation=105`.
+- `pairings/Q6TjmyFsPUccwVDlnUaiKBuEDPP2_uJWm5Z9Au5eNtmPjNrAU9giZpQu2`: `status=active`, both
+  members.
+
+**Timing.** The window anchors to the last accepted heartbeat, not the uninstall moment, so
+the worker fired 17:05:02 EAT (one `*/5` tick after the 17:01:45 deadline) rather than
+uninstall+45 min. The owner observed the tray notice on the partner phone (`provider_accepted
+=2` is the transport's two-token acceptance).
+
+**Device follow-up.** Reinstalled the release APK on .106 after the notice window closed
+(fresh install; the package had been absent since 16:24:54) and continued the reinstalled-
+sign-in leg (pairing + backup restore) — outcome appended below when complete.
+
+**Device follow-up outcome (2026-11-15 ~19:35-20:00 EAT, release 1.1.38).**
+
+- **Sign-in: PASSED.** Settings → Account pane reads "Signed in as
+  x6532.auto.backup.20261114@example.com", "Email and password", "Email verified". The
+  credential persisted across the XOS force-kill that fired the same second the Sign in
+  tap landed (`pid 22322 has died: fg TOP`, no crash records) — on relaunch the app came
+  up PersistentActive. One earlier loss of the signed-in state before any sign-in attempt
+  could not be attributed (logcat rolled; recorded as undetermined, not a defect claim).
+- **Encrypted backup pane: opens, account-scoped key intact.** "Backup key is set up";
+  automatic backup shows the first-unlock hint ("Enter your passphrase or recovery key
+  once"); Back up now / Restore from cloud / Change passphrase / Replace recovery key all
+  present. The uninstall destroyed the Keystore-wrapped DeviceKey (expected — Keystore
+  data dies with the package), but the ABK itself is account-scoped and survived.
+- **Restore: unlock form + failure path PASSED; success leg BLOCKED (owner-held secret).**
+  "Restore from cloud" opens the UnlockForm (passphrase tab + Recovery key tab). A wrong
+  passphrase started the envelope download ("Downloading backup… 0%") and failed at the
+  decrypt step with the user-facing copy "That passphrase or recovery key didn't unlock
+  your backup key. Check it and try again." (no crash, form retained). The correct
+  passphrase / 24-word recovery key is not held in any session record, so the successful
+  restore-to-preview-apply path is BLOCKED pending the owner supplying the secret.
+- **Pairing: dropped locally as designed; re-pair BLOCKED on device availability.**
+  Partner tab reads "No partner yet" / "Invite a partner" / "Join with a code" — the
+  uninstall destroyed the device-local pairing keys, and `BackupRestorer` deliberately
+  keeps device-local tables (rules, usage, pairing, profile) while restoring only the
+  eight logical tables, so a backup restore could not have recreated the pair even with
+  the secret. The server pairing `Q6TjmyFsPUccwVDlnUaiKBuEDPP2_uJWm5Z9Au5eNtmPjNrAU9giZpQu2`
+  remains `status=active` with both members. Re-pairing needs the partner device .107,
+  which is not connected (`adb devices` shows only .106 + the two AVDs).
+- **XOS kill cadence observed:** ~12 min during this leg (18:17:30 pid 18145, 18:29:32
+  pid 22322), no crash buffer / dropbox / tombstone entries. Recents Lock mitigation could
+  not be engaged (long-press in Recents re-opens the app instead of surfacing the lock).
+
+## 2026-11-15 21:10 EAT — auth-state matrix legs D/F on the rig; OPD #43 survivor delivery device-proven; functions deployed
+
+- **Leg D (signed-out recipient) both directions: PASSED.** AVD2 signed out ~18:55; AVD1's
+  messages parked in AVD2's mailbox (outbox claimed=1 accepted=1) and rendered on sign-in
+  (recipientEventsPulled=2 → "From Rig Alpha / Thinking of you today."). Reverse direction:
+  AVD2's "Back onlinei" landed AVD1's mailbox (seq 3) and was pulled at 19:43:54 with all
+  three receipts DELIVERED. Defect observed alongside: newer delivered events did not clear
+  the stale "Accountability is paused" card — fixed in `PartnerDashboardSource` (newest-event
+  set now includes the staged activity projection) with a regression test; device re-check
+  pending the wrap build.
+- **Leg F (anonymous→account pair drop, runs LAST): server PASSED, survivor delivery
+  device-proven.** `finalizeGuestTransition` terminated the guest's pairs with
+  `terminatedAt`/`terminatedBy=guestUid`/`terminationReason=GUEST_ACCOUNT_TRANSITION`;
+  system event `guest_transition_terminated` written per active pair; cleanup job enqueued.
+  A mid-leg identity rotation on AVD1 (`ensureUid` rotation, ADR #125 — the original
+  anonymous uid was gone from the auth emulator and a fresh uid minted ~20:59) surfaced as a
+  rules PERMISSION_DENIED on the pair read; the pair's `members` were PATCHed via the
+  Firestore emulator admin REST API to carry the rotated uid, keeping `status=terminated`.
+  Then, on the next foreground pass: the survivor posted
+  `NotificationRecord id=1533437223 tag=partner:ended:P1trorM69NTeotBoxh0cqJsb7CX2_XmBjMYmLyHPYujFb9Bn7dHtQkLO2`
+  importance=4, channel `partner_accountability_events_v1`, title "RigBeta ended the
+  partnership", text "Ended Nov 15, 2026 9:06 PM. The shared data was erased on both
+  phones."; Partner page rendered "Your partner ended the partnership. Your data for it on
+  this device has been erased." with Invite/Join; the Home partner card was pruned; the
+  enrollment was shredded (next pass clean, no pair resolve). AVD2 (account member) had
+  already reached its pairing-cleared state ("Pairing data was lost").
+- **Guest-transition emulator suite: 16/16 PASSED** on the final handler
+  (`firebase emulators:exec` on a side port so the rig stayed up).
+- **Deployed to `myexodus-53804`:** `prepareGuestTransition`, `finalizeGuestTransition`,
+  `cancelGuestTransition` (termination metadata) and `ingestPartnerEvents` (registry-bound
+  authorization) — all four update operations succeeded.
+
+## 2026-11-15 23:30 EAT — stale-pause-card fix re-verified on the rig (v40)
+
+Closes the "device re-check pending the wrap build" note from the 21:10 entry. Version-
+code 40 on both AVDs; pair `7amXhHErP65IYwQbrpJRPJGJQ4cv_rwNjURbzfoDv4z5sqSDrxLi5VAXW`
+(account rig.gamma on AVD2, anonymous "Anon" on AVD1).
+
+- **Pause renders:** AVD2 sign-out staged `ACCOUNTABILITY_UPDATE` in AVD1's mailbox
+  (`partnerMailboxes/rwNjURb…/messages`, createdAt 1794773053653 = 23:04:13Z); AVD1 showed
+  "Accountability is paused / They signed out 2m ago."
+- **Pause clears on a newer event:** AVD2 signed back in, then saved a shared website rule
+  (example.org, block all day) watched by the guest. Backend staged `RULE_CHANGE_ATTEMPT`
+  at 1794773971372 (23:19:31Z), strictly newer than the pause. After one foreground pass on
+  AVD1 the dashboard rendered the pair with **no** paused card — the newest-event set
+  (now incl. `partnerActivity.pinnedMessageAtEpochMillis` /
+  `lastEventOccurredAtEpochMillis`) clears it as designed. Regression test
+  `stillPausedSince_*` plus the staged-projection case already covered this on the JVM.

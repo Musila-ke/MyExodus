@@ -10,6 +10,20 @@ import kotlin.random.Random
  *  uses a longer fixed defer instead — the one translation the transport performs. */
 class DeliveryRateLimitedException(cause: Throwable) : Exception(cause)
 
+/** Why this drain could not register or refresh the installation. Delivery stalls silently
+ *  without this: the worker cannot register and nothing else surfaces the reason. */
+enum class PartnerRegistrationBlock {
+    /** The background worker may not register (§8.3.1 foreground gate). */
+    NEEDS_FOREGROUND,
+    /** §8.3.1: `auth_time` is older than five minutes; the user must prove the provider. */
+    REAUTH_REQUIRED,
+    NO_ACCOUNT,
+    /** No paired agreement key yet — registration waits for a pairing. */
+    NO_RECIPIENT_KEY,
+    ATTESTATION_REQUIRED,
+    RETRYABLE,
+}
+
 /**
  * §4.3/§8.4/§9 drain: claim → sign → submit → reconcile, with leases, per-index reconciliation,
  * exponential backoff and the three key-invalidation states. Never mutates ciphertext or the
@@ -61,6 +75,7 @@ class PartnerEventDrain(
         val retried: Int = 0,
         val rejected: Int = 0,
         val registrationRequired: Boolean = false,
+        val registrationBlock: PartnerRegistrationBlock? = null,
         val earliestNextAttemptMs: Long? = null,
     )
 
@@ -89,6 +104,7 @@ class PartnerEventDrain(
             }
         }.getOrNull()
 
+        var registrationBlock: PartnerRegistrationBlock? = null
         val signingHealthy = installation.registrationState == InstallationState.REGISTRATION_ACTIVE &&
             signingKeyId != null &&
             installation.activeKeyId == signingKeyId
@@ -101,6 +117,7 @@ class PartnerEventDrain(
             if (!allowRegistration) {
                 return@withLock Result(
                     registrationRequired = true,
+                    registrationBlock = PartnerRegistrationBlock.NEEDS_FOREGROUND,
                     earliestNextAttemptMs = outbox.earliestNextAttempt(uid),
                 )
             }
@@ -108,6 +125,7 @@ class PartnerEventDrain(
             if (outcome !is PartnerEventRegistrar.Outcome.Registered) {
                 return@withLock Result(
                     registrationRequired = true,
+                    registrationBlock = blockOf(outcome),
                     earliestNextAttemptMs = outbox.earliestNextAttempt(uid),
                 )
             }
@@ -117,6 +135,7 @@ class PartnerEventDrain(
             }.getOrNull()
                 ?: return@withLock Result(
                     registrationRequired = true,
+                    registrationBlock = PartnerRegistrationBlock.RETRYABLE,
                     earliestNextAttemptMs = outbox.earliestNextAttempt(uid),
                 )
         } else if (allowRegistration) {
@@ -142,8 +161,14 @@ class PartnerEventDrain(
                     outbox.markReenrollRequired(installation.installationId)
                     return@withLock Result(
                         registrationRequired = true,
+                        registrationBlock = blockOf(outcome),
                         earliestNextAttemptMs = outbox.earliestNextAttempt(uid),
                     )
+                } else {
+                    // Outbound rows are unaffected by a failed refresh, but the server still
+                    // advertises the previous enrollment's recipient key. Carry the reason so
+                    // the app can prompt instead of stalling inbound delivery invisibly.
+                    registrationBlock = blockOf(outcome)
                 }
             }
         }
@@ -186,6 +211,8 @@ class PartnerEventDrain(
                     Prepared.Reenroll -> {
                         outbox.markReenrollRequired(installation.installationId)
                         registrationRequired = true
+                        registrationBlock = registrationBlock
+                            ?: PartnerRegistrationBlock.RETRYABLE
                         stop = true
                         capped = true
                     }
@@ -261,7 +288,19 @@ class PartnerEventDrain(
                             "RECIPIENT_KEY_STALE",
                             runCatching { PartnerEventProtocol.digest(prepared.event) }.getOrNull(),
                         )
-                        when (
+                        if (authorized.isEmpty()) {
+                            // An empty authorized set is not revocation: the partner has no
+                            // ACTIVE recipient key at all (never enrolled, or mid re-pair).
+                            // §6.1 step 3 keeps the event WAITING_FOR_RECIPIENT_KEY; a
+                            // terminal reject here would destroy an event the partner can
+                            // still receive once its app enrolls.
+                            outbox.applyRegeneratedEnvelopes(prepared.eventId, null, revision)
+                            outbox.deferWaiting(
+                                prepared.eventId,
+                                clock.wallClockMs() + limits.waitingBackoffMs,
+                            )
+                            retried++
+                        } else when (
                             recorder.regenerateRecipientEnvelopes(
                                 prepared.eventId, revision, authorized,
                             )
@@ -312,6 +351,8 @@ class PartnerEventDrain(
                     PartnerEventResultCode.REENROLL_REQUIRED -> {
                         outbox.markReenrollRequired(installation.installationId)
                         registrationRequired = true
+                        registrationBlock = registrationBlock
+                            ?: PartnerRegistrationBlock.RETRYABLE
                         stop = true
                         break
                     }
@@ -347,6 +388,7 @@ class PartnerEventDrain(
             retried = retried,
             rejected = rejected,
             registrationRequired = registrationRequired,
+            registrationBlock = registrationBlock,
             earliestNextAttemptMs = outbox.earliestNextAttempt(uid),
         )
     }
@@ -456,6 +498,20 @@ class PartnerEventDrain(
             null
         }
     }
+
+    private fun blockOf(outcome: PartnerEventRegistrar.Outcome): PartnerRegistrationBlock =
+        when (outcome) {
+            PartnerEventRegistrar.Outcome.NoAccount -> PartnerRegistrationBlock.NO_ACCOUNT
+            PartnerEventRegistrar.Outcome.AuthNotFresh -> PartnerRegistrationBlock.REAUTH_REQUIRED
+            PartnerEventRegistrar.Outcome.NoRecipientKey ->
+                PartnerRegistrationBlock.NO_RECIPIENT_KEY
+            PartnerEventRegistrar.Outcome.AttestationRequired ->
+                PartnerRegistrationBlock.ATTESTATION_REQUIRED
+            is PartnerEventRegistrar.Outcome.Registered,
+            is PartnerEventRegistrar.Outcome.Rejected,
+            PartnerEventRegistrar.Outcome.Retryable,
+            -> PartnerRegistrationBlock.RETRYABLE
+        }
 
     private fun backoffMs(attempt: Int): Long {
         val exponent = (attempt - 1).coerceIn(0, 20)

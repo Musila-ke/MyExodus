@@ -108,6 +108,54 @@ class PartnerObservationProjectionTest {
     }
 
     @Test
+    fun deliveredRelapseAndMilestone_becomeFeedRows_withSenderOccurrenceTime() = runBlocking {
+        db.enrollmentDao().upsert(enrollment())
+        val relapseAt = nowMs - 6 * 60 * 60 * 1000L
+
+        projection().onDelivered(
+            document(kind = PartnerEventKind.ACCOUNTABILITY_UPDATE.wire),
+            activity(
+                EventPayload.TYPE_RELAPSE_RECORDED,
+                habitLabel = "No porn", endedDays = 12, occurredAtMs = relapseAt,
+            ),
+        )
+        projection().onDelivered(
+            document(eventId = "evt-2", kind = PartnerEventKind.ACCOUNTABILITY_UPDATE.wire),
+            activity(EventPayload.TYPE_MILESTONE_REACHED, habitLabel = "No porn", milestoneDay = 7),
+        )
+        // A redelivered document must not duplicate the row.
+        projection().onDelivered(
+            document(eventId = "evt-2", kind = PartnerEventKind.ACCOUNTABILITY_UPDATE.wire),
+            activity(EventPayload.TYPE_MILESTONE_REACHED, habitLabel = "No porn", milestoneDay = 7),
+        )
+
+        val rows = activityRows().sortedBy { it.eventId }
+        assertEquals(listOf("evt-1", "evt-2"), rows.map { it.eventId })
+        assertEquals(EventPayload.TYPE_RELAPSE_RECORDED, rows[0].kind)
+        assertEquals("No porn", rows[0].habitLabel)
+        assertEquals(12, rows[0].endedDays)
+        assertEquals(null, rows[0].milestoneDay)
+        // A backdated relapse keeps the sender's own occurrence time, not the arrival time.
+        assertEquals(relapseAt, rows[0].occurredAtMs)
+        assertEquals(EventPayload.TYPE_MILESTONE_REACHED, rows[1].kind)
+        assertEquals(7, rows[1].milestoneDay)
+        assertEquals(nowMs, rows[1].occurredAtMs)
+        assertEquals(nowMs + PartnerEventJournal.RETENTION_MILLIS, rows[1].expiresAtMs)
+    }
+
+    @Test
+    fun dailyStreakSnapshot_neverWritesAnActivityRow() = runBlocking {
+        db.enrollmentDao().upsert(enrollment())
+
+        projection().onDelivered(
+            document(kind = PartnerEventKind.ACCOUNTABILITY_UPDATE.wire),
+            activity(EventPayload.TYPE_STREAK_UPDATED, habitLabel = "No porn"),
+        )
+
+        assertTrue(activityRows().isEmpty())
+    }
+
+    @Test
     fun otherKinds_neverWriteAnAttemptRow() = runBlocking {
         db.enrollmentDao().upsert(enrollment())
 
@@ -167,6 +215,27 @@ class PartnerObservationProjectionTest {
         ),
     )
 
+    private fun activity(
+        type: String,
+        habitLabel: String? = null,
+        endedDays: Int? = null,
+        milestoneDay: Int? = null,
+        occurredAtMs: Long = nowMs,
+    ) = encodePayload(
+        EventPayload(
+            type = type,
+            text = "",
+            protocolVersion = EventPayload.ACTIVITY_PROTOCOL_VERSION,
+            schemaVersion = EventPayload.ACTIVITY_SCHEMA_VERSION,
+            stateAfter = ActivityStateAfter(
+                daysFree = 7, relapseCount = if (endedDays != null) 1 else 0,
+                milestonesReached = milestoneDay?.let { listOf(it) } ?: emptyList(),
+                coachingProgress = 0, eventOccurredAtMs = occurredAtMs,
+                habitLabel = habitLabel, endedDays = endedDays, milestoneDay = milestoneDay,
+            ),
+        ),
+    )
+
     private fun enrollment() = EnrollmentRecord(
         pairId = "pair-1",
         mySenderKeyId = "a".repeat(64),
@@ -179,6 +248,9 @@ class PartnerObservationProjectionTest {
 
     private suspend fun rows() =
         factory.open()!!.partnerAttemptAlertDao().recent("pair-1", nowMs, 100)
+
+    private suspend fun activityRows() =
+        factory.open()!!.partnerActivityAlertDao().recent("pair-1", nowMs, 100)
 
     private class FakeKeyManager : DatabaseKeyManager {
         override fun getOrCreateDek(): ByteArray = ByteArray(32)

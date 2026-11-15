@@ -176,6 +176,23 @@ interface ServiceEventOutboxDao {
     suspend fun permanentRejectRow(eventId: String, errorCode: String?, terminalAtMs: Long): Int
 
     /**
+     * Owner ruling 2026-11-15: a sign-out pause the drain did not confirm is cancelled rather
+     * than left queued — a stale pause delivered after a later sign-in would be a lie. Unlike
+     * [permanentRejectRow] this must reach a row the drain never leased. A concurrent ACK
+     * still wins ([markAcked] is unguarded, and an ACK means the server accepted).
+     */
+    @Query(
+        "UPDATE pending_partner_events SET status = 'PERMANENT_REJECTED', " +
+            "wire_outcome = 'PERMANENT_REJECTED', lease_until_ms = NULL, " +
+            "last_error_code = :errorCode, terminal_at_ms = :terminalAtMs, " +
+            "temporary_local_ciphertext = NULL, recipient_envelopes_blob = NULL, " +
+            "signed_envelope = NULL, signing_signature = NULL " +
+            "WHERE event_id = :eventId " +
+            "AND status IN ('PENDING', 'WAITING_FOR_RECIPIENT_KEY', 'LEASED')",
+    )
+    suspend fun rejectUnconfirmedPause(eventId: String, errorCode: String?, terminalAtMs: Long): Int
+
+    /**
      * §8.1 terminal stale: the server's authorized set named none of the row's local keys, so
      * every resend would earn the same rejection. Guarded on the stale outcome the rejection
      * just recorded — a concurrent ACK or regeneration still wins.

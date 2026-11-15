@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.MailOutline
 import androidx.compose.material.icons.outlined.MarkEmailRead
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PersonOutline
+import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -68,6 +69,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.R
 import com.example.myexodus.account.AuthEvent
@@ -87,6 +89,7 @@ import com.example.myexodus.account.RecoveryFailure
 import com.example.myexodus.account.TransitionFailure
 import com.example.myexodus.account.TransitionIntent
 import com.example.myexodus.account.TransitionStep
+import com.example.myexodus.accountability.delivery.PartnerRegistrationBlock
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.PillTone
 import com.example.myexodus.ui.StatusPill
@@ -113,6 +116,7 @@ internal fun AccountPane(
     val cloudAccess by viewModel.cloudAccess.collectAsStateWithLifecycle()
     val deletion by viewModel.deletionState.collectAsStateWithLifecycle()
     val removal by viewModel.removal.collectAsStateWithLifecycle()
+    val pauseNotice by viewModel.pauseNotice.collectAsStateWithLifecycle()
     val isGuest = state is AuthState.GuestActive
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -249,6 +253,12 @@ internal fun AccountPane(
 
             RecoveryCard(state = recovery, onImport = viewModel::stageRecoveryImport)
 
+            // Owner ruling 2026-11-15 (#245): survives the transition into SignedOut so the
+            // outcome of the pause announcement stays visible; history once signed back in.
+            if (state !is AuthState.PersistentActive && state !is AuthState.GuestActive) {
+                pauseNotice?.let { PauseNoticeCard(it) }
+            }
+
             when (val current = state) {
                 AuthState.Initializing -> Box(
                     Modifier.fillMaxWidth().padding(vertical = 48.dp),
@@ -261,6 +271,7 @@ internal fun AccountPane(
                     failure = current.failure,
                     onDismiss = viewModel::dismissTransient,
                     onDiscardPendingWrites = viewModel::discardPendingWritesAndRetry,
+                    onRetry = viewModel::retryLastAttempt,
                     onRestart = viewModel::restartForCloudRecovery,
                 )
 
@@ -310,41 +321,18 @@ internal fun AccountPane(
     }
 
     if (showSwitchDialog) {
-        AlertDialog(
-            onDismissRequest = {
+        GuestSwitchDialog(
+            onDismiss = {
                 showSwitchDialog = false
                 pendingSwitch = null
             },
-            title = { Text(stringResource(R.string.account_transition_title)) },
-            text = { Text(stringResource(R.string.account_transition_body)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showSwitchDialog = false
-                        viewModel.startTransition(TransitionIntent.IMPORT)
-                    },
-                ) { Text(stringResource(R.string.account_transition_import)) }
+            onImport = {
+                showSwitchDialog = false
+                viewModel.startTransition(TransitionIntent.IMPORT)
             },
-            dismissButton = {
-                Column(horizontalAlignment = Alignment.End) {
-                    TextButton(
-                        onClick = {
-                            showSwitchDialog = false
-                            viewModel.startTransition(TransitionIntent.DISCARD)
-                        },
-                    ) {
-                        Text(
-                            stringResource(R.string.account_transition_discard),
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                    TextButton(
-                        onClick = {
-                            showSwitchDialog = false
-                            pendingSwitch = null
-                        },
-                    ) { Text(stringResource(R.string.account_transition_stay_guest)) }
-                }
+            onDiscard = {
+                showSwitchDialog = false
+                viewModel.startTransition(TransitionIntent.DISCARD)
             },
         )
     }
@@ -624,6 +612,71 @@ private fun RemoveLocalDialog(
 private sealed interface PendingSwitch {
     data class Email(val email: String, val password: String) : PendingSwitch
     data object Google : PendingSwitch
+}
+
+/**
+ * Plan §8.4 disclosure before a guest→existing-account switch. Shared by Settings → Account and
+ * first-run onboarding so the three equal-weight choices cannot drift between entry points.
+ */
+@Composable
+internal fun GuestSwitchDialog(
+    onDismiss: () -> Unit,
+    onImport: () -> Unit,
+    onDiscard: () -> Unit,
+) {
+    // Owner 2026-11-15: the stock dialog's single dismiss slot stacked two of the three
+    // choices in a stretched column (rows drifted apart, the last one clipped). All three
+    // are equal-weight decisions, so they get their own full-width rows instead.
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 6.dp,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    stringResource(R.string.account_transition_title),
+                    style = MaterialTheme.typography.headlineSmall,
+                )
+                Text(
+                    stringResource(R.string.account_transition_body),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                // Owner 2026-11-15: creating a new account upgrades the guest in place, so
+                // the user has a way to keep their partner connections the dialog's copy
+                // would otherwise only announce losing.
+                Text(
+                    stringResource(R.string.account_transition_create_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(
+                    onClick = onImport,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(stringResource(R.string.account_transition_import)) }
+                OutlinedButton(
+                    onClick = onDiscard,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        stringResource(R.string.account_transition_discard),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(stringResource(R.string.account_transition_stay_guest)) }
+            }
+        }
+    }
 }
 
 /**
@@ -999,6 +1052,21 @@ private fun PersistentAccount(
                 Button(onClick = viewModel::refreshVerification) {
                     Text(stringResource(R.string.account_verify_confirm))
                 }
+            }
+        }
+    }
+
+    // §8.3.1: enrollment/rotation needs a five-minute-old-or-fresher `auth_time`. Without
+    // this prompt a blocked registration is invisible and partner updates silently stall.
+    val deliveryBlock by viewModel.deliveryBlock.collectAsStateWithLifecycle()
+    if (deliveryBlock == PartnerRegistrationBlock.REAUTH_REQUIRED) {
+        AccountCard(
+            icon = Icons.Outlined.Security,
+            title = stringResource(R.string.account_delivery_reauth_title),
+            body = stringResource(R.string.account_delivery_reauth_body),
+        ) {
+            Button(onClick = viewModel::requireDeliveryReauth) {
+                Text(stringResource(R.string.account_delivery_reauth_action))
             }
         }
     }
@@ -1583,6 +1651,7 @@ private fun ErrorCard(
     failure: AuthFailure,
     onDismiss: () -> Unit,
     onDiscardPendingWrites: () -> Unit,
+    onRetry: () -> Unit,
     onRestart: () -> Unit,
 ) {
     Surface(
@@ -1602,6 +1671,10 @@ private fun ErrorCard(
                     // §9: a failed one-time purge is not retryable in-process.
                     AuthFailure.CLOUD_MIGRATION_PENDING -> TextButton(onClick = onRestart) {
                         Text(stringResource(R.string.account_restart))
+                    }
+                    // Owner ruling 2026-11-15: the refused sign-out replays once it can reach.
+                    AuthFailure.PARTNER_NOT_NOTIFIED -> TextButton(onClick = onRetry) {
+                        Text(stringResource(R.string.account_error_retry))
                     }
                     else -> Unit
                 }
@@ -1699,6 +1772,29 @@ private fun DeletionCard(
     }
 }
 
+/** Owner ruling 2026-11-15 (#245): shows the sign-out pause reaching the partner. A pause
+ *  that does not get through refuses the sign-out instead (AuthFailure.PARTNER_NOT_NOTIFIED). */
+@Composable
+private fun PauseNoticeCard(notice: PauseNotice) {
+    val (title, body) = when (notice) {
+        PauseNotice.SENDING -> R.string.account_sign_out_pause_sending_title to
+            R.string.account_sign_out_pause_sending_body
+        PauseNotice.SENT -> R.string.account_sign_out_pause_sent_title to
+            R.string.account_sign_out_pause_sent_body
+    }
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(stringResource(title), style = MaterialTheme.typography.titleSmall)
+            Text(stringResource(body), style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
 @Composable
 private fun StatusCard(text: String) {
     Surface(
@@ -1738,6 +1834,7 @@ internal fun failureRes(failure: AuthFailure): Int = when (failure) {
     AuthFailure.TRANSITION_REQUIRED -> R.string.account_error_transition
     AuthFailure.PENDING_WRITES -> R.string.account_error_pending_writes
     AuthFailure.CLOUD_MIGRATION_PENDING -> R.string.account_error_cloud_pending
+    AuthFailure.PARTNER_NOT_NOTIFIED -> R.string.account_error_partner_not_notified
     AuthFailure.TRANSITION_IN_PROGRESS -> R.string.account_error_transition_in_progress
     AuthFailure.SECURITY_CHECK_FAILED -> R.string.account_error_security
     AuthFailure.UNKNOWN -> R.string.account_error_generic

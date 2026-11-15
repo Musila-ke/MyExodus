@@ -83,7 +83,11 @@ async function expectRejection(promise, code, message) {
   }
 }
 
-/** Seeds a recipient's ACTIVE key and its active pairing with the sender. */
+/**
+ * Seeds a recipient the way production does: an ACTIVE key, the ACTIVE device registration
+ * that references it (ingest authorizes through this, never the key doc's `ownerUid`), and
+ * the active pairing with the sender.
+ */
 async function seedRecipient(uid, { revision = 1, status = 'ACTIVE' } = {}) {
   const pair = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const spki = pair.publicKey.export({ type: 'spki', format: 'der' });
@@ -97,6 +101,12 @@ async function seedRecipient(uid, { revision = 1, status = 'ACTIVE' } = {}) {
     spkiDerBase64: spki.toString('base64'),
     revision,
     status,
+  });
+  await db.doc(`partnerDeviceSigningRegistrations/${uid}:${installationId}`).set({
+    ownerUid: uid,
+    installationId,
+    recipientKeyId: keyId,
+    status: 'ACTIVE',
   });
   await db.doc(`pairings/${pairIdOf(ALICE, uid)}`).set({
     members: [ALICE, uid],
@@ -353,6 +363,42 @@ test('stale recipient keys reject with no writes and return the authorized keys'
   assert.deepStrictEqual(afterRotation.results[0].currentRecipientKeys, [{
     keyId: rotated.keyId, revision: 2, installationId: rotated.installationId,
   }]);
+});
+
+test('a recipient key owned by another identity on the same device stays authorized', async () => {
+  // Two identities on one physical device share the recipient keypair; whichever identity
+  // registered last overwrites the key doc's ownerUid/installationId. Authorization must
+  // follow the partner's ACTIVE registration, and the mailbox must be addressed by the
+  // registration's installation, or the signed-out identity's pair goes stale forever.
+  const bob = await seedRecipient(BOB);
+  const guestUid = 'guest-uid';
+  const guestInstall = 'guest-install';
+  await db.doc(`partnerRecipientKeys/${bob.keyId}`).set(
+    { ownerUid: guestUid, installationId: guestInstall }, { merge: true },
+  );
+  await db.doc(`partnerDeviceSigningRegistrations/${guestUid}:${guestInstall}`).set({
+    ownerUid: guestUid,
+    installationId: guestInstall,
+    recipientKeyId: bob.keyId,
+    status: 'ACTIVE',
+  });
+
+  const w = eventFor([bob]);
+  const reply = await request([w]);
+  assert.deepStrictEqual(reply.results, [
+    { index: 0, code: 'ACCEPTED', eventId: w.event.eventId },
+  ]);
+  assert.strictEqual(
+    await exists(mailboxPath(BOB, w.event.eventId, bob.installationId)), true,
+    'the mailbox is addressed by the registration installation',
+  );
+  assert.strictEqual(
+    await exists(jobPath(w.event.eventId, bob.installationId)), true,
+  );
+  assert.strictEqual(
+    await exists(jobPath(w.event.eventId, guestInstall)), false,
+    'the key doc installation never addresses the mailbox',
+  );
 });
 
 test('an unpaired recipient and a self-addressed envelope are stale', async () => {

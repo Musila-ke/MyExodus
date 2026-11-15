@@ -4,16 +4,14 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** OPD #43: only a terminated pair whose reason is an account deletion may trigger a purge. */
+/** OPD #43: any server-side termination is delivery to a member that still holds the
+ *  enrollment — account deletion, guest identity switch, or a plain end of the partnership. */
 class PairUidResolverTest {
 
     @Test
-    fun accountDeletionReason_isOnlyATerminatedDeletionPair() {
-        assertTrue(isAccountDeletionTermination("terminated", "ACCOUNT_DELETED"))
-        assertTrue(isAccountDeletionTermination("terminated", "GUEST_ACCOUNT_DELETION"))
-        assertFalse("an ordinary unpair carries no reason", isAccountDeletionTermination("terminated", null))
-        assertFalse(isAccountDeletionTermination("terminated", "SOMETHING_ELSE"))
-        assertFalse(isAccountDeletionTermination("active", "ACCOUNT_DELETED"))
-        assertFalse(isAccountDeletionTermination(null, null))
+    fun terminatedStatus_isTheServerTerminationSignal() {
+        assertTrue("any reason — deletion, guest switch, or plain end — reaches the survivor", isServerTermination("terminated"))
+        assertFalse(isServerTermination("active"))
+        assertFalse(isServerTermination(null))
     }
 }

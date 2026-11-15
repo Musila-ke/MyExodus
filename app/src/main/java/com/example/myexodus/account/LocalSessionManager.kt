@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Plan §4.1: the persisted facts an identity switch must survive a process death with — the
@@ -213,7 +214,7 @@ class LocalSessionManager @Inject constructor(
             val pending = store.pendingUnregisterUid() ?: return@launch
             val current = operations.currentIdentity()?.uid
             if (pending == current && !signedOut) {
-                if (runCatching { push.unregister(pending) }.isSuccess) {
+                if (unregisterBounded(pending)) {
                     store.setPendingUnregister(null)
                 }
             } else if (pending != current) {
@@ -290,10 +291,15 @@ class LocalSessionManager @Inject constructor(
         }
         // §4.3: the mapping is deletable only while this UID is current. Offline, the retry
         // metadata is retained and replayed at the next start on the same identity.
-        runCatching { push.unregister(uid) }
-            .onFailure { store.setPendingUnregister(uid) }
+        if (!unregisterBounded(uid)) store.setPendingUnregister(uid)
         return TransitionStart.Started
     }
+
+    /** Offline a Firestore delete is queued and its Task never completes, so the §4.3 push
+     *  unregister is bounded; false means the row is retained for the next start. */
+    private suspend fun unregisterBounded(uid: String): Boolean = runCatching {
+        withTimeoutOrNull(PUSH_UNREGISTER_TIMEOUT_MS) { push.unregister(uid) } != null
+    }.getOrDefault(false)
 
     override fun completeTransition(newUid: String?) {
         synchronized(lock) {
@@ -370,5 +376,8 @@ class LocalSessionManager @Inject constructor(
         /** §8.7 needs a bounded wait; 5 s is long enough for an ordinary flush, short enough
          *  that a wedged queue surfaces the explicit-discard choice instead of hanging. */
         const val PENDING_WRITES_TIMEOUT_MS = 5_000L
+        /** Offline the Firestore delete never acks; the retained replay at the next start
+         *  covers it, so a sign-out must never wait on it. */
+        const val PUSH_UNREGISTER_TIMEOUT_MS = 3_000L
     }
 }

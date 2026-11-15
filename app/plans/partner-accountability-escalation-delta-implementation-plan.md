@@ -1,5 +1,7 @@
 # Partner-Accountability Escalation Delta Implementation Plan
 
+*Status (2026-11-15, plan-fidelity sweep): **executed delta-only under ADR #225 (2026-10-28/29) — read Appendix D first.** Appendix D audits every requirement against shipped source (SHIPPED / PARTIAL / GAP / REJECTED / SUPERSEDED). Of the unbuilt cluster ADR #225 deferred, the per-rule partner roles and lifecycle journaling (ADR #226/#227/#259), the per-episode block notification (ADR #295), streak events, and uninstall/availability notices (ADR #300–#302) have since shipped; the **backup-partner release is still deliberately unbuilt** (`backup_pair_id` is stored and cleared on recovery, but no delivery path reads it — Appendix D req 14). ADR #225 carries the amendment.*
+
 ## 1. Feature Overview
 
 Implement the Partner-Accountability Escalation Delta for MyExodus. The feature assigns accountability responsibilities per rule, sends redacted end-to-end encrypted events to the correct partner devices, detects loss or degradation of local enforcement, retries delivery from durable storage, and notifies partners when the app has been unreachable for an extended period.

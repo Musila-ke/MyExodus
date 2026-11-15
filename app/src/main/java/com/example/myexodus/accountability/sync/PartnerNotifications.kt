@@ -96,6 +96,12 @@ object PartnerNotifications {
     const val CHANNEL_DEVICE_STATUS = "device_status_v1"
     const val NOTIF_LIVENESS_PROBE = 2006
 
+    /** Fix A discoverability (owner 2026-11-15): a blocked partner registration persists in
+     *  the tray until the reauth completes, so delivery stalling is never silent. One entry,
+     *  not one per partner: the block is account-wide, not pair-scoped. */
+    const val NOTIF_REGISTRATION_PAUSED = 2008
+    private const val REGISTRATION_PAUSED_TAG = "partner-registration-paused"
+
     /** Retired 2026-10-28 (owner ruling): the server no longer asks the user to check in.
      *  The liveness probe is data-only, and this tray-visible nudge is deleted at startup. */
     internal const val CHANNEL_CHECKIN_REMINDERS_LEGACY = "checkin_reminders_v1"
@@ -245,6 +251,11 @@ object PartnerNotifications {
             EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED ->
                 context.getString(R.string.partner_availability_stopped_title_named, partnerName) to
                     context.getString(R.string.partner_availability_stopped_body)
+            // Owner ruling 2026-11-15: signing out pauses accountability at that moment; the
+            // partner hears it now instead of inferring it from hours of silence.
+            EventPayload.TYPE_ACCOUNTABILITY_PAUSED ->
+                context.getString(R.string.partner_paused_title_named, partnerName) to
+                    context.getString(R.string.partner_paused_body)
             // Owner directive 2026-11-09: the streak-management acts name themselves, so the
             // partner hears "shared / renamed / deleted a streak", not "new activity". Always
             // rich — a pre-v3 sender's label-less body is still the honest signal.
@@ -631,6 +642,25 @@ object PartnerNotifications {
         NotificationManagerCompat.from(context).cancel(PartnerNudgePush.TAG, NOTIF_PARTNER_NUDGE)
     }
 
+    /** Fix A (owner 2026-11-15): the reauth prompt also lives in the tray, tap → Settings. */
+    fun notifyRegistrationPaused(context: Context) =
+        post(
+            context,
+            CHANNEL_ACCOUNTABILITY_EVENTS,
+            context.getString(R.string.partner_channel_activity_name),
+            NotificationManager.IMPORTANCE_HIGH,
+            NOTIF_REGISTRATION_PAUSED,
+            R.string.account_delivery_reauth_title,
+            R.string.account_delivery_reauth_body,
+            tag = REGISTRATION_PAUSED_TAG,
+            openSettings = true,
+        )
+
+    fun cancelRegistrationPaused(context: Context) {
+        NotificationManagerCompat.from(context)
+            .cancel(REGISTRATION_PAUSED_TAG, NOTIF_REGISTRATION_PAUSED)
+    }
+
     // Suppressed: the gate is NotificationAccess.canPost (the only way in), which lint can't
     // trace through a helper.
     @SuppressLint("MissingPermission")
@@ -649,6 +679,7 @@ object PartnerNotifications {
         openPlanId: String? = null,
         openPartnerView: String? = null,
         openPairId: String? = null,
+        openSettings: Boolean = false,
     ) {
         if (!NotificationAccess.canPost(context)) return
         // Create only when missing (device-observed 2026-10-04, both rig devices): re-creating
@@ -677,10 +708,11 @@ object PartnerNotifications {
             .setData(NotificationTapTarget.of(tag ?: "id-$notificationId"))
             .putExtra(
                 MainActivity.EXTRA_START_TAB,
-                if (openPlanId != null || openPartnerView != null || openPairId != null) {
-                    MainActivity.TAB_PARTNER
-                } else {
-                    MainActivity.TAB_HOME
+                when {
+                    openSettings -> MainActivity.TAB_SETTINGS
+                    openPlanId != null || openPartnerView != null || openPairId != null ->
+                        MainActivity.TAB_PARTNER
+                    else -> MainActivity.TAB_HOME
                 },
             )
         if (openPlanId != null) {

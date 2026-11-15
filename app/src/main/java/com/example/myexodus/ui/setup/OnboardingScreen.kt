@@ -41,6 +41,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -65,12 +66,16 @@ import com.example.myexodus.R
 import com.example.myexodus.account.AuthFailure
 import com.example.myexodus.account.AuthState
 import com.example.myexodus.account.GoogleCredentialOutcome
+import com.example.myexodus.account.GuestTransitionState
+import com.example.myexodus.account.TransitionIntent
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.BrandLockup
 import com.example.myexodus.ui.settings.AccountAuthForm
 import com.example.myexodus.ui.settings.AccountViewModel
+import com.example.myexodus.ui.settings.GuestSwitchDialog
 import com.example.myexodus.ui.settings.failureRes
+import com.example.myexodus.ui.settings.transitionFailureRes
 import kotlinx.coroutines.launch
 
 private data class OnboardingSlide(
@@ -385,6 +390,29 @@ private fun AccountPage(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var googleFailure by remember { mutableStateOf<AuthFailure?>(null) }
+    val transition by viewModel.transition.collectAsStateWithLifecycle()
+    val isGuest = state is AuthState.GuestActive
+    // Server-confirmed switch allowance — signing in to an existing account needs it (plan §8.4).
+    val prepared = transition is GuestTransitionState.Prepared
+    var pendingEmail by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var pendingGoogle by remember { mutableStateOf<String?>(null) }
+    var showSwitchDialog by remember { mutableStateOf(false) }
+
+    // Resume the interrupted sign-in once the switch is armed, exactly as Settings → Account does.
+    LaunchedEffect(transition) {
+        if (transition is GuestTransitionState.Prepared) {
+            pendingEmail?.let { (email, password) ->
+                pendingEmail = null
+                pendingGoogle = null
+                viewModel.signInWithEmail(email, password)
+            }
+            pendingGoogle?.let { token ->
+                pendingEmail = null
+                pendingGoogle = null
+                viewModel.continueWithGoogle(token, switchAccount = true)
+            }
+        }
+    }
 
     // A done account action (create, sign-in, Google) swaps the form for a confirmation the
     // user leaves with a tap. No auto-advance: returning here from the permissions via Back
@@ -473,24 +501,42 @@ private fun AccountPage(
             )
             Spacer(Modifier.height(24.dp))
             AccountAuthForm(
-                hasGuestUid = state is AuthState.GuestActive,
-                // Onboarding has no completed transition to resume; a fresh install links in place.
-                prepared = false,
+                hasGuestUid = isGuest,
+                prepared = prepared,
                 googleAvailable = viewModel.googleAvailable,
                 viewModel = viewModel,
-                onSignIn = { email, password -> viewModel.signInWithEmail(email, password) },
+                // Plan §8.4: a guest must arm the switch, so the same Import/Discard disclosure
+                // Settings → Account shows gates the sign-in here instead of a guaranteed refusal.
+                onSignIn = { email, password ->
+                    if (prepared || !isGuest) {
+                        viewModel.signInWithEmail(email, password)
+                    } else {
+                        pendingGoogle = null
+                        pendingEmail = email to password
+                        showSwitchDialog = true
+                    }
+                },
                 onGoogle = {
                     scope.launch {
                         when (val result = viewModel.requestGoogleCredential(context)) {
                             is GoogleCredentialOutcome.Success ->
-                                viewModel.continueWithGoogle(result.idToken, switchAccount = false)
+                                if (prepared || !isGuest) {
+                                    viewModel.continueWithGoogle(result.idToken, switchAccount = isGuest)
+                                } else {
+                                    pendingEmail = null
+                                    pendingGoogle = result.idToken
+                                    showSwitchDialog = true
+                                }
                             GoogleCredentialOutcome.Cancelled -> Unit
                             is GoogleCredentialOutcome.Unavailable -> googleFailure = result.failure
                         }
                     }
                 },
             )
-            if (state is AuthState.Authenticating) {
+            if (state is AuthState.Authenticating ||
+                transition is GuestTransitionState.Preparing ||
+                transition is GuestTransitionState.Finalizing
+            ) {
                 Spacer(Modifier.height(12.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -498,7 +544,13 @@ private fun AccountPage(
                 ) { CircularProgressIndicator(Modifier.size(22.dp)) }
             }
             val failure = (state as? AuthState.AuthError)?.failure ?: googleFailure
-            if (failure != null) {
+            val transitionFailure = (transition as? GuestTransitionState.Failed)?.failure
+            val failureText = when {
+                failure != null -> failureRes(failure)
+                transitionFailure != null -> transitionFailureRes(transitionFailure)
+                else -> null
+            }
+            if (failureText != null) {
                 Spacer(Modifier.height(12.dp))
                 Surface(
                     color = MaterialTheme.colorScheme.errorContainer,
@@ -511,13 +563,14 @@ private fun AccountPage(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         Text(
-                            stringResource(failureRes(failure)),
+                            stringResource(failureText),
                             style = MaterialTheme.typography.bodySmall,
                         )
                         TextButton(
                             onClick = {
                                 googleFailure = null
                                 viewModel.dismissTransient()
+                                viewModel.dismissTransition()
                             },
                             modifier = Modifier.align(Alignment.End),
                         ) { Text(stringResource(R.string.account_dismiss)) }
@@ -542,6 +595,23 @@ private fun AccountPage(
                 .fillMaxWidth()
                 .padding(bottom = 4.dp),
         )
+        if (showSwitchDialog) {
+            GuestSwitchDialog(
+                onDismiss = {
+                    showSwitchDialog = false
+                    pendingEmail = null
+                    pendingGoogle = null
+                },
+                onImport = {
+                    showSwitchDialog = false
+                    viewModel.startTransition(TransitionIntent.IMPORT)
+                },
+                onDiscard = {
+                    showSwitchDialog = false
+                    viewModel.startTransition(TransitionIntent.DISCARD)
+                },
+            )
+        }
     }
 }
 

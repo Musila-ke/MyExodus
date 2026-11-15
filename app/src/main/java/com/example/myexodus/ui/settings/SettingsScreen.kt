@@ -49,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.R
 import com.example.myexodus.account.AuthState
+import com.example.myexodus.accountability.delivery.PartnerRegistrationBlock
 import com.example.myexodus.applock.AppLockController
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.ProtectionDegradation
@@ -254,6 +255,9 @@ private fun SettingsIndex(
         0 -> stringResource(R.string.settings_protection_summary_ok)
         else -> pluralStringResource(R.plurals.settings_protection_summary_attention, attention, attention)
     }
+    // Fix A discoverability (owner 2026-11-15): a paused partner registration puts the
+    // attention dot on the Account row that leads to the card and its Verify action.
+    val deliveryBlock by account.deliveryBlock.collectAsStateWithLifecycle()
 
     Column(
         modifier = modifier
@@ -287,6 +291,11 @@ private fun SettingsIndex(
                     icon = Icons.Outlined.Person,
                     title = stringResource(R.string.account_settings_title),
                     subtitle = accountSubtitle,
+                    tone = if (deliveryBlock == PartnerRegistrationBlock.REAUTH_REQUIRED) {
+                        StatusTone.ATTENTION
+                    } else {
+                        null
+                    },
                     onClick = { onOpenPane(PANE_ACCOUNT) },
                 )
 

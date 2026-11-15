@@ -322,6 +322,11 @@
          partner must hear. Unlocked copy only (FR-13). -->
     <string name="partner_availability_stopped_title_named">%1$s turned off device availability</string>
     <string name="partner_availability_stopped_body">You will not see whether blocking is on and working on their device unless this is turned back on.</string>
+    <!-- Owner ruling 2026-11-15: signing out pauses accountability, and the partner hears it
+         at that moment instead of inferring it from hours of silence. Unlocked copy only
+         (FR-13). -->
+    <string name="partner_paused_title_named">%1$s paused accountability</string>
+    <string name="partner_paused_body">They signed out of the app on their phone, so updates are paused until they sign back in.</string>
     <!-- Owner directive 2026-11-09: the streak-management acts. Unlocked copy only; the
          lockscreen keeps the plain partner_event_* forms (FR-13). -->
     <string name="partner_streak_shared_title_named">%1$s shared a streak with you</string>
@@ -1083,7 +1088,7 @@
     <!-- Owner report 2026-11-02: bare counts ("1 today, 5 this week", a bar reading "4") did
          not say what was counted. Every count on this card is a shared event; the window is a
          rolling seven days, so it is never labelled as a calendar "week". -->
-    <string name="partner_activity_counted">Counted: blocks and overrides, recovery steps, relapses, milestones and rule changes. These are the events your partner shared with you.</string>
+    <string name="partner_activity_counted">Counted: blocks and overrides, relapses, milestones and rule changes. These are the events your partner shared with you.</string>
     <string name="partner_activity_today">Today</string>
     <string name="partner_activity_today_stat">Events today</string>
     <string name="partner_activity_week">Events last 7 days</string>
@@ -1094,7 +1099,7 @@
     <!-- Owner directive 2026-11-01: the activity page shows the week as a picture. Each bar is
          a local day, today on the right; the plural merges a column into one spoken sentence. -->
     <string name="partner_activity_chart_title">Shared events per day</string>
-    <string name="partner_activity_chart_caption">The last 7 days: blocks and overrides, recovery steps, relapses, milestones and rule changes. Today is on the right.</string>
+    <string name="partner_activity_chart_caption">The last 7 days: blocks and overrides, relapses, milestones and rule changes. Today is on the right.</string>
     <plurals name="partner_activity_chart_bar">
         <item quantity="one">%1$s, %2$d event</item>
         <item quantity="other">%1$s, %2$d events</item>
@@ -1201,6 +1206,11 @@
     <string name="partner_alert_rule">Restriction rule</string>
     <string name="partner_alert_checkins_switch">Blocked-app check-ins</string>
     <string name="partner_alert_sharing_stopped">Stopped sharing</string>
+    <string name="partner_alert_accountability">Accountability</string>
+    <string name="partner_alert_paused">Paused</string>
+    <!-- Owner ruling 2026-11-15 (#246): the hub's hard paused state. -->
+    <string name="partner_paused_card_title">Accountability is paused</string>
+    <string name="partner_paused_card_body">They signed out %1$s. Nothing new is shared until they sign back in.</string>
     <string name="partner_rule_created">Rule created</string>
     <string name="partner_rule_assigned">Rule assigned to you</string>
     <string name="partner_rule_unassigned">Rule no longer shared with you</string>
@@ -1745,6 +1755,8 @@
     <string name="account_error_security">Google sign-in couldn\'t be verified. Try again.</string>
     <string name="account_error_pending_writes">The switch didn\'t finish because some changes saved on this device haven\'t reached the server yet. Try again in a moment, or discard those changes to continue now.</string>
     <string name="account_error_cloud_pending">Accounts are paused for this launch. The app couldn\'t finish preparing its secure storage, so signing in now could show another account\'s data. Restart the app to try again.</string>
+    <string name="account_error_partner_not_notified">Your partner couldn\'t be told that accountability is paused, so you\'re still signed in and accountability stays on. Check your connection, then try again.</string>
+    <string name="account_error_retry">Try again</string>
     <string name="account_error_transition_in_progress">Another account change is already in progress. Wait for it to finish, then try again.</string>
     <string name="account_pending_writes_discard">Discard unsent changes and retry</string>
     <string name="account_restart">Restart app</string>
@@ -1763,11 +1775,22 @@
 
     <string name="account_sign_out">Sign out</string>
     <string name="account_sign_out_body">Your encrypted data stays on this device. Signing out doesn\'t delete it.</string>
+    <!-- Owner ruling 2026-11-15: signing out announces an accountability pause to the partner
+         before credentials are torn down. An unconfirmed pause refuses the sign-out instead of
+         ending accountability in silence. -->
+    <string name="account_sign_out_pause_sending_title">Telling your partner</string>
+    <string name="account_sign_out_pause_sending_body">Your partner is being told that accountability is paused before you sign out.</string>
+    <string name="account_sign_out_pause_sent_title">Partner notified</string>
+    <string name="account_sign_out_pause_sent_body">Your partner was told accountability is paused. It resumes with your next shared update after you sign back in.</string>
     <string name="account_reauth_title">Confirm it\'s you</string>
     <string name="account_reauth_body">Sign in again to finish this change.</string>
     <string name="account_reauth_confirm">Confirm</string>
     <string name="account_reauth_google">Confirm with Google</string>
     <string name="account_reauth_cancel">Cancel</string>
+    <!-- §8.3.1: a blocked partner-event registration previously stalled with no visible cause. -->
+    <string name="account_delivery_reauth_title">Partner updates are paused</string>
+    <string name="account_delivery_reauth_body">This phone needs to confirm your account before it can exchange updates with your partner. Verify it’s you once and delivery resumes in both directions.</string>
+    <string name="account_delivery_reauth_action">Verify it’s you</string>
     <string name="account_working">Working…</string>
     <string name="account_dismiss">OK</string>
 
@@ -1836,6 +1859,7 @@
     <string name="account_transition_import">Import my progress</string>
     <string name="account_transition_discard">Discard guest progress</string>
     <string name="account_transition_stay_guest">Stay a guest</string>
+    <string name="account_transition_create_hint">To keep your partner connections, go back and create a new account instead. It is added to this guest session, so your connections carry over.</string>
     <string name="account_transition_guest_hint">Signing in to an existing account from guest mode first asks what to do with your guest progress, then ends your guest partner connections.</string>
     <string name="account_transition_preparing">Preparing the account switch…</string>
     <string name="account_transition_cancelling">Cancelling the switch…</string>

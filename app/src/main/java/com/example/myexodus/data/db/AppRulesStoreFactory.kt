@@ -1911,6 +1911,35 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * v31 → v32 (rig finding 2026-11-15): the receiver's record of a delivered relapse or
+         * milestone, so the staged transport keeps the "Recent activity" rows the legacy chain
+         * path supplied. Additive — no existing table is touched.
+         */
+        val MIGRATION_31_32 = object : Migration(31, 32) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_activity_alert (" +
+                        "pair_id TEXT NOT NULL, event_id TEXT NOT NULL, kind TEXT NOT NULL, " +
+                        "habit_label TEXT, ended_days INTEGER, milestone_day INTEGER, " +
+                        "occurred_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL, " +
+                        "PRIMARY KEY(pair_id, event_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_activity_alert_occurred_at_ms " +
+                        "ON partner_activity_alert (occurred_at_ms)",
+                ).use { it.step() }
+            }
+        }
+
+        /** v32 rollback (older build reinstalled): the feed rows reflect delivered staged
+         *  events only — the tray still announces them, and nothing else references the table. */
+        val MIGRATION_32_31 = object : Migration(32, 31) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare("DROP TABLE IF EXISTS partner_activity_alert").use { it.step() }
+            }
+        }
+
         /** v23 rollback (older build reinstalled): table rebuilds remove the identity and
          *  batch columns while every rule and journal row survives. */
         val MIGRATION_23_22 = object : Migration(23, 22) {
@@ -2230,6 +2259,7 @@ class AppRulesStoreFactory(
             MIGRATION_28_29, MIGRATION_29_28,
             MIGRATION_29_30, MIGRATION_30_29,
             MIGRATION_30_31, MIGRATION_31_30,
+            MIGRATION_31_32, MIGRATION_32_31,
         )
     }
 }

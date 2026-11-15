@@ -84,6 +84,9 @@ enum class AuthFailure {
     PENDING_WRITES,
     /** Plan §9: the one-time legacy-cache purge failed; Firestore-backed changes are blocked. */
     CLOUD_MIGRATION_PENDING,
+    /** Owner ruling 2026-11-15: the sign-out pause could not be confirmed, so signing out
+     *  would pause accountability silently. The session stays signed in until it gets through. */
+    PARTNER_NOT_NOTIFIED,
     /** Another identity change already froze the session; waiting is enough. */
     TRANSITION_IN_PROGRESS,
     SECURITY_CHECK_FAILED,

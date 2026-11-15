@@ -1,5 +1,7 @@
 # MyExodus — V1 App UI Phase 1 — Implementation Specification (v2)
 
+*Status (2026-11-15, plan-fidelity sweep): **✅ BUILT as the UI-page specification, per the 2026-09-12 decisions block below.** The "Google Play (primary)" distribution line immediately below is dead (ADR #15, direct APK only) and is corrected by decision 1. The UI pages have since been redesigned several times; V1.md and the ADRs carry current behavior.*
+
 Supersedes `myexodus-v1-blocker-implementation-plan.md`. Distribution: Google Play (primary). Target: all Android OEMs.
 
 > **Implementation decisions (user-confirmed 2026-09-12) — deviations from this document, recorded BEFORE implementation starts:**

@@ -96,6 +96,12 @@ data class EventPayload(
          *  signal with no notice. Snapshot-less, same consent-announcement shape. */
         const val TYPE_AVAILABILITY_SHARING_STOPPED = "availability_sharing_stopped"
 
+        /** Owner ruling 2026-11-15: signing out on this device pauses accountability. The
+         *  partner must hear it at sign-out, not infer it from hours of silence. Sent as the
+         *  last event before credential teardown, snapshot-less — it announces a suspension,
+         *  it does not change any shared state. */
+        const val TYPE_ACCOUNTABILITY_PAUSED = "accountability_paused"
+
         val ACTIVITY_TYPES: Set<String> = setOf(
             TYPE_STREAK_UPDATED,
             TYPE_RELAPSE_RECORDED,
@@ -108,14 +114,17 @@ data class EventPayload(
             TYPE_STREAK_DELETED,
             TYPE_CHECKINS_SHARING_STOPPED,
             TYPE_AVAILABILITY_SHARING_STOPPED,
+            TYPE_ACCOUNTABILITY_PAUSED,
         )
 
-        /** Consent revokes — announcements of a switch going off, never state. The receiver
-         *  keeps a feed row for each delivered one (they carry no chain row and no text). */
+        /** Consent revokes and accountability suspensions — announcements of a signal going
+         *  quiet, never state. The receiver keeps a feed row for each delivered one (they
+         *  carry no chain row and no text). */
         val SHARING_STOPPED_TYPES: Set<String> = setOf(
             TYPE_STREAK_SHARING_STOPPED,
             TYPE_CHECKINS_SHARING_STOPPED,
             TYPE_AVAILABILITY_SHARING_STOPPED,
+            TYPE_ACCOUNTABILITY_PAUSED,
         )
 
         /** Wire v2 (ADR #134): the kinds that concern one habit — exactly these carry
@@ -177,7 +186,8 @@ fun classifyActivity(payload: EventPayload): ActivityEvent = when {
     payload.stateAfter == null &&
         payload.type != EventPayload.TYPE_MOTIVATIONAL_MESSAGE &&
         payload.type != EventPayload.TYPE_CHECKINS_SHARING_STOPPED &&
-        payload.type != EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED ->
+        payload.type != EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED &&
+        payload.type != EventPayload.TYPE_ACCOUNTABILITY_PAUSED ->
         ActivityEvent.Malformed(payload.type)
     else -> ActivityEvent.Valid(payload)
 }

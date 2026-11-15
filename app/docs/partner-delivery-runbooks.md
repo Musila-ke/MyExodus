@@ -124,6 +124,23 @@ Evaluation every five minutes **while `device_liveness_alerts_v1_enabled === tru
 
 ---
 
+## Runbook D — Local-rig journey seed (milestone / day-crossing legs)
+
+S15 (STREAK_UPDATED day crossing) and S17 (milestone) cannot occur in real elapsed time inside a session, so `PartnerJourneySeedInstrumentedTest` (androidTest, owner-approved 2026-10-01) writes ONE journal row through the production DAO with the snapshot the real transition would have produced. Everything after the row is production.
+
+**The harness is SEED-ONLY by construction.** Under `am instrument`, `MyExodusApp` skips `LocalDatabaseMigration.start` (`MyExodusApp.kt:286`), so the instrumented process starts against the LEGACY database file names, and the Hilt DB singletons are already bound by the time test code runs. The live app then writes to uid-scoped files (`myexodus_rules_<uidhash>.db`, SQLCipher-encrypted; only the Hilt `AppRulesStoreFactory` carries the DEK to open it). A test that calls `syncOnce` itself therefore links journal rows in the SCOPED rules store against the LEGACY accountability outbox — and `PartnerActivityDao.pendingForPair` excludes any row with a `partner_activity_link` row (`NOT EXISTS`), so those rows never deliver through the production pass again. The test only writes the row and asserts it is still UNLINKED; the app process owns linking.
+
+Run it (debug build on the two-AVD rig; never `connectedAndroidTest` — those uninstall):
+
+1. Warm the §8.1 signing window on the sender (any production signing prompt), then run the seed with the partner's uid: `adb -s emulator-5556 shell am instrument -w -e class 'com.example.myexodus.accountability.sync.PartnerJourneySeedInstrumentedTest#seedMilestone_deliversToOwnerPair_overProductionRails' -e partnerUid <partner uid> com.example.myexodus.test/androidx.test.runner.AndroidJUnitRunner`. Logcat tag `MyExodusPartnerTest` prints `RESULT journeySeed=QUEUED … eventId=<uuid>`.
+2. Relaunch the sender's app (`am start -n com.example.myexodus/.MainActivity`). The foreground pass links, signs and drains the row; `MyExodusPartnerEvents: drain: Result(claimed=1, accepted=1, …)` is the sender-side proof.
+3. Backend proof: `firebase-debug.log` line `{"count":1,"accepted":1,"installationId":…}` from `ingestPartnerEvents`; Firestore doc `partnerNotificationOutbox/<eventId>__<recipientInstallationId>`.
+4. Receiver proof: the partner's next sync logs `recipientEventsPulled=1`, and `dumpsys notification --noredact` shows the per-pair `partner:event:<pairId>` entry with the expected copy (S17 rich milestone copy; S15 generic "New activity from …").
+
+The per-pair tray entry is replace-in-place: seed and deliver ONE journey event at a time or the later render replaces the earlier one before it can be captured.
+
+---
+
 ## Compatibility window (§13.5)
 
 - **No legacy purge in this release.** Legacy aliases, endpoints and the legacy `appendUserEvent` path stay deployed. Old APK installs that omit `installationId` remain accepted; a sender that identifies a registered installation is refused on the legacy path with `failed-precondition / SIGNED_TRANSPORT_REQUIRED` (§13.3), so a migrated installation never moves backward.

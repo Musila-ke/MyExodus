@@ -235,7 +235,14 @@ function createFinalizeGuestTransitionHandler({ db, now = () => Date.now() }) {
         if (!Array.isArray(members) || !members.includes(guestUid)) continue;
         if (snap.get('status') !== 'active') continue;
         terminatedPairIds.push(snap.id);
-        tx.set(db.doc(`pairings/${snap.id}`), { status: 'terminated' }, { merge: true });
+        // Same termination metadata account-deletion writes: the survivor's sync keys on
+        // `status`, and the reason keeps the pair document self-describing.
+        tx.set(db.doc(`pairings/${snap.id}`), {
+          status: 'terminated',
+          terminatedAt: FieldValue.serverTimestamp(),
+          terminatedBy: guestUid,
+          terminationReason: 'GUEST_ACCOUNT_TRANSITION',
+        }, { merge: true });
         // Deterministic id: a retried finalize (or a racing cleanup) can never duplicate it.
         tx.set(db.doc(`pairings/${snap.id}/system_events/guest_transition_terminated`), {
           type: 'PAIR_TERMINATED',
