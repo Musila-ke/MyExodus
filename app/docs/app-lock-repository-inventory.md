@@ -695,6 +695,16 @@ pass as recorded in §15; only the owner-gated physical-device and API 26-29 leg
   `HabitRepositoryTest.lockedVault_mapsToTheDefinedFailureResult_atEveryEntryPoint`,
   `RecoverySessionRepositoryTest.lockedVault_skipsEveryOperation_neverThrows`. No vault bypass
   and no DEK cache; a locked-vault-specific widget prompt is deferred as an owner decision.
+- The rest of the widget surface was swept in the same pass (owner ask 2026-11-16: "ensure
+  other similar issues aren't there as well even in other widget operations"): `logUrge` goes
+  through the fixed repository; `logReachOut` runs `SosViewModel` (Firebase, no vault); the
+  partner read is wrapped in `runCatching`; every other widget operation reads only non-vaulted
+  stores (`WidgetSnapshot` DataStore) and `ProtectionSnapshotWriter` already catches
+  `IllegalStateException` (which covers `VaultLockedException`). The receive-side projections
+  that still open raw (`PartnerObservationProjection`, `PartnerActivityReceiver`,
+  `PartnerRuleChangeProjection`) are a deliberate §13.4 contract — the throw propagates to the
+  mailbox receiver, the document stays unreceipted, and every caller (the sync workers and the
+  two in-process passes) catches; that is retry-after-unlock, not a crash path.
 
 **Gate accounting (§7 Phase 6)**
 
