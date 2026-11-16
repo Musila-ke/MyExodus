@@ -296,6 +296,46 @@ class HabitRepositoryTest {
         assertTrue("a read that threw is the error state, not a pending one", repository.loadFailed.value)
     }
 
+    /**
+     * App-lock gate (2026-11-16 crash): a widget action runs with the app backgrounded, so the
+     * vault is locked when it fires and [AppRulesStoreFactory.open] throws
+     * [com.example.myexodus.data.db.VaultLockedException]. Every entry point must still return
+     * its defined failure result — an uncaught throw killed the process and XOS then cleared
+     * the accessibility service.
+     */
+    @Test
+    fun lockedVault_mapsToTheDefinedFailureResult_atEveryEntryPoint() = runBlocking {
+        seedProfile()
+        onboard()
+        val habitId = checkNotNull(repository.state.value).habitId
+        val lockedFactory = AppRulesStoreFactory(
+            context, recovery, healthStore, vaultAccessAllowed = { false },
+        )
+        val locked = HabitRepository(
+            storeFactory = lockedFactory,
+            anomalyLog = StreakAnomalyLog(anomalyFile),
+            readings = { now },
+            scheduler = MilestoneScheduler(context, lockedFactory, readings = { now }),
+        )
+
+        assertEquals(HabitRepository.RelapseResult.StoreUnavailable, locked.logRelapse(habitId))
+        assertEquals(HabitRepository.RenameResult.StoreUnavailable, locked.renameHabit(habitId, "x"))
+        assertEquals(HabitRepository.DeleteResult.StoreUnavailable, locked.deleteHabit(habitId))
+        assertEquals(emptyList<HabitSummary>(), locked.habits())
+        assertNull(locked.sharingMatrix())
+        assertNull(locked.evaluate(habitId))
+        assertNull(locked.selectHabit(habitId))
+        assertFalse(locked.setPairStreakSharing("pair-1", habitId, true, true, true))
+        assertFalse(locked.setPairProfileSharing("pair-1", shareCheckIns = true, shareRecovery = false))
+        locked.acknowledgeMilestone(habitId, 7) // must return, not throw
+        assertNull(locked.refreshActive())
+        assertTrue("a gated read is the error state, not a pending one", locked.loadFailed.value)
+        assertEquals(
+            HabitRepository.OnboardingResult.Rejected(Reason.STORE_UNAVAILABLE),
+            locked.onboard(PROFILE_ID, "X", 2, WithdrawalSeverity.MODERATE, T0 - 1_000),
+        )
+    }
+
     @Test
     fun secondOnboard_selectsTheNewHabit_andLeavesTheFirstUntouched() = runBlocking {
         seedProfile()

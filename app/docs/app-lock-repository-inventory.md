@@ -683,6 +683,18 @@ pass as recorded in §15; only the owner-gated physical-device and API 26-29 leg
   crashes the FGS while locked. `BlockerActivity.openRecovery` and the widget receiver only use
   non-vaulted DataStore and `runCatching`; every worker and publisher defers per §8.9. No
   post-lock DB bypass found.
+- The launcher widget's **action** surface was the gap (owner report 2026-11-16):
+  `WidgetActionActivity`/`WidgetActionViewModel` write through `HabitRepository` (`logRelapse`)
+  and `RecoverySessionRepository` (`logOnly`), and both called `storeFactory.open()` unguarded.
+  With App Lock enabled the app is backgrounded while the widget is tapped, so the vault is
+  LOCKED and `open()` threw `VaultLockedException` into the ViewModel coroutine — an uncaught
+  crash, after which XOS cleared the accessibility master switch (ADR #314). Both repositories
+  now open through a private `openStore()` helper that maps the closed gate to `null`, the same
+  "store unavailable" both classes already document, so every entry point returns its defined
+  result (relapse: `StoreUnavailable`; urge: skip, FR-5). Tests:
+  `HabitRepositoryTest.lockedVault_mapsToTheDefinedFailureResult_atEveryEntryPoint`,
+  `RecoverySessionRepositoryTest.lockedVault_skipsEveryOperation_neverThrows`. No vault bypass
+  and no DEK cache; a locked-vault-specific widget prompt is deferred as an owner decision.
 
 **Gate accounting (§7 Phase 6)**
 

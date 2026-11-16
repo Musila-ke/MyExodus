@@ -215,6 +215,27 @@ class RecoverySessionRepositoryTest {
         assertEquals(listOf(kept), sessions.page(10, 0).map { it.id })
     }
 
+    /**
+     * App-lock gate (2026-11-16 crash): the widget's urge action runs with the app
+     * backgrounded, so the vault is locked when it fires and open() throws. Every method keeps
+     * its documented "store not open → skip" behavior instead of taking the process down.
+     */
+    @Test
+    fun lockedVault_skipsEveryOperation_neverThrows() = runTest {
+        val locked = RecoverySessionRepository(
+            AppRulesStoreFactory(context, recovery, DatabaseHealthStore(), vaultAccessAllowed = { false }),
+        )
+
+        locked.logOnly(4, RecoverySession.ENTRY_WIDGET, "UTC", now)
+        val id = locked.start("sober", null, RecoverySession.ENTRY_TAB, "UTC", now)
+        locked.finish(id, RecoverySession.STATE_COMPLETED, null, now + 1_000)
+        locked.delete(id)
+        assertEquals(0, locked.interruptStale(now))
+        assertEquals(0L, locked.count())
+        assertTrue(locked.page(10, 0).isEmpty())
+        assertTrue(locked.countsByStateSince(0L).isEmpty())
+    }
+
     private suspend fun session(id: String): RecoverySession =
         sessions.page(10, 0).first { it.id == id }
 

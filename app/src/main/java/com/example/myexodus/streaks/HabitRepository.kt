@@ -7,6 +7,7 @@ import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.sync.PartnerSyncSignals
 import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.VaultLockedException
 import com.example.myexodus.data.db.entity.HabitProgress
 import com.example.myexodus.data.db.entity.MilestoneEvent
 import com.example.myexodus.data.db.entity.PairProfileSharing
@@ -37,7 +38,8 @@ import kotlinx.coroutines.sync.withLock
  * the UI shows.
  *
  * The store is opened per operation via [AppRulesStoreFactory] (house background-component
- * pattern): when the DB is in a defined recovery state the write is refused with a defined
+ * pattern): when the DB is in a defined recovery state — or the app-lock gate is closed, the
+ * state the launcher widget and alarm paths actually hit — the write is refused with a defined
  * result rather than crashing, and alarm receivers therefore cannot take the app down. Every
  * entry point wraps its store work in [guardingStore], so a failure that surfaces only after a
  * successful open (I/O error, corruption mid-write) gets the same defined result instead of
@@ -169,6 +171,19 @@ class HabitRepository(
             fallback()
         }
 
+    /**
+     * [AppRulesStoreFactory.open] throws while the app-lock gate is closed (§8.3); every caller
+     * of this class already defines "store unavailable" for a store that cannot open, and the
+     * widget/alarm paths run with the app backgrounded — an uncaught throw there killed the
+     * process (2026-11-16). The locked gate maps to that same defined result, never a crash.
+     */
+    private fun openStore(): AppRulesStore? =
+        try {
+            storeFactory.open()
+        } catch (e: VaultLockedException) {
+            null
+        }
+
     /** #7: one outcome per flow terminal — metadata only (never the habit label, a target, or
      *  a counter), best-effort so telemetry can never break the write. */
     private fun reportFeature(event: String, outcome: String, reason: String? = null) {
@@ -274,7 +289,7 @@ class HabitRepository(
         if (recoveryStartAt > readings.tWallMillis) {
             return rejected(OnboardingResult.Rejected.Reason.START_IN_FUTURE)
         }
-        val db = storeFactory.open()
+        val db = openStore()
             ?: return rejected(OnboardingResult.Rejected.Reason.STORE_UNAVAILABLE)
         val ready = guardingStore({ rejected(OnboardingResult.Rejected.Reason.STORE_UNAVAILABLE) }) {
             val anchor = when (val first = StreakTimer.firstAnchor(readings)) {
@@ -350,7 +365,7 @@ class HabitRepository(
      * user-entered time when the relapse is logged retrospectively; it defaults to now.
      */
     suspend fun logRelapse(habitId: String, backdatedRelapseAt: Long? = null): RelapseResult {
-        val db = storeFactory.open() ?: return relapseOutcome(RelapseResult.StoreUnavailable)
+        val db = openStore() ?: return relapseOutcome(RelapseResult.StoreUnavailable)
         val result = guardingStore({ RelapseResult.StoreUnavailable }) {
             val written = evaluationMutex.withLock {
                 // §6.2 rolls the persisted accumulator into the record; evaluate first so it
@@ -377,7 +392,7 @@ class HabitRepository(
      * cannot have its write overtaken by this read.
      */
     suspend fun refreshActive(): HabitState? {
-        val db = storeFactory.open() ?: run {
+        val db = openStore() ?: run {
             _loadFailed.value = true
             return _state.value
         }
@@ -409,7 +424,7 @@ class HabitRepository(
 
     /** All habits of the active profile, display-ordered — the switcher's read model. */
     suspend fun habits(): List<HabitSummary> {
-        val db = storeFactory.open() ?: return emptyList()
+        val db = openStore() ?: return emptyList()
         return guardingStore({ emptyList() }) {
             val profile = db.userProfileDao().getActive() ?: return@guardingStore emptyList()
             db.habitProgressDao().getForProfile(profile.userId)
@@ -421,7 +436,7 @@ class HabitRepository(
      *  plus the pair-level profile categories. Null = the store refused to open — the pane
      *  says so rather than claiming "no streaks"; an empty habit list is a real answer. */
     suspend fun sharingMatrix(): SharingMatrix? {
-        val db = storeFactory.open() ?: return null
+        val db = openStore() ?: return null
         return guardingStore({ null }) {
             val profile = db.userProfileDao().getActive()
                 ?: return@guardingStore SharingMatrix(emptyList(), emptyMap())
@@ -481,7 +496,7 @@ class HabitRepository(
         shareRelapses: Boolean,
         shareMilestones: Boolean,
     ): Boolean {
-        val db = storeFactory.open() ?: return false
+        val db = openStore() ?: return false
         val now = readings().tWallMillis
         return guardingStore({ false }) {
             val habit = db.habitProgressDao().getById(habitProgressId) ?: return@guardingStore false
@@ -534,7 +549,7 @@ class HabitRepository(
         shareRecovery: Boolean,
         shareAvailability: Boolean = false,
     ): Boolean {
-        val db = storeFactory.open() ?: return false
+        val db = openStore() ?: return false
         val now = readings().tWallMillis
         var availabilityChanged = false
         var availabilityRevokeEmitted = false
@@ -610,7 +625,7 @@ class HabitRepository(
      * the evaluation mutex — see [refreshActive].
      */
     suspend fun selectHabit(habitId: String): HabitState? {
-        val db = storeFactory.open() ?: return _state.value
+        val db = openStore() ?: return _state.value
         val state = guardingStore({ _state.value }) {
             evaluationMutex.withLock {
                 val habit = db.habitProgressDao().getById(habitId) ?: return@withLock null
@@ -636,7 +651,7 @@ class HabitRepository(
         if (trimmed.isEmpty() || trimmed.length > MAX_LABEL_LENGTH) {
             return RenameResult.InvalidName
         }
-        val db = storeFactory.open() ?: return RenameResult.StoreUnavailable
+        val db = openStore() ?: return RenameResult.StoreUnavailable
         return guardingStore({ RenameResult.StoreUnavailable }) {
             db.habitProgressDao().getById(habitId) ?: return@guardingStore RenameResult.NotFound
             db.withWriteTransaction<Unit> {
@@ -663,7 +678,7 @@ class HabitRepository(
      * the next habit in display order takes its place, or the screen returns to setup.
      */
     suspend fun deleteHabit(habitId: String): DeleteResult {
-        val db = storeFactory.open() ?: return DeleteResult.StoreUnavailable
+        val db = openStore() ?: return DeleteResult.StoreUnavailable
         return guardingStore({ DeleteResult.StoreUnavailable }) {
             val habit = db.habitProgressDao().getById(habitId) ?: return@guardingStore DeleteResult.NotFound
             val wasDisplayed = _state.value?.habitId == habitId
@@ -720,7 +735,7 @@ class HabitRepository(
      * milestone alarm must not swap what the UI shows).
      */
     suspend fun evaluate(habitId: String): HabitState? {
-        val db = storeFactory.open() ?: return _state.value
+        val db = openStore() ?: return _state.value
         val state = guardingStore({ _state.value }) {
             evaluationMutex.withLock { evaluateLocked(db, habitId, forceDisplay = false) }
         }
@@ -736,7 +751,7 @@ class HabitRepository(
      * same-day row, which the DAO guard (`achieved_at IS NOT NULL`) leaves untouched.
      */
     suspend fun acknowledgeMilestone(habitId: String, milestoneDay: Int) {
-        val db = storeFactory.open() ?: return
+        val db = openStore() ?: return
         guardingStore({ }) {
             db.withWriteTransaction<Unit> {
                 val streak = db.recoveryStreakDao().getActiveStreak(habitId) ?: return@withWriteTransaction

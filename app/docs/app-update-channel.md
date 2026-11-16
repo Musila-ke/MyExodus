@@ -107,6 +107,22 @@ artifacts are signed with the release identity (certificate SHA-256
   was served for about two minutes before `/releases/latest/download/` switched. The X6532
   already ran 1.1.38 by direct `install -r` at publication, so an in-app replacement *by*
   1.1.38 was not exercised; the in-app path is proven by the v34→v36 physical leg above.
+- `artifact-v41` (`app-release.apk`, 39,251,849 bytes, SHA-256
+  `484fd5a7fa7974dd56ce400383c1a720b2e6cbd4202d437c567919f67d750230`), the 1.1.39 build.
+  Carries ADR #314: a widget action on a locked vault degrades to its defined failure result
+  instead of crashing the process (the crash could take the accessibility service down and
+  with it blocking), with regression tests at both widget-reachable repositories.
+- `policy-000016`, the latest release: signed `OFFER` of versionCode 41 (`1.1.39`) at 100
+  percent, cohort salt `70c3a2e91b6d4f08a5c7d13e6b82f495`. Anonymous latest manifest
+  SHA-256 `0a2b13fd8038b3ae3f02f096472c98e45eaba8a8b909e26316d2d0ca2e2ff283`, byte-identical
+  to the locally signed envelope (decoded: sequence 16, OFFER, 1.1.39/41, 100%); the
+  anonymous APK download from the version-pinned URL matched exactly (39,251,849 bytes,
+  signed digest). The X6532 already ran 1.1.39 by direct `install -r` when this policy was
+  published, so an in-app replacement *by* 1.1.39 was not exercised; the in-app path is
+  proven by the v34→v36 physical leg above. The phone's wireless ADB (`adb tcpip`, port
+  5555) did not survive the reboot done in the same session, so the on-device legs that
+  remained (accessibility re-enable, locked-widget action, Path A wall Close) are **BLOCKED**
+  on reconnection, not silently skipped.
 
 The rollout goes straight to 100 percent because the tester base is the owner and one partner:
 the 5 to 25 to 100 progression has not been rehearsed and is not claimed.
@@ -131,7 +147,7 @@ through the verify path. Package state after the update read `versionCode=36
 versionName=1.1.34` with `firstInstallTime` preserved, the one-time "now on 1.1.34" notice
 appeared, and the signed-in account and local data survived. Details in §14.
 
-Publisher state: highest policy sequence 14, highest versionCode 37. Tags are immutable, so
+Publisher state: highest policy sequence 16, highest versionCode 41. Tags are immutable, so
 `policy-000005` (an early test publication) stays burned and every new policy needs a higher
 sequence.
 

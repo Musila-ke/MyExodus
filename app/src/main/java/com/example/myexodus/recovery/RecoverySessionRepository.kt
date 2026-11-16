@@ -1,7 +1,9 @@
 package com.example.myexodus.recovery
 
 import com.example.myexodus.accountability.sync.PartnerSyncSignals
+import com.example.myexodus.data.db.AppRulesStore
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.VaultLockedException
 import com.example.myexodus.data.db.dao.SessionCount
 import com.example.myexodus.data.db.entity.RecoverySession
 import java.util.UUID
@@ -20,6 +22,18 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
     /** See [abandonQuietly] — outlives any single composition. */
     private val writes = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /**
+     * A closed app-lock gate is the same "store is not open" this class tolerates everywhere;
+     * [AppRulesStoreFactory.open] throws for it (§8.3), and the widget's urge action runs with
+     * the app backgrounded — an uncaught throw there killed the process (2026-11-16).
+     */
+    private fun openStore(): AppRulesStore? =
+        try {
+            storeFactory.open()
+        } catch (e: VaultLockedException) {
+            null
+        }
+
     /** Starts a technique session; returns its id whether or not the row could be written. */
     suspend fun start(
         technique: String,
@@ -32,7 +46,7 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
         actionId: String? = null,
     ): String {
         val id = UUID.randomUUID().toString()
-        val store = storeFactory.open() ?: return id
+        val store = openStore() ?: return id
         store.recoverySessionDao().insert(
             RecoverySession(
                 id = id,
@@ -61,7 +75,7 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
         require(state == RecoverySession.STATE_COMPLETED || state == RecoverySession.STATE_ABANDONED) {
             "finish() takes a terminal state, not $state"
         }
-        val store = storeFactory.open() ?: return
+        val store = openStore() ?: return
         val dao = store.recoverySessionDao()
         val session = dao.byId(id) ?: return
         // First terminal state wins: a UI end racing the app-start sweep (or a surface leaving
@@ -101,7 +115,7 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
         category: String? = null,
         actionId: String? = null,
     ) {
-        val store = storeFactory.open() ?: return
+        val store = openStore() ?: return
         store.recoverySessionDao().insert(
             RecoverySession(
                 id = UUID.randomUUID().toString(),
@@ -125,7 +139,7 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
      *  the mirror needs no reconciling event because a STARTED row was never mirrorable (the
      *  drain requires a terminal state) and its interruption simply makes it drainable now. */
     suspend fun interruptStale(nowEpochMs: Long): Int {
-        val store = storeFactory.open() ?: return 0
+        val store = openStore() ?: return 0
         return store.recoverySessionDao().interruptStale(
             cutoffEpochMs = nowEpochMs - RecoverySession.STALE_SESSION_MS,
             staleMs = RecoverySession.STALE_SESSION_MS,
@@ -140,19 +154,19 @@ class RecoverySessionRepository(private val storeFactory: AppRulesStoreFactory) 
      * with the partner; nothing retracts it.
      */
     suspend fun delete(id: String) {
-        val dao = storeFactory.open()?.recoverySessionDao() ?: return
+        val dao = openStore()?.recoverySessionDao() ?: return
         dao.deleteById(id)
         dao.deleteLinksFor(id)
     }
 
     /** [habitId] null = every row, including rows logged with no habit. */
     suspend fun page(limit: Int, offset: Int, habitId: String? = null): List<RecoverySession> =
-        storeFactory.open()?.recoverySessionDao()?.page(limit, offset, habitId) ?: emptyList()
+        openStore()?.recoverySessionDao()?.page(limit, offset, habitId) ?: emptyList()
 
-    suspend fun count(): Long = storeFactory.open()?.recoverySessionDao()?.count() ?: 0
+    suspend fun count(): Long = openStore()?.recoverySessionDao()?.count() ?: 0
 
     /** Per-(state, technique) counts at or after [fromMs] (`0` = all time), for the history summary. */
     suspend fun countsByStateSince(fromMs: Long, habitId: String? = null): List<SessionCount> =
-        storeFactory.open()?.recoverySessionDao()?.countsByStateSince(fromMs, habitId) ?: emptyList()
+        openStore()?.recoverySessionDao()?.countsByStateSince(fromMs, habitId) ?: emptyList()
 
 }
