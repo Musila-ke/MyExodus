@@ -129,6 +129,16 @@ class PartnerSyncTelemetryTest {
     }
 
     @Test
+    fun timeout_reportsTheStalledStep() = runTest {
+        val fake = Fake()
+        fake.telemetry.timedOut("sign_in_mint_timeout")
+        assertEquals(
+            listOf("${PartnerSyncTelemetry.EVENT_PASS_TIMEOUT} phase=sign_in_mint_timeout"),
+            fake.events,
+        )
+    }
+
+    @Test
     fun latencyBucket_edgesMatchTheT1Targets() {
         assertEquals("under_1s", PartnerSyncTelemetry.latencyBucket(999))
         assertEquals("under_3s", PartnerSyncTelemetry.latencyBucket(1_000))

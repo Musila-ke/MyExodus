@@ -19,6 +19,16 @@ import com.example.myexodus.util.canExpediteWork
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
+
+/** Last step reached by a sync pass — the only diagnosis a timed-out pass can leave behind:
+ *  suspended coroutines have no thread stack, and the release logcat ring wraps within
+ *  minutes (2026-11-18 incident). Written along the pass chain (registrar, resolver,
+ *  coordinator's callers), read by [PartnerSyncWorker]'s timeout. Approximate under
+ *  concurrency — it names a suspect, not a proof. */
+@Volatile
+internal var partnerSyncPhase: String = "idle"
 
 /** §14 housekeeping (plan §7 Decision 7): 15-minute partner sync — attempt → event reconcile,
  *  outbox drain, mailbox pull, backfill response. Delivery latency is bounded by this cadence
@@ -36,16 +46,26 @@ class PartnerSyncWorker @AssistedInject constructor(
 
     override suspend fun doWork(): Result {
         val report = try {
-            runPartnerSyncPass(
-                registrar,
-                coordinator,
-                wakeMessageId = inputData.getString(PARTNER_WAKE_MESSAGE_ID),
-                forceHeartbeat = inputData.getBoolean(PARTNER_FORCE_HEARTBEAT, false),
-            )
+            withTimeout(PASS_TIMEOUT_MS) {
+                runPartnerSyncPass(
+                    registrar,
+                    coordinator,
+                    wakeMessageId = inputData.getString(PARTNER_WAKE_MESSAGE_ID),
+                    forceHeartbeat = inputData.getBoolean(PARTNER_FORCE_HEARTBEAT, false),
+                )
+            }
         } catch (e: VaultLockedException) {
             // §8.9: a locked App Lock vault defers the pass — WorkManager's backoff retries it
             // once the vault is open; the activity kick and periodic cadence also cover it.
             Log.i(TAG, "sync deferred: vault locked")
+            return Result.retry()
+        } catch (e: TimeoutCancellationException) {
+            // Owner incident 2026-11-18: an unbounded await wedged a wake pass for 17+ minutes,
+            // and WorkManager 2.11.2 chains periodic runs, so the fallback cadence went silent
+            // too. Returning always schedules the successor; the phase names the stalled step.
+            Log.w(TAG, "sync pass unfinished after ${PASS_TIMEOUT_MS}ms at '$partnerSyncPhase' — retrying")
+            runCatching { telemetry.timedOut(partnerSyncPhase) }
+                .onFailure { Log.w(TAG, "timeout telemetry failed", it) }
             return Result.retry()
         }
         Log.i(TAG, "sync: $report")
@@ -56,6 +76,10 @@ class PartnerSyncWorker @AssistedInject constructor(
 
     private companion object {
         const val TAG = "MyExodusPartnerSync"
+
+        /** Whole-pass bound; with WorkManager's 30 s retry backoff this caps a stalled pass's
+         *  delivery delay at ≈ the 2-minute product bar. A healthy pass is a few seconds. */
+        const val PASS_TIMEOUT_MS = 90_000L
     }
 }
 
@@ -73,9 +97,11 @@ suspend fun runPartnerSyncPass(
     wakeMessageId: String? = null,
     forceHeartbeat: Boolean = false,
 ): PartnerSyncCoordinator.SyncReport {
+    partnerSyncPhase = "push_installation"
     if (!registrar.register()) {
         Log.w("MyExodusPartnerSync", "push installation not (re)registered this run")
     }
+    partnerSyncPhase = "sync_pass"
     val report = coordinator.syncOnce(wakeMessageId, forceHeartbeat)
     // Unpair progress (peer shred pulled, journal row advanced, ack confirmed) repaints too:
     // deletion passes report pulledCount=0 by design (the wake path returns before the

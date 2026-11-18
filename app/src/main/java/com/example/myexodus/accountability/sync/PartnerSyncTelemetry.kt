@@ -40,7 +40,13 @@ class PartnerSyncTelemetry(
         report("$EVENT_OUTBOX_PENDING age=${outboxAgeBucket(now() - oldest)}")
     }
 
+    /** A pass that outlived the worker's bound — Crashlytics survives the small logcat ring
+     *  (2026-11-18 incident: the ring had wrapped before anyone looked) and names the step the
+     *  pass last reached. */
+    fun timedOut(phase: String) = report("$EVENT_PASS_TIMEOUT phase=$phase")
+
     companion object {
+        const val EVENT_PASS_TIMEOUT = "partner_sync_timeout"
         const val EVENT_NOTIFICATIONS_DENIED = "partner_notifications_denied"
         const val EVENT_OUTBOX_PENDING = "partner_outbox_pending"
         const val EVENT_DELIVERY_PHASE = "partner_delivery_phase"

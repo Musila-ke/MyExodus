@@ -130,7 +130,22 @@ artifacts are signed with the release identity (certificate SHA-256
   Settings tab dot and the Account card instead of only reauth; and a foreground drain
   re-probes waiting rows inside the 900 s defer, so a partner enrolling after pairing is
   picked up on the next app open.
-- `policy-000017`, the latest release: signed `OFFER` of versionCode 42 (`1.1.40`) at 100
+- `artifact-v43` (`app-release.apk`, 39,252,881 bytes, SHA-256
+  `ed603200650b55bc760da51a59d78417d0b2b6aebc486de12e9df34bcf9d79f6`), the 1.1.41 build.
+  Carries ADR #315: the background partner-sync pass is bounded at 90 s and retries
+  instead of wedging, sign-in waits time out without ever creating a second anonymous
+  account, and a timed-out pass reports `partner_sync_timeout phase=<step>` to Crashlytics.
+  Fixes the 2026-11-18 incident where a partnership-end notice sat ~20 minutes until the
+  app was restarted. No other behavior changes.
+- `policy-000018`, the latest release: signed `OFFER` of versionCode 43 (`1.1.41`) at 100
+  percent, cohort salt `41dca6402c31d7e032fbb1b82f2dd4c5`, issued 1795005730
+  (2026-11-18T12:42:10Z). Anonymous latest manifest SHA-256
+  `0491b26b7ee7e8e145610a1af85971407f2eed53ed562b0fefd45b5bacb59107`, decoded anonymously
+  to the signed envelope (sequence 18, OFFER, 1.1.41/43, 100%); the version-pinned APK
+  downloaded anonymously with the exact size and `ed6032…` digest. Both physical phones
+  were updated by direct `install -r` from this artifact (`installerPackageName=null`,
+  lastUpdateTime 15:43:38 / 15:44:19), not through the in-app path.
+- `policy-000017`, the previous release: signed `OFFER` of versionCode 42 (`1.1.40`) at 100
   percent, cohort salt `1cf6edd497fd97fcbaf8a87d096253f6`. Anonymous latest manifest
   SHA-256 `019406d76db1e841caa667d6b3f66f9fc089e81a84e8692feccc7ac3d24bb5ee`, byte-identical
   to the locally signed envelope (decoded: sequence 17, OFFER, 1.1.40/42, 100%). The
@@ -175,7 +190,7 @@ the pairing and rules survived. The in-app installer path also left
 `ACCESS_RESTRICTED_SETTINGS` at `ignore` on the updated package (see the restricted-settings
 note in `device-evidence-2026-11-18-partner-pairing.md`).
 
-Publisher state: highest policy sequence 17, highest versionCode 42. Tags are immutable, so
+Publisher state: highest policy sequence 18, highest versionCode 43. Tags are immutable, so
 `policy-000005` (an early test publication) stays burned and every new policy needs a higher
 sequence.
 

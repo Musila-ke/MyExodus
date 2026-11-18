@@ -46,8 +46,12 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FirebaseFirestore
 import java.util.UUID
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 
 /**
  * §14 partner-sync housekeeping (blocking-core plan §6 + §14): the periodic pass that turns
@@ -1155,9 +1159,11 @@ class PairUidResolver(
             Log.w(TAG, "no uid: signed out or the session is transitioning")
             return@withLock null
         }
+        partnerSyncPhase = "sign_in_app_check"
         AppCheckInstaller.install(appContext)
+        partnerSyncPhase = "sign_in_current_user"
         val auth = FirebaseAuth.getInstance()
-        var user = auth.currentUser ?: signIn(auth)
+        var user = auth.currentUser ?: mintAnonymousUser()
         // A dead refresh token leaves `currentUser` set while every authenticated call fails
         // forever — the SDK never signs itself out of that state, so nothing recovers and the
         // OPD #30 card never earns its verdict (device-proven 2026-10-23: both emulator auth
@@ -1166,31 +1172,54 @@ class PairUidResolver(
         // network failure (ADR #125). The fresh uid is a member of no existing pairing, so the
         // rotation is recorded for [PartnerSyncCoordinator] to raise the re-pair card from —
         // certain loss, no attestation check needed.
-        if (user != null && identityRejected(user)) {
-            Log.w(TAG, "identity abandoned by the server — minting a new anonymous uid")
-            auth.signOut()
-            user = signIn(auth)
-            if (user != null) reachability.markIdentityRotated(System.currentTimeMillis())
+        if (user != null) {
+            partnerSyncPhase = "sign_in_token_probe"
+            if (identityRejected(user)) {
+                Log.w(TAG, "identity abandoned by the server — minting a new anonymous uid")
+                auth.signOut()
+                user = mintAnonymousUser()
+                if (user != null) reachability.markIdentityRotated(System.currentTimeMillis())
+            }
         }
         if (user == null) Log.w(TAG, "no uid — sign-in unavailable")
         user?.uid?.also { uid ->
             if (uid != profileReadyFor) {
-                runCatching { ensureProfile() }
+                partnerSyncPhase = "sign_in_profile"
+                runCatching { withTimeout(PROFILE_TIMEOUT_MS) { ensureProfile() } }
                     .onSuccess { profileReadyFor = uid }
                     .onFailure { Log.w(TAG, "profile initialization failed — will retry", it) }
             }
         }
     }
 
-    private suspend fun signIn(auth: FirebaseAuth): FirebaseUser? = runCatching {
-        auth.signInAnonymously().await()
+    /** Bounded wait on the process-wide anonymous mint — see [SingleFlightMint] for why only
+     *  the wait, never the mint, is what times out (2026-10-01 double-mint). */
+    private suspend fun mintAnonymousUser(): FirebaseUser? {
+        partnerSyncPhase = "sign_in_mint"
+        val user = anonymousSignIn.awaitOrNull(SIGN_IN_TIMEOUT_MS)
+        if (user == null) {
+            // active=true means this wait expired, not that the mint failed — it may still land.
+            val wedged = anonymousSignIn.active
+            partnerSyncPhase = if (wedged) "sign_in_mint_timeout" else "sign_in_mint_failed"
+            Log.w(
+                TAG,
+                if (wedged) {
+                    "anonymous sign-in unanswered after ${SIGN_IN_TIMEOUT_MS}ms — still running"
+                } else {
+                    "anonymous sign-in failed"
+                },
+            )
+        }
+        return user
     }
-        .onFailure { Log.w(TAG, "anonymous sign-in failed", it) }
-        .getOrNull()
-        ?.user
 
+    /** ADR #125: only the auth server's own verdict counts, so a timed-out probe is not a
+     *  rejection — the identity must never rotate on a network failure. */
     private suspend fun identityRejected(user: FirebaseUser): Boolean =
-        isDeadIdentity(runCatching { user.getIdToken(false).await() }.exceptionOrNull())
+        isDeadIdentity(
+            runCatching { withTimeout(TOKEN_PROBE_TIMEOUT_MS) { user.getIdToken(false).await() } }
+                .exceptionOrNull(),
+        )
 
     suspend fun resolve(pairId: String): Resolved? {
         val uid = ensureUid() ?: return null
@@ -1236,7 +1265,25 @@ class PairUidResolver(
     private companion object {
         const val TAG = "MyExodusPairUidResolver"
 
+        /** Every auth wait is bounded so a wedged Play-services call cannot hold [SIGN_IN_LOCK]
+         *  (and every partner caller queued behind it) beyond these waits — owner incident
+         *  2026-11-18: the unbounded version wedged a wake pass for 17+ minutes. */
+        const val SIGN_IN_TIMEOUT_MS = 15_000L
+        const val TOKEN_PROBE_TIMEOUT_MS = 10_000L
+        const val PROFILE_TIMEOUT_MS = 15_000L
+
         /** Static so every resolver instance shares one lock — see [ensureUid]. */
         val SIGN_IN_LOCK = Mutex()
+
+        /** Process-wide like [SIGN_IN_LOCK]: a timed-out waiter must not leave a second
+         *  signInAnonymously() starting alongside the still-running first (2026-10-01). */
+        private val anonymousSignIn = SingleFlightMint<FirebaseUser>(
+            CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        ) {
+            runCatching { FirebaseAuth.getInstance().signInAnonymously().await() }
+                .onFailure { Log.w(TAG, "anonymous sign-in failed", it) }
+                .getOrNull()
+                ?.user
+        }
     }
 }

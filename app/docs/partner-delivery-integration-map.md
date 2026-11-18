@@ -52,7 +52,11 @@ Vault gate: `AppRulesStoreFactory` refuses to open while the DI predicate
 - `accountability/sync/PartnerSyncWorker.kt` — 15-min unique periodic `partner-sync`
   (CONNECTED constraint, `UPDATE` policy) + expedited one-shot `partner-sync-now`
   (`KEEP`); wake input keys `messageId`, `forceHeartbeat`; catches `VaultLockedException`
-  and returns `Result.retry()`.
+  and returns `Result.retry()`. Since v43 (ADR #315) the whole pass is bounded at 90 s —
+  a `TimeoutCancellationException` returns `Result.retry()` (always re-arms the periodic
+  chain) and reports `partner_sync_timeout phase=<partnerSyncPhase>` to Crashlytics; the
+  auth awaits inside the pass are individually bounded and the anonymous mint is one
+  process-wide single-flight so a timed-out wait never overlaps a second mint.
 - `accountability/sync/PartnerSyncCoordinator.kt` — `syncOnce` under `syncMutex`:
   reconcile journal → chain events, repair protocol, drain outbox → mailbox, pull mailbox;
   `SyncReport.signingBlocked` surfaces the cold window.

@@ -115,6 +115,58 @@ stay on the Partner page ~60 s while paired, then look for a registration row.
   has no update channel". The v41 artifact's dex contains the string (`classes4.dex`), so v41
   has a working channel. v40 phones need one manual v41 install; after that the channel updates.
 
+## Partnership termination delivery stall (2026-11-18 ~14:34–14:52 EAT) — natural incident
+
+The owner ended the partnership (`NErry…_WRtL…`) on the X6532 at 14:34 EAT. The X6532C
+(survivor) posted nothing and showed "last synced 46 min ago". No forcing was used.
+
+| Time (EAT) | Event | Source |
+|---|---|---|
+| 14:34:15.415 | pair-deletion message written to the survivor's mailbox, no `relayStatus` (not rejected) | Firestore `mailboxes/NErry…/messages/bbaa7f1a…` |
+| 14:34:20.240 | pair `status=terminated`; `system_events/pair_terminated` | Firestore |
+| 14:34:22 | relay **DISPATCHED** the generic SYNC_AVAILABLE FCM wake to both of the survivor's push installations | `relay-dispatch/bbaa7f1a…/installations/*` status DISPATCHED, provider fcm |
+| 14:34:23 | expedited job `#u0a250/64` (no constraints) STARTs — 1 s after the wake | `dumpsys jobscheduler` Job history |
+| 14:40:02 | second constraint-free expedited job `#u0a250/66` STARTs | same |
+| 14:51:42 | both jobs STOP "unexpectedly disconnected" — the process was force-stopped by the tester; **neither had completed in 17 min** | same |
+| 14:51:44 | process restarted; work re-armed; a full pass completes 14:54:08 | liveness `lastAcceptedContactAtMs`, job history |
+| ~14:54 | survivor notice posted: "musila ended the partnership" / "Partnership ended" / "A shared partnership was ended. Its shared data was erased." | `dumpsys notification`, tag `partner:ended:<pairId>` |
+
+Context proven from the same window:
+- Process alive and foreground (MainActivity top-resumed) from before 14:00 until the
+  force-stop; Wi-Fi CONNECTED+VALIDATED; no ANR, no crash.
+- Last successful server contact before the stall: liveness 14:01:15, push-installation
+  `updatedAt` 14:01:24.
+- **No MyExodus JobScheduler job STARTed between 14:00:56 and 14:34:23** — the 15-minute
+  cadence produced no runs in the stall window. `#u0a250/41` at 14:00:56 completed in 46 ms;
+  no START in the whole history lacks a STOP except the two wake jobs.
+- The seconds-level push→sync path (13:57–13:59 rule-toggle deliveries, above) was healthy
+  on the same build an hour earlier.
+
+Code structure behind the stall (verified 2026-11-18):
+- `PartnerSyncWorker.doWork` has no timeout around `runPartnerSyncPass`
+  (`PartnerSyncWorker.kt:35-48`); the partner path has no bounded network awaits — the only
+  `withTimeoutOrNull` in the area are the push label lookup (1 s,
+  `PartnerMessagingService.kt:140`) and the composer's 45 s send leg (`MessageDelivery.kt`).
+- The pass's first dependencies are Play-services Tasks: `PushInstallationRegistrar.register`
+  awaits the Firebase Installation ID and FCM token before any Firestore call
+  (`PushInstallationRegistrar.kt:64-80`); `PairUidResolver.ensureUid` runs
+  `signInAnonymously().await()` / `getIdToken(false).await()` inside one static
+  process-wide Mutex (`PartnerSyncCoordinator.kt:1153-1177`, `SIGN_IN_LOCK` at :1240). A Task
+  that never completes therefore holds the worker — and, for the mutex, every partner caller
+  in the process — indefinitely.
+- WorkManager 2.11.2 (the locked version) maps periodic work to chained delayed one-shot
+  jobs: `javap` of `SystemJobInfoConverter` in the resolved AAR shows `setMinimumLatency`,
+  no `setPeriodic`. A run that never completes therefore also schedules no successor.
+
+Unproven: which await wedged. The logcat ring buffer is 64 KiB and had wrapped (earliest
+retained entry 14:57:24) before inspection; the release build is not debuggable (no
+`run-as`, no WorkManager DB); no ANR exists because the main thread was never blocked.
+
+Ruled out as causes: rules/streaks (the server flipped the pair regardless; the mailbox
+message was accepted and the relay dispatched to both installations), Wi-Fi (validated
+throughout; other apps' jobs ran in the same window), app version (v40–v42 share identical
+delivery code; the v42 rule delivery was proven minutes earlier).
+
 ## Natural latencies observed (no forcing)
 
 - Pairing → recipient registration: 17 s.
@@ -195,3 +247,51 @@ re-probes waiting rows inside the 900 s defer.
 - **Not exercised:** an induced `ATTESTATION_REQUIRED`/`RETRYABLE` stall on hardware (no
   natural producer was available without breaking the healthy pair); the surfacing path
   for those blocks is covered by the exhaustive JVM predicate test.
+
+## v43 delivery legs on the incident path (2026-11-18 ~15:51–15:59 EAT)
+
+Both phones on release-signed v43/1.1.41 (`install -r`; `versionCode=43
+versionName=1.1.41`, lastUpdateTime 15:43:38 / 15:44:19). Pair re-formed this session:
+pair `NErry…_WRtL…` re-activated 12:50:21.613Z, `pairingEpoch=4`, members X6532 (.16,
+"musila") and X6532C (.8, "John"). The X6532C stayed backgrounded on the launcher as the
+receiving device, and its logcat was streamed to the host so the on-device ring buffer
+could not wrap. Every action below was a real UI action — no test hooks, no forced passes:
+the producer toggled the batch from Rules, and for the termination leg ended the
+partnership from the Pairing page and authenticated the BiometricPrompt.
+
+**Leg A — rule-change delivery, background receiver (twice).**
+
+- Toggle off at 15:51:16–17 → inbox message `185f61cd…` createdAt 12:51:52.901Z; ingest
+  12:51:53.361Z; `partnerNotify` dispatch 12:51:59.147Z.
+- .8: expedited `partner-sync-now` START ~15:52:00.7; notice enqueued 15:52:01.267
+  (`partner:event:<pairId>`, title "Rule update from musila"); worker finished ~15:52:03.6.
+  Message write→visible 8.4 s; dispatch→visible 2.1 s.
+- Toggle back ON 15:54:44 → second notice `when=1795006519505` (15:55:19.5). The owner
+  confirmed both notices arrived on the phone.
+
+**Leg B — termination notice, the exact incident path.**
+
+- 12:58:33Z "End partnership" confirmed in the dialog; the owner authenticates the
+  BiometricPrompt (the ceremony itself requires it).
+- 12:58:40.517Z: termination envelope written to `mailboxes/<john>/messages/e56d26f3…`
+  (`recordKind=USER_ENCRYPTED`, `keyEpoch=0`) — 7.5 s after the confirm tap, a window
+  that includes the owner's prompt and the signing ceremony.
+- 12:58:45.114Z: .8 `PartnerMessagingService` logs `wake for e56d26f3…` (FCM); 12:58:45.178
+  WorkManager schedules the expedited job; 12:58:45.219 worker START.
+- 12:58:47.827Z: `notification_enqueue` — `partner:ended:<pairId>`, "musila ended the
+  partnership", "Ended Nov 18, 2026 3:58 PM. The shared data was erased on both phones."
+- 12:58:47.877Z: `SyncReport(… unpairAdvanced=true, signingBlocked=false …)`; worker
+  result SUCCESS 12:58:47.888; job executed 12:58:47.999.
+- Latencies: envelope write→visible **7.3 s**; FCM wake→visible **2.7 s**; owner
+  confirm→visible **14.8 s**.
+- The pass ran entirely in the background; `signingBlocked=false` proves no auth prompt
+  was needed or attempted.
+
+This is the path that hung on 2026-11-18 14:34 (relay wake → expedited pass never
+completed; the notice took ~20 minutes and appeared only after a force-stop and relaunch).
+On v43 the same wake-to-visible segment completes in 2.7 s. No `partner_sync_timeout`
+report was produced for either leg and no retry occurred.
+
+**End state.** The pair is terminated — that is this leg's scenario outcome. The owner's
+other pairing on the same phone (Arsene) is untouched, and the Pairing page switched to it
+correctly. Rotation guard ran on both serials (`accelerometer_rotation=0`).

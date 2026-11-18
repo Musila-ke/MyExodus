@@ -1951,3 +1951,42 @@ Verification:
   induced attestation/retryable stall was **not** exercised on hardware (no natural
   producer without breaking the healthy pair). Device detail in
   `device-evidence-2026-11-18-partner-pairing.md`.
+
+## 2026-11-18 15:59 EAT — v43/1.1.41: a partner sync pass is bounded and always re-arms (incident fix shipped and device-proven)
+
+This morning's incident: the owner ended a partnership at 14:34; the survivor's relay FCM
+wake fired at 14:34:22 and its expedited pass STARTed at 14:34:23 (again at 14:40:02), but
+no pass completed — the notice arrived only after a force-stop at 14:51:42 and a relaunch,
+~20 minutes after the end. The causes are structural: `PartnerSyncWorker` ran the pass with
+no bound; the pass chains Play-services awaits with no deadlines of their own;
+`PairUidResolver.ensureUid` awaited sign-in/token inside a static process-wide mutex; and
+WorkManager 2.11.2 chains periodic runs on completion, so one wedged await silenced both
+the wake rail and the 15-minute fallback. The exact suspended await is not recoverable
+post-hoc (suspended coroutines have no thread stack, the logcat ring had wrapped, the
+release build is not debuggable); ADR #315 records that limit instead of naming a guess.
+
+Fix — v43/1.1.41, published as `artifact-v43` / `policy-000018` (ADR #315):
+
+- Whole-pass `withTimeout(90_000)`; `TimeoutCancellationException` → `Result.retry()`, which
+  always schedules the successor. Each timeout reports
+  `partner_sync_timeout phase=<last phase>` to Crashlytics via a process-wide breadcrumb.
+- Auth awaits bounded inside the pass (mint wait 15 s, token probe 10 s, profile 15 s;
+  worst-case lock body ≈55 s).
+- `SingleFlightMint`: one process-wide anonymous mint; a timed-out waiter abandons only its
+  wait and the next caller joins the in-flight mint — the 2026-10-01 one-account invariant
+  holds. A timed-out token probe is not a rejection (ADR #125 unchanged).
+
+Verification:
+
+- `SingleFlightMintTest` (3 cases) and `PartnerSyncTelemetryTest.timeout_reportsTheStalledStep`;
+  full JVM suite green and the three classes green on a 5× stress re-run; `:app:lintDebug`
+  alone "No issues found."; code review of the full diff found no blocking findings.
+- Release 1.1.41/v43 installed with `install -r` on both physical phones; anonymous
+  manifest byte-identical and the APK digest matched (`ed6032…`).
+- Device legs on the release build, all real UI actions — nothing forced: rule-change
+  delivery twice with the receiver backgrounded (message write→visible 8.4 s,
+  dispatch→visible 2.1 s); and the termination notice on the exact incident path — envelope
+  written 12:58:40.517Z, FCM wake 12:58:45.114Z, notice enqueued 12:58:47.827Z (wake→visible
+  2.7 s, envelope→visible 7.3 s, owner-confirm→visible 14.8 s), with
+  `unpairAdvanced=true`, `signingBlocked=false`, no timeout report, no retry. Detail in
+  `device-evidence-2026-11-18-partner-pairing.md`.

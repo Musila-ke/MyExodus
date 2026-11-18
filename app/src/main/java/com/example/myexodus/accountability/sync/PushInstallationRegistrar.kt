@@ -68,11 +68,13 @@ class PushInstallationRegistrar(
             }
             // FID after auth: the first fetch may need network, and there is no point
             // resolving one for a device that cannot claim it.
+            partnerSyncPhase = "push_installation_fid"
             val installationId = ensureInstallationId()
             if (installationId == null) {
                 Log.w(TAG, "registration skipped: no installation id (FID unavailable)")
                 return false
             }
+            partnerSyncPhase = "push_installation_token"
             val token = fetchToken()?.takeIf { it.isNotBlank() }
             if (token == null) {
                 Log.w(TAG, "registration skipped: no FCM token")
@@ -82,6 +84,7 @@ class PushInstallationRegistrar(
                 Log.i(TAG, "registration skipped: the session changed while resolving")
                 return false
             }
+            partnerSyncPhase = "push_installation_write"
             val data = FirestoreSchema.pushInstallationData(
                 provider = PROVIDER_FCM,
                 token = token,
