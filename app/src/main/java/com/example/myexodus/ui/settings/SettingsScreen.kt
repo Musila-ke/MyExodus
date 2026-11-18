@@ -49,7 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.R
 import com.example.myexodus.account.AuthState
-import com.example.myexodus.accountability.delivery.PartnerRegistrationBlock
+import com.example.myexodus.accountability.delivery.needsAttention
 import com.example.myexodus.applock.AppLockController
 import com.example.myexodus.blocking.EnhancedModeHealthMonitor
 import com.example.myexodus.blocking.ProtectionDegradation
@@ -291,7 +291,7 @@ private fun SettingsIndex(
                     icon = Icons.Outlined.Person,
                     title = stringResource(R.string.account_settings_title),
                     subtitle = accountSubtitle,
-                    tone = if (deliveryBlock == PartnerRegistrationBlock.REAUTH_REQUIRED) {
+                    tone = if (deliveryBlock?.needsAttention == true) {
                         StatusTone.ATTENTION
                     } else {
                         null

@@ -11,6 +11,7 @@ import androidx.core.app.NotificationManagerCompat
 import com.example.myexodus.BuildConfig
 import com.example.myexodus.MainActivity
 import com.example.myexodus.R
+import com.example.myexodus.accountability.delivery.PartnerRegistrationBlock
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
@@ -642,8 +643,9 @@ object PartnerNotifications {
         NotificationManagerCompat.from(context).cancel(PartnerNudgePush.TAG, NOTIF_PARTNER_NUDGE)
     }
 
-    /** Fix A (owner 2026-11-15): the reauth prompt also lives in the tray, tap → Settings. */
-    fun notifyRegistrationPaused(context: Context) =
+    /** Fix A (owner 2026-11-15): the registration prompt also lives in the tray, tap → Settings,
+     *  with the body chosen by the block (2026-11-18: every actionable block surfaces). */
+    fun notifyRegistrationPaused(context: Context, block: PartnerRegistrationBlock) =
         post(
             context,
             CHANNEL_ACCOUNTABILITY_EVENTS,
@@ -651,7 +653,13 @@ object PartnerNotifications {
             NotificationManager.IMPORTANCE_HIGH,
             NOTIF_REGISTRATION_PAUSED,
             R.string.account_delivery_reauth_title,
-            R.string.account_delivery_reauth_body,
+            when (block) {
+                PartnerRegistrationBlock.ATTESTATION_REQUIRED ->
+                    R.string.account_delivery_attestation_body
+                PartnerRegistrationBlock.RETRYABLE ->
+                    R.string.account_delivery_retry_body
+                else -> R.string.account_delivery_reauth_body
+            },
             tag = REGISTRATION_PAUSED_TAG,
             openSettings = true,
         )

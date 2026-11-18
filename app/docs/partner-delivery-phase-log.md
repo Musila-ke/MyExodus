@@ -1914,3 +1914,40 @@ code 40 on both AVDs; pair `7amXhHErP65IYwQbrpJRPJGJQ4cv_rwNjURbzfoDv4z5sqSDrxLi
   (now incl. `partnerActivity.pinnedMessageAtEpochMillis` /
   `lastEventOccurredAtEpochMillis`) clears it as designed. Regression test
   `stillPausedSince_*` plus the staged-projection case already covered this on the JVM.
+
+## 2026-11-18 14:05 EAT — stall visibility + foreground re-probe (v42/1.1.40) shipped and device-proven
+
+This morning's field failure: the partner device never completed §8.3.1 registration, and
+nothing told the user — the tray prompt existed only for `REAUTH_REQUIRED`, and a waiting
+row sat out its full 900 s defer even when the app had been reopened in between. Two
+fixes, both shipped in 1.1.40/v42 (published as `artifact-v42` / `policy-000017`):
+
+- **Every actionable block surfaces.** `PartnerRegistrationBlock.needsAttention` (true:
+  reauth, attestation failure, retryable; false: needs-foreground, no account, no
+  recipient key — normal pre-pairing states, not alarms) now drives three surfaces: the
+  tray notification with a block-specific body, the Settings tab dot, and the Account pane
+  card (reauth keeps its Verify action; attestation and retryable are informational).
+  Previously only reauth produced any of the three. Pinned by the exhaustive
+  `needsAttention_isTrueExactlyForBlocksTheUserMustActOn`.
+- **Foreground drains re-probe waiting rows inside the defer.** `regenerateWaiting` takes
+  `foreground = allowRegistration`; a foreground drain passes `Long.MAX_VALUE` as the due
+  time so every `WAITING_FOR_RECIPIENT_KEY` row is re-probed on app open, while
+  background drains (`PartnerEventSyncWorker`, `allowRegistration = false`) keep the 900 s
+  defer. This is what picks up a partner who enrolls after pairing without waiting out
+  the backoff. Pinned by `foregroundDrain_reprobesAWaitingRowInsideItsDefer`.
+
+Verification:
+
+- `:app:testDebugUnitTest` full suite green; `PartnerEventDrainTest` also green on a 5×
+  stress rerun.
+- Both physical phones on release-signed v42, paired with each other and verified. No
+  spurious paused notification and no Settings attention dot on either (block null on a
+  healthy pair).
+- Foreground drains logged on every app open (`drain: 0 event(s) delivered`).
+- Real rule-change delivery on v42: toggling a 32-site batch on the X6532 produced "Rule
+  update from musila" on the X6532C and moved "Rules & blocks" 4 → 5; restoring it
+  produced the second notice and 6 updates (`recipientEventsPulled=1`).
+- Direct `PartnerEventDrainTest` runs also cover the registration-block paths on JVM; an
+  induced attestation/retryable stall was **not** exercised on hardware (no natural
+  producer without breaking the healthy pair). Device detail in
+  `device-evidence-2026-11-18-partner-pairing.md`.

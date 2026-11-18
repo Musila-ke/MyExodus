@@ -85,7 +85,7 @@ import com.example.myexodus.blocking.recovery.RecoveryStateStore
 import com.example.myexodus.blocking.usage.AccountingOutageSource
 import com.example.myexodus.blocking.usage.PlatformUsageReader
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
-import com.example.myexodus.accountability.delivery.PartnerRegistrationBlock
+import com.example.myexodus.accountability.delivery.needsAttention
 import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.sos.NudgeEnvelope
 import com.example.myexodus.accountability.sos.NudgeRepository
@@ -260,10 +260,9 @@ fun AppShell(
     // Fix A discoverability (owner 2026-11-15): a paused partner registration marks the
     // Settings tab itself, so the reauth prompt is visible from anywhere in the app.
     val deliveryBlock by account.deliveryBlock.collectAsStateWithLifecycle()
-    // Only the block the Account pane can resolve earns a dot; the rest clear on their own.
+    // Every actionable block earns the dot — a silent stall is the failure this exists to prevent.
     val attentionTabs =
-        if (deliveryBlock == PartnerRegistrationBlock.REAUTH_REQUIRED) setOf(NavKeys.SETTINGS)
-        else emptySet()
+        if (deliveryBlock?.needsAttention == true) setOf(NavKeys.SETTINGS) else emptySet()
     var pickerOpen by rememberSaveable { mutableStateOf(false) }
     var openRuleId by rememberSaveable { mutableStateOf<String?>(null) }
     // Phase 4: the Recovery spoke to open next — set by the block screen, the widget, or the

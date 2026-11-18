@@ -90,6 +90,7 @@ import com.example.myexodus.account.TransitionFailure
 import com.example.myexodus.account.TransitionIntent
 import com.example.myexodus.account.TransitionStep
 import com.example.myexodus.accountability.delivery.PartnerRegistrationBlock
+import com.example.myexodus.accountability.delivery.needsAttention
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.PillTone
 import com.example.myexodus.ui.StatusPill
@@ -1056,11 +1057,12 @@ private fun PersistentAccount(
         }
     }
 
-    // §8.3.1: enrollment/rotation needs a five-minute-old-or-fresher `auth_time`. Without
-    // this prompt a blocked registration is invisible and partner updates silently stall.
+    // §8.3.1: enrollment/rotation needs a five-minute-old-or-fresher `auth_time`, and key setup
+    // can fail outright. Without this card a blocked registration is invisible and partner
+    // updates silently stall (2026-11-18: every actionable block shows one).
     val deliveryBlock by viewModel.deliveryBlock.collectAsStateWithLifecycle()
-    if (deliveryBlock == PartnerRegistrationBlock.REAUTH_REQUIRED) {
-        AccountCard(
+    when (deliveryBlock) {
+        PartnerRegistrationBlock.REAUTH_REQUIRED -> AccountCard(
             icon = Icons.Outlined.Security,
             title = stringResource(R.string.account_delivery_reauth_title),
             body = stringResource(R.string.account_delivery_reauth_body),
@@ -1069,6 +1071,17 @@ private fun PersistentAccount(
                 Text(stringResource(R.string.account_delivery_reauth_action))
             }
         }
+        PartnerRegistrationBlock.ATTESTATION_REQUIRED -> AccountCard(
+            icon = Icons.Outlined.Security,
+            title = stringResource(R.string.account_delivery_reauth_title),
+            body = stringResource(R.string.account_delivery_attestation_body),
+        )
+        PartnerRegistrationBlock.RETRYABLE -> AccountCard(
+            icon = Icons.Outlined.Security,
+            title = stringResource(R.string.account_delivery_reauth_title),
+            body = stringResource(R.string.account_delivery_retry_body),
+        )
+        else -> Unit
     }
 
     // §6.4: encrypted backup belongs to the account that owns it, so its entry point lives here.

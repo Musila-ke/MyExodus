@@ -123,6 +123,25 @@ artifacts are signed with the release identity (certificate SHA-256
   5555) did not survive the reboot done in the same session, so the on-device legs that
   remained (accessibility re-enable, locked-widget action, Path A wall Close) are **BLOCKED**
   on reconnection, not silently skipped.
+- `artifact-v42` (`app-release.apk`, 39,252,881 bytes, SHA-256
+  `fc63c6e8acf6adfe5130b7519b0fea43285d207f2102ceedcccca3f2e44bc569`), the 1.1.40 build.
+  Carries the 2026-11-18 partner-delivery visibility fixes: every actionable partner
+  registration block (reauth, attestation failure, retryable) surfaces in the tray, the
+  Settings tab dot and the Account card instead of only reauth; and a foreground drain
+  re-probes waiting rows inside the 900 s defer, so a partner enrolling after pairing is
+  picked up on the next app open.
+- `policy-000017`, the latest release: signed `OFFER` of versionCode 42 (`1.1.40`) at 100
+  percent, cohort salt `1cf6edd497fd97fcbaf8a87d096253f6`. Anonymous latest manifest
+  SHA-256 `019406d76db1e841caa667d6b3f66f9fc089e81a84e8692feccc7ac3d24bb5ee`, byte-identical
+  to the locally signed envelope (decoded: sequence 17, OFFER, 1.1.40/42, 100%). The
+  X6532C (v41) discovered this offer in Settings → Updates and replaced itself in place
+  through the in-app path — Download, verify, Install Unknown Apps grant, Play Protect
+  scan, install; package state after read `versionCode=42 versionName=1.1.40`,
+  `installerPackageName=com.example.myexodus`, `firstInstallTime` preserved (the first
+  physical in-app replacement leg since v36). The X6532's in-app download stalled at 0
+  percent while its default network was cellular and Wi-Fi was merely connected; the
+  channel-verified artifact was installed with `adb install -r` instead. Root cause was
+  not established and is recorded as observed, not explained.
 
 The rollout goes straight to 100 percent because the tester base is the owner and one partner:
 the 5 to 25 to 100 progression has not been rehearsed and is not claimed.
@@ -147,7 +166,16 @@ through the verify path. Package state after the update read `versionCode=36
 versionName=1.1.34` with `firstInstallTime` preserved, the one-time "now on 1.1.34" notice
 appeared, and the signed-in account and local data survived. Details in §14.
 
-Publisher state: highest policy sequence 16, highest versionCode 41. Tags are immutable, so
+**In-app hardware update, 2026-11-18:** the X6532C (then 1.1.39/v41) discovered
+`policy-000017` through the live channel and replaced itself in place with `artifact-v42`
+through the full user path: Download, verify, Install Unknown Apps grant, Play Protect
+first-seen scan, Install. Package state after read `versionCode=42 versionName=1.1.40`,
+`installerPackageName=com.example.myexodus`, `firstInstallTime` preserved (11:52:59), and
+the pairing and rules survived. The in-app installer path also left
+`ACCESS_RESTRICTED_SETTINGS` at `ignore` on the updated package (see the restricted-settings
+note in `device-evidence-2026-11-18-partner-pairing.md`).
+
+Publisher state: highest policy sequence 17, highest versionCode 42. Tags are immutable, so
 `policy-000005` (an early test publication) stays burned and every new policy needs a higher
 sequence.
 
@@ -872,6 +900,33 @@ v31, live channel, 2026-11-13):**
 - The X6532 already ran 1.1.38 by direct install at publication, so an in-app replacement
   *by* 1.1.38 was not exercised; the in-app path is proven by the v34→v36 physical leg above.
 
+**PASSED (publication of v42 and physical X6532C in-app update 1.1.39/v41 → 1.1.40/v42, 2026-11-18):**
+
+- `:app:assembleRelease -Pmyexodus.updateRepository=Musila-ke/MyExodus-Releases` built
+  `versionCode=42`, `versionName=1.1.40`, 39,252,881 bytes, SHA-256
+  `fc63c6e8acf6adfe5130b7519b0fea43285d207f2102ceedcccca3f2e44bc569`, signed by the release
+  identity (certificate SHA-256 `8f881880…854b`).
+- `artifact-v42` was published as an immutable prerelease; `policy-000017` (sequence 17,
+  versionCode 42, rollout 100, cohort salt `1cf6edd497fd97fcbaf8a87d096253f6`) was signed and
+  published as the latest release. The live manifest decoded anonymously to the signed
+  envelope (SHA-256 `019406d7…bb5ee`), and the version-pinned APK downloaded anonymously with
+  the exact size and digest.
+- Full user path on the X6532C: Settings → Updates offered 1.1.40, Download completed and
+  verified, the Install Unknown Apps grant screen was followed, Android's Play Protect
+  first-seen scan appeared, and Install completed the replacement in place. `dumpsys package`
+  after: `versionCode=42 versionName=1.1.40`, `installerPackageName=com.example.myexodus`,
+  `firstInstallTime=2026-11-18 11:52:59` preserved; pairing and rules intact.
+- The one-time post-upgrade notice appeared on the X6532 with the exact signed 1.1.40 release
+  notes and was dismissed with OK.
+- The same leg on the X6532 stalled at "Downloading the update: 0%" for several minutes
+  (its default network was cellular while Wi-Fi was merely connected; the metered path
+  consents automatically, and the attempt had already entered `DOWNLOADING`, so the gate
+  was not the blocker). Root cause not established; the channel-verified artifact was
+  installed with `adb install -r` instead and read back `versionCode=42`. Recorded as
+  observed, not explained.
+- `accelerometer_rotation=0` verified on both serials after the injected input
+  (`scripts/rotation-guard.sh`).
+
 **BLOCKED (owner-gated or hardware):**
 
 - Installer-session `fsync` with a real `openWrite` stream, duplicate and stale status intents,
@@ -880,7 +935,11 @@ v31, live channel, 2026-11-13):**
   replacement itself is now proven on physical hardware (2026-11-14).
 - Android 13+ restricted-settings re-enable behavior after a self-update: the in-app update
   ran on hardware and the app flagged "Protection needs to be turned back on after this
-  update", but the accessibility restricted-settings re-grant path itself was not driven in
+  update". The 2026-11-18 in-app replacement left `ACCESS_RESTRICTED_SETTINGS` at `ignore`
+  on the X6532C (`installerPackageName=com.example.myexodus`) — the one state in which App
+  Info shows the ⋮ "Allow restricted settings" item — and the owner confirms the ⋮ is now
+  visible on both phones. The re-grant itself (⋮ → allow → re-enable the service) was not
+  yet completed on either phone at wrap time, so no accessibility-on evidence follows from
   this leg.
 - 5 to 25 to 100 percent cohort progression has not been rehearsed on the live repository.
   Policy 9 goes straight to 100 percent for the two-tester base; GitHub immutable-release

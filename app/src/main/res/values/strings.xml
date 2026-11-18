@@ -1791,6 +1791,9 @@
     <string name="account_delivery_reauth_title">Partner updates are paused</string>
     <string name="account_delivery_reauth_body">This phone needs to confirm your account before it can exchange updates with your partner. Verify it’s you once and delivery resumes in both directions.</string>
     <string name="account_delivery_reauth_action">Verify it’s you</string>
+    <!-- Same tray slot as the reauth prompt: every actionable registration block now surfaces. -->
+    <string name="account_delivery_attestation_body">This phone couldn’t set up its secure partner key, so partner updates stay paused. Reopen MyExodus to retry.</string>
+    <string name="account_delivery_retry_body">This phone couldn’t finish setting up partner updates. It keeps retrying; reopen MyExodus if this lasts.</string>
     <string name="account_working">Working…</string>
     <string name="account_dismiss">OK</string>
 

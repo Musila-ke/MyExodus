@@ -655,6 +655,21 @@ class PartnerEventDrainTest {
     }
 
     @Test
+    fun foregroundDrain_reprobesAWaitingRowInsideItsDefer() = runBlocking {
+        registered()
+        records.clear()
+        val recorded = record()
+        // Field failure 2026-11-18: the partner enrolled after pairing, but the row sat out the
+        // full 900 s waiting defer even though the app had been reopened in between.
+        outbox.deferWaiting(recorded.eventId, clock.nowMs + 900_000)
+        records += enrollment(1)
+
+        assertEquals(0, drain.run(allowRegistration = false).claimed)
+        assertEquals("a reopening user must not wait out the background defer", 1, drain.run(allowRegistration = true).accepted)
+        assertEquals(PendingPartnerEvent.STATUS_ACKED, checkNotNull(outbox.event(recorded.eventId)).status)
+    }
+
+    @Test
     fun unreadableRow_isPermanentlyRejected_withoutSigningAnything() = runBlocking {
         val installation = registered()
         insertRow(installation.installationId, kind = "MADE_UP")
@@ -747,6 +762,23 @@ class PartnerEventDrainTest {
 
         assertTrue(result.registrationRequired)
         assertEquals(PartnerRegistrationBlock.REAUTH_REQUIRED, result.registrationBlock)
+    }
+
+    @Test
+    fun needsAttention_isTrueExactlyForBlocksTheUserMustActOn() {
+        // Exhaustive by construction: an unmapped enum entry fails the equality instead of
+        // defaulting to silence, which is the failure this predicate exists to prevent.
+        assertEquals(
+            mapOf(
+                PartnerRegistrationBlock.NEEDS_FOREGROUND to false,
+                PartnerRegistrationBlock.REAUTH_REQUIRED to true,
+                PartnerRegistrationBlock.NO_ACCOUNT to false,
+                PartnerRegistrationBlock.NO_RECIPIENT_KEY to false,
+                PartnerRegistrationBlock.ATTESTATION_REQUIRED to true,
+                PartnerRegistrationBlock.RETRYABLE to true,
+            ),
+            PartnerRegistrationBlock.entries.associateWith { it.needsAttention },
+        )
     }
 
     @Test

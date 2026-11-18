@@ -24,6 +24,21 @@ enum class PartnerRegistrationBlock {
     RETRYABLE,
 }
 
+/** Blocks that would otherwise stall partner delivery silently and that the user can act on.
+ *  Pre-pairing and signed-out states are normal, not alarms (2026-11-18 field test: a silent
+ *  enrollment stall is the failure the owner could not see). */
+val PartnerRegistrationBlock.needsAttention: Boolean
+    get() = when (this) {
+        PartnerRegistrationBlock.REAUTH_REQUIRED,
+        PartnerRegistrationBlock.ATTESTATION_REQUIRED,
+        PartnerRegistrationBlock.RETRYABLE,
+        -> true
+        PartnerRegistrationBlock.NEEDS_FOREGROUND,
+        PartnerRegistrationBlock.NO_ACCOUNT,
+        PartnerRegistrationBlock.NO_RECIPIENT_KEY,
+        -> false
+    }
+
 /**
  * §4.3/§8.4/§9 drain: claim → sign → submit → reconcile, with leases, per-index reconciliation,
  * exponential backoff and the three key-invalidation states. Never mutates ciphertext or the
@@ -180,7 +195,7 @@ class PartnerEventDrain(
             earliestNextAttemptMs = outbox.earliestNextAttempt(uid),
         )
 
-        regenerateWaiting(uid)
+        regenerateWaiting(uid, foreground = allowRegistration)
 
         var claimed = 0
         var accepted = 0
@@ -394,8 +409,15 @@ class PartnerEventDrain(
     }
 
     /** Waiting rows re-probe once per drain; a still-missing recipient key defers, no hot loop. */
-    private suspend fun regenerateWaiting(uid: String) {
-        val waiting = outbox.waitingRows(uid, clock.wallClockMs(), limits.batchSize)
+    private suspend fun regenerateWaiting(uid: String, foreground: Boolean) {
+        // Foreground drains are user-driven and bounded, so they re-probe even inside the 900 s
+        // defer: a partner enrolling after pairing is picked up on the next app open instead of
+        // sitting out the waiting backoff (2026-11-18 field test).
+        val waiting = outbox.waitingRows(
+            uid,
+            if (foreground) Long.MAX_VALUE else clock.wallClockMs(),
+            limits.batchSize,
+        )
         waiting.forEach { row ->
             when (recorder.regenerateRecipientEnvelopes(row.eventId)) {
                 PartnerEventRecorder.RegenerationResult.Regenerated ->

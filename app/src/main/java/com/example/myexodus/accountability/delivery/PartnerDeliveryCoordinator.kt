@@ -84,9 +84,12 @@ class PartnerDeliveryCoordinator(
         if (allowRegistration) {
             _registrationBlock.value = result.registrationBlock
             // Fix A discoverability (owner 2026-11-15): the prompt also persists in the tray,
-            // so a stalled registration is visible without opening Settings → Account.
-            if (result.registrationBlock == PartnerRegistrationBlock.REAUTH_REQUIRED) {
-                PartnerNotifications.notifyRegistrationPaused(context)
+            // so a stalled registration is visible without opening Settings → Account. Every
+            // actionable block counts (2026-11-18 field test: only reauth was surfaced, and a
+            // silent enrollment stall went unnoticed on the partner device).
+            val block = result.registrationBlock
+            if (block != null && block.needsAttention) {
+                PartnerNotifications.notifyRegistrationPaused(context, block)
             } else {
                 PartnerNotifications.cancelRegistrationPaused(context)
             }
