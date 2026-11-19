@@ -89,7 +89,12 @@ class BlockerAccessibilityService : AccessibilityService() {
 
     override fun onCreate() {
         super.onCreate()
-        overlay = OverlayController(this, stateMachine, profiler, ::openRecovery, ::openDifferentSite)
+        overlay = OverlayController(
+            this, stateMachine, profiler, ::openRecovery, ::openDifferentSite,
+            // The wall's Close is the user's own "leave", so it evicts even while the FGS's
+            // durable-wall launch is in flight (ADR #93 decision 2).
+            onWallClose = { pkg -> closeBlockedApp(pkg, userInitiated = true) },
+        )
     }
 
     /** Display of the most recent scan request, consumed by [handleUrlResult]. Main-thread
@@ -782,7 +787,7 @@ class BlockerAccessibilityService : AccessibilityService() {
      *  close a third-party app can perform, and it only applies once the target is genuinely
      *  backgrounded — hence the retry after the (asynchronous) HOME transition. The wall itself
      *  is untouched: it keeps its own lifetime (the user's Close tap). */
-    private fun closeBlockedApp(packageName: String) {
+    private fun closeBlockedApp(packageName: String, userInitiated: Boolean = false) {
         // HOME is global — whatever is front goes back. Late duplicate WSCs for the blocked
         // app can reach this after BlockerActivity has taken the front (emulator-5554,
         // 2026-11-02: five queued WSCs re-evicted in one burst; the global HOME pushed our own
@@ -803,14 +808,28 @@ class BlockerAccessibilityService : AccessibilityService() {
             launchedAtElapsedMs = EnforcementForegroundService.activeBlockTargetSinceElapsedMs,
             targetPackage = packageName,
         )
-        val evicted = !(wallIsFront || wallLaunching) && performGlobalAction(GLOBAL_ACTION_HOME)
+        // A user's own Close is an explicit "leave the wall": it evicts even mid-launch
+        // (ADR #93 decision 2 — Close lands where the app is already gone).
+        val evicted = !(wallIsFront || (wallLaunching && !userInitiated)) &&
+            performGlobalAction(GLOBAL_ACTION_HOME)
         killBlockedProcess(packageName)
         mainHandler.postDelayed({ killBlockedProcess(packageName) }, BLOCK_CLOSE_RETRY_MS)
-        if (wallLaunching) {
+        if (wallLaunching && !userInitiated) {
             // The suppressed HOME is the first kill's license to land; once the wall's own
             // front transition backgrounds the app (~4 s emulator-measured), kill again so
             // suppression doesn't reopen the "covering is not stopping" hole (2026-09-27).
             mainHandler.postDelayed({ killBlockedProcess(packageName) }, WALL_LAUNCH_SUPPRESS_MS)
+            // A suppressed close used to be final: when the durable wall never surfaced (XOS
+            // pause wedge, device-caught 2026-11-19) the app stayed RESUMED and audible under
+            // the card until an unrelated foreground event re-blocked it minutes later. Re-run
+            // the close once the wall-launch window has passed — only while the blocked app is
+            // still the active root, so a wall that did surface (or any other foreground) is
+            // left untouched.
+            mainHandler.postDelayed({
+                val stillTarget =
+                    runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull() == packageName
+                if (stillTarget) closeBlockedApp(packageName)
+            }, WALL_LAUNCH_SUPPRESS_MS + BLOCK_CLOSE_RETRY_MS)
         }
         Log.i(
             TAG,

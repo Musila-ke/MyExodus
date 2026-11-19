@@ -44,6 +44,9 @@ class OverlayController(
     private val profiler: LatencyProfiler,
     private val onOpenRecovery: (ruleId: String) -> Unit,
     private val onDifferentSite: (browserPackage: String) -> Unit,
+    /** The evicting host's close-behind-the-wall run before a wall's Close hides it
+     *  (ADR #93 decision 2: Close lands where the app is already gone). */
+    private val onWallClose: (packageName: String) -> Unit = {},
     /** Path B's host (enforcement plan v2 §8 Step 5): the foreground service holds no
      *  accessibility token, so its overlay is always the bare-addView
      *  TYPE_APPLICATION_OVERLAY mechanism (SYSTEM_ALERT_WINDOW-gated, Decision 16). */
@@ -256,6 +259,16 @@ class OverlayController(
         if (shown[displayId] == true &&
             (content is OverlayContent.DailyLimitBlocked || content is OverlayContent.AppBlocked)
         ) {
+            // Evict before revealing (ADR #93 decision 2). Hiding alone handed the app back —
+            // device-caught 2026-11-19: the FGS's launch in flight suppressed the automatic
+            // eviction, the durable wall never surfaced, and this Close uncovered live
+            // Instagram. AppBlocked's null packageName is the URL-race fallback (no target
+            // to close).
+            when (content) {
+                is OverlayContent.DailyLimitBlocked -> onWallClose(content.packageName)
+                is OverlayContent.AppBlocked -> content.packageName?.let(onWallClose)
+                else -> Unit
+            }
             hide(stateMachine.currentGeneration, displayId)
         }
     }

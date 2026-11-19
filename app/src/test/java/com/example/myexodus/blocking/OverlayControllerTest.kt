@@ -31,6 +31,8 @@ class OverlayControllerTest {
 
     private lateinit var controller: OverlayController
     private lateinit var stateMachine: ForegroundStateMachine
+    private val closedPackages = mutableListOf<String>()
+    private val shownDuringClose = mutableListOf<Boolean>()
 
     @Before
     fun setUp() {
@@ -41,6 +43,10 @@ class OverlayControllerTest {
             profiler = LatencyProfiler(Application(), sampleDenominator = 1),
             onOpenRecovery = {},
             onDifferentSite = {},
+            onWallClose = { pkg ->
+                closedPackages += pkg
+                shownDuringClose += controller.isShown(0)
+            },
         )
     }
 
@@ -265,6 +271,42 @@ class OverlayControllerTest {
         assertEquals(android.view.View.VISIBLE, close.visibility)
         close.performClick()
         assertFalse("the app-block card dismisses from its Close", controller.isShown(0))
+    }
+
+    @Test
+    fun wallClose_closesTheAppBehindTheWall_beforeHiding() {
+        // ADR #93 decision 2: Close lands on the launcher with the app already gone. Both wall
+        // kinds run the host's close first; a hide-first ordering would reveal the live app
+        // for the duration of the HOME transition (device-caught 2026-11-19).
+        val gen = advance()
+        controller.show(gen, displayId = 0, bounds = fullScreen(), content = limitCard())
+        closeButton().performClick()
+        assertEquals(listOf("com.instagram.android"), closedPackages)
+        assertEquals("the close runs while the wall still covers the app", listOf(true), shownDuringClose)
+        assertFalse(controller.isShown(0))
+
+        controller.show(
+            gen, displayId = 0, bounds = fullScreen(),
+            content = OverlayContent.AppBlocked("Instagram", "r-instagram", "com.instagram.android"),
+        )
+        closeButton().performClick()
+        assertEquals(
+            listOf("com.instagram.android", "com.instagram.android"),
+            closedPackages,
+        )
+        assertFalse(controller.isShown(0))
+    }
+
+    @Test
+    fun bannerDismiss_neverRunsTheWallClose() {
+        val gen = advance()
+        controller.show(gen, displayId = 0, bounds = fullScreen(), content = banner())
+        view(0).performClick()
+        assertTrue(closedPackages.isEmpty())
+        // The app-block card's URL-race fallback has no target to close.
+        controller.show(gen, displayId = 0, bounds = fullScreen(), content = cover())
+        view(0).performClick()
+        assertTrue(closedPackages.isEmpty())
     }
 
     private fun closeButton(): android.widget.Button =

@@ -145,6 +145,23 @@ artifacts are signed with the release identity (certificate SHA-256
   downloaded anonymously with the exact size and `ed6032…` digest. Both physical phones
   were updated by direct `install -r` from this artifact (`installerPackageName=null`,
   lastUpdateTime 15:43:38 / 15:44:19), not through the in-app path.
+- `artifact-v44` (`app-release.apk`, 39,252,881 bytes, SHA-256
+  `482a3542f15195f0a2f013e5d53a064ac983187a84ba472098fb0563112d2c99`), the 1.1.42 build.
+  Carries ADR #316: a block wall's Close closes the app behind the wall before hiding
+  (both wall kinds, evicting host only), a user's own Close evicts even while the FGS's
+  durable-wall launch is in flight, and a close suppressed by that launch window re-runs
+  once (at 5.7 s) only while the blocked app is still the active root — the XOS wedge that
+  left a blocked app live and audible under the card is closed.
+- `policy-000019`, the latest release: signed `OFFER` of versionCode 44 (`1.1.42`) at 100
+  percent, cohort salt `994bc24ed57ca80cfd60db4627ace375`, issued 1795095697
+  (2026-11-19T13:41:37Z). Anonymous latest manifest SHA-256
+  `f80e3515a08d12280a73740061bec30c32d7a4e3b0d3b361def8d0ade0e1b24e`, byte-identical to
+  the locally signed envelope (decoded: sequence 19, OFFER, 1.1.42/44, 100%); the
+  version-pinned APK downloaded anonymously with the exact size and `482a35…2c99` digest.
+  The X6532 already ran 1.1.42 by direct `install -r` at publication (16:31:02,
+  `installerPackageName=null`, `firstInstallTime` 2026-11-15 preserved), so an in-app
+  replacement *by* 1.1.42 was not exercised; the in-app path is proven by the v34→v36 and
+  v41→v42 physical legs above.
 - `policy-000017`, the previous release: signed `OFFER` of versionCode 42 (`1.1.40`) at 100
   percent, cohort salt `1cf6edd497fd97fcbaf8a87d096253f6`. Anonymous latest manifest
   SHA-256 `019406d76db1e841caa667d6b3f66f9fc089e81a84e8692feccc7ac3d24bb5ee`, byte-identical
@@ -190,7 +207,7 @@ the pairing and rules survived. The in-app installer path also left
 `ACCESS_RESTRICTED_SETTINGS` at `ignore` on the updated package (see the restricted-settings
 note in `device-evidence-2026-11-18-partner-pairing.md`).
 
-Publisher state: highest policy sequence 18, highest versionCode 43. Tags are immutable, so
+Publisher state: highest policy sequence 19, highest versionCode 44. Tags are immutable, so
 `policy-000005` (an early test publication) stays burned and every new policy needs a higher
 sequence.
 
@@ -941,6 +958,32 @@ v31, live channel, 2026-11-13):**
   observed, not explained.
 - `accelerometer_rotation=0` verified on both serials after the injected input
   (`scripts/rotation-guard.sh`).
+
+**PASSED (publication of v44, 2026-11-19):**
+
+- `:app:assembleRelease -Pmyexodus.updateRepository=Musila-ke/MyExodus-Releases` built
+  `versionCode=44`, `versionName=1.1.42`, `minSdk 26`, `targetSdk 36`, 39,252,881 bytes,
+  SHA-256 `482a3542f15195f0a2f013e5d53a064ac983187a84ba472098fb0563112d2c99`, signed by the
+  release identity (`apksigner verify --print-certs`, certificate SHA-256 `8f881880…854b`),
+  with the pinned repository string present in the packaged dex (classes4.dex).
+- The first build attempt in the interrupted session had omitted the repository property
+  (a channel-less `NOT_CONFIGURED` artifact would have resulted); it was killed before
+  packaging and rebuilt with the property.
+- `artifact-v44` was published as an immutable prerelease with `app-release.apk`; the GitHub
+  asset digest equals the local SHA-256.
+- `policy-000019` (sequence 19, versionCode 44, rollout 100, cohort salt
+  `994bc24ed57ca80cfd60db4627ace375`) was signed with the production key and published as
+  the latest non-prerelease. Publisher state after publication:
+  `{"highestPolicySequence": 19, "highestVersionCode": 44}`.
+- The live `/releases/latest/download/update-manifest.json` decoded anonymously to
+  `policySequence 19`, `OFFER`, versionCode 44 (`1.1.42`), rollout 100, the pinned
+  `apkUrl`, and the exact size and SHA-256 above; the downloaded envelope is
+  byte-identical to the locally signed one (SHA-256
+  `f80e3515a08d12280a73740061bec30c32d7a4e3b0d3b361def8d0ade0e1b24e`), with no CDN lag
+  observed this time.
+- The version-pinned APK URL downloaded anonymously with the exact size and signed digest.
+- The X6532 already ran 1.1.42 by direct install at publication, so an in-app replacement
+  *by* 1.1.42 was not exercised.
 
 **BLOCKED (owner-gated or hardware):**
 
