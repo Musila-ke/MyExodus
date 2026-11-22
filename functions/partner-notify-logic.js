@@ -172,6 +172,7 @@ function fanoutWrites(task, collections, now) {
         encoding: entry.encoding,
         pairId: entry.pairId,
         createdAt: acceptedAt,
+        deviceOccurredAtMs: typeof task.deviceOccurredAtMs === 'number' ? task.deviceOccurredAtMs : null,
       },
     });
     writes.push({

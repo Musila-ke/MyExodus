@@ -7,7 +7,9 @@ import androidx.room3.PrimaryKey
 /**
  * §8.6 Phase 5 recipient-side delivery receipt: the `(recipientInstallationId, mailboxEventId)`
  * pair the plan names as the deduplication key. A receipt is written only after the document
- * reached a terminal state (delivered, undecryptable, or structurally skipped), so a crash
+ * reached a terminal state (delivered, undecryptable, or structurally skipped), or as
+ * [PartnerMailboxDelivery.STATUS_PENDING] when the notification posted but the vault-gated
+ * projection deferred — the next pass retries that one without notifying again. A crash
  * mid-page re-processes the unrecorded document and nothing is delivered twice.
  *
  * Only ids and a status are stored — never plaintext (I07: this is the plain-FBE database).
@@ -29,6 +31,10 @@ data class PartnerMailboxDelivery(
 
         /** Structurally unusable on this build: unknown event kind or unsupported encoding. */
         const val STATUS_SKIPPED = "SKIPPED"
+
+        /** Notification posted, vault-gated projection deferred to a later pass (plan §4:
+         *  background work must not need the App Lock vault). Never terminal. */
+        const val STATUS_PENDING = "PENDING"
     }
 }
 

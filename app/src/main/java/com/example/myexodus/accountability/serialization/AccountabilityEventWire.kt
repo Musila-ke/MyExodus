@@ -116,6 +116,9 @@ enum class RuleChange(val wire: String) {
     UNASSIGNED("UNASSIGNED"),
     UPDATED("UPDATED"),
     DISABLED("DISABLED"),
+    /** A disabled rule was turned back on. [UPDATED] stays reserved for content edits (days,
+     *  apps, assignment), so the partner hears the actual act (owner report 2026-11-22). */
+    ENABLED("ENABLED"),
     DELETED("DELETED"),
     EXPIRED("EXPIRED"),
     ;

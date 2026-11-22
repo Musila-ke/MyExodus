@@ -27,9 +27,11 @@ import com.example.myexodus.data.db.entity.PartnerSharingAlert
  * state (and notification) the legacy chain path produced, so a pair sees the same dashboard
  * whichever transport carried the event.
  *
- * Vault gating (§13.4): the projection opens the vault first. While it is locked the exception
- * propagates and [PartnerMailboxReceiver] leaves the document unreceipted, so it is retried
- * after the normal foreground unlock.
+ * Vault gating (§13.4, refined by the Reliable Partner Event Delivery plan §4 line 87): the
+ * notification posts FIRST, from background-accessible state (enrollment rows + strings never
+ * need the vault) — App Lock must never silence the tray. Only then does the state projection
+ * open the vault; while it is locked the exception propagates, [PartnerMailboxReceiver] stores
+ * a PENDING receipt, and the next pass re-delivers with `notify = false`.
  *
  * The staged body cannot know its own sequence (the outbox assigns it after sealing), so the
  * document's `sequence` field stands in through [PartnerEventProtocol.STAGED_SEQUENCE_BASE].
@@ -46,12 +48,16 @@ class PartnerObservationProjection(
     private val now: () -> Long = System::currentTimeMillis,
 ) {
 
-    suspend fun onDelivered(document: PartnerMailboxDocument, plaintext: ByteArray) {
+    suspend fun onDelivered(
+        document: PartnerMailboxDocument,
+        plaintext: ByteArray,
+        notify: Boolean = true,
+    ) {
         val pairId = document.pairId ?: return
         when (document.kind) {
             PartnerEventKind.BLOCK_ATTEMPT.wire,
             PartnerEventKind.ACCOUNTABILITY_UPDATE.wire ->
-                onAccountabilityUpdate(pairId, document, plaintext)
+                onAccountabilityUpdate(pairId, document, plaintext, notify)
             PartnerEventKind.MONITORING_UPDATE.wire -> onMonitoringUpdate(pairId, document, plaintext)
             else -> Unit
         }
@@ -61,8 +67,10 @@ class PartnerObservationProjection(
         pairId: String,
         document: PartnerMailboxDocument,
         plaintext: ByteArray,
+        notify: Boolean,
     ) {
         val payload = runCatching { decodePayload(plaintext) }.getOrNull() ?: return
+        if (notify) notifyEvent(pairId, document, payload)
         val store = storeFactory.open()
             ?: throw IllegalStateException("observation projection needs the local store")
         // Staged attempts write no chain rows, so the dashboard's legacy attempt source never
@@ -92,19 +100,30 @@ class PartnerObservationProjection(
                 PartnerEventProtocol.STAGED_SEQUENCE_BASE + (document.senderSequence ?: 0L),
             )
         }
-        // Same skip list as the legacy path: approvals own their notifications and plan
-        // progress is bookkeeping the author's checklist repaints from.
-        if (payload.type != EventPayload.TYPE_APPROVAL_REQUEST &&
-            payload.type != EventPayload.TYPE_APPROVAL_RESPONSE &&
-            payload.type != PlanWire.TYPE_PLAN_PROGRESS
+    }
+
+    /** Posted before the vault opens (see the class note). Same skip list as the legacy path:
+     *  approvals own their notifications and plan progress is bookkeeping the author's
+     *  checklist repaints from. The document id keys the tray entry, so a burst of events
+     *  never collapses into one replace-in-place item. */
+    private suspend fun notifyEvent(
+        pairId: String,
+        document: PartnerMailboxDocument,
+        payload: EventPayload,
+    ) {
+        if (payload.type == EventPayload.TYPE_APPROVAL_REQUEST ||
+            payload.type == EventPayload.TYPE_APPROVAL_RESPONSE ||
+            payload.type == PlanWire.TYPE_PLAN_PROGRESS
         ) {
-            enrollmentDao.getByPairId(pairId)?.let { enrollment ->
-                runCatching {
-                    PartnerNotifications.notifyPartnerEvent(
-                        context, pairId, displayNameOf(enrollment), payload,
-                    )
-                }.onFailure { Log.w(TAG, "partner event notification failed pairId=$pairId", it) }
-            }
+            return
+        }
+        enrollmentDao.getByPairId(pairId)?.let { enrollment ->
+            runCatching {
+                PartnerNotifications.notifyPartnerEvent(
+                    context, pairId, displayNameOf(enrollment), payload,
+                    eventKey = document.messageId,
+                )
+            }.onFailure { Log.w(TAG, "partner event notification failed pairId=$pairId", it) }
         }
     }
 
@@ -125,7 +144,11 @@ class PartnerObservationProjection(
                     eventId = eventId,
                     text = payload.text,
                     appLabel = payload.appLabel,
-                    occurredAtMs = document.createdAtMs,
+                    // The block instant, never the delivery time: a deferred attempt must
+                    // keep its place in the chain relative to newer rule events (owner
+                    // report 2026-11-23 — "ruled turned off ... then rule blocked" read
+                    // backwards because rows were stamped at delivery).
+                    occurredAtMs = document.deviceOccurredAtMs ?: document.createdAtMs,
                     expiresAtMs = nowMs + PartnerEventJournal.RETENTION_MILLIS,
                 ),
             )
@@ -178,7 +201,7 @@ class PartnerObservationProjection(
                     eventId = eventId,
                     kind = payload.type,
                     label = payload.stateAfter?.habitLabel?.takeIf { it.isNotBlank() },
-                    occurredAtMs = document.createdAtMs,
+                    occurredAtMs = document.deviceOccurredAtMs ?: document.createdAtMs,
                     expiresAtMs = nowMs + PartnerEventJournal.RETENTION_MILLIS,
                 ),
             )

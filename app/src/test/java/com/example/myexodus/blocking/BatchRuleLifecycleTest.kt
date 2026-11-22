@@ -172,7 +172,8 @@ class BatchRuleLifecycleTest {
             listOf(
                 RuleChange.CREATED.wire,
                 RuleChange.DISABLED.wire,
-                RuleChange.UPDATED.wire,
+                // Owner report 2026-11-22 (#10): a resume is "turned on", not "changed".
+                RuleChange.ENABLED.wire,
                 RuleChange.DELETED.wire,
             ),
             rows.sortedBy { it.createdAtMs }.map { it.ruleChange },

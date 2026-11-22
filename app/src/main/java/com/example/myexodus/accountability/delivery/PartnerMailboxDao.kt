@@ -18,6 +18,13 @@ interface PartnerMailboxDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertDelivery(row: PartnerMailboxDelivery): Long
 
+    /** PENDING receipt -> its terminal status once the deferred projection succeeds. */
+    @Query(
+        "UPDATE partner_mailbox_delivery SET status = :status " +
+            "WHERE recipient_installation_id = :installationId AND mailbox_event_id = :messageId",
+    )
+    suspend fun updateDeliveryStatus(installationId: String, messageId: String, status: String)
+
     @Query("SELECT watermark_created_at_ms FROM partner_mailbox_state WHERE installation_id = :installationId")
     suspend fun watermark(installationId: String): Long?
 

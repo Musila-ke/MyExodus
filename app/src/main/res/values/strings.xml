@@ -244,6 +244,7 @@
     <string name="partner_rule_event_unassigned">You were removed from a rule you watched.</string>
     <string name="partner_rule_event_updated">A rule you watch was changed.</string>
     <string name="partner_rule_event_disabled">A rule you watch was turned off.</string>
+    <string name="partner_rule_event_enabled">A rule you watch was turned on.</string>
     <string name="partner_rule_event_deleted">A rule you watch was deleted.</string>
     <string name="partner_rule_event_expired">A rule you watch ended. Its set duration ran out.</string>
     <!-- Wire v2 identity (ADR #227): the body names what changed. Three shapes: a standalone
@@ -251,12 +252,14 @@
     <string name="partner_rule_event_added_labeled">You were added as accountability partner on %1$s.</string>
     <string name="partner_rule_event_updated_labeled">%1$s was changed.</string>
     <string name="partner_rule_event_disabled_labeled">%1$s was turned off.</string>
+    <string name="partner_rule_event_enabled_labeled">%1$s was turned on.</string>
     <string name="partner_rule_event_deleted_labeled">%1$s was deleted.</string>
     <string name="partner_rule_event_unassigned_labeled">You were removed from %1$s.</string>
     <string name="partner_rule_event_expired_labeled">%1$s ended. Its set duration ran out.</string>
     <string name="partner_rule_event_added_in_batch">You were added as accountability partner on %1$s in the %2$s batch.</string>
     <string name="partner_rule_event_updated_in_batch">%1$s was changed in the %2$s batch.</string>
     <string name="partner_rule_event_disabled_in_batch">%1$s was turned off in the %2$s batch.</string>
+    <string name="partner_rule_event_enabled_in_batch">%1$s was turned on in the %2$s batch.</string>
     <string name="partner_rule_event_deleted_in_batch">%1$s was deleted from the %2$s batch.</string>
     <string name="partner_rule_event_unassigned_in_batch">You were removed from %1$s in the %2$s batch.</string>
     <string name="partner_rule_event_expired_in_batch">%1$s ended in the %2$s batch. Its set duration ran out.</string>
@@ -271,6 +274,10 @@
     <plurals name="partner_rule_event_disabled_batched">
         <item quantity="one">The %1$s batch was turned off (%2$d item).</item>
         <item quantity="other">The %1$s batch was turned off (%2$d items).</item>
+    </plurals>
+    <plurals name="partner_rule_event_enabled_batched">
+        <item quantity="one">The %1$s batch was turned on (%2$d item).</item>
+        <item quantity="other">The %1$s batch was turned on (%2$d items).</item>
     </plurals>
     <plurals name="partner_rule_event_deleted_batched">
         <item quantity="one">The %1$s batch was deleted (%2$d item).</item>
@@ -1147,6 +1154,17 @@
     <string name="partner_connection_state_not_checking_in">Not checking in</string>
     <string name="partner_connection_state_no_data">No data yet</string>
     <string name="partner_connection_state_not_shared">Not shared</string>
+    <!-- Owner report 2026-11-22 #5: a read still in flight says so; it never passes for a
+         "no data" answer. -->
+    <string name="partner_connection_state_loading">Checking…</string>
+    <string name="partner_card_loading">Loading…</string>
+    <string name="partner_checkins_loading_body">Fetching their latest status. This can take a moment.</string>
+    <!-- Owner report 2026-11-22 #6: a stat with no honest reading yet shows this, never 0. -->
+    <string name="partner_stat_unknown">n/a</string>
+    <!-- Owner report 2026-11-22 #4: dismissible offline notice for the partner tab. -->
+    <string name="partner_offline_title">You’re offline</string>
+    <string name="partner_offline_body">Their updates can’t reach this phone until you reconnect. Pages show what is saved here.</string>
+    <string name="partner_offline_dismiss">Dismiss</string>
     <string name="partner_connection_body_checking_in">Their phone checked in with the server recently.</string>
     <string name="partner_connection_body_late">No check-in for 45–90 minutes. This can be normal. Android may defer background work.</string>
     <string name="partner_connection_body_not_checking_in">No check-in for over 90 minutes.</string>
@@ -1216,6 +1234,7 @@
     <string name="partner_rule_unassigned">Rule no longer shared with you</string>
     <string name="partner_rule_updated">Rule updated</string>
     <string name="partner_rule_disabled">Rule turned off</string>
+    <string name="partner_rule_enabled">Rule turned on</string>
     <string name="partner_rule_deleted">Rule deleted</string>
     <string name="partner_rule_expired">Rule ended</string>
     <string name="partner_rule_in_batch">%1$s batch</string>
@@ -1335,7 +1354,7 @@
     <string name="sos_rate_limited_unknown">You’ve reached the check-in limit. Try again later.</string>
     <!-- FAB rev (owner mandate 2026-10-04): the confirmation dialog supersedes FR-2's
          "no confirmation dialog" — one extra tap beats an accidental check-in. It names the
-         target partner and carries the message (default prefilled, editable, blank = none). -->
+         target partner and sends the fixed check-in request (owner report 2026-11-22 #3). -->
     <string name="sos_confirm_title">Reach out to your partner?</string>
     <string name="sos_confirm_title_named">Reach out to %1$s?</string>
     <!-- Owner ruling 2026-10-23: with several live partners the send names one recipient —
@@ -1343,9 +1362,7 @@
     <string name="sos_target_label">Send to</string>
     <string name="sos_confirm_send">Send</string>
     <string name="sos_confirm_cancel">Cancel</string>
-    <string name="sos_message_label">Message</string>
     <string name="sos_default_message">I could use a check-in.</string>
-    <string name="sos_message_counter">%1$d/%2$d</string>
     <string name="sos_check_in_sent">Check-in sent.</string>
     <!-- FR-25: help/onboarding text only — the tap path itself never displays this. -->
     <string name="sos_not_emergency">Reach out is a check-in, not an emergency service. If you need urgent help, call your local emergency number.</string>

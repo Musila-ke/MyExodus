@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.room3.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.accountability.state.AccountabilityDatabase
+import com.example.myexodus.data.db.VaultLockedException
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -38,7 +39,9 @@ class PartnerMailboxReceiverTest {
     private var documents: List<PartnerMailboxDocument> = emptyList()
     private var queries = mutableListOf<Triple<String, String, Long>>()
     private var delivered = mutableListOf<Pair<PartnerMailboxDocument, String>>()
+    private var notifyFlags = mutableListOf<Boolean>()
     private var deliveredThrows = false
+    private var vaultLocked = false
     private var decryptThrows: Exception? = null
 
     @Before
@@ -72,8 +75,10 @@ class PartnerMailboxReceiverTest {
                 ?.takeUnless { it == CORRUPT }
                 ?.toByteArray()
         },
-        onDelivered = { document, plaintext ->
+        onDelivered = { document, plaintext, notify ->
             if (deliveredThrows) error("projection failed")
+            notifyFlags += notify
+            if (vaultLocked) throw VaultLockedException()
             delivered += document to String(plaintext)
         },
         limit = limit,
@@ -198,6 +203,72 @@ class PartnerMailboxReceiverTest {
         assertEquals(250L, dao.watermark("recipient-inst"))
         assertEquals(PartnerMailboxDelivery.STATUS_DELIVERED, dao.receipt("recipient-inst", "m1"))
         assertEquals(PartnerMailboxDelivery.STATUS_DELIVERED, dao.receipt("recipient-inst", "m2"))
+    }
+
+    /** Plan §4 line 87 (owner report 2026-11-22, critical): with App Lock on, a vault-locked
+     *  projection must NOT stall delivery. The pass records a PENDING receipt, holds the
+     *  watermark (so the document stays re-readable), and the post-unlock retry runs without
+     *  notifying — the alert already posted on the locked pass. */
+    @Test
+    fun pull_vaultLockedDefersTheProjection_thenRetriesWithoutNotifying() = runBlocking {
+        documents = listOf(doc("m1", 100), doc("m2", 200))
+        vaultLocked = true
+
+        val receiver = receiver()
+        val locked = receiver.pull()
+
+        assertEquals(PartnerMailboxReceiver.PullResult(deferred = 2), locked)
+        assertEquals(PartnerMailboxDelivery.STATUS_PENDING, dao.receipt("recipient-inst", "m1"))
+        assertEquals(PartnerMailboxDelivery.STATUS_PENDING, dao.receipt("recipient-inst", "m2"))
+        assertNull("a pending document must stay re-readable", dao.watermark("recipient-inst"))
+        assertEquals("the locked pass notifies", listOf(true, true), notifyFlags)
+        assertTrue(delivered.isEmpty())
+
+        vaultLocked = false
+        val retried = receiver.pull()
+
+        assertEquals(2, retried.delivered)
+        assertEquals("the retry never re-notifies", listOf(true, true, false, false), notifyFlags)
+        assertEquals(PartnerMailboxDelivery.STATUS_DELIVERED, dao.receipt("recipient-inst", "m1"))
+        assertEquals(PartnerMailboxDelivery.STATUS_DELIVERED, dao.receipt("recipient-inst", "m2"))
+        assertEquals(200L, dao.watermark("recipient-inst"))
+    }
+
+    /** The page must keep going past a deferred document and still never advance the
+     *  watermark beyond it — a later success cannot strand a PENDING id below the mark. */
+    @Test
+    fun pull_aDeferredDocumentHoldsTheWatermarkEvenWhenLaterDocumentsSucceed() = runBlocking {
+        documents = listOf(doc("m1", 100), doc("m2", 200))
+        var first = true
+        val receiver = PartnerMailboxReceiver(
+            dao = dao,
+            ownerUid = { uid },
+            recipientInstallationId = { installationId },
+            queryMailbox = { _, _, fromMs, pageLimit ->
+                documents.filter { it.createdAtMs >= fromMs }.sortedBy { it.createdAtMs }.take(pageLimit)
+            },
+            decrypt = { it.payload?.toByteArray() },
+            onDelivered = { document, _, _ ->
+                if (first && document.messageId == "m1") {
+                    first = false
+                    throw VaultLockedException()
+                }
+                delivered += document to document.messageId
+            },
+        )
+
+        val result = receiver.pull()
+
+        assertEquals(PartnerMailboxReceiver.PullResult(delivered = 1, deferred = 1), result)
+        assertEquals(PartnerMailboxDelivery.STATUS_PENDING, dao.receipt("recipient-inst", "m1"))
+        assertEquals(PartnerMailboxDelivery.STATUS_DELIVERED, dao.receipt("recipient-inst", "m2"))
+        assertNull("the watermark never sails past the pending document", dao.watermark("recipient-inst"))
+
+        val retried = receiver.pull()
+
+        assertEquals(PartnerMailboxReceiver.PullResult(delivered = 1, duplicates = 1), retried)
+        assertEquals(PartnerMailboxDelivery.STATUS_DELIVERED, dao.receipt("recipient-inst", "m1"))
+        assertEquals(200L, dao.watermark("recipient-inst"))
     }
 
     @Test

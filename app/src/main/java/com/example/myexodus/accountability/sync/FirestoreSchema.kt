@@ -107,15 +107,22 @@ object FirestoreSchema {
      * `Date.now()`, and Firestore range filters are type-scoped — comparing a Timestamp here
      * matches nothing and silently returns zero documents.
      */
+    /** The staged mailbox a recipient uid reads — shared by the pull and the foreground
+     *  doorbell so both watch exactly the same collection. */
+    fun partnerMailboxCollection(
+        firestore: FirebaseFirestore,
+        recipientUid: String,
+    ): CollectionReference = firestore
+        .collection(PARTNER_MAILBOXES_COLLECTION).document(recipientUid)
+        .collection(MESSAGES_COLLECTION)
+
     suspend fun partnerMailboxDocsAfter(
         firestore: FirebaseFirestore,
         recipientUid: String,
         installationId: String,
         createdAtFromMs: Long,
         limit: Int,
-    ): List<PartnerMailboxDocument> = firestore
-        .collection(PARTNER_MAILBOXES_COLLECTION).document(recipientUid)
-        .collection(MESSAGES_COLLECTION)
+    ): List<PartnerMailboxDocument> = partnerMailboxCollection(firestore, recipientUid)
         .whereEqualTo("recipientInstallationId", installationId)
         .whereGreaterThanOrEqualTo("createdAt", createdAtFromMs)
         .orderBy("createdAt")
@@ -138,6 +145,7 @@ object FirestoreSchema {
             pairId = doc.getString("pairId"),
             createdAtMs = doc.getLong("createdAt") ?: 0L,
             senderSequence = doc.getLong("sequence"),
+            deviceOccurredAtMs = doc.getLong("deviceOccurredAtMs"),
         )
 
     /** The watermark is persisted as epoch millis (server timestamps have microsecond

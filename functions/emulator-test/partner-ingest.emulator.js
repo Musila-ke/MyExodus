@@ -212,6 +212,9 @@ test('an accepted check-in writes the ledger, the mailbox and the notification j
   assert.strictEqual(mailbox.payload, 'AAECAw');
   assert.strictEqual(mailbox.encoding, 'existing-e2ee');
   assert.strictEqual(mailbox.pairId, pairIdOf(ALICE, BOB));
+  // The device occurrence instant reaches the recipient, so its feed row sorts at the
+  // block time rather than the delivery time (owner report 2026-11-23).
+  assert.strictEqual(mailbox.deviceOccurredAtMs, NOW);
 
   const job = (await db.doc(jobPath(w.event.eventId, bob.installationId)).get()).data();
   assert.strictEqual(job.recipientUid, BOB);

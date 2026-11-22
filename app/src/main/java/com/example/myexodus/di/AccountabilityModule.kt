@@ -697,12 +697,16 @@ object AccountabilityModule {
     @Provides @Singleton
     fun providePartnerLiveSync(
         firestore: FirebaseFirestore,
+        db: AccountabilityDatabase,
+        outbox: ServiceEventOutbox,
         enrollmentDao: EnrollmentDao,
         resolver: PairUidResolver,
     ): PartnerLiveSync = PartnerLiveSync(
         firestore = firestore,
         enrollmentDao = enrollmentDao,
+        mailboxDao = db.partnerMailboxDao(),
         ensureUid = resolver::ensureUid,
+        recipientInstallationId = { uid -> outbox.ensureInstallation(uid).installationId },
     )
 
     /** Plan §8 Step 10 / AD-08: requester-side cadence + escalation and the AD-08b responder. */
@@ -1140,7 +1144,7 @@ object AccountabilityModule {
             // party's label is read per post so the tray names which partner it concerns, and
             // the decoded payload rides along — a motivational message's own text, or a
             // wire-v2 relapse/milestone's streak name + time (owner mandate 2026-10-04).
-            notify = { pairId, payload ->
+            notify = { pairId, messageId, payload ->
                 // Plan progress is bookkeeping the author's checklist repaints from — a
                 // notification per checked line would be pure noise. Plan publishing DOES
                 // notify (the recipient must learn the plan exists), handled below.
@@ -1151,6 +1155,7 @@ object AccountabilityModule {
                     enrollmentDao.getByPairId(pairId)?.let { enrollment ->
                         PartnerNotifications.notifyPartnerEvent(
                             context, pairId, displayNameOf(enrollment), payload,
+                            eventKey = messageId,
                         )
                     }
                 }
@@ -1223,7 +1228,8 @@ object AccountabilityModule {
                     } else {
                         runCatching {
                             PartnerNotifications.notifyRuleChanged(
-                                context, pairId, displayNameOf(enrollment), change, event.ruleIdentity,
+                                context, pairId, displayNameOf(enrollment), change,
+                                event.ruleIdentity, event.eventId,
                             )
                         }.onSuccess {
                             if (traced) deliveryTrace.record(pairId, event.eventId, "stage=notify notify=posted")

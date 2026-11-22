@@ -1,5 +1,8 @@
 package com.example.myexodus.ui.partner
 
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -25,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Edit
@@ -49,6 +53,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -409,6 +414,17 @@ fun PartnerScreen(
     // Plan Step 8 (§8.13): the partner's server-derived connection signal, kept apart from the
     // E2EE monitoring report and from sync freshness. Null = no honest reading.
     var partnerStatus by remember { mutableStateOf<PartnerStatus?>(null) }
+    // Owner report 2026-11-22 #5: the server read is the slow half of this page; while it is in
+    // flight the check-in cards must say "loading", never pass for "nothing reported".
+    var statusLoading by remember { mutableStateOf(true) }
+    // Owner report 2026-11-22 #6: coaching items = the plans the partner authored for this
+    // subject in this partnership (local rows), not the legacy wire count. Null = no honest read.
+    var partnerPlanCount by remember { mutableStateOf<Int?>(null) }
+    // Owner report 2026-11-22 #4: partner updates cannot arrive offline; the notice is
+    // dismissible and returns only after the connection drops again.
+    val online = rememberOnline()
+    var offlineNoticeDismissed by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(online) { if (online) offlineNoticeDismissed = false }
 
     // Finding #57: roster switches start overlapping reloads (every roster row fires one), and
     // IO-pool completions can arrive out of order. Only the newest reload may publish, or a
@@ -442,22 +458,32 @@ fun PartnerScreen(
         val shares = (state as? PartnerDashboardUi.Paired)?.let { paired ->
             runCatching { habitRepository.sharesNothingWith(paired.pairId) }.getOrNull()
         }
+        // Owner report 2026-11-22 #6: the summary's coaching count is the partner-authored plans
+        // for THIS pair — read locally, so it holds whatever streak the selector shows.
+        val planCount = (state as? PartnerDashboardUi.Paired)?.let { paired ->
+            runCatching { planRepository.plans()?.count { !it.authored && it.pairId == paired.pairId } }
+                .onFailure { Log.w(TAG, "partner plan count read failed", it) }
+                .getOrNull()
+        }
         // Plan Step 8: every repaint path (pull, resume, switch, check-now) refreshes the
         // connection reading through the client's one-call-a-minute bound, so a burst of
         // reloads can never become a callable burst. A failure clears it rather than repeating
         // a stale claim from before the silence.
+        statusLoading = true
         val status = (state as? PartnerDashboardUi.Paired)?.let { paired ->
             runCatching { onLoadPartnerStatus(paired.pairId) }
                 .onFailure { Log.w(TAG, "partner status read failed", it) }
                 .getOrNull()
         }
-        // Finding #57 covers these two reads as well: they belong to the pair this reload
-        // loaded, so a reload that lost the race to a newer one must publish neither — writing
-        // A's "nothing shared" or connection reading under B's selection is the same stale
-        // dashboard the state guard above closes.
+        // Finding #57 covers these reads as well: they belong to the pair this reload
+        // loaded, so a reload that lost the race to a newer one must publish none of them —
+        // writing A's "nothing shared", connection reading or plan count under B's selection is
+        // the same stale dashboard the state guard above closes.
         if (epoch != reloadEpoch.get()) return
         sharesNothing = shares
+        partnerPlanCount = planCount
         partnerStatus = status
+        statusLoading = false
     }
 
     /** §19.5: bring another supported user's dashboard forward — persisted, then reloaded.
@@ -710,6 +736,10 @@ fun PartnerScreen(
             }
         }
 
+        if (!online && !offlineNoticeDismissed) {
+            OfflineBanner(onDismiss = { offlineNoticeDismissed = true })
+        }
+
         when (val current = state) {
             null, PartnerDashboardUi.Loading -> Text(
                 stringResource(R.string.partner_loading),
@@ -799,7 +829,13 @@ fun PartnerScreen(
                         // empty, and a second "nothing shared" sentence above it repeated
                         // the same absence in two cards.
                         current.activity?.takeIf(::showsPartnerSummary)
-                            ?.let { PartnerSummaryCard(it, current.chainStatus) }
+                            ?.let {
+                                PartnerSummaryCard(
+                                    it,
+                                    current.chainStatus,
+                                    coachingCount = partnerPlanCount,
+                                )
+                            }
                         ActivityChartCard(current.alerts)
                         // Owner directive 2026-11-09: the answer (summary + picture + list)
                         // comes before the composer. The send action used to sit between the
@@ -817,7 +853,11 @@ fun PartnerScreen(
                         // the mirror of the hub's "Their message to you".
                         current.sentMessageText?.let { SentMessageCard(it) }
                     }
-                    VIEW_CHECKINS -> CheckinsView(state = current, status = partnerStatus)
+                    VIEW_CHECKINS -> CheckinsView(
+                        state = current,
+                        status = partnerStatus,
+                        statusLoading = statusLoading,
+                    )
                     VIEW_RULES -> RulesView(current)
                     else -> PairingView(
                         state = current,
@@ -968,10 +1008,18 @@ fun PartnerScreen(
                         onClick = { view = VIEW_ACTIVITY },
                     )
                     RowDivider()
+                    // Owner report 2026-11-22 #5: while the server read is in flight the row
+                    // says it is checking — a blank subtitle read as "no data".
+                    val status = partnerStatus
+                    val checkinsSubtitle = when {
+                        status != null -> stringResource(connectionStateTextRes(status))
+                        statusLoading -> stringResource(R.string.partner_connection_state_loading)
+                        else -> null
+                    }
                     IndexRow(
                         icon = Icons.Outlined.VerifiedUser,
                         title = stringResource(R.string.partner_tile_checkins),
-                        subtitle = partnerStatus?.let { stringResource(connectionStateTextRes(it)) },
+                        subtitle = checkinsSubtitle,
                         tone = partnerStatus?.let(::connectionStateTone),
                         onClick = { view = VIEW_CHECKINS },
                     )
@@ -1309,7 +1357,11 @@ fun PartnerScreen(
  * rather than rendering as blank space.
  */
 @Composable
-private fun CheckinsView(state: PartnerDashboardUi.Paired, status: PartnerStatus?) {
+private fun CheckinsView(
+    state: PartnerDashboardUi.Paired,
+    status: PartnerStatus?,
+    statusLoading: Boolean,
+) {
     // Owner directive 2026-11-09: the page leads with what it answers. The old page dropped
     // two status cards on blank space, and nothing said how "protection" and "checking in"
     // relate — or that silence proves neither.
@@ -1318,7 +1370,9 @@ private fun CheckinsView(state: PartnerDashboardUi.Paired, status: PartnerStatus
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    if (state.monitoring == null && status == null) {
+    // Owner report 2026-11-22 #5: "nothing reported yet" while the server read is still in
+    // flight is a false claim — the page says it is loading instead, then tells the truth.
+    if (state.monitoring == null && status == null && !statusLoading) {
         InfoCard(
             title = stringResource(R.string.partner_checkins_empty_title),
             body = stringResource(R.string.partner_checkins_empty_body),
@@ -1336,7 +1390,19 @@ private fun CheckinsView(state: PartnerDashboardUi.Paired, status: PartnerStatus
             gap = if (monitoring.state == MonitoringState.DEGRADED) latestGap else null,
         )
     }
-    status?.let { PartnerConnectionCard(it) }
+    when {
+        status != null -> PartnerConnectionCard(status)
+        // Both cards are placeholders only until the in-flight read lands; a resolved but
+        // null reading stays silent rather than claiming anything.
+        statusLoading && state.monitoring == null -> LoadingCard(
+            title = stringResource(R.string.partner_tile_checkins),
+            body = stringResource(R.string.partner_checkins_loading_body),
+        )
+        statusLoading -> LoadingCard(
+            title = stringResource(R.string.partner_connection_title),
+            body = stringResource(R.string.partner_card_loading),
+        )
+    }
 }
 
 /**
@@ -1532,7 +1598,13 @@ private fun PartnerConnectionCard(status: PartnerStatus) {
 }
 
 @Composable
-private fun PartnerSummaryCard(activity: PartnerActivityUi, chainStatus: PartnerChainStatus) {
+private fun PartnerSummaryCard(
+    activity: PartnerActivityUi,
+    chainStatus: PartnerChainStatus,
+    /** Owner report 2026-11-22 #6: plans the partner authored for this subject in this
+     *  partnership. Null = no honest read yet — the cell shows a dash, never a zero. */
+    coachingCount: Int?,
+) {
     PartnerSurface(spacing = 12.dp) {
         // ADR #285: a snapshot-less message writes only the pin. No shared state means no
         // numbers — zeros would be a claim about the partner the absent events do not support.
@@ -1612,7 +1684,7 @@ private fun PartnerSummaryCard(activity: PartnerActivityUi, chainStatus: Partner
                 )
                 StatColumn(
                     stringResource(R.string.partner_summary_coaching_label),
-                    activity.coachingProgress.toString(),
+                    coachingCount?.toString() ?: stringResource(R.string.partner_stat_unknown),
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -2630,6 +2702,7 @@ private fun ruleChangeLabel(change: RuleChange): Int = when (change) {
     RuleChange.UNASSIGNED -> R.string.partner_rule_unassigned
     RuleChange.UPDATED -> R.string.partner_rule_updated
     RuleChange.DISABLED -> R.string.partner_rule_disabled
+    RuleChange.ENABLED -> R.string.partner_rule_enabled
     RuleChange.DELETED -> R.string.partner_rule_deleted
     RuleChange.EXPIRED -> R.string.partner_rule_expired
 }
@@ -3124,6 +3197,91 @@ private fun InfoCard(
         )
         actions()
     }
+}
+
+/** Owner report 2026-11-22 #5: an in-flight read gets a titled card with a spinner, so a
+ *  pending state can never pass for "nothing reported". */
+@Composable
+private fun LoadingCard(title: String, body: String) {
+    PartnerSurface(spacing = 6.dp) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+            Text(
+                body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** Owner report 2026-11-22 #4: dismissible offline notice — accountability updates cannot
+ *  arrive without a network, and the page must say so instead of showing aging state as if it
+ *  were current. */
+@Composable
+private fun OfflineBanner(onDismiss: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    stringResource(R.string.partner_offline_title),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    stringResource(R.string.partner_offline_body),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = stringResource(R.string.partner_offline_dismiss),
+                )
+            }
+        }
+    }
+}
+
+/** Live connectivity for the partner tab: the same active-network INTERNET capability the
+ *  "Check now" pre-check reads, kept current by the default-network callback. */
+@Composable
+private fun rememberOnline(): Boolean {
+    val context = LocalContext.current
+    fun read(): Boolean {
+        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return true
+        return runCatching {
+            cm.getNetworkCapabilities(cm.activeNetwork)
+                ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        }.getOrDefault(true)
+    }
+    var online by remember { mutableStateOf(read()) }
+    DisposableEffect(context) {
+        val cm = context.getSystemService(ConnectivityManager::class.java)
+            ?: return@DisposableEffect onDispose {}
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) { online = read() }
+            override fun onLost(network: Network) { online = read() }
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                online = read()
+            }
+        }
+        runCatching { cm.registerDefaultNetworkCallback(callback) }
+            .onFailure { return@DisposableEffect onDispose {} }
+        onDispose { runCatching { cm.unregisterNetworkCallback(callback) } }
+    }
+    return online
 }
 
 /** "3f9a2c11…" — the partner's attested-key fingerprint, enough to recognize, not to confuse. */

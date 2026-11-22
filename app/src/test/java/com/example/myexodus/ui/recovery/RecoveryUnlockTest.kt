@@ -90,6 +90,25 @@ class RecoveryUnlockTest {
         )
     }
 
+    /** Device-caught 2026-11-22 (two v44 crashes): an unlock tap racing an App Lock relock
+     *  threw VaultLockedException out of the IO coroutine and killed the process. With the
+     *  gate closed the call must simply do nothing — no write, no crash. */
+    @Test
+    fun unlockRule_whileTheVaultIsLocked_isANoOp_notACrash() = runTest {
+        val health = DatabaseHealthStore()
+        val lockedRecovery = RecoveryManager(
+            context, FakeKeyManager(), ActivityLogKeyManager(context), RulesStoreKeyManager(context), health,
+        )
+        val lockedFactory = AppRulesStoreFactory(
+            context, lockedRecovery, health, vaultAccessAllowed = { false },
+        )
+        val lockedRepository = RulesRepository(
+            lockedFactory, RulesSnapshotPublisher(context, lockedFactory),
+        )
+
+        unlockRule(lockedRepository, RecoveryStateStore(lockedFactory), "r-any")
+    }
+
     private class FakeKeyManager : DatabaseKeyManager {
         override fun getOrCreateDek(): ByteArray = ByteArray(32)
         override fun classifyFailure(e: Throwable): KeyFailure = KeyFailure.DatabaseIssue

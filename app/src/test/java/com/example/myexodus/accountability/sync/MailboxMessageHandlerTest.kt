@@ -74,6 +74,7 @@ class MailboxMessageHandlerTest {
         val appended = mutableListOf<Triple<String, String, Long>>()
         val acks = mutableListOf<Pair<String, String>>()
         val notified = mutableListOf<Pair<String, String>>()
+        val notifyMessageIds = mutableListOf<String>()
         val notifyPayloads = mutableListOf<EventPayload>()
         val repairResponses = mutableListOf<Triple<String, Long, ByteArray>>()
         val deletionRequests = mutableListOf<Triple<String, String, Long?>>()
@@ -99,10 +100,11 @@ class MailboxMessageHandlerTest {
             },
             // The decoded payload rides through untouched — copy selection (titles, bodies,
             // blank-text degradation) is PartnerNotifications' concern, pinned there.
-            notify = { pairId, payload ->
+            notify = { pairId, messageId, payload ->
                 notifyError?.let { throw it }
                 notified += pairId to payload.type
                 notifyPayloads += payload
+                notifyMessageIds += messageId
             },
             respondToRequest = { pairId, sequence, hash -> repairResponses += Triple(pairId, sequence, hash) },
             flagTamperIfRepairing = { tamperChecks++; tamperRepairing },

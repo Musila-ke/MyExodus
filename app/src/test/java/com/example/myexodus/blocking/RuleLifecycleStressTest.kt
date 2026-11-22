@@ -108,7 +108,7 @@ class RuleLifecycleStressTest {
         System.err.println("rule churn: ${RULE_COUNT * 9} writes, A=${aRows.size} B=${bRows.size} rows read in ${elapsedMs}ms")
 
         assertEquals("A: ASSIGNED, UPDATED, UNASSIGNED, ASSIGNED, DELETED per rule", RULE_COUNT * 5, aRows.size)
-        assertEquals("B: ASSIGNED, DISABLED, UPDATED, UNASSIGNED per rule", RULE_COUNT * 4, bRows.size)
+        assertEquals("B: ASSIGNED, DISABLED, ENABLED, UNASSIGNED per rule", RULE_COUNT * 4, bRows.size)
         assertTrue("cross-pair leakage into A", aRows.all { it.routePairId == PAIR_A })
         assertTrue("cross-pair leakage into B", bRows.all { it.routePairId == PAIR_B })
 
@@ -122,7 +122,8 @@ class RuleLifecycleStressTest {
             assertEquals(rows.sortedBy { it.createdAtMs }, rows)
         }
         for (rows in byRuleB.values) {
-            assertEquals(listOf("ASSIGNED", "DISABLED", "UPDATED", "UNASSIGNED"), rows.map { it.ruleChange })
+            // Owner report 2026-11-22 (#10): an off→on re-enable is "turned on", not "changed".
+            assertEquals(listOf("ASSIGNED", "DISABLED", "ENABLED", "UNASSIGNED"), rows.map { it.ruleChange })
         }
         assertTrue("every row carries the rule's UUID", aRows.all { runCatching { UUID.fromString(it.ruleId) }.isSuccess })
     }

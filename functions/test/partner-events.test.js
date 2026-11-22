@@ -69,6 +69,16 @@ test('payload-only kinds accept empty metadata and reject any safe metadata', ()
   }
 });
 
+test('rule-change metadata allowlist carries every client verb, including ENABLED', () => {
+  assert.deepStrictEqual(
+    [...P.METADATA_VALUES.ruleChange],
+    ['CREATED', 'ASSIGNED', 'UNASSIGNED', 'UPDATED', 'DISABLED', 'ENABLED', 'DELETED', 'EXPIRED'],
+  );
+  const enabled = clone(eventNamed('rule-change-attempt-expired'));
+  enabled.metadata.ruleChange = 'ENABLED';
+  assert.strictEqual(P.validateEvent(enabled), null);
+});
+
 test('ownerUid is inside the signed bytes, so rebinding changes the digest', () => {
   const event = eventNamed('block-attempt-app-two-recipients');
   const rebound = { ...clone(event), ownerUid: 'anotherUid_456' };

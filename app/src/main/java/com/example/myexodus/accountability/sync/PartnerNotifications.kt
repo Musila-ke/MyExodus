@@ -120,6 +120,12 @@ object PartnerNotifications {
     internal fun partnerTag(category: String, pairId: String): String =
         "partner:$category:$pairId"
 
+    /** Per-event tray identity: the tag carries the event so a burst never collapses into
+     *  one replace-in-place entry (the NotificationManager key is (tag, id)). Calls without an
+     *  event key keep the per-pair entry they always had. */
+    private fun eventTag(pairId: String, eventKey: String?): String =
+        partnerTag("event", if (eventKey == null) pairId else "$pairId/$eventKey")
+
     /** §8.7: the silent status entry posted in the probe callback — shade-visible, no sound,
      *  no banner (LOW). Permission denied skips it inside [post]; the probe still runs, it
      *  just counts as weaker evidence. */
@@ -215,17 +221,33 @@ object PartnerNotifications {
         manager.deleteNotificationChannel(CHANNEL_PARTNER_NUDGES_V2)
     }
 
-    /** Partner-activity alert. The per-pair tag/id collapses one partner's events into a single
-     *  tray entry. Every post alerts — owner ruling 2026-10-31: the tray entry was updating
-     *  silently for a new message/relapse because the post carried FLAG_ONLY_ALERT_ONCE, and
-     *  "it is in the shade but never appeared on screen" is the observed defect. §11.7's
-     *  one-alert burst rule is superseded for partner events: each event a partner chose to
-     *  share is worth a heads-up, and the single replace-in-place entry still prevents tray
-     *  stacking. Unlocked copy names the sender and, for a wire-v2 relapse or milestone,
-     *  states which streak and when it happened (owner mandate 2026-10-04); a motivational
-     *  message shows the message itself (owner feedback 2026-10-01). The lockscreen public
-     *  version stays generic (FR-13) — none of the rich copy reaches it. */
-    fun notifyPartnerEvent(context: Context, pairId: String, partnerName: String, payload: EventPayload) {
+    /** Partner-activity alert. Every post alerts — owner ruling 2026-10-31: the tray entry was
+     *  updating silently for a new message/relapse because the post carried
+     *  FLAG_ONLY_ALERT_ONCE, and "it is in the shade but never appeared on screen" is the
+     *  observed defect. §11.7's one-alert burst rule is superseded for partner events: each
+     *  event a partner chose to share is worth a heads-up. An [eventKey] gives each event its
+     *  own tray entry — the old per-pair key collapsed a burst into one item whose copy a
+     *  later event overwrote, which is how rule changes went unseen (owner report
+     *  2026-11-22); without one (approvals, availability) the per-pair entry is replaced in
+     *  place. Unlocked copy names the sender and, for a wire-v2 relapse or milestone, states
+     *  which streak and when it happened (owner mandate 2026-10-04); a motivational message
+     *  shows the message itself (owner feedback 2026-10-01). The lockscreen public version
+     *  stays generic (FR-13) — none of the rich copy reaches it. */
+    fun notifyPartnerEvent(
+        context: Context,
+        pairId: String,
+        partnerName: String,
+        payload: EventPayload,
+        eventKey: String? = null,
+    ) {
+        // Owner report 2026-11-22 (#2): these two are page bookkeeping, not acts — the feed
+        // drops them (PartnerPresentation.alertOf), so the generic "new activity" tray copy
+        // opened an Activity page with nothing new. Silence is the honest signal.
+        if (payload.type == EventPayload.TYPE_STREAK_UPDATED ||
+            payload.type == EventPayload.TYPE_COACHING_STEP_UPDATED
+        ) {
+            return
+        }
         val rich = when (payload.type) {
             EventPayload.TYPE_RELAPSE_RECORDED ->
                 context.getString(R.string.partner_relapse_title_named, partnerName) to
@@ -304,7 +326,7 @@ object PartnerNotifications {
                 context.getString(R.string.partner_event_title_named, partnerName)
             },
             namedText = richBody,
-            tag = partnerTag("event", pairId),
+            tag = eventTag(pairId, eventKey),
             // Owner report 2026-10-31: the plan alert opened Home, where the plan is not even
             // reachable — the tap must land on the plan it names.
             openPlanId = payload.plan?.planId
@@ -372,6 +394,7 @@ object PartnerNotifications {
         partnerName: String,
         change: RuleChange,
         identity: RuleIdentity?,
+        eventKey: String? = null,
     ) {
         post(
             context,
@@ -383,7 +406,7 @@ object PartnerNotifications {
             R.string.partner_event_text,
             namedTitle = context.getString(R.string.partner_rule_event_title_named, partnerName),
             namedText = ruleEventBody(context, change, identity),
-            tag = partnerTag("event", pairId),
+            tag = eventTag(pairId, eventKey),
             // Owner ask 2026-11-02: the change is listed on Rules & blocks — land there.
             openPartnerView = VIEW_RULES,
             openPairId = pairId,
@@ -453,6 +476,7 @@ object PartnerNotifications {
                     RuleChange.UNASSIGNED -> R.string.partner_rule_event_unassigned
                     RuleChange.UPDATED -> R.string.partner_rule_event_updated
                     RuleChange.DISABLED -> R.string.partner_rule_event_disabled
+                    RuleChange.ENABLED -> R.string.partner_rule_event_enabled
                     RuleChange.DELETED -> R.string.partner_rule_event_deleted
                     RuleChange.EXPIRED -> R.string.partner_rule_event_expired
                 },
@@ -466,6 +490,7 @@ object PartnerNotifications {
                     RuleChange.CREATED, RuleChange.ASSIGNED -> R.plurals.partner_rule_event_added_batched
                     RuleChange.UPDATED -> R.plurals.partner_rule_event_updated_batched
                     RuleChange.DISABLED -> R.plurals.partner_rule_event_disabled_batched
+                    RuleChange.ENABLED -> R.plurals.partner_rule_event_enabled_batched
                     RuleChange.DELETED -> R.plurals.partner_rule_event_deleted_batched
                     RuleChange.UNASSIGNED -> R.plurals.partner_rule_event_unassigned_batched
                     RuleChange.EXPIRED -> R.plurals.partner_rule_event_expired_batched
@@ -482,6 +507,7 @@ object PartnerNotifications {
                     RuleChange.CREATED, RuleChange.ASSIGNED -> R.string.partner_rule_event_added_labeled
                     RuleChange.UPDATED -> R.string.partner_rule_event_updated_labeled
                     RuleChange.DISABLED -> R.string.partner_rule_event_disabled_labeled
+                    RuleChange.ENABLED -> R.string.partner_rule_event_enabled_labeled
                     RuleChange.DELETED -> R.string.partner_rule_event_deleted_labeled
                     RuleChange.UNASSIGNED -> R.string.partner_rule_event_unassigned_labeled
                     RuleChange.EXPIRED -> R.string.partner_rule_event_expired_labeled
@@ -494,6 +520,7 @@ object PartnerNotifications {
                     RuleChange.CREATED, RuleChange.ASSIGNED -> R.string.partner_rule_event_added_in_batch
                     RuleChange.UPDATED -> R.string.partner_rule_event_updated_in_batch
                     RuleChange.DISABLED -> R.string.partner_rule_event_disabled_in_batch
+                    RuleChange.ENABLED -> R.string.partner_rule_event_enabled_in_batch
                     RuleChange.DELETED -> R.string.partner_rule_event_deleted_in_batch
                     RuleChange.UNASSIGNED -> R.string.partner_rule_event_unassigned_in_batch
                     RuleChange.EXPIRED -> R.string.partner_rule_event_expired_in_batch

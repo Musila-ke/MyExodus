@@ -62,7 +62,8 @@ class MailboxMessageHandler(
      *  milestone's day). Approval types reach this hook too — the composition layer filters
      *  them, because the approval flows post their own dedicated, named notifications
      *  (§8 Step 12). */
-    private val notify: suspend (pairId: String, payload: EventPayload) -> Unit = { _, _ -> },
+    private val notify: suspend (pairId: String, messageId: String, payload: EventPayload) -> Unit =
+        { _, _, _ -> },
     /** Step 11 responder: enqueue a replay of our chain after the requested anchor. */
     private val respondToRequest: suspend (pairId: String, expectedPreviousSequence: Long, expectedPreviousHash: ByteArray) -> Unit = { _, _, _ -> },
     /** Step 11 tamper correlation: true when a repair was in flight and is now blocked. */
@@ -235,7 +236,7 @@ class MailboxMessageHandler(
                         if (payload.type == EventPayload.TYPE_SYNC_REQUEST) {
                             answerRepairRequest(pairId, messageId, payload)
                         } else {
-                            runCatching { notify(pairId, payload) }
+                            runCatching { notify(pairId, messageId, payload) }
                                 .onFailure { Log.w(TAG, "notify failed messageId=$messageId", it) }
                         }
                     }

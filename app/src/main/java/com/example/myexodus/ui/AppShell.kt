@@ -47,7 +47,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -87,7 +86,6 @@ import com.example.myexodus.blocking.usage.PlatformUsageReader
 import com.example.myexodus.blocking.usage.UsageAccountingEngine
 import com.example.myexodus.accountability.delivery.needsAttention
 import com.example.myexodus.accountability.plan.PartnerPlanRepository
-import com.example.myexodus.accountability.sos.NudgeEnvelope
 import com.example.myexodus.accountability.sos.NudgeRepository
 import com.example.myexodus.accountability.sync.MessageSendOutcome
 import com.example.myexodus.accountability.monitoring.PartnerStatus
@@ -880,9 +878,9 @@ fun AppShell(
 
 /**
  * FAB rev (owner mandate 2026-10-04, Q4): the reach-out confirmation. Names the partner the
- * send will reach (§19.5 target first; falls back to the generic title when no name resolves),
- * and carries the message — prefilled with the default, fully editable, capped at the
- * envelope's char bound; a cleared field sends the v1 no-text nudge.
+ * send will reach (§19.5 target first; falls back to the generic title when no name resolves)
+ * and sends the fixed check-in request (owner report 2026-11-22 #3: Reach out is a check-in
+ * ask only — custom text lives in How They Are Doing as Send message, not here).
  *
  * Owner ruling 2026-10-23 (per-subject routing): with more than one live partner the dialog
  * also asks who gets it — one explicit recipient per send, never a fan-out. The default is
@@ -897,7 +895,6 @@ internal fun SosConfirmDialog(
     onDismiss: () -> Unit,
 ) {
     val defaultMessage = stringResource(R.string.sos_default_message)
-    var message by remember { mutableStateOf(defaultMessage) }
     var selectedPairId by remember(targets, initialPairId) {
         mutableStateOf(initialPairId ?: targets.firstOrNull()?.pairId)
     }
@@ -942,29 +939,21 @@ internal fun SosConfirmDialog(
                         }
                     }
                 }
-                OutlinedTextField(
-                    value = message,
-                    onValueChange = { message = it.take(NudgeEnvelope.MAX_TEXT_CHARS) },
-                    label = { Text(stringResource(R.string.sos_message_label)) },
-                    supportingText = {
-                        Text(
-                            stringResource(
-                                R.string.sos_message_counter,
-                                message.length,
-                                NudgeEnvelope.MAX_TEXT_CHARS,
-                            ),
-                        )
-                    },
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = MaterialTheme.shapes.medium,
                     modifier = Modifier.fillMaxWidth(),
-                )
+                ) {
+                    Text(
+                        text = defaultMessage,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    )
+                }
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = {
-                    onSend(message.trim().takeIf { it.isNotEmpty() }, selectedPairId)
-                },
-            ) {
+            TextButton(onClick = { onSend(defaultMessage, selectedPairId) }) {
                 Text(stringResource(R.string.sos_confirm_send))
             }
         },

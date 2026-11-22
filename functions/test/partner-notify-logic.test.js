@@ -155,6 +155,7 @@ test('fanoutWrites produces one mailbox and one job per recipient with AAD input
     kind: 'BLOCK_ATTEMPT',
     sequence: 7,
     createdAt: NOW - 5_000,
+    deviceOccurredAtMs: NOW - 9_000,
     recipients: [
       {
         recipientUid: 'uid-a',
@@ -191,6 +192,9 @@ test('fanoutWrites produces one mailbox and one job per recipient with AAD input
   assert.equal(mailbox.data.kind, 'BLOCK_ATTEMPT');
   assert.equal(mailbox.data.recipientInstallationId, 'inst-a');
   assert.equal(mailbox.data.createdAt, NOW - 5_000);
+  // The device occurrence instant rides through too — the recipient stamps its feed row
+  // with the block time, never the delivery time.
+  assert.equal(mailbox.data.deviceOccurredAtMs, NOW - 9_000);
   // §13.3: the sender's staged sequence rides through the fanout materialization.
   assert.equal(mailbox.data.sequence, 7);
   const jobWrite = writes[1];

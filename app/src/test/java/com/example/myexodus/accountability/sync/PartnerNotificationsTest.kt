@@ -61,7 +61,7 @@ class PartnerNotificationsTest {
     fun deniedPermission_postIsSilentNoOp() {
         shadowOf(context as Application).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
         PartnerNotifications.notifyPartnerEvent(
-            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_STREAK_UPDATED),
+            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_RELAPSE_RECORDED),
         )
         assertTrue(manager.activeNotifications.isEmpty())
         assertNull(manager.getNotificationChannel(PartnerNotifications.CHANNEL_ACCOUNTABILITY_EVENTS))
@@ -71,7 +71,7 @@ class PartnerNotificationsTest {
     fun granted_partnerAlertsChannelIsHighImportance() {
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         PartnerNotifications.notifyPartnerEvent(
-            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_STREAK_UPDATED),
+            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_RELAPSE_RECORDED),
         )
         assertEquals(
             NotificationManager.IMPORTANCE_HIGH,
@@ -103,38 +103,41 @@ class PartnerNotificationsTest {
     }
 
     /**
-     * Owner ruling 2026-10-31: every partner event must alert on screen. A second event for
-     * the same pair still replaces the one tray entry (fixed tag/id) but may not carry
-     * FLAG_ONLY_ALERT_ONCE — that flag was the observed reason a new message updated the
-     * shade silently. Approval items keep their own alert-every-time contract.
+     * Owner ruling 2026-10-31: every partner event must alert on screen, never update the
+     * shade silently. Owner report 2026-11-22 (critical): the per-pair tray key collapsed a
+     * burst into one entry whose copy a later event overwrote — each event now keeps its own
+     * entry, and only a redelivery of the SAME event replaces in place. Approval items keep
+     * their own alert-every-time contract.
      */
     @Test
-    fun partnerEvent_alertsOnEveryPost_andReplacesTheTrayEntry() {
+    fun partnerEvent_alertsOnEveryPost_andKeepsOneTrayEntryPerEvent() {
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
 
         PartnerNotifications.notifyPartnerEvent(
-            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_STREAK_UPDATED),
+            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_RELAPSE_RECORDED), eventKey = "m1",
         )
         PartnerNotifications.notifyPartnerEvent(
-            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_RELAPSE_RECORDED),
+            context, PAIR_ID, PARTNER_NAME,
+            payload(EventPayload.TYPE_MOTIVATIONAL_MESSAGE, text = "proud of you for keeping going"),
+            eventKey = "m2",
+        )
+        // A mailbox redelivery of an already-notified event replaces, never stacks.
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_RELAPSE_RECORDED), eventKey = "m1",
         )
         PartnerNotifications.notifyApprovalRequest(context, PAIR_ID, PARTNER_NAME)
 
-        val partnerEvent = manager.activeNotifications.first {
+        val partnerEvents = manager.activeNotifications.filter {
             it.id == PartnerNotifications.idFor(PartnerNotifications.NOTIF_PARTNER_EVENT, PAIR_ID)
         }
-        assertEquals(
-            "a new partner event must alert, never update the shade silently",
-            0,
-            partnerEvent.notification.flags and Notification.FLAG_ONLY_ALERT_ONCE,
-        )
-        assertEquals(
-            "one partner still owns exactly one activity tray entry",
-            1,
-            manager.activeNotifications.count {
-                it.id == PartnerNotifications.idFor(PartnerNotifications.NOTIF_PARTNER_EVENT, PAIR_ID)
-            },
-        )
+        assertEquals("one tray entry per event, not per pair", 2, partnerEvents.size)
+        for (event in partnerEvents) {
+            assertEquals(
+                "every partner event must alert, never update the shade silently",
+                0,
+                event.notification.flags and Notification.FLAG_ONLY_ALERT_ONCE,
+            )
+        }
         val approval = manager.activeNotifications.first {
             it.id == PartnerNotifications.idFor(PartnerNotifications.NOTIF_APPROVAL_REQUEST, PAIR_ID)
         }
@@ -145,6 +148,23 @@ class PartnerNotificationsTest {
         )
     }
 
+    /** Owner report 2026-11-22 (#2): a daily streak snapshot or coaching tick is page
+     *  bookkeeping the feed itself drops — the old generic "New activity" tray copy opened a
+     *  page with nothing new. Both must stay silent. */
+    @Test
+    fun noiseTypes_neverPostTheGenericNewActivityCopy() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_STREAK_UPDATED), eventKey = "m1",
+        )
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_COACHING_STEP_UPDATED), eventKey = "m2",
+        )
+
+        assertTrue(manager.activeNotifications.isEmpty())
+    }
+
     /** FR-13 / NFR2: the lockscreen shows a generic copy rather than the app's own text, and the
      *  content is private so the system does not fall back to rendering it in full. */
     @Test
@@ -152,7 +172,7 @@ class PartnerNotificationsTest {
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
 
         PartnerNotifications.notifyPartnerEvent(
-            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_STREAK_UPDATED),
+            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_RELAPSE_RECORDED),
         )
 
         val notification = manager.activeNotifications.single().notification
@@ -500,7 +520,7 @@ class PartnerNotificationsTest {
 
         PartnerNotifications.notifyPartnerNudge(context, nudgeId)
         PartnerNotifications.notifyPartnerEvent(
-            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_STREAK_UPDATED),
+            context, PAIR_ID, PARTNER_NAME, payload(EventPayload.TYPE_RELAPSE_RECORDED),
         )
 
         val posted = manager.activeNotifications
@@ -1026,7 +1046,9 @@ class PartnerNotificationsTest {
             RuleChange.UNASSIGNED to R.string.partner_rule_event_unassigned,
             RuleChange.UPDATED to R.string.partner_rule_event_updated,
             RuleChange.DISABLED to R.string.partner_rule_event_disabled,
+            RuleChange.ENABLED to R.string.partner_rule_event_enabled,
             RuleChange.DELETED to R.string.partner_rule_event_deleted,
+            RuleChange.EXPIRED to R.string.partner_rule_event_expired,
         )
         for ((change, body) in expected) {
             PartnerNotifications.notifyRuleChanged(context, PAIR_ID, PARTNER_NAME, change, null)
@@ -1044,9 +1066,44 @@ class PartnerNotificationsTest {
             assertEquals(PAIR_ID, tap.getStringExtra(MainActivity.EXTRA_OPEN_PARTNER))
             // Owner ask 2026-11-02: and land on Rules & blocks, where the change is listed.
             assertEquals(VIEW_RULES, tap.getStringExtra(MainActivity.EXTRA_OPEN_PARTNER_VIEW))
-            // One replace-in-place entry per pair: the six posts never stack.
+            // Without an event key the per-pair entry still replaces in place: never stacks.
             assertEquals(1, manager.activeNotifications.size)
         }
+    }
+
+    /** Owner report 2026-11-22 (critical): Instagram/WhatsApp/Chrome re-enables each posted
+     *  to the same per-pair tray entry, so a burst collapsed and changes were unseen. With
+     *  the wire event id as key, every change keeps its own entry and its own named copy. */
+    @Test
+    fun ruleChanged_distinctEventsKeepDistinctTrayEntries() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+
+        PartnerNotifications.notifyRuleChanged(
+            context, PAIR_ID, PARTNER_NAME, RuleChange.ENABLED, null, eventKey = "evt-instagram",
+        )
+        PartnerNotifications.notifyRuleChanged(
+            context, PAIR_ID, PARTNER_NAME, RuleChange.ENABLED, null, eventKey = "evt-whatsapp",
+        )
+        PartnerNotifications.notifyRuleChanged(
+            context, PAIR_ID, PARTNER_NAME, RuleChange.ENABLED, null, eventKey = "evt-instagram",
+        )
+
+        val entries = manager.activeNotifications.filter {
+            it.id == PartnerNotifications.idFor(PartnerNotifications.NOTIF_PARTNER_EVENT, PAIR_ID)
+        }
+        assertEquals("two events, one redelivery -> two entries", 2, entries.size)
+        assertEquals(
+            setOf(
+                PartnerNotifications.partnerTag("event", "$PAIR_ID/evt-instagram"),
+                PartnerNotifications.partnerTag("event", "$PAIR_ID/evt-whatsapp"),
+            ),
+            entries.map { it.tag }.toSet(),
+        )
+        assertEquals(
+            "a re-enable reads switched on, never updated",
+            context.getString(R.string.partner_rule_event_enabled),
+            entries.first().notification.extras.getString(Notification.EXTRA_TEXT),
+        )
     }
 
     /** Owner report 2026-10-31 ("what have I been added to?"): the body names the app, and a

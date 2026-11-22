@@ -220,6 +220,7 @@ async function processEvent({ db, uid, installationId, wire, at }) {
         installationId,
         kind: event.kind,
         sequence: event.sequence,
+        deviceOccurredAtMs: event.deviceOccurredAtMs,
         recipients: entries.map((entry) => ({
           recipientUid: entry.recipientUid,
           recipientInstallationId: entry.recipientInstallationId,
@@ -259,6 +260,10 @@ async function processEvent({ db, uid, installationId, wire, at }) {
           encoding: entry.envelope.encoding,
           pairId: pairIdOf(uid, entry.recipientUid),
           createdAt: at,
+          // The device occurrence instant (already on the ledger above): the recipient
+          // orders and stamps its feed row with this, never the delivery time, so a
+          // deferred block cannot surface after a newer rule change it preceded.
+          deviceOccurredAtMs: event.deviceOccurredAtMs,
         },
         { merge: false },
       );

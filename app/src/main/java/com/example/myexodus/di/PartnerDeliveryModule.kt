@@ -128,9 +128,9 @@ object PartnerDeliveryModule {
             FirestoreSchema.partnerMailboxDocsAfter(firestore, uid, installationId, fromMs, limit)
         },
         decrypt = decryptor::open,
-        onDelivered = { document, plaintext ->
-            projection.onDelivered(document, plaintext)
-            observation.onDelivered(document, plaintext)
+        onDelivered = { document, plaintext, notify ->
+            projection.onDelivered(document, plaintext, postNotification = notify)
+            observation.onDelivered(document, plaintext, notify)
         },
     )
 
@@ -164,8 +164,10 @@ object PartnerDeliveryModule {
     ): PartnerRuleChangeProjection = PartnerRuleChangeProjection(
         storeFactory = storeFactory,
         enrollmentDao = db.enrollmentDao(),
-        notify = { pairId, partnerName, change, identity ->
-            PartnerNotifications.notifyRuleChanged(context, pairId, partnerName, change, identity)
+        notify = { pairId, partnerName, change, identity, eventKey ->
+            PartnerNotifications.notifyRuleChanged(
+                context, pairId, partnerName, change, identity, eventKey,
+            )
         },
     )
 

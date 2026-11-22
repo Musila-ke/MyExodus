@@ -5,8 +5,6 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextClearance
-import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.myexodus.R
 import com.example.myexodus.ui.SosConfirmDialog
@@ -17,10 +15,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * SOS plan §12.3 rev (owner mandate 2026-10-04, V1 Req 35; owner ruling 2026-10-23): the
- * reach-out confirmation on the real render path — it names the partner, offers an explicit
- * recipient when several are live (one per send, never fan-out), prefills the default
- * message, sends the edited text, and a cleared field sends the v1 no-text nudge (null).
+ * SOS plan §12.3 rev (owner mandate 2026-10-04, V1 Req 35; owner ruling 2026-10-23; owner
+ * report 2026-11-22 #3): the reach-out confirmation on the real render path — it names the
+ * partner, offers an explicit recipient when several are live (one per send, never fan-out),
+ * shows the fixed check-in request it will send, and has no free-text field (custom text is
+ * How They Are Doing's Send message).
  *
  * Rendering the extracted [SosConfirmDialog] in isolation, the same contract style as
  * [NudgeHomeSurfaceInstrumentedTest]: this leg pins the dialog surface on-device; the tap →
@@ -55,44 +54,34 @@ class NudgeDialogInstrumentedTest {
         ReachOutTarget(pairId = pairId, name = name)
 
     @Test
-    fun dialog_namesThePartner_prefillsTheDefault_andSendsTheEditedText() {
+    fun dialog_namesThePartner_showsTheFixedCheckIn_andSendsIt() {
         render(listOf(partner("Sam")))
 
         compose.onNodeWithText(str(R.string.sos_confirm_title_named, "Sam")).assertIsDisplayed()
         compose.onNodeWithText(str(R.string.sos_default_message)).assertIsDisplayed()
-        assertEquals(
-            str(R.string.sos_default_message).length.toString() + "/${NudgeEnvelope.MAX_TEXT_CHARS}",
-            str(
-                R.string.sos_message_counter,
-                str(R.string.sos_default_message).length,
-                NudgeEnvelope.MAX_TEXT_CHARS,
-            ),
-        )
 
-        compose.onNodeWithText(str(R.string.sos_default_message)).performTextReplacement("Please call me")
         compose.onNodeWithText(str(R.string.sos_confirm_send)).performClick()
         compose.waitForIdle()
         assertEquals(
-            "the edited text and the single partner travel together",
-            listOf(Sent("Please call me", "pair-sam")),
+            "the fixed check-in message and the single partner travel together",
+            listOf(Sent(str(R.string.sos_default_message), "pair-sam")),
             sent,
         )
         assertEquals(0, dismissed)
     }
 
     @Test
-    fun unnamedTarget_fallsBackToTheGenericTitle_andAClearedFieldSendsNoText() {
+    fun unnamedTarget_fallsBackToTheGenericTitle_andStillSendsTheFixedCheckIn() {
         render(targets = emptyList(), initialPairId = null)
 
         compose.onNodeWithText(str(R.string.sos_confirm_title)).assertIsDisplayed()
         compose.onNodeWithText(str(R.string.sos_target_label)).assertDoesNotExist()
 
-        compose.onNodeWithText(str(R.string.sos_default_message)).performTextClearance()
         compose.onNodeWithText(str(R.string.sos_confirm_send)).performClick()
         compose.waitForIdle()
         assertEquals(
-            "blank must travel as null (v1 constant), never an empty string; no pick = default target",
-            listOf(Sent(null, null)),
+            "the fixed message travels; no pick = default target",
+            listOf(Sent(str(R.string.sos_default_message), null)),
             sent,
         )
     }

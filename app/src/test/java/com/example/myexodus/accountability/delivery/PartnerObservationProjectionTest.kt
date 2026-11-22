@@ -85,15 +85,37 @@ class PartnerObservationProjectionTest {
     }
 
     @Test
+    fun deliveredBlockAttempt_keepsTheDeviceOccurrenceTime_notTheDeliveryTime() = runBlocking {
+        db.enrollmentDao().upsert(enrollment())
+        // The block happened hours before the deferred staging: the feed row must sort at
+        // the block instant, never after newer rule events that were delivered first.
+        val blockedAt = nowMs - 6 * 60 * 60 * 1000L
+        projection().onDelivered(
+            document(
+                kind = PartnerEventKind.BLOCK_ATTEMPT.wire,
+                deviceOccurredAtMs = blockedAt,
+            ),
+            payload("blocked:com.x", appLabel = "Calculator"),
+        )
+
+        assertEquals(blockedAt, rows().single().occurredAtMs)
+    }
+
+    @Test
     fun deliveredConsentRevoke_becomesTheFeedRow() = runBlocking {
         db.enrollmentDao().upsert(enrollment())
+        val revokedAt = nowMs - 60 * 60 * 1000L
 
         projection().onDelivered(
             document(kind = PartnerEventKind.ACCOUNTABILITY_UPDATE.wire),
             revoke(EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED),
         )
         projection().onDelivered(
-            document(eventId = "evt-2", kind = PartnerEventKind.ACCOUNTABILITY_UPDATE.wire),
+            document(
+                eventId = "evt-2",
+                kind = PartnerEventKind.ACCOUNTABILITY_UPDATE.wire,
+                deviceOccurredAtMs = revokedAt,
+            ),
             revoke(EventPayload.TYPE_STREAK_SHARING_STOPPED, habitLabel = "No porn"),
         )
 
@@ -103,7 +125,9 @@ class PartnerObservationProjectionTest {
         assertEquals(EventPayload.TYPE_AVAILABILITY_SHARING_STOPPED, rows[0].kind)
         assertEquals(null, rows[0].label)
         assertEquals("No porn", rows[1].label)
+        // No device time on the wire (a pre-field backend): the delivery time stands in.
         assertEquals(nowMs, rows[0].occurredAtMs)
+        assertEquals(revokedAt, rows[1].occurredAtMs)
         assertEquals(nowMs + PartnerEventJournal.RETENTION_MILLIS, rows[0].expiresAtMs)
     }
 
@@ -182,7 +206,11 @@ class PartnerObservationProjectionTest {
         now = { nowMs },
     )
 
-    private fun document(eventId: String? = "evt-1", kind: String) = PartnerMailboxDocument(
+    private fun document(
+        eventId: String? = "evt-1",
+        kind: String,
+        deviceOccurredAtMs: Long? = null,
+    ) = PartnerMailboxDocument(
         messageId = "msg-1",
         eventId = eventId,
         senderInstallationId = "install-partner",
@@ -194,6 +222,7 @@ class PartnerObservationProjectionTest {
         pairId = "pair-1",
         createdAtMs = nowMs,
         senderSequence = 7,
+        deviceOccurredAtMs = deviceOccurredAtMs,
     )
 
     private fun payload(text: String, appLabel: String? = null) = encodePayload(

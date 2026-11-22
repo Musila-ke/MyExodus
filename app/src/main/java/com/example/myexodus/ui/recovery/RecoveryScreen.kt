@@ -72,6 +72,7 @@ import com.example.myexodus.blocking.recovery.RecoveryCountdown
 import com.example.myexodus.blocking.recovery.RecoveryCountdownTracker
 import com.example.myexodus.blocking.recovery.RecoveryStateStore
 import com.example.myexodus.blocking.recovery.RecoveryTimer
+import com.example.myexodus.data.db.VaultLockedException
 import com.example.myexodus.data.db.entity.CoachingStep
 import com.example.myexodus.data.db.entity.RecoverySession
 import com.example.myexodus.data.db.entity.RecoveryState
@@ -181,30 +182,43 @@ fun RecoveryScreen(
     // seconds behind another opener's lock; on Main that is an ANR (device-caught 2026-09-19
     // on the resume path — this screen's callers are all Main-scoped).
     suspend fun reload() = withContext(Dispatchers.IO) {
-        val rules = repository.getActiveRules().associateBy { it.ruleId }
-        val now = System.currentTimeMillis()
-        liveSessions = recoveryStore.sessions()
-            .mapNotNull { session ->
-                val enforced = liveSessionRule(rules[session.ruleId], now) ?: return@mapNotNull null
-                LiveSession(
-                    state = session,
-                    rule = enforced,
-                    remainingSeconds = 0L,
-                    frozenAtSeconds = null,
-                )
-            }
-            .sortedBy { it.state.deadlineWallClockUtcMillis }
+        // Device-caught 2026-11-22 (v44, both crashes): the ON_RESUME re-read below can run
+        // in the frame between App Lock relocking the vault and the gate replacing this
+        // screen — the throw escaped the launch and killed the process. A locked vault here
+        // just means the gate is about to re-prompt; the last known state stays.
+        try {
+            val rules = repository.getActiveRules().associateBy { it.ruleId }
+            val now = System.currentTimeMillis()
+            liveSessions = recoveryStore.sessions()
+                .mapNotNull { session ->
+                    val enforced = liveSessionRule(rules[session.ruleId], now) ?: return@mapNotNull null
+                    LiveSession(
+                        state = session,
+                        rule = enforced,
+                        remainingSeconds = 0L,
+                        frozenAtSeconds = null,
+                    )
+                }
+                .sortedBy { it.state.deadlineWallClockUtcMillis }
+        } catch (_: VaultLockedException) {
+            return@withContext
+        }
     }
 
     suspend fun reloadPlan() = withContext(Dispatchers.IO) {
-        val id = runCatching { repository.ensureActiveProfile().userId }.getOrNull() ?: return@withContext
-        profileId = id
-        planItems = planRepository.items(id)
-        val window = planRepository.activeWindow(LocalDateTime.now())
-        // A step's trigger link is a string (blank = any time, OPEN-4); the decimal id is the
-        // link value the W3 editor writes.
-        activeWindowId = window?.id?.toString()
-        inRiskWindow = window != null
+        try {
+            val id = runCatching { repository.ensureActiveProfile().userId }.getOrNull()
+                ?: return@withContext
+            profileId = id
+            planItems = planRepository.items(id)
+            val window = planRepository.activeWindow(LocalDateTime.now())
+            // A step's trigger link is a string (blank = any time, OPEN-4); the decimal id is
+            // the link value the W3 editor writes.
+            activeWindowId = window?.id?.toString()
+            inRiskWindow = window != null
+        } catch (_: VaultLockedException) {
+            return@withContext
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -1070,11 +1084,16 @@ internal suspend fun unlockRule(
     recoveryStore: RecoveryStateStore,
     ruleId: String,
 ) = withContext(Dispatchers.IO) {
-    val rule = repository.getActiveRules().firstOrNull { it.ruleId == ruleId }
-    if (rule != null) {
-        repository.updateRule(rule.copy(blockExpiresAt = System.currentTimeMillis() - 1))
+    try {
+        val rule = repository.getActiveRules().firstOrNull { it.ruleId == ruleId }
+        if (rule != null) {
+            repository.updateRule(rule.copy(blockExpiresAt = System.currentTimeMillis() - 1))
+        }
+        recoveryStore.clear(ruleId)
+    } catch (_: VaultLockedException) {
+        // Relocked between render and tap: nothing written, session untouched — the gate
+        // re-prompts and the unlock can be retried from the same row.
     }
-    recoveryStore.clear(ruleId)
 }
 
 /**

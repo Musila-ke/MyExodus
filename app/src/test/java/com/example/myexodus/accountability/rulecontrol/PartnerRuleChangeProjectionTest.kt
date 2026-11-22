@@ -89,7 +89,7 @@ class PartnerRuleChangeProjectionTest {
         assertEquals(nowMs, row.receivedAtMs)
         assertEquals(nowMs + PartnerEventJournal.RETENTION_MILLIS, row.expiresAtMs)
         assertEquals(
-            listOf(listOf("pair-1", "Alex", RuleChange.ASSIGNED, IDENTITY)),
+            listOf(listOf("pair-1", "Alex", RuleChange.ASSIGNED, IDENTITY, document.eventId)),
             notifications,
         )
     }
@@ -121,16 +121,29 @@ class PartnerRuleChangeProjectionTest {
         assertTrue(notifications.isEmpty())
     }
 
+    /** Plan §4 line 87 (owner report 2026-11-22, critical): App Lock must never silence the
+     *  tray. A locked vault still posts the alert — from background-accessible state — and
+     *  only the feed row defers to the post-unlock retry, which must not post again. */
     @Test
-    fun closedVault_propagates_soTheMailboxDocumentStaysUnreceipted() {
+    fun closedVault_postsTheAlert_andDefersOnlyTheFeedRow() {
         runBlocking { db.enrollmentDao().upsert(enrollment()) }
         val locked = projection(vaultAccessAllowed = { false })
+        val document = document(eventId = UUID.randomUUID().toString())
 
         assertThrows(VaultLockedException::class.java) {
-            runBlocking { locked.onDelivered(document(), payload(RuleChange.UPDATED)) }
+            runBlocking { locked.onDelivered(document, payload(RuleChange.UPDATED)) }
         }
-        runBlocking { assertTrue(rows("pair-1").isEmpty()) }
-        assertTrue(notifications.isEmpty())
+        assertEquals(
+            listOf(listOf("pair-1", "Alex", RuleChange.UPDATED, IDENTITY, document.eventId)),
+            notifications,
+        )
+
+        assertThrows(VaultLockedException::class.java) {
+            runBlocking {
+                locked.onDelivered(document, payload(RuleChange.UPDATED), postNotification = false)
+            }
+        }
+        assertEquals("the deferred retry never re-posts", 1, notifications.size)
     }
 
     private fun projection(vaultAccessAllowed: () -> Boolean = { true }) = PartnerRuleChangeProjection(
@@ -140,8 +153,8 @@ class PartnerRuleChangeProjectionTest {
             AppRulesStoreFactory(context, recovery, DatabaseHealthStore(), vaultAccessAllowed = vaultAccessAllowed)
         },
         enrollmentDao = db.enrollmentDao(),
-        notify = { pairId, partnerName, change, identity ->
-            notifications += listOf(pairId, partnerName, change, identity)
+        notify = { pairId, partnerName, change, identity, eventKey ->
+            notifications += listOf(pairId, partnerName, change, identity, eventKey)
         },
         now = { nowMs },
     )

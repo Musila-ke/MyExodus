@@ -9,6 +9,7 @@ import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleIdentity
 import com.example.myexodus.accountability.sync.displayNameOf
 import com.example.myexodus.data.db.AppRulesStoreFactory
+import com.example.myexodus.data.db.VaultLockedException
 import com.example.myexodus.data.db.entity.PartnerEventJournal
 import com.example.myexodus.data.db.entity.PartnerRuleChange
 
@@ -22,25 +23,41 @@ import com.example.myexodus.data.db.entity.PartnerRuleChange
  * redelivery — or the same logical change arriving on both transports during the staged
  * rollout — inserts once and notifies once.
  *
- * Vault gating (§13.4): the projection opens the vault through the app-lock gate. While it is
- * locked the exception propagates and [com.example.myexodus.accountability.delivery.PartnerMailboxReceiver]
- * leaves the document unreceipted, so the record migrates only after the normal foreground
- * unlock — never from a background unlock of its own.
+ * Vault gating (§13.4, refined by the Reliable Partner Event Delivery plan §4 line 87): the
+ * notification posts from background-accessible state when the vault is locked, then the
+ * exception propagates and [com.example.myexodus.accountability.delivery.PartnerMailboxReceiver]
+ * stores a PENDING receipt — the record migrates after the normal foreground unlock (the
+ * retry runs with `postNotification = false`, so the alert is never posted twice), never from
+ * a background unlock of its own.
  */
 class PartnerRuleChangeProjection(
     private val storeFactory: AppRulesStoreFactory,
     private val enrollmentDao: EnrollmentDao,
-    private val notify: (pairId: String, partnerName: String, change: RuleChange, identity: RuleIdentity?) -> Unit,
+    private val notify: (
+        pairId: String,
+        partnerName: String,
+        change: RuleChange,
+        identity: RuleIdentity?,
+        eventKey: String,
+    ) -> Unit,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
 
-    suspend fun onDelivered(document: PartnerMailboxDocument, plaintext: ByteArray) {
+    suspend fun onDelivered(
+        document: PartnerMailboxDocument,
+        plaintext: ByteArray,
+        postNotification: Boolean = true,
+    ) {
         if (document.kind != PartnerEventKind.RULE_CHANGE_ATTEMPT.wire) return
         val pairId = document.pairId ?: return
         val eventId = document.eventId ?: return
         val decoded = PartnerRuleChangePayload.decodeOrNull(plaintext) ?: return
-        val store = storeFactory.open()
-            ?: throw IllegalStateException("rule change projection needs the local store")
+        val store = try {
+            storeFactory.open()
+        } catch (e: VaultLockedException) {
+            if (postNotification) postAlert(pairId, eventId, decoded)
+            throw e
+        } ?: throw IllegalStateException("rule change projection needs the local store")
 
         val nowMs = now()
         val dao = store.partnerRuleChangeDao()
@@ -64,11 +81,19 @@ class PartnerRuleChangeProjection(
             ),
         )
         if (inserted == -1L) return
+        if (postNotification) postAlert(pairId, eventId, decoded)
+    }
+
+    private suspend fun postAlert(
+        pairId: String,
+        eventId: String,
+        decoded: PartnerRuleChangePayload.Decoded,
+    ) {
         val enrollment = enrollmentDao.getByPairId(pairId) ?: return
         // A failed post must not stall the mailbox watermark: the feed row is the source of
         // truth and a retry would find the insert above already stored.
         runCatching {
-            notify(pairId, displayNameOf(enrollment), decoded.change, decoded.identity)
+            notify(pairId, displayNameOf(enrollment), decoded.change, decoded.identity, eventId)
         }.onFailure { Log.w(TAG, "rule change notification failed pairId=$pairId", it) }
     }
 

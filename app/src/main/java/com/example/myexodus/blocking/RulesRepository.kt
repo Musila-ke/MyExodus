@@ -210,7 +210,7 @@ class RulesRepository(
             )
         }
         if (changed.isEmpty()) return
-        val journal = batchJournalRows(members, if (enabled) RuleChange.UPDATED else RuleChange.DISABLED)
+        val journal = batchJournalRows(members, if (enabled) RuleChange.ENABLED else RuleChange.DISABLED)
         dao.updateBatchAndBump(changed, db.policyVersionDao(), db.partnerEventJournalDao(), journal)
         publisher.loadFromDb()
         journaled(journal)
@@ -347,7 +347,11 @@ class RulesRepository(
             to != null && old != new -> record(
                 to,
                 new.ruleId,
-                forcedChange ?: if (old.isEnabled && !new.isEnabled) RuleChange.DISABLED else RuleChange.UPDATED,
+                forcedChange ?: when {
+                    old.isEnabled && !new.isEnabled -> RuleChange.DISABLED
+                    !old.isEnabled && new.isEnabled -> RuleChange.ENABLED
+                    else -> RuleChange.UPDATED
+                },
                 new,
             )
         }

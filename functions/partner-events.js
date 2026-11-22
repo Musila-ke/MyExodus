@@ -61,7 +61,7 @@ const ISSUE = Object.freeze({
 // names, notes and identifiers are structurally impossible.
 const METADATA_VALUES = Object.freeze({
   category: Object.freeze(['BLOCKED_APP_ATTEMPT', 'BLOCKED_DOMAIN_ATTEMPT']),
-  ruleChange: Object.freeze(['CREATED', 'ASSIGNED', 'UNASSIGNED', 'UPDATED', 'DISABLED', 'DELETED', 'EXPIRED']),
+  ruleChange: Object.freeze(['CREATED', 'ASSIGNED', 'UNASSIGNED', 'UPDATED', 'DISABLED', 'ENABLED', 'DELETED', 'EXPIRED']),
 });
 
 // §10.10 Firestore layout. All writes are Admin SDK only. partnerMailboxes is the single
