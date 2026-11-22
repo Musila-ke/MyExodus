@@ -1990,3 +1990,53 @@ Verification:
   2.7 s, envelope→visible 7.3 s, owner-confirm→visible 14.8 s), with
   `unpairAdvanced=true`, `signingBlocked=false`, no timeout report, no retry. Detail in
   `device-evidence-2026-11-18-partner-pairing.md`.
+
+## 2026-11-23 — v45/1.1.43 (built and installed, NOT published): notifications post while the vault is locked, per-event tray entries, ENABLED verb, device-time stamping
+
+Owner field report on the live X6532 (v44/1.1.42) with a real partner; the 17 issues are
+registered in `owner-issues-2026-11-22.md`. Delivery-relevant defects and fixes:
+
+- **Missing notifications (report #9).** v44's projections opened the App Lock vault before
+  notifying; a locked vault threw `VaultLockedException` and the mailbox page aborted without
+  a receipt, so the silent partner burst (22:58–22:59 EAT) never reached the tray until a
+  later foreground pass. The projections now notify FIRST from background-accessible state
+  (enrollment rows + strings; plan §4 line 87), and the vault-gated work follows. A locked
+  vault writes a `STATUS_PENDING` receipt and holds the watermark; the next pass retries with
+  `notify = false`, so a retry never re-posts (R07). Pulls are serialized under
+  `PartnerSyncCoordinator.syncMutex`, so the receipt check-then-act cannot race.
+- **Tray collapse (report #9).** Every event of a pair shared one notification key, so each
+  post replaced the last and only "Instagram was turned off" survived. Tray keys are now per
+  event (`partner:event:<pairId>/<eventId|messageId>`); FCM push coalescing stays server-side
+  (AC19 unaffected). Noise bookkeeping types (`TYPE_STREAK_UPDATED`,
+  `TYPE_COACHING_STEP_UPDATED`) no longer post (report #2).
+- **Staged-mailbox doorbell.** `PartnerLiveSync` now also listens to the staged mailbox and
+  compares against the mailbox watermark, so a foreground session pulls promptly instead of
+  waiting for the periodic pass.
+- **Rule on/off verbs (report #10).** `RuleChange.ENABLED` end-to-end: `RulesRepository`
+  emits DISABLED on on→off and ENABLED on off→on, UPDATED only for content edits; copy reads
+  "was turned on/turned off" (labeled, in-batch, batched); server allowlist extended.
+- **Feed order (report #15).** Mailbox documents carry `deviceOccurredAtMs`; attempt/sharing
+  rows stamp the sender's occurrence instant (fallback `createdAt`) so a deferred delivery
+  cannot sort a block after newer events. Server: `partner-ingest.js` direct + fanout writes,
+  `partner-notify-logic.js` fanoutWrites; deployed `ingestPartnerEvents`,
+  `partnerNotifyTrigger`, `partnerNotifySweep` to myexodus-53804.
+- **Crash guard (report #7).** `RecoveryScreen.reload()/reloadPlan()/unlockRule()` treat a
+  locked vault as a no-op; v44's two foreground kills were uncaught `VaultLockedException`
+  from the ON_RESUME reload. The reported relapse pop-up on block add/remove has no producer
+  in code; the full block lifecycle on the v45 emulator (add → edit → delete) showed no
+  pop-up, no reset, no FATAL.
+
+Verification:
+
+- Full JVM `:app:testDebugUnitTest`: 296 classes / **2,864 tests / 0 failures / 0 errors /
+  0 skipped**. `:app:lintDebug` alone: BUILD SUCCESSFUL, no errors. Functions `node --test`:
+  **271/271**. Opengrep 7 rules / 577 files → 0 findings; gitleaks tree (19.64 MB) and
+  history (231 commits) → 0 leaks; Trivy app lockfile 45 HIGH/CRITICAL, every entry on the
+  build/test-tooling classpaths (runtime bcprov 1.85.2 is above every fixed version); Trivy
+  functions lockfile 0 HIGH/CRITICAL.
+- v45 installed `install -r` on the X6532 (02:16 EAT, data preserved) and the API-37
+  emulator; update dialog rendered, app runs, no FATAL/VaultLocked in the device ring.
+- **Not published** per the owner's explicit gate: no GitHub release, no policy artifact.
+- Honest limits: live E2E of a delivered event on v45 needs the partner awake (partner
+  delivery legs ride the next awake window); Crashlytics has no read API and was not
+  consultable from here — the server rails (Cloud Logging) were checked instead.
