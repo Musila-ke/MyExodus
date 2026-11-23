@@ -1230,6 +1230,7 @@ object AccountabilityModule {
                             PartnerNotifications.notifyRuleChanged(
                                 context, pairId, displayNameOf(enrollment), change,
                                 event.ruleIdentity, event.eventId,
+                                occurredAtMs = event.occurredAtMinute * 60_000L,
                             )
                         }.onSuccess {
                             if (traced) deliveryTrace.record(pairId, event.eventId, "stage=notify notify=posted")

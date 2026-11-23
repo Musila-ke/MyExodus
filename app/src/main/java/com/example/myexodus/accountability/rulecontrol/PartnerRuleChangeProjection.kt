@@ -39,6 +39,8 @@ class PartnerRuleChangeProjection(
         change: RuleChange,
         identity: RuleIdentity?,
         eventKey: String,
+        /** The wire's semantic occurrence instant (`occurredAtMinute`), for the delayed marker. */
+        occurredAtMs: Long,
     ) -> Unit,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
@@ -93,7 +95,10 @@ class PartnerRuleChangeProjection(
         // A failed post must not stall the mailbox watermark: the feed row is the source of
         // truth and a retry would find the insert above already stored.
         runCatching {
-            notify(pairId, displayNameOf(enrollment), decoded.change, decoded.identity, eventId)
+            notify(
+                pairId, displayNameOf(enrollment), decoded.change, decoded.identity, eventId,
+                decoded.occurredAtMinute * 60_000L,
+            )
         }.onFailure { Log.w(TAG, "rule change notification failed pairId=$pairId", it) }
     }
 

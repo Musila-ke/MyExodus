@@ -946,6 +946,65 @@ class PartnerNotificationsTest {
         )
     }
 
+    /** Owner report 2026-11-23: a block queued on the partner's offline phone arrived two
+     *  hours later reading like a fresh event. A visibly delayed attempt states the wire's
+     *  occurrence instant; a prompt one keeps the short body. */
+    @Test
+    fun delayedAttempt_statesWhenItHappened() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val body = context.getString(R.string.partner_activity_blocked_body, "Instagram")
+        val attempt = payload(
+            EventPayload.TYPE_ACTIVITY, text = "blocked:com.instagram.android", appLabel = "Instagram",
+        )
+
+        val twoHoursAgo = System.currentTimeMillis() - 2 * 60 * 60_000L
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME, attempt, eventKey = "e1", occurredAtMs = twoHoursAgo,
+        )
+        assertEquals(
+            context.getString(
+                R.string.partner_event_time_suffix,
+                body,
+                DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(twoHoursAgo)),
+            ),
+            manager.activeNotifications.single().notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+
+        PartnerNotifications.notifyPartnerEvent(
+            context, PAIR_ID, PARTNER_NAME, attempt, eventKey = "e2",
+            occurredAtMs = System.currentTimeMillis() - 60_000L,
+        )
+        assertEquals(
+            "a prompt delivery keeps the short copy",
+            body,
+            manager.activeNotifications.first {
+                it.tag == PartnerNotifications.partnerTag("event", "$PAIR_ID/e2")
+            }.notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
+    /** Owner report 2026-11-23: the delayed marker applies to rule changes too — the wire's
+     *  semantic `occurredAtMinute` is the only honest time to state. */
+    @Test
+    fun delayedRuleChange_statesWhenItHappened() {
+        shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        val threeHoursAgo = System.currentTimeMillis() - 3 * 60 * 60_000L
+
+        PartnerNotifications.notifyRuleChanged(
+            context, PAIR_ID, PARTNER_NAME, RuleChange.DISABLED, null,
+            eventKey = "evt-whatsapp", occurredAtMs = threeHoursAgo,
+        )
+
+        assertEquals(
+            context.getString(
+                R.string.partner_event_time_suffix,
+                context.getString(R.string.partner_rule_event_disabled),
+                DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(threeHoursAgo)),
+            ),
+            manager.activeNotifications.single().notification.extras.getString(Notification.EXTRA_TEXT),
+        )
+    }
+
     @Test
     fun overrideAttempt_namesTheOverride() {
         shadowOf(context as Application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)

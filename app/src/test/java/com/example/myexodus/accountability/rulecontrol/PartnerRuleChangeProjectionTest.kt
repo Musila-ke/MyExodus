@@ -89,7 +89,14 @@ class PartnerRuleChangeProjectionTest {
         assertEquals(nowMs, row.receivedAtMs)
         assertEquals(nowMs + PartnerEventJournal.RETENTION_MILLIS, row.expiresAtMs)
         assertEquals(
-            listOf(listOf("pair-1", "Alex", RuleChange.ASSIGNED, IDENTITY, document.eventId)),
+            listOf(
+                listOf(
+                    "pair-1", "Alex", RuleChange.ASSIGNED, IDENTITY, document.eventId,
+                    // Owner report 2026-11-23: the post hears the wire's occurrence instant so
+                    // a queued change can state when it actually happened.
+                    MINUTE * 60_000L,
+                ),
+            ),
             notifications,
         )
     }
@@ -134,7 +141,12 @@ class PartnerRuleChangeProjectionTest {
             runBlocking { locked.onDelivered(document, payload(RuleChange.UPDATED)) }
         }
         assertEquals(
-            listOf(listOf("pair-1", "Alex", RuleChange.UPDATED, IDENTITY, document.eventId)),
+            listOf(
+                listOf(
+                    "pair-1", "Alex", RuleChange.UPDATED, IDENTITY, document.eventId,
+                    MINUTE * 60_000L,
+                ),
+            ),
             notifications,
         )
 
@@ -153,8 +165,8 @@ class PartnerRuleChangeProjectionTest {
             AppRulesStoreFactory(context, recovery, DatabaseHealthStore(), vaultAccessAllowed = vaultAccessAllowed)
         },
         enrollmentDao = db.enrollmentDao(),
-        notify = { pairId, partnerName, change, identity, eventKey ->
-            notifications += listOf(pairId, partnerName, change, identity, eventKey)
+        notify = { pairId, partnerName, change, identity, eventKey, occurredAtMs ->
+            notifications += listOf(pairId, partnerName, change, identity, eventKey, occurredAtMs)
         },
         now = { nowMs },
     )

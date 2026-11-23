@@ -122,6 +122,11 @@ class PartnerObservationProjection(
                 PartnerNotifications.notifyPartnerEvent(
                     context, pairId, displayNameOf(enrollment), payload,
                     eventKey = document.messageId,
+                    // Only BLOCK_ATTEMPT's wire instant is the act's own occurrence — every
+                    // other staged kind stamps the row when the sync pass reached it, and a
+                    // relapse/milestone body already states the true time.
+                    occurredAtMs = document.deviceOccurredAtMs
+                        ?.takeIf { document.kind == PartnerEventKind.BLOCK_ATTEMPT.wire },
                 )
             }.onFailure { Log.w(TAG, "partner event notification failed pairId=$pairId", it) }
         }

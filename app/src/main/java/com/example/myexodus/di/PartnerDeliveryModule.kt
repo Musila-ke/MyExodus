@@ -164,9 +164,9 @@ object PartnerDeliveryModule {
     ): PartnerRuleChangeProjection = PartnerRuleChangeProjection(
         storeFactory = storeFactory,
         enrollmentDao = db.enrollmentDao(),
-        notify = { pairId, partnerName, change, identity, eventKey ->
+        notify = { pairId, partnerName, change, identity, eventKey, occurredAtMs ->
             PartnerNotifications.notifyRuleChanged(
-                context, pairId, partnerName, change, identity, eventKey,
+                context, pairId, partnerName, change, identity, eventKey, occurredAtMs,
             )
         },
     )

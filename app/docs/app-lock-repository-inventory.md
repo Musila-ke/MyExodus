@@ -878,3 +878,31 @@ credential at every OS prompt; the app itself never saw credential input.
   journal value (`active_pending_first_unlock` vs `first_unlock_verified`) is inferred from
   behavior (the post-enrollment unlock rendered the migrated vault, and a later cold launch
   still presented LOCKED), not read directly.
+
+## 16. Phase 7 status — release validation and rollout (recorded 2026-11-23, plan-fidelity sweep)
+
+Plan gate (§7 Phase 7): "Tiered physical QA, four metrics, enrollment flag, direct-APK
+release | Mandatory device tiers and acceptance criteria pass; staged pilot ready."
+
+- **Tiered physical QA — NOT MET.** One physical API 30+ handset (the X6532) covers the
+  API-30+ path; the API 26-29 tier has no device on hand (§12.2 unresolved release blocker,
+  unchanged). Emulators verify state logic but cannot prove Keystore/TEE behavior (§12).
+  Owner-attended legs still open: device-credential (pattern) path at the prompt, screen-off/
+  keyguard prompt, Turn off App Lock, biometric-enrollment invalidation, OS lockout, TalkBack,
+  rotation-during-prompt (recorded in §15).
+- **Four §14 outcome metrics — NOT IMPLEMENTED.** No `app_lock_enrollment_result`,
+  `app_lock_unlock_result`, `app_lock_key_unavailable` or `app_lock_migration_result` event
+  exists anywhere in `app/src/main` (grep 2026-11-23). `telemetry/` contains only crash
+  reporting and startup tracing. The plan's "reuse existing privacy-safe crash/analytics
+  infrastructure" has no analytics rail to extend today. Treat as an open Phase 7 item:
+  implement on whatever opt-out rail the owner designates before the feature leaves pilot, or
+  record an explicit owner-approved deferral. Do not invent a new monitoring stack (§14).
+- **Enrollment gate — satisfied in a different mechanism.** New enrollment is off by default
+  (the feature is opt-in through Settings; no user is enrolled unless they enable it). The
+  plan's optional remote rollout flag (FR-14) is moot after ADR #171 retired Remote Config;
+  absence of a flag cannot bypass crypto (INV-10 holds by construction).
+- **Direct-APK release — channel live.** The signed GitHub Releases channel (ADR #171) is
+  published (`artifact-v44`/`policy-000019` at 2026-11-23); App Lock ships inside normal
+  releases; v45's build is installed but not published (owner gate).
+- **Status summary:** Phase 7 is not complete and cannot be declared complete on one API tier.
+  The physical API 26-29 tier and the four-metric decision are the two honest blockers.

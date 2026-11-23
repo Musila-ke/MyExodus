@@ -221,6 +221,12 @@ object PartnerNotifications {
         manager.deleteNotificationChannel(CHANNEL_PARTNER_NUDGES_V2)
     }
 
+    /** A delivery that took longer than this is visibly delayed, and the body states when the
+     *  act actually happened (owner report 2026-11-23: a block and a rule-off queued on the
+     *  partner's offline phone arrived ~2h later reading like fresh events). Only the wire's
+     *  occurrence instant is ever claimed — the delay's cause is not attributable from it. */
+    private const val LATE_EVENT_THRESHOLD_MS = 5 * 60_000L
+
     /** Partner-activity alert. Every post alerts — owner ruling 2026-10-31: the tray entry was
      *  updating silently for a new message/relapse because the post carried
      *  FLAG_ONLY_ALERT_ONCE, and "it is in the shade but never appeared on screen" is the
@@ -239,6 +245,9 @@ object PartnerNotifications {
         partnerName: String,
         payload: EventPayload,
         eventKey: String? = null,
+        /** The wire's occurrence instant, when this kind carries one (BLOCK_ATTEMPT); a
+         *  delayed body then states it (see [LATE_EVENT_THRESHOLD_MS]). */
+        occurredAtMs: Long? = null,
     ) {
         // Owner report 2026-11-22 (#2): these two are page bookkeeping, not acts — the feed
         // drops them (PartnerPresentation.alertOf), so the generic "new activity" tray copy
@@ -308,7 +317,7 @@ object PartnerNotifications {
             EventPayload.TYPE_ACTIVITY -> activityCopy(context, partnerName, payload)
             else -> null to null
         }
-        val richBody = rich.second
+        val richBody = rich.second?.let { withDelayedAt(context, it, occurredAtMs) }
         post(
             context,
             CHANNEL_ACCOUNTABILITY_EVENTS,
@@ -395,6 +404,9 @@ object PartnerNotifications {
         change: RuleChange,
         identity: RuleIdentity?,
         eventKey: String? = null,
+        /** The wire's semantic occurrence minute (`occurredAtMinute`), when the caller has it —
+         *  a delayed body then states it (see [LATE_EVENT_THRESHOLD_MS]). */
+        occurredAtMs: Long? = null,
     ) {
         post(
             context,
@@ -405,7 +417,7 @@ object PartnerNotifications {
             R.string.partner_event_title,
             R.string.partner_event_text,
             namedTitle = context.getString(R.string.partner_rule_event_title_named, partnerName),
-            namedText = ruleEventBody(context, change, identity),
+            namedText = withDelayedAt(context, ruleEventBody(context, change, identity), occurredAtMs),
             tag = eventTag(pairId, eventKey),
             // Owner ask 2026-11-02: the change is listed on Rules & blocks — land there.
             openPartnerView = VIEW_RULES,
@@ -550,6 +562,15 @@ object PartnerNotifications {
         )
         return withOccurredAt(context, "$label · $reached", state.eventOccurredAtMs)
     }
+
+    /** States the wire's occurrence instant only when the delivery is visibly late — a fresh
+     *  event keeps the short body. The delay's cause (sender queue vs this phone offline) is
+     *  never claimed: the wire cannot prove either. */
+    private fun withDelayedAt(context: Context, body: String, occurredAtMs: Long?): String =
+        occurredAtMs
+            ?.takeIf { System.currentTimeMillis() - it >= LATE_EVENT_THRESHOLD_MS }
+            ?.let { withOccurredAt(context, body, it) }
+            ?: body
 
     private fun withOccurredAt(context: Context, body: String, occurredAtMs: Long): String {
         val at = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
