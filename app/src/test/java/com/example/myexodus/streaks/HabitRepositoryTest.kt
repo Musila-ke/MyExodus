@@ -58,6 +58,7 @@ class HabitRepositoryTest {
 
     private var now = TimeReadings(tWallMillis = T0, rBootMillis = 1_000, bootCount = 7)
     private lateinit var repository: HabitRepository
+    private lateinit var cache: PartnerStreakCrossingCache
     private val telemetry = mutableListOf<Triple<String, String, String?>>()
 
     @Before
@@ -73,12 +74,14 @@ class HabitRepositoryTest {
         anomalyFile = tmp.newFile("streak-anomalies.log")
         telemetry.clear()
 
+        cache = PartnerStreakCrossingCache(context)
         repository = HabitRepository(
             storeFactory = factory,
             anomalyLog = StreakAnomalyLog(anomalyFile),
             readings = { now },
             scheduler = MilestoneScheduler(context, factory, readings = { now }),
             featureTelemetry = { event, outcome, reason -> telemetry += Triple(event, outcome, reason) },
+            crossingCache = cache,
         )
     }
 
@@ -691,6 +694,112 @@ class HabitRepositoryTest {
         now = TimeReadings(tWallMillis = T0 + StreakTimer.DAY_MS + 60_000, rBootMillis = RB0 + StreakTimer.DAY_MS + 60_000, bootCount = 7)
         repository.evaluate(habitIdOf())
         assertEquals(1, journalRows().size)
+    }
+
+    // --- Register #17 (owner-approved 2026-11-23): the non-vault crossing hint ---------------
+
+    @Test
+    fun evaluate_recordsTheNextCrossingHint_forASharedStreak() = runBlocking {
+        seedProfile()
+        onboard()
+        seedStreakConsent(habitIdOf())
+        now = TimeReadings(tWallMillis = T0 + 5_000, rBootMillis = RB0 + 5_000, bootCount = 7)
+
+        repository.evaluate(habitIdOf())
+
+        val hint = checkNotNull(cache.entry(habitIdOf()))
+        assertEquals(streakIdOf(), hint.streakId)
+        assertEquals("the count the user's own surfaces render", 1, hint.daysFree)
+        assertEquals(
+            "the next whole day of the accumulator, not of the calendar",
+            T0 + StreakTimer.DAY_MS,
+            hint.nextCrossingAtMs,
+        )
+        assertTrue("nothing is due before that instant", cache.dueHabits(T0 + 5_000).isEmpty())
+        assertEquals(listOf(habitIdOf()), cache.dueHabits(hint.nextCrossingAtMs))
+    }
+
+    @Test
+    fun evaluate_recordsNoHint_withoutASharingPair() = runBlocking {
+        seedProfile()
+        onboard()
+
+        repository.evaluate(habitIdOf())
+
+        assertNull("only counts partners may receive are cached", cache.entry(habitIdOf()))
+    }
+
+    @Test
+    fun sharing_setsAndDropsTheHintWithTheConsent() = runBlocking {
+        seedProfile()
+        onboard()
+        val habitId = habitIdOf()
+
+        assertTrue(repository.setPairStreakSharing("pair-1", habitId, true, false, false))
+        assertNotNull("the rise arms the next crossing", cache.entry(habitId))
+
+        assertTrue(repository.setPairStreakSharing("pair-1", habitId, false, false, false))
+        assertNull("the fall disarms it", cache.entry(habitId))
+    }
+
+    /** The freshness pass itself: a due hint evaluates, the ordinary day-crossing guard emits
+     *  one STREAK_UPDATED through the existing journal, and the hint re-arms for the next day. */
+    @Test
+    fun evaluateDueStreaks_emitsTheCrossingAndRearmsTheHint() = runBlocking {
+        seedProfile()
+        onboard()
+        seedStreakConsent(habitIdOf())
+        repository.evaluate(habitIdOf())
+        val dueAt = checkNotNull(cache.entry(habitIdOf())).nextCrossingAtMs
+        now = TimeReadings(
+            tWallMillis = dueAt + 5_000,
+            rBootMillis = RB0 + StreakTimer.DAY_MS + 5_000,
+            bootCount = 7,
+        )
+
+        repository.evaluateDueStreaks(now.tWallMillis)
+
+        assertEquals(
+            listOf(EventPayload.TYPE_STREAK_UPDATED),
+            journalRows().map { it.kind },
+        )
+        val rearmed = checkNotNull(cache.entry(habitIdOf()))
+        assertTrue("re-armed for the next boundary", rearmed.nextCrossingAtMs > now.tWallMillis)
+    }
+
+    @Test
+    fun relapse_resetsTheHintToTheFreshStreak() = runBlocking {
+        seedProfile()
+        onboard()
+        seedStreakConsent(habitIdOf())
+        repository.evaluate(habitIdOf())
+        val ended = checkNotNull(cache.entry(habitIdOf())).streakId
+
+        now = TimeReadings(
+            tWallMillis = now.tWallMillis + 60_000,
+            rBootMillis = now.rBootMillis + 60_000,
+            bootCount = 7,
+        )
+        repository.logRelapse(habitIdOf())
+
+        val fresh = checkNotNull(cache.entry(habitIdOf()))
+        assertTrue("the ended streak's boundary must not survive", fresh.streakId != ended)
+        assertEquals(streakIdOf(), fresh.streakId)
+        assertEquals("a fresh streak is Day 1", 1, fresh.daysFree)
+        assertTrue(fresh.nextCrossingAtMs > now.tWallMillis)
+    }
+
+    @Test
+    fun deleteHabit_dropsTheHint() = runBlocking {
+        seedProfile()
+        onboard()
+        seedStreakConsent(habitIdOf())
+        repository.evaluate(habitIdOf())
+        val habitId = habitIdOf()
+
+        repository.deleteHabit(habitId)
+
+        assertNull(cache.entry(habitId))
     }
 
     @Test

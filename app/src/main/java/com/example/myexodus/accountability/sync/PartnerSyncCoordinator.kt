@@ -110,6 +110,11 @@ class PartnerSyncCoordinator(
      *  liveness probe proves the server has not accepted a beat recently, so the local window
      *  must not suppress the reply). */
     private val checkIn: suspend (Boolean) -> Unit = {},
+    /** Owner-approved freshness design (owner-issues register #17): evaluate shared streaks
+     *  whose cached next-day-crossing instant has passed, so a day crossing can reach the
+     *  partner without the app being opened. The hint is non-vault; the evaluation and its
+     *  STREAK_UPDATED emission are the ordinary ones. Runs only while paired. */
+    private val evaluateDueStreaks: suspend () -> Unit = {},
     /** §8.6 Phase 5 recipient half: pull this installation's partner mailbox and return the
      *  events opened this pass. FCM-independent by construction — the periodic pass, the wake's
      *  sync work and the foreground refresh all reach the same code, so a device that never got
@@ -255,6 +260,10 @@ class PartnerSyncCoordinator(
         }
         runCatching { checkIn(forceHeartbeat) }
             .onFailure { Log.w(TAG, "heartbeat check-in failed", it) }
+        // Register #17: a shared streak's day crossing must not wait for the app to open. The
+        // hint check is non-vault; a locked vault defers to the next foreground evaluation.
+        runCatching { evaluateDueStreaks() }
+            .onFailure { Log.w(TAG, "due-streak evaluation failed", it) }
         // §8.6: the account-scoped mailbox pull runs every pass whether or not any push ever
         // arrived — the periodic cadence IS the delivery mechanism for a device with denied
         // notifications, no token, or a killed app.

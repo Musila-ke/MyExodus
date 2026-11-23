@@ -19,7 +19,10 @@ import kotlinx.coroutines.launch
  * (achieved/sent/acknowledged) without changing anything; `streak-catchup` runs the exact
  * boot-receiver call, `MilestoneAlerter.catchUpAll()`, so the task #14 catch-up path
  * is device-testable without a real reboot (BOOT_COMPLETED is a protected broadcast the
- * shell cannot send).
+ * shell cannot send). `streak-backdate` seeds a day-crossing the register-#17 way: it adds
+ * elapsed via the production version-guarded anchor update and rewrites the shared-streak
+ * hint to past-due — the seed touches only persisted state; the periodic pass and the
+ * emission that follow are production.
  */
 @AndroidEntryPoint
 class StreaksTestReceiver : BroadcastReceiver() {
@@ -27,6 +30,8 @@ class StreaksTestReceiver : BroadcastReceiver() {
     @Inject lateinit var alerter: MilestoneAlerter
 
     @Inject lateinit var storeFactory: AppRulesStoreFactory
+
+    @Inject lateinit var crossingCache: PartnerStreakCrossingCache
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
@@ -40,6 +45,8 @@ class StreaksTestReceiver : BroadcastReceiver() {
                         readMilestones(context, "streak-catchup")
                     }
 
+                    ACTION_STREAK_BACKDATE -> backdate(context, intent)
+
                     else -> Log.w(TAG, "unknown action $action")
                 }
             } catch (t: Throwable) {
@@ -47,6 +54,48 @@ class StreaksTestReceiver : BroadcastReceiver() {
             } finally {
                 pending.finish()
             }
+        }
+    }
+
+    /** Seed half of the register-#17 device leg: the version-guarded production anchor update
+     *  adds [Intent]'s `--el backdateMs` to the accumulator, and an existing shared-streak
+     *  hint is rewritten past-due. Everything after this (periodic pass, evaluation, journal,
+     *  outbox) is the production path. */
+    private suspend fun backdate(context: Context, intent: Intent) {
+        val backdateMs = intent.getLongExtra(EXTRA_BACKDATE_MS, 0L)
+        if (backdateMs <= 0L) {
+            Log.e(TAG, "streak-backdate: missing --el backdateMs")
+            return
+        }
+        val store = storeFactory.open() ?: run {
+            Log.e(TAG, "streak-backdate: store unavailable")
+            return
+        }
+        val habitIds = intent.getStringExtra(EXTRA_HABIT)?.let { listOf(it) }
+            ?: store.recoveryStreakDao().activeHabitIds()
+        val readings = SystemStreakClock.read(context)
+        habitIds.forEach { habitId ->
+            var applied = 0
+            for (attempt in 0 until 3) {
+                val streak = store.recoveryStreakDao().getActiveStreak(habitId) ?: break
+                applied = store.recoveryStreakDao().compareAndUpdateAnchor(
+                    streakId = streak.streakId,
+                    tWallLastObserved = readings.tWallMillis,
+                    rBootLastObserved = readings.rBootMillis,
+                    bootCountLastObserved = readings.bootCount,
+                    currentStreakElapsedMs = streak.currentStreakElapsedMs + backdateMs,
+                    expectedRowVersion = streak.rowVersion,
+                )
+                if (applied == 1) break
+            }
+            crossingCache.entry(habitId)?.let {
+                crossingCache.record(it.copy(nextCrossingAtMs = readings.tWallMillis - 1_000L))
+            }
+            Log.i(
+                TAG,
+                "streak-backdate: habit=${habitId.take(8)} backdatedMs=$backdateMs applied=$applied " +
+                    "hintDueAt=${crossingCache.entry(habitId)?.nextCrossingAtMs ?: "-"}",
+            )
         }
     }
 
@@ -78,5 +127,8 @@ class StreaksTestReceiver : BroadcastReceiver() {
         private const val TAG = "MyExodusVerification"
         const val ACTION_STREAK_READ = "streak-read"
         const val ACTION_STREAK_CATCHUP = "streak-catchup"
+        const val ACTION_STREAK_BACKDATE = "streak-backdate"
+        const val EXTRA_BACKDATE_MS = "backdateMs"
+        const val EXTRA_HABIT = "habit"
     }
 }

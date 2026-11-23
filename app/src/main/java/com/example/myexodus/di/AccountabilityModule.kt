@@ -76,6 +76,7 @@ import com.example.myexodus.accountability.plan.PartnerPlanRepository
 import com.example.myexodus.accountability.serialization.PlanWire
 import com.example.myexodus.accountability.sync.PartnerSyncCoordinator
 import com.example.myexodus.accountability.sync.PartnerSyncTelemetry
+import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.accountability.sync.PushInstallationRegistrar
 import com.example.myexodus.accountability.sync.decodePublicKey
 import com.example.myexodus.notifications.NotificationAccess
@@ -895,6 +896,7 @@ object AccountabilityModule {
         sessionFence: SessionFence,
         recipientMailbox: PartnerMailboxReceiver,
         eventProducer: PartnerEventProducer,
+        habitRepository: HabitRepository,
     ): PartnerSyncCoordinator = PartnerSyncCoordinator(
         enrollmentDao = enrollmentDao,
         storeFactory = storeFactory,
@@ -936,6 +938,7 @@ object AccountabilityModule {
         pruneReachability = reachability::prune,
         consumeIdentityRotation = reachability::consumeIdentityRotation,
         checkIn = { force -> heartbeat.checkIn(force) },
+        evaluateDueStreaks = { habitRepository.evaluateDueStreaks() },
         pullPartnerEvents = { recipientMailbox.pull().delivered },
         syncAvailabilityConsent = { pairId, enabled -> dms.syncConsent(pairId, enabled) },
         fence = sessionFence,

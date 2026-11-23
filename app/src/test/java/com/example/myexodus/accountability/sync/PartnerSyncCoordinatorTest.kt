@@ -1351,6 +1351,22 @@ class PartnerSyncCoordinatorTest {
         assertEquals(listOf(true, false), forces)
     }
 
+    /** Register #17: a shared streak's day crossing must reach the partner without the app
+     *  being opened — the periodic pass evaluates whatever the non-vault hint says is due,
+     *  and only while there is a partner to tell. */
+    @Test
+    fun evaluateDueStreaks_ridesPairedPassesOnly() = runTest {
+        var evaluations = 0
+        coordinator = coordinator(warmSigner(), evaluateDueStreaks = { evaluations++ })
+
+        coordinator.syncOnce()
+        assertEquals("no partner, no freshness pass", 0, evaluations)
+
+        enroll()
+        coordinator.syncOnce()
+        assertEquals("one due check per paired pass", 1, evaluations)
+    }
+
     /**
      * Plan Step 8 (§8.10): DMS dispatch reads the AUTHORITATIVE pair document, so the local
      * availability switch must converge there — an on switch that never reaches the server
@@ -1666,6 +1682,7 @@ class PartnerSyncCoordinatorTest {
         drainThrowsFor: String? = null,
         drainGate: CompletableDeferred<Unit>? = null,
         checkIn: suspend (Boolean) -> Unit = {},
+        evaluateDueStreaks: suspend () -> Unit = {},
         syncConsent: suspend (String, Boolean) -> Boolean = { _, _ -> true },
         fence: SessionFence = SessionFence.Unfenced,
         resolveRuleLabel: (String, String) -> String = { _, target -> target },
@@ -1716,6 +1733,7 @@ class PartnerSyncCoordinatorTest {
         consumeIdentityRotation = { identityRotations += it },
         resumeUnpairs = resumeUnpairs,
         checkIn = checkIn,
+        evaluateDueStreaks = evaluateDueStreaks,
         syncAvailabilityConsent = { pId, enabled ->
             consentCalls += pId to enabled
             syncConsent(pId, enabled)

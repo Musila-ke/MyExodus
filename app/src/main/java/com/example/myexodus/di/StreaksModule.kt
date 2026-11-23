@@ -5,6 +5,7 @@ import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.streaks.HabitRepository
 import com.example.myexodus.streaks.MilestoneAlerter
 import com.example.myexodus.streaks.MilestoneScheduler
+import com.example.myexodus.streaks.PartnerStreakCrossingCache
 import com.example.myexodus.streaks.StreakAnomalyLog
 import com.example.myexodus.streaks.SystemStreakClock
 import com.example.myexodus.telemetry.CrashReporting
@@ -40,6 +41,7 @@ object StreaksModule {
         scheduler: MilestoneScheduler,
         @ApplicationContext context: Context,
         crashReporting: CrashReporting,
+        crossingCache: PartnerStreakCrossingCache,
     ): HabitRepository = HabitRepository(
         storeFactory = storeFactory,
         anomalyLog = anomalyLog,
@@ -48,6 +50,7 @@ object StreaksModule {
         featureTelemetry = { event, outcome, reason ->
             crashReporting.featureOutcome(event, outcome, reason)
         },
+        crossingCache = crossingCache,
     )
 
     @Provides @Singleton

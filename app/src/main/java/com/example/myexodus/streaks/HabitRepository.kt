@@ -118,6 +118,9 @@ class HabitRepository(
      *  telemetry-free; must never throw into a write (the AttemptRecorder contract). */
     private val featureTelemetry: (event: String, outcome: String, reason: String?) -> Unit =
         { _, _, _ -> },
+    /** Owner-approved freshness design (owner-issues register #17): non-vault next-day-crossing
+     *  hints the periodic sender pass reads. Null in unwired construction — writes then no-op. */
+    private val crossingCache: PartnerStreakCrossingCache? = null,
 ) {
 
     private val evaluationMutex = Mutex()
@@ -347,6 +350,7 @@ class HabitRepository(
                 },
             )
             publishState(state)
+            refreshCrossingHint(db, state)
             OnboardingResult.Ready(state)
         }
         // Best-effort and outside the failure boundary: the habit is already durable, so a
@@ -373,7 +377,11 @@ class HabitRepository(
                 evaluateLocked(db, habitId, forceDisplay = true)
                 db.withWriteTransaction { relapseOnce(db, habitId, backdatedRelapseAt) }
             }
-            if (written is RelapseResult.RolledOver) publishState(written.state)
+            if (written is RelapseResult.RolledOver) {
+                publishState(written.state)
+                // The crossing hint belongs to the new streak's accumulator, not the ended one.
+                refreshCrossingHint(db, written.state)
+            }
             written
         }
         // Best-effort and outside the failure boundary: the write is already durable, so a
@@ -531,6 +539,9 @@ class HabitRepository(
                         targetPairId = pairId,
                     )
                 }
+            }
+            if (crossingCache != null) {
+                loadState(db, habitProgressId)?.let { refreshCrossingHint(db, it) }
             }
             true
         }
@@ -706,6 +717,7 @@ class HabitRepository(
                     db.recoverySessionDao().clearHabitLink(habitId)
                     db.habitProgressDao().delete(habit)
                 }
+                crossingCache?.remove(habitId)
                 if (!wasDisplayed) return@withLock _state.value
                 val profile = db.userProfileDao().getActive()
                 val fallback = profile?.let {
@@ -746,6 +758,20 @@ class HabitRepository(
     }
 
     /**
+     * Freshness pass for shared streaks (owner-approved design, owner-issues register #17):
+     * evaluate every habit whose cached next-day-crossing instant has passed. Wired into the
+     * existing periodic sender pass; a locked vault yields no store, so this no-ops and the
+     * next foreground evaluation still emits the missed crossing. The accumulator decides
+     * whether a day actually crossed — this loop never asserts a count, and the ordinary
+     * day-crossing guard keeps it to one STREAK_UPDATED per day.
+     */
+    suspend fun evaluateDueStreaks(nowMs: Long = System.currentTimeMillis()) {
+        for (habitId in crossingCache?.dueHabits(nowMs).orEmpty()) {
+            evaluate(habitId)
+        }
+    }
+
+    /**
      * §8 Step 4 splash-card dismissal. Keyed by (habit, day) and resolved to the active
      * streak inside the transaction — a dismissal that races a rollover acks the new streak's
      * same-day row, which the DAO guard (`achieved_at IS NOT NULL`) leaves untouched.
@@ -780,6 +806,10 @@ class HabitRepository(
                 ) {
                     publishState(outcome.state)
                 }
+                // A hint for a habit/streak that no longer exists would otherwise evaluate
+                // every pass forever; removal is the self-heal (delete/unpair paths also do it).
+                outcome.state?.let { refreshCrossingHint(db, it) }
+                    ?: crossingCache?.remove(habitId)
                 return outcome.state
             }
         }
@@ -985,6 +1015,32 @@ class HabitRepository(
             severity = severity,
             withdrawalWeeks = WithdrawalCurve.weeks(habit.habitDurationYears, severity),
             milestones = db.milestoneEventDao().getForStreak(streak.streakId),
+        )
+    }
+
+    /**
+     * Register [state]'s next whole-day instant for the periodic sender pass — only while some
+     * pair shares the streak (the same consent the emission itself needs). The instant comes
+     * from the accumulator's own clock plus the wall time of this write, so a backdated start
+     * date never mints or shifts a crossing (§6.2).
+     */
+    private suspend fun refreshCrossingHint(db: AppRulesStore, state: HabitState) {
+        val cache = crossingCache ?: return
+        val shared = db.pairSharingDao().streakAll()
+            .any { it.habitProgressId == state.habitId && it.shareStreak }
+        if (!shared) {
+            cache.remove(state.habitId)
+            return
+        }
+        val rawDay = state.currentStreakElapsedMs / StreakTimer.DAY_MS
+        val remaining = (rawDay + 1) * StreakTimer.DAY_MS - state.currentStreakElapsedMs
+        cache.record(
+            PartnerStreakCrossingCache.Entry(
+                habitId = state.habitId,
+                streakId = state.streakId,
+                daysFree = state.currentDay,
+                nextCrossingAtMs = readings().tWallMillis + remaining,
+            ),
         )
     }
 
