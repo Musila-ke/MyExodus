@@ -353,9 +353,17 @@ curl -s -H "Authorization: Bearer $TOKEN" -H "x-goog-user-project: myexodus-5380
 
 Adjust the filter to the report: `jsonPayload.message=~"rejected"` for callable rejections,
 `resource.labels.service_name="sendNudge"` to scope one function, or
-`timestamp>="2026-11-13T17:00:00Z"` for the report's time window. `firebase functions:log`
-currently fails against this project ("Failed to retrieve log entries from Google Cloud"); the
-REST call above is the working path (verified 2026-11-13).
+`timestamp>="2026-11-13T17:00:00Z"` for the report's time window.
+
+`firebase functions:log` works again as of firebase-tools **15.37.0** (updated 2026-11-23;
+it failed on 15.9.0 with "Failed to retrieve log entries from Google Cloud" — verified
+2026-11-23: `firebase functions:log -n 3 --project myexodus-53804` returned live
+retrydispatchsweep / partnernotifysweep / partnernotifytrigger entries). The REST call above
+remains the precise-filter path; the CLI reads through the project's Cloud Logging linkage.
+Cloud Logging free allotment: **50 GB/month per project** across Google products (official
+Firebase support answer 9748636); Functions logs export automatically; default retention
+30 days. The Firebase console card meters usage against that allotment (0.28 GiB observed
+2026-11-23). Client Crashlytics remains console-only (§2).
 
 **2. Client non-fatals.** Firebase console, project `myexodus-53804`, Crashlytics. There is no
 CLI/API for reading Crashlytics issues; use the console. Every rail in §1 and §1a groups under
