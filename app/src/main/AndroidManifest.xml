@@ -11,6 +11,10 @@
     <!-- Full-tunnel VpnService (plan §8.4): the TUN socket is created by the system and
         only readable by us; INTERNET is needed for the protect()-ed upstream sockets. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- ADR #318: the DNS sinkhole reads the active non-VPN network's resolvers as its
+        fallback upstream (ConnectivityManager.getAllNetworks). Normal permission, no prompt.
+        A library also contributes it; declared explicitly because the engine now depends on it. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Normal permission (no runtime prompt): queried by BiometricManager.canAuthenticate
         (§8.2 enrollment polling); declared up-front per the platform contract. -->

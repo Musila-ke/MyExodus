@@ -39,9 +39,16 @@ object DnsMessages {
     }
 
     /** NXDOMAIN response: header + verbatim question echo; QR set, RD echoed, RCODE=3. */
-    fun buildNxDomain(query: Query, packet: ByteArray, offset: Int): ByteArray {
+    fun buildNxDomain(query: Query, packet: ByteArray, offset: Int): ByteArray =
+        buildError(query, packet, offset, 0x0003)
+
+    /** SERVFAIL response (RCODE=2): every upstream attempt went unanswered — fail fast. */
+    fun buildServFail(query: Query, packet: ByteArray, offset: Int): ByteArray =
+        buildError(query, packet, offset, 0x0002)
+
+    private fun buildError(query: Query, packet: ByteArray, offset: Int, rcode: Int): ByteArray {
         val questionLen = query.questionEnd - (offset + 12)
-        val flags = 0x8000 or (query.flags and 0x0100) or 0x0003
+        val flags = 0x8000 or (query.flags and 0x0100) or rcode
         val buf = ByteBuffer.allocate(12 + questionLen)
         buf.putShort(query.id.toShort())
         buf.putShort(flags.toShort())

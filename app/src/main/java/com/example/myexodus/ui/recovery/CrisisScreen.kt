@@ -132,8 +132,8 @@ fun CrisisScreen(
             ?.let { section to it }
     }
     val online = remember {
-        // ACCESS_NETWORK_STATE is contributed by a library, not declared here; never let the
-        // probe take down the one screen that has to open instantly. Unknown reads as online.
+        // Never let this probe take down the one screen that has to open instantly.
+        // Unknown reads as online.
         runCatching {
             val manager = context.getSystemService(ConnectivityManager::class.java)
                 ?: return@runCatching true

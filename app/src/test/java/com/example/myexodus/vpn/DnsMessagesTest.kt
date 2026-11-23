@@ -59,6 +59,21 @@ class DnsMessagesTest {
     }
 
     @Test
+    fun buildServFail_echoesQuestionWithRcode2() {
+        val packet = DnsMessages.buildQuery("example.com", 0xCAFE)
+        val query = DnsMessages.parseQuery(packet, 0)!!
+        val reply = DnsMessages.buildServFail(query, packet, 0)
+        assertEquals(packet.size, reply.size)
+        assertTrue("QR must be set", DnsMessages.isReply(reply, 0))
+        assertTrue("RD must be echoed", readRd(reply))
+        assertEquals(2, DnsMessages.rcode(reply, 0))
+        assertEquals(1, readShortAt(reply, 4)) // QDCOUNT echoes the question
+        assertEquals(0, DnsMessages.answerCount(reply, 0))
+        assertTrue("question section must be verbatim", packet.copyOfRange(12, packet.size).contentEquals(reply.copyOfRange(12, reply.size)))
+        assertEquals(0xCAFE, readShortAt(reply, 0))
+    }
+
+    @Test
     fun blocklist_suffixMatching() {
         // The spike's blocked targets, matched via the engine matcher (the allowed test
         // target example.com is deliberately not in the set).

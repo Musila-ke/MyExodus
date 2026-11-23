@@ -5,6 +5,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -38,6 +40,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
@@ -73,7 +76,8 @@ import kotlinx.coroutines.launch
  *    by the kernel and never traverses the TUN — and a local port-53 listener is
  *    EACCES on OEM builds with ip_unprivileged_port_start > 0 (XOS sets 1024).
  *  - UDP/53: blocked qnames answered locally with NXDOMAIN; all other queries forwarded to
- *    a real upstream resolver over protect()-ed sockets; replies re-addressed and keyed by
+ *    upstream resolvers over protect()-ed sockets with network-DNS fallback, bounded retry
+ *    and a local SERVFAIL on exhaustion (ADR #318); replies re-addressed and keyed by
  *    transaction id.
  *  - Everything else (all non-53 traffic, including TCP) is forwarded byte-for-byte over
  *    protect()-ed sockets (transparent TCP relay with per-flow workers) so the device's
@@ -119,6 +123,12 @@ class DnsSinkholeVpnService : VpnService() {
         const val UPSTREAM_DNS_V6 = "2001:4860:4860::8888"
         const val FLOW_IDLE_SWEEP_MS = 300_000L
 
+        /** Retry-watchdog tick; the per-query cadence is [DnsUpstreamPolicy.RETRY_INTERVAL_MS]. */
+        const val DNS_RETRY_TICK_MS = 250L
+
+        /** Network-DNS fallback cache: DNS bursts must not repeat binder round-trips per query. */
+        const val NETWORK_DNS_TTL_MS = 15_000L
+
         /** Bounded upstream reads: an idle flow still gets its hole-repair timer run. */
         const val RELAY_READ_TIMEOUT_MS = 1_000
 
@@ -152,6 +162,16 @@ class DnsSinkholeVpnService : VpnService() {
     private val flowOwners by lazy { FlowOwnerClassifier(this) }
     private val pendingDns = ConcurrentHashMap<String, PendingDns>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /** Set when a query exhausted every upstream candidate; cleared by the next answer (ADR #318). */
+    @Volatile private var upstreamDown4 = false
+    @Volatile private var upstreamDown6 = false
+
+    private data class NetworkDns(val servers: List<InetAddress>, val v6Available: Boolean, val atMs: Long)
+    @Volatile private var networkDnsCache: NetworkDns? = null
+    private val sinkholeResolvers by lazy {
+        setOf(InetAddress.getByName(DNS_V4), InetAddress.getByName(DNS_V6))
+    }
 
     /**
      * §4.3's two single-thread executors: `domainusage-tick` owns the ledger pass, `domainusage-db`
@@ -270,6 +290,7 @@ class DnsSinkholeVpnService : VpnService() {
             thread(name = "vpn-tun") { pump(fd) }
             thread(name = "vpn-dns4") { dnsReceiveLoop(s4, isV6 = false) }
             thread(name = "vpn-dns6") { dnsReceiveLoop(s6, isV6 = true) }
+            thread(name = "vpn-dns-retry") { dnsRetryLoop() }
             thread(name = "vpn-sweep") { sweepLoop() }
             launchDomainUsage()
             observePolicy()
@@ -327,10 +348,14 @@ class DnsSinkholeVpnService : VpnService() {
     private fun evaluateHealth() {
         if (!running) return
         val privateDnsActive = privateDnsMode.isNotEmpty() && privateDnsMode != "off" && privateDnsMode != "unknown"
+        // A dead v4 upstream is always a real outage; a dead v6 upstream only when the
+        // underlying network actually has a v6 path (v4-only networks never expect v6 DNS).
+        val upstreamHealthy = !upstreamDown4 && !(upstreamDown6 && networkDns().v6Available)
         val (newState, code) = EngineHealth.decide(
             tunUp = tunFd != null,
             dnsLoopsAlive = dnsLoop4Alive && dnsLoop6Alive,
             policyLoaded = publisher.state.value !is SnapshotState.Degraded,
+            upstreamHealthy = upstreamHealthy,
             privateDnsActive = privateDnsActive,
         )
         // Report on (state, code) change, not state alone: DEGRADED(DNS_LOOP_DOWN) must
@@ -434,18 +459,109 @@ class DnsSinkholeVpnService : VpnService() {
             Log.i(TAG, "dns shaped v${ip.version} len=${decision.length} written=${writeTun(out)}")
             return
         }
-        pendingDns["${ip.version}:${query.id}"] = PendingDns(ip.src, udp.srcPort, ip.dst)
-        forwardUpstream(ip.isV6, packet, udp.payloadOffset, udp.payloadLength, "${ip.version}:${query.id}")
+        // ADR #318: hold the query bytes + a prebuilt SERVFAIL so the retry and exhaustion
+        // paths need nothing from this packet afterwards.
+        val key = "${ip.version}:${query.id}"
+        val pending = PendingDns(
+            deviceIp = ip.src,
+            devicePort = udp.srcPort,
+            dnsIp = ip.dst,
+            isV6 = ip.isV6,
+            queryBytes = payload,
+            servFailBytes = DnsMessages.buildServFail(query, packet, udp.payloadOffset),
+        )
+        pendingDns[key] = pending
+        sendPending(pending, key)
     }
 
-    private fun forwardUpstream(isV6: Boolean, packet: ByteArray, offset: Int, length: Int, pendingKey: String) {
-        val socket = (if (isV6) dnsSocket6 else dnsSocket4) ?: return
+    /**
+     * Send (or re-send) one pending query to the candidate for the current attempt. A send
+     * failure is not fatal: the retry watchdog moves to the next candidate, and exhaustion
+     * answers SERVFAIL. The old behavior — dropping the pending entry on the first
+     * IOException — left the device to time out, which is the public-Wi-Fi defect (ADR #318).
+     */
+    private fun sendPending(pending: PendingDns, key: String) {
+        val socket = (if (pending.isV6) dnsSocket6 else dnsSocket4) ?: return
+        val upstream = DnsUpstreamPolicy.pick(candidatesFor(pending.isV6), pending.attempts - 1) ?: return
         try {
-            val upstream = InetAddress.getByName(if (isV6) UPSTREAM_DNS_V6 else UPSTREAM_DNS_V4)
-            socket.send(DatagramPacket(packet, offset, length, upstream, 53))
+            socket.send(DatagramPacket(pending.queryBytes, pending.queryBytes.size, upstream, 53))
         } catch (e: IOException) {
-            pendingDns.remove(pendingKey)
+            // Next attempt tries the next candidate; exhaustion answers SERVFAIL.
         }
+        // INV-7: family and attempt counts only — the retry trail is the field evidence that a
+        // network is blocking its primary upstream (ADR #318).
+        if (pending.attempts > 1) {
+            Log.i(TAG, "dns upstream retry v${if (pending.isV6) 6 else 4} attempt=${pending.attempts}/${DnsUpstreamPolicy.MAX_ATTEMPTS}")
+        }
+        pending.lastSentAtMs = SystemClock.elapsedRealtime()
+    }
+
+    private fun candidatesFor(isV6: Boolean): List<InetAddress> {
+        val primary = InetAddress.getByName(if (isV6) UPSTREAM_DNS_V6 else UPSTREAM_DNS_V4)
+        return DnsUpstreamPolicy.candidates(primary, networkDns().servers, isV6, sinkholeResolvers)
+    }
+
+    /**
+     * The active non-VPN network's resolvers, so a network that blocks the hardcoded upstream
+     * still resolves. While the tunnel is up, activeNetwork IS the VPN, whose LinkProperties
+     * point back at our own sinkhole — hence the TRANSPORT_VPN filter.
+     */
+    private fun networkDns(): NetworkDns {
+        val now = SystemClock.elapsedRealtime()
+        networkDnsCache?.let { if (now - it.atMs < NETWORK_DNS_TTL_MS) return it }
+        val servers = ArrayList<InetAddress>()
+        var v6Available = false
+        try {
+            val cm = getSystemService(ConnectivityManager::class.java)
+            for (network in cm.allNetworks) {
+                val caps = cm.getNetworkCapabilities(network) ?: continue
+                if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
+                val lp = cm.getLinkProperties(network) ?: continue
+                servers += lp.dnsServers
+                if (DnsUpstreamPolicy.hasGlobalV6Path(lp.linkAddresses.map { it.address })) v6Available = true
+            }
+        } catch (e: Exception) {
+            // SecurityException/an unexpected ConnectivityService failure: primary-only fallback.
+            if (BuildConfig.DEBUG) Log.w(TAG, "network dns lookup failed: ${e.javaClass.simpleName}")
+        }
+        return NetworkDns(servers, v6Available, now).also { networkDnsCache = it }
+    }
+
+    /**
+     * Bounded retransmission (ADR #318): every [DnsUpstreamPolicy.RETRY_INTERVAL_MS] an
+     * unanswered pending query advances to the next candidate — covering lost UDP and
+     * upstreams that are unreachable (send throws) or silently blocked. After
+     * [DnsUpstreamPolicy.MAX_ATTEMPTS] sends the device is answered SERVFAIL locally so it
+     * fails fast and re-queries instead of timing out.
+     */
+    private fun dnsRetryLoop() {
+        while (running) {
+            Thread.sleep(DNS_RETRY_TICK_MS)
+            val now = SystemClock.elapsedRealtime()
+            for ((key, pending) in pendingDns) {
+                if (now - pending.lastSentAtMs < DnsUpstreamPolicy.RETRY_INTERVAL_MS) continue
+                if (pending.attempts >= DnsUpstreamPolicy.MAX_ATTEMPTS) {
+                    dnsExhausted(pending, key)
+                    continue
+                }
+                pending.attempts++
+                sendPending(pending, key) // stamps lastSentAtMs
+            }
+        }
+    }
+
+    private fun dnsExhausted(pending: PendingDns, key: String) {
+        // Identity-checked: an answer that landed first already removed the entry and was
+        // delivered — failing it now would post a stray SERVFAIL and a false DEGRADED.
+        if (!pendingDns.remove(key, pending)) return
+        val reply = VpnPacket.buildUdpPacket(pending.dnsIp, pending.deviceIp, 53, pending.devicePort, pending.servFailBytes)
+        val written = writeTun(reply)
+        // INV-7: family and attempt counts only — no addresses or names.
+        Log.w(TAG, "dns upstream exhausted v${if (pending.isV6) 6 else 4} attempts=${pending.attempts} servfail-written=$written")
+        val wasDown = if (pending.isV6) upstreamDown6 else upstreamDown4
+        if (pending.isV6) upstreamDown6 = true else upstreamDown4 = true
+        if (!wasDown) evaluateHealth()
     }
 
     private fun dnsReceiveLoop(socket: DatagramSocket, isV6: Boolean) {
@@ -461,6 +577,11 @@ class DnsSinkholeVpnService : VpnService() {
                 if (dp.length < 12) continue
                 val id = VpnPacket.readShort(buf, 0) and 0xFFFF
                 val pending = pendingDns.remove("${if (isV6) 6 else 4}:$id") ?: continue
+                // An answer proves this family's upstream path works again.
+                if (if (isV6) upstreamDown6 else upstreamDown4) {
+                    if (isV6) upstreamDown6 = false else upstreamDown4 = false
+                    evaluateHealth()
+                }
                 val payload = buf.copyOf(dp.length)
                 engine.onDnsResponse(payload, payload.size) // §6.2: observe the real answer first
                 writeTun(VpnPacket.buildUdpPacket(pending.dnsIp, pending.deviceIp, 53, pending.devicePort, payload))
@@ -1031,5 +1152,16 @@ class DnsSinkholeVpnService : VpnService() {
         override fun reset() = Unit
     }
 
-    private class PendingDns(val deviceIp: ByteArray, val devicePort: Int, val dnsIp: ByteArray)
+    private class PendingDns(
+        val deviceIp: ByteArray,
+        val devicePort: Int,
+        val dnsIp: ByteArray,
+        val isV6: Boolean,
+        val queryBytes: ByteArray,
+        val servFailBytes: ByteArray,
+    ) {
+        /** Sends so far; the retry watchdog increments before each re-send. */
+        @Volatile var attempts = 1
+        @Volatile var lastSentAtMs = SystemClock.elapsedRealtime()
+    }
 }

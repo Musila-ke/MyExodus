@@ -7,7 +7,7 @@ class EngineHealthTest {
 
     @Test
     fun allGood_active() {
-        val (state, reason) = EngineHealth.decide(tunUp = true, dnsLoopsAlive = true, policyLoaded = true, privateDnsActive = false)
+        val (state, reason) = EngineHealth.decide(tunUp = true, dnsLoopsAlive = true, policyLoaded = true, upstreamHealthy = true, privateDnsActive = false)
         assertEquals(VpnEngineState.ACTIVE, state)
         assertEquals("", reason)
     }
@@ -15,7 +15,7 @@ class EngineHealthTest {
     @Test
     fun tunDown_failed() {
         // TUN setup failure dominates everything else.
-        val (state, reason) = EngineHealth.decide(tunUp = false, dnsLoopsAlive = true, policyLoaded = true, privateDnsActive = true)
+        val (state, reason) = EngineHealth.decide(tunUp = false, dnsLoopsAlive = true, policyLoaded = true, upstreamHealthy = true, privateDnsActive = true)
         assertEquals(VpnEngineState.FAILED, state)
         assertEquals(EngineHealth.FAILED_TUN_SETUP, reason)
     }
@@ -23,14 +23,30 @@ class EngineHealthTest {
     @Test
     fun policyNotLoaded_degradedEvenWhenTunUp() {
         // The §8.4 core: "VPN interface up" != "filtering functioning".
-        val (state, reason) = EngineHealth.decide(tunUp = true, dnsLoopsAlive = true, policyLoaded = false, privateDnsActive = false)
+        val (state, reason) = EngineHealth.decide(tunUp = true, dnsLoopsAlive = true, policyLoaded = false, upstreamHealthy = true, privateDnsActive = false)
         assertEquals(VpnEngineState.DEGRADED, state)
         assertEquals(EngineHealth.FAILED_POLICY_LOAD, reason)
     }
 
     @Test
     fun dnsLoopDown_degraded() {
-        val (state, reason) = EngineHealth.decide(tunUp = true, dnsLoopsAlive = false, policyLoaded = true, privateDnsActive = false)
+        val (state, reason) = EngineHealth.decide(tunUp = true, dnsLoopsAlive = false, policyLoaded = true, upstreamHealthy = true, privateDnsActive = false)
+        assertEquals(VpnEngineState.DEGRADED, state)
+        assertEquals(EngineHealth.DNS_LOOP_DOWN, reason)
+    }
+
+    @Test
+    fun upstreamUnreachable_degraded() {
+        // ADR #318: tunnel and loops up, every upstream candidate exhausted — resolution is
+        // broken even though "VPN interface up" holds.
+        val (state, reason) = EngineHealth.decide(tunUp = true, dnsLoopsAlive = true, policyLoaded = true, upstreamHealthy = false, privateDnsActive = false)
+        assertEquals(VpnEngineState.DEGRADED, state)
+        assertEquals(EngineHealth.DNS_UPSTREAM_UNREACHABLE, reason)
+    }
+
+    @Test
+    fun dnsLoopDownBeatsUpstreamUnreachable() {
+        val (state, reason) = EngineHealth.decide(tunUp = true, dnsLoopsAlive = false, policyLoaded = true, upstreamHealthy = false, privateDnsActive = false)
         assertEquals(VpnEngineState.DEGRADED, state)
         assertEquals(EngineHealth.DNS_LOOP_DOWN, reason)
     }
@@ -38,14 +54,14 @@ class EngineHealthTest {
     @Test
     fun privateDnsActive_degraded() {
         // The disclosed blocking gap (plan §6/§8.4): never ACTIVE while DoT can bypass.
-        val (state, reason) = EngineHealth.decide(tunUp = true, dnsLoopsAlive = true, policyLoaded = true, privateDnsActive = true)
+        val (state, reason) = EngineHealth.decide(tunUp = true, dnsLoopsAlive = true, policyLoaded = true, upstreamHealthy = true, privateDnsActive = true)
         assertEquals(VpnEngineState.DEGRADED, state)
         assertEquals(EngineHealth.PRIVATE_DNS_ACTIVE, reason)
     }
 
     @Test
     fun policyFailureBeatsPrivateDnsGap() {
-        val (state, reason) = EngineHealth.decide(tunUp = true, dnsLoopsAlive = true, policyLoaded = false, privateDnsActive = true)
+        val (state, reason) = EngineHealth.decide(tunUp = true, dnsLoopsAlive = true, policyLoaded = false, upstreamHealthy = true, privateDnsActive = true)
         assertEquals(VpnEngineState.DEGRADED, state)
         assertEquals(EngineHealth.FAILED_POLICY_LOAD, reason)
     }
