@@ -175,6 +175,30 @@ artifacts are signed with the release identity (certificate SHA-256
   channel-verified artifact was installed with `adb install -r` instead. Root cause was
   not established and is recorded as observed, not explained.
 
+- `artifact-v46` (`app-release.apk`, 39,802,474 bytes, SHA-256
+  `0e0bdde1b33305381c7dabc4b906c83f3d74e9d2c396d5ecbefad1162c4af624`), the 1.1.44 build.
+  Carries the v45 owner-issue sweep (partner notifications post before the App Lock vault
+  with per-event tray keys, rule enable/disable and batched verbs end-to-end, mailbox
+  occurrence instants, Recovery vault-lock crash guard, UI polish, ADR #318 VPN DNS fixes,
+  ADR #319 non-vault streak-crossing cache) and the v46 changes (interrupted-pairing
+  recovery, Firebase Analytics wired with advertising-ID permissions removed, the exact
+  rule-expiry instant). versionCode 45 was built and verified on-device but never published;
+  the channel goes 44 to 46.
+- `policy-000020`: burned before any device could use it — the envelope asset was misnamed
+  `v46-manifest.json`, so `/releases/latest/download/update-manifest.json` 404ed for about
+  a minute; release immutability left the tag unrepairable and `policy-000021` superseded it.
+  The §11 pitfall stands: the policy asset must be named exactly `update-manifest.json`.
+- `policy-000021`, the latest release: signed `OFFER` of versionCode 46 (`1.1.44`) at 100
+  percent, cohort salt `d6b196d2e8388e2b1fec5ff237b33a67`. Anonymous latest manifest SHA-256
+  `41834ba5f2362b3b39083d399f3dc091641b98eda3966be13b951ee5e39a7e45`, byte-identical to the
+  locally signed envelope (decoded: sequence 21, OFFER, 1.1.44/46, 100%); the version-pinned
+  APK downloaded anonymously with the exact size and digest. On the X6532 (already running
+  1.1.44 by direct `install -r`), Settings → Updates → Check again performed a live check
+  against this policy and projected "You're on version 1.1.44, the latest version" with
+  "Last verified update check: 0 minutes ago". The in-app replacement leg itself was not
+  exercised (the device already ran the target), and the X6532C was unreachable — BLOCKED,
+  last recorded 1.1.41/v43.
+
 The rollout goes straight to 100 percent because the tester base is the owner and one partner:
 the 5 to 25 to 100 progression has not been rehearsed and is not claimed.
 
@@ -207,9 +231,9 @@ the pairing and rules survived. The in-app installer path also left
 `ACCESS_RESTRICTED_SETTINGS` at `ignore` on the updated package (see the restricted-settings
 note in `device-evidence-2026-11-18-partner-pairing.md`).
 
-Publisher state: highest policy sequence 19, highest versionCode 44. Tags are immutable, so
-`policy-000005` (an early test publication) stays burned and every new policy needs a higher
-sequence.
+Publisher state: highest policy sequence 21, highest versionCode 46. Tags are immutable, so
+`policy-000005` (an early test publication) and `policy-000020` (misnamed envelope asset) stay
+burned and every new policy needs a higher sequence.
 
 ## 2. Trust chain
 
@@ -984,6 +1008,32 @@ v31, live channel, 2026-11-13):**
 - The version-pinned APK URL downloaded anonymously with the exact size and signed digest.
 - The X6532 already ran 1.1.42 by direct install at publication, so an in-app replacement
   *by* 1.1.42 was not exercised.
+
+**PASSED (publication of v46, 2026-11-24):**
+
+- `:app:assembleRelease` built `versionCode=46`, `versionName=1.1.44`, `minSdk 26`,
+  `targetSdk 36`, 39,802,474 bytes, SHA-256
+  `0e0bdde1b33305381c7dabc4b906c83f3d74e9d2c396d5ecbefad1162c4af624`, signed by the release
+  identity (`apksigner verify --print-certs`, certificate SHA-256 `8f881880…854b`).
+- `artifact-v46` was published as an immutable prerelease with `app-release.apk`; the GitHub
+  asset digest equals the local SHA-256.
+- The first policy publication (`policy-000020`) carried its envelope under the wrong asset
+  name and was superseded within the same session; `policy-000021` (sequence 21,
+  versionCode 46, rollout 100, cohort salt `d6b196d2e8388e2b1fec5ff237b33a67`) was signed
+  with the production key and published as the latest non-prerelease. Publisher state after
+  publication: `{"highestPolicySequence": 21, "highestVersionCode": 46}`.
+- The live `/releases/latest/download/update-manifest.json` decoded anonymously to
+  `policySequence 21`, `OFFER`, versionCode 46 (`1.1.44`), rollout 100, the pinned `apkUrl`,
+  and the exact size and SHA-256 above; the downloaded envelope is byte-identical to the
+  locally signed one (SHA-256
+  `41834ba5f2362b3b39083d399f3dc091641b98eda3966be13b951ee5e39a7e45`). CDN lag was observed
+  again: the latest link 404ed until the new mapping took effect (~2 minutes).
+- The version-pinned APK URL downloaded anonymously with the exact size and signed digest.
+- On the X6532, Settings → Updates → Check again ran a live check against this policy and
+  showed "You're on version 1.1.44, the latest version" with "0 minutes ago"; the device
+  already ran 1.1.44 by direct install, so an in-app replacement *by* 1.1.44 was not
+  exercised. The X6532C was unreachable (BLOCKED).
+- `UpdatePolicyTest` was re-run against the shipping tree: passed.
 
 **BLOCKED (owner-gated or hardware):**
 
