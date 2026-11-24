@@ -82,7 +82,13 @@ class PairingFlow(
         /** Null session id when the failure precedes the token read (typed-code entry). */
         data class TokenExpired(val sessionId: String?) : Outcome
         data class TokenAlreadyUsed(val sessionId: String?) : Outcome
-        data class Rejected(val reason: String) : Outcome
+        data class Rejected(
+            val reason: String,
+            /** Row 19: set only when the server holds an active pair with no local enrollment
+             *  to end — the join screen may then offer the explicit terminate-and-continue
+             *  action. Null keeps every other refusal strict. */
+            val recoverablePairId: String? = null,
+        ) : Outcome
     }
 
     /** Initiator step 1 (§10 step 1): token generated + registered, QR content ready to show. */
@@ -356,6 +362,11 @@ class PairingFlow(
             is JoinPreparationResult.Failed -> prepared.outcome
         }
 
+    /** Row 19 recovery: ends the server pair this device no longer holds locally. The callable
+     *  is member-only and idempotent; false means not acknowledged (transport/ambiguous) — the
+     *  caller may simply try again. */
+    suspend fun terminateActivePair(pairId: String): Boolean = exchange.terminatePair(pairId)
+
     /**
      * Partner half, phase 1: decode the QR, read the initiator's material from the token
      * document, verify its hardware identity, and derive the SAS — no signature, no write.
@@ -433,7 +444,14 @@ class PairingFlow(
         // is a member of it, so the state is readable here. The token is deliberately NOT
         // deleted: the inviter may have meant it for someone else.
         if (exchange.existingActivePair(myUid, initiatorUid)) {
-            return JoinPreparationResult.Failed(Outcome.Rejected("PAIRING_ACTIVE"))
+            // Row 19: an interrupted End-partnership can leave the server pair active with the
+            // local enrollment already gone — no UI path exists to end it. Offer the recovery
+            // action only in that state; with local material present the refusal stays strict.
+            val pairId = EnrollmentTranscript.durablePairIdOf(myUid, initiatorUid)
+            val recoverable = enrollmentDao.getByPairId(pairId) == null
+            return JoinPreparationResult.Failed(
+                Outcome.Rejected("PAIRING_ACTIVE", recoverablePairId = pairId.takeIf { recoverable }),
+            )
         }
         // The initiator's enrollment payload returns from the token document — the QR
         // cannot carry it (attestation chains overflow QR capacity, 2953 B ceiling).

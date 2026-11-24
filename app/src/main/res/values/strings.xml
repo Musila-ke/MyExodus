@@ -544,7 +544,7 @@
     <string name="editor_days_weekends">Weekends</string>
     <string name="editor_same_time_error">Start and end time can’t be the same. Pick a different end time.</string>
     <string name="editor_ends">Ends</string>
-    <string name="editor_ends_note">The rule switches off by itself once this date has passed.</string>
+    <string name="editor_ends_note">The rule switches off by itself at the end of this day.</string>
     <string name="editor_ends_too_soon">This block ends before it can take effect, so it would never block anything. Move the end date later, or change the days or schedule.</string>
     <string name="editor_partner_title">Accountability partner</string>
     <string name="editor_partner_hint">They see changes to this rule and any attempts it blocks.</string>
@@ -1519,6 +1519,11 @@
     <string name="partner_ceremony_failed_body">The setup stopped before the partnership was created. Close this and start a fresh pairing from scratch on both phones.</string>
     <string name="partner_ceremony_failed_active_title">Already paired</string>
     <string name="partner_ceremony_failed_active_body">You already have an active partnership with this partner. Unpair the existing partnership first, then pair again.</string>
+    <string name="partner_ceremony_active_recovery_body">This phone no longer holds its pairing details, but an active partnership with this person still exists on the server. End the existing partnership to pair again with this code.</string>
+    <string name="partner_ceremony_active_recovery_action">End partnership and continue</string>
+    <string name="partner_ceremony_active_recovery_confirm_title">End the existing partnership?</string>
+    <string name="partner_ceremony_active_recovery_confirm_body">This ends the active partnership for both of you. The invitation code stays valid, so pairing continues right after.</string>
+    <string name="partner_ceremony_active_recovery_confirm_action">End partnership</string>
     <string name="partner_ceremony_failed_stale_title">The attempts didn’t line up</string>
     <string name="partner_ceremony_failed_stale_body">The two phones were taking part in different pairing attempts. Close this and start a fresh pairing from scratch on both phones.</string>
     <string name="partner_ceremony_failed_same_device_title">Both sides came from one phone</string>

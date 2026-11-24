@@ -24,8 +24,8 @@ android {
         targetSdk = 36
         // Release 0 is the first build that carries a meaningful version: the server's
         // clientCompatibility minimum is compared against this versionCode (plan §8.10).
-        versionCode = 45
-        versionName = "1.1.43"
+        versionCode = 46
+        versionName = "1.1.44"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -210,6 +210,7 @@ dependencies {
     implementation(libs.firebase.appcheck.playintegrity)
     implementation(libs.firebase.auth)
     implementation(libs.firebase.crashlytics)
+    implementation(libs.firebase.analytics)
     implementation(libs.bcprov.jdk18on)
     implementation(libs.zxcvbn)
     implementation(libs.androidx.datastore.tink)

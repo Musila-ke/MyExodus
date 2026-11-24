@@ -50,6 +50,16 @@
         applies its own target-SDK/installer eligibility checks and may return a normal user
         prompt instead; it is never treated as guaranteed. -->
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+    <!-- ADR #13 Amendment 2026-11-24: firebase-analytics' measurement libraries merge the
+        Advertising ID permissions in. This app has no ads and never reads the ad ID; Google's
+        documented opt-out (permission removal) keeps GA4 collecting while the identifier
+        stay unreachable. -->
+    <uses-permission
+        android:name="com.google.android.gms.permission.AD_ID"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.ACCESS_ADSERVICES_AD_ID"
+        tools:node="remove" />
 
     <!-- App picker (Rules screen): needed on API 30+ for queryIntentActivities on
         launcher apps and for the app-label lookup on the picked package. -->

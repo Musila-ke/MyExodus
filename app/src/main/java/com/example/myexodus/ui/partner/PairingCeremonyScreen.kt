@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Handshake
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -329,12 +330,37 @@ fun PairingCeremonyScreen(
                     else -> {
                         // Verdicts from the prepare phase: unreadable token, failed partner
                         // verification, or a read error — mapped, with the raw reason in logcat.
-                        val reason = (prepared.outcome as? PairingFlow.Outcome.Rejected)?.reason
-                        Log.w(TAG, "join prepare rejected: $reason")
-                        val (title, body) = pairingFailureCopy(reason)
-                        fail(title, body)
+                        val rejected = prepared.outcome as? PairingFlow.Outcome.Rejected
+                        Log.w(TAG, "join prepare rejected: ${rejected?.reason}")
+                        val recoverablePairId = rejected?.recoverablePairId
+                        if (recoverablePairId != null) {
+                            // Row 19: server pair active, local pairing material gone. The
+                            // action below is the only way out of this deadlock.
+                            step = CeremonyStep.ActivePairRecovery(recoverablePairId)
+                        } else {
+                            val (title, body) = pairingFailureCopy(rejected?.reason)
+                            fail(title, body)
+                        }
                     }
                 }
+            }
+        }
+    }
+
+    /** Row 19: the user chose to end the stale server pair. On success the same code is
+     *  prepared again — the token was deliberately left joinable by the refusal. */
+    fun recoverActivePair(pairId: String) {
+        if (working) return
+        working = true
+        scope.launch(Dispatchers.IO) {
+            val terminated = runCatching { deps.flow.terminateActivePair(pairId) }
+                .onFailure { Log.w(TAG, "terminate active pair failed", it) }
+                .getOrDefault(false)
+            working = false
+            if (terminated) {
+                startJoin()
+            } else {
+                fail(R.string.partner_ceremony_offline_title, R.string.partner_ceremony_offline_body)
             }
         }
     }
@@ -390,7 +416,8 @@ fun PairingCeremonyScreen(
         BackRow(
             label = stringResource(
                 when (step) {
-                    is CeremonyStep.Failed -> R.string.partner_ceremony_back_title_failed
+                    is CeremonyStep.Failed, is CeremonyStep.ActivePairRecovery ->
+                        R.string.partner_ceremony_back_title_failed
                     is CeremonyStep.Compare -> R.string.partner_ceremony_back_title_compare
                     // Owner report 2026-10-23: after success the header still read "Invite a
                     // partner" above a card saying "You're paired". The row names the screen;
@@ -473,6 +500,12 @@ fun PairingCeremonyScreen(
                 },
                 onClose = onExit,
             )
+
+            is CeremonyStep.ActivePairRecovery -> ActivePairRecoveryTerminal(
+                working = working,
+                onRecover = { recoverActivePair(current.pairId) },
+                onClose = onExit,
+            )
         }
     }
 
@@ -520,6 +553,10 @@ private sealed interface CeremonyStep {
     data class Compare(val sas: String) : CeremonyStep
     data class Paired(val pairId: String, val partnerLabel: String?, val partnerKeyId: String) : CeremonyStep
     data class Failed(val titleRes: Int, val bodyRes: Int) : CeremonyStep
+
+    /** Row 19: a join was refused PAIRING_ACTIVE because this device lost its local pairing
+     *  material while the server pair stayed active. [pairId] is what the recovery terminates. */
+    data class ActivePairRecovery(val pairId: String) : CeremonyStep
 }
 
 private sealed interface Pending {
@@ -1010,6 +1047,74 @@ private fun FailedTerminal(title: String, body: String, onRetry: () -> Unit, onC
         TextButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.partner_ceremony_close))
         }
+    }
+}
+
+/**
+ * Row 19: the deadlock escape hatch. Its own card (not [FailedTerminal]) because the action
+ * ends an active partnership on both sides — the dialog is the human gate, the same way the
+ * SAS is the gate for the ceremony itself.
+ */
+@Composable
+private fun ActivePairRecoveryTerminal(
+    working: Boolean,
+    onRecover: () -> Unit,
+    onClose: () -> Unit,
+) {
+    var confirming by remember { mutableStateOf(false) }
+    CeremonyCard {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                Icons.Outlined.ErrorOutline,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(22.dp),
+            )
+            Text(
+                stringResource(R.string.partner_ceremony_failed_active_title),
+                style = MaterialTheme.typography.titleMedium,
+            )
+        }
+        Text(
+            stringResource(R.string.partner_ceremony_active_recovery_body),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Button(onClick = { confirming = true }, enabled = !working, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.partner_ceremony_active_recovery_action))
+        }
+        TextButton(onClick = onClose, enabled = !working, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.partner_ceremony_close))
+        }
+    }
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = { if (!working) confirming = false },
+            title = { Text(stringResource(R.string.partner_ceremony_active_recovery_confirm_title)) },
+            text = { Text(stringResource(R.string.partner_ceremony_active_recovery_confirm_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirming = false
+                        onRecover()
+                    },
+                    enabled = !working,
+                ) {
+                    Text(
+                        stringResource(R.string.partner_ceremony_active_recovery_confirm_action),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirming = false }, enabled = !working) {
+                    Text(stringResource(R.string.partner_ceremony_close))
+                }
+            },
+        )
     }
 }
 

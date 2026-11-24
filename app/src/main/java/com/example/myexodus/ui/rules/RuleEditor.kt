@@ -78,7 +78,7 @@ import com.example.myexodus.domainusage.HostNormalizer
 import com.example.myexodus.domainusage.MeteringConfig
 import com.example.myexodus.domainusage.PublicSuffixList
 import com.example.myexodus.ui.BackRow
-import com.example.myexodus.ui.formatDate
+import com.example.myexodus.ui.formatExpiry
 import com.example.myexodus.ui.DayChips
 import com.example.myexodus.ui.TimeField
 import com.example.myexodus.ui.formatDuration
@@ -983,7 +983,7 @@ internal fun EndsRow(expiresAt: Long, onChange: (Long) -> Unit) {
                 modifier = Modifier.weight(1f),
             )
             Text(
-                if (expiresAt > 0) formatDate(expiresAt) else stringResource(R.string.editor_never),
+                if (expiresAt > 0) formatExpiry(expiresAt) else stringResource(R.string.editor_never),
                 style = MaterialTheme.typography.bodyMedium,
                 color = if (expiresAt > 0) MaterialTheme.colorScheme.onSurface
                 else MaterialTheme.colorScheme.onSurfaceVariant,

@@ -106,9 +106,15 @@ class ScheduleSummaryTest {
     }
 
     @Test
-    fun expiry_isAppendedForEveryMechanism() {
-        val summary = scheduleSummary(rule(alwaysOn = true, expiresAt = utc(2026, 10, 1, 12, 0)), res)
+    fun expiry_isAppendedForEveryMechanism_withItsEndOfDayTime() {
+        // A date-only "until Oct 1" read as "ends when Oct 1 begins" (owner report
+        // 2026-11-24); the summary must name the instant enforcement actually lifts.
+        // Built at local noon so the rendered clock time is zone- and locale-independent.
+        val noon = LocalDate.of(2026, 10, 1).atTime(12, 0)
+            .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val summary = scheduleSummary(rule(alwaysOn = true, expiresAt = noon), res)
         assertTrue(summary, summary.contains("until"))
+        assertTrue("expiry carries its time: $summary", summary.contains(formatTime(12 * 60L)))
     }
 
     @Test

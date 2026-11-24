@@ -420,9 +420,13 @@ class PairingFlowTest {
         val prepared = flow(partner, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets()) { nowEpochMillis }
             .prepareJoinWithCode(PairingCode.encode(initiation.token), "uid-b")
 
+        val rejected = (prepared as PairingFlow.JoinPreparationResult.Failed).outcome
+            as PairingFlow.Outcome.Rejected
+        assertEquals("PAIRING_ACTIVE", rejected.reason)
         assertEquals(
-            PairingFlow.JoinPreparationResult.Failed(PairingFlow.Outcome.Rejected("PAIRING_ACTIVE")),
-            prepared,
+            "no local material: the join may offer the terminate-and-continue recovery (row 19)",
+            EnrollmentTranscript.durablePairIdOf("uid-a", "uid-b"),
+            rejected.recoverablePairId,
         )
         assertTrue("token left joinable for its intended partner", cloud.tokenDocs.isNotEmpty())
         assertNull(
@@ -430,6 +434,64 @@ class PairingFlowTest {
             cloud.tokenDocs.getValue(FirestoreSchema.pairingTokenDocumentId(initiation.token)).partnerResponse,
         )
     }
+
+    /** Row 19 guard: recovery is offered only when the local pairing material is actually gone.
+     *  A working local pair being re-invited must never be terminable from the join screen. */
+    @Test
+    fun typedCode_activePairWithLocalEnrollment_refusesWithoutRecovery() = runTest {
+        var nowEpochMillis = 1_700_000_000_000L
+        val cloud = FakeCloud()
+        val initiator = DeviceKeys()
+        val partner = DeviceKeys()
+        val pairId = EnrollmentTranscript.durablePairIdOf("uid-a", "uid-b")
+        cloud.pairings[pairId] = FakeCloud.PairingState().apply { status = "active" }
+        val initiation = flow(initiator, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets()) { nowEpochMillis }
+            .initiate("uid-a")
+        val dao = FakeEnrollmentDao().apply { records += localEnrollment(pairId) }
+
+        val prepared = flow(partner, cloud, testScheduler, dao, FakeSecrets()) { nowEpochMillis }
+            .prepareJoinWithCode(PairingCode.encode(initiation.token), "uid-b")
+
+        val rejected = (prepared as PairingFlow.JoinPreparationResult.Failed).outcome
+            as PairingFlow.Outcome.Rejected
+        assertEquals("PAIRING_ACTIVE", rejected.reason)
+        assertNull("local material present: strict refusal, no terminate action", rejected.recoverablePairId)
+    }
+
+    /** Row 19 end-to-end at the flow level: terminate the stale pair, then the same code
+     *  prepares normally (the refusal deliberately leaves the token joinable). */
+    @Test
+    fun typedCode_activePairRecovery_terminatesThenTheSameCodePrepares() = runTest {
+        var nowEpochMillis = 1_700_000_000_000L
+        val cloud = FakeCloud()
+        val initiator = DeviceKeys()
+        val partner = DeviceKeys()
+        val pairId = EnrollmentTranscript.durablePairIdOf("uid-a", "uid-b")
+        cloud.pairings[pairId] = FakeCloud.PairingState().apply { status = "active" }
+        val initiation = flow(initiator, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets()) { nowEpochMillis }
+            .initiate("uid-a")
+        val partnerFlow = flow(partner, cloud, testScheduler, FakeEnrollmentDao(), FakeSecrets()) { nowEpochMillis }
+        val code = PairingCode.encode(initiation.token)
+
+        val rejected = (partnerFlow.prepareJoinWithCode(code, "uid-b")
+            as PairingFlow.JoinPreparationResult.Failed).outcome as PairingFlow.Outcome.Rejected
+
+        assertTrue(partnerFlow.terminateActivePair(checkNotNull(rejected.recoverablePairId)))
+        assertNull("stale server pair ended", cloud.pairings[pairId])
+        assertTrue(
+            "the same code prepares after the stale pair is gone",
+            partnerFlow.prepareJoinWithCode(code, "uid-b") is PairingFlow.JoinPreparationResult.Ready,
+        )
+    }
+
+    private fun localEnrollment(pairId: String) = EnrollmentRecord(
+        pairId = pairId,
+        mySenderKeyId = "my-key",
+        partnerSigningKeyId = "partner-key",
+        partnerSigningPubKey = byteArrayOf(1),
+        partnerAgreementPubKey = byteArrayOf(2),
+        createdAtEpochMillis = 1L,
+    )
 
     /** A terminated record is a re-pair target (registerPairing increments the epoch) — it
      *  must not be read as an existing active partnership. */

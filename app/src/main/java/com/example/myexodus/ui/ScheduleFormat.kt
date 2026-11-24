@@ -79,7 +79,7 @@ fun scheduleSummary(rule: RestrictionRule, res: Resources): String {
     // 0 = never expires (engine semantics); Long.MAX_VALUE is the harness's "never" sentinel —
     // rendering it as a date shows year 292278994.
     if (rule.blockExpiresAt > 0 && rule.blockExpiresAt < FAR_FUTURE_EPOCH_MILLIS) {
-        parts += res.getString(R.string.schedule_until, formatDate(rule.blockExpiresAt))
+        parts += res.getString(R.string.schedule_until, formatExpiry(rule.blockExpiresAt))
     }
     return if (parts.isEmpty()) res.getString(R.string.schedule_none) else parts.joinToString(" · ")
 }
@@ -92,9 +92,11 @@ fun formatTime(minutesOfDay: Long): String =
     DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
         .format(LocalTime.ofSecondOfDay(minutesOfDay * 60))
 
-fun formatDate(epochMillis: Long): String =
-    DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)
-        .format(Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()).toLocalDate())
+/** Expiry is an end-of-day instant (RuleEditor.toLocalEndOfDayMillis); showing the date alone
+ *  read as "ends when that date begins" (owner report 2026-11-24). */
+fun formatExpiry(epochMillis: Long): String =
+    DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
+        .format(Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()))
 
 /** Day + month for dates the user just lived; a date from another year keeps its year so an
  *  old "Free since" never reads as this year's. */
