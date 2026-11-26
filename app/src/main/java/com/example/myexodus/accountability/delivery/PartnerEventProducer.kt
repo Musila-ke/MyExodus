@@ -95,6 +95,8 @@ class PartnerEventProducer(
             change = change,
             identity = identity,
             occurredAtMinute = row.occurredAtMinute,
+            schedule = row.ruleScheduleOrNull(),
+            previousSchedule = row.rulePreviousScheduleOrNull(),
         )
         return when (
             recorder.record(

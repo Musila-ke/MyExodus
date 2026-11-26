@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.R
+import com.example.myexodus.accountability.serialization.RuleSchedule
 import com.example.myexodus.data.db.entity.RestrictionRule
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -186,6 +187,90 @@ class ScheduleSummaryTest {
             "a plain pause still says Paused",
             RuleRowState(res.getString(R.string.state_paused), false),
             ruleRowState(rule(alwaysOn = true).copy(isEnabled = false), utc(2026, 9, 19, 12, 0), res),
+        )
+    }
+
+    // --- OPD #48: the partner's rule card (created summary, updated before→after) ---
+
+    private fun partnerSchedule(
+        alwaysOn: Boolean = false,
+        days: String = "1111111",
+        window: Pair<Long, Long>? = null,
+        limitMs: Long = 0L,
+        expiresAt: Long = 0L,
+    ) = RuleSchedule(
+        alwaysOn = alwaysOn, days = days,
+        windowStartMinute = window?.first, windowEndMinute = window?.second,
+        dailyLimitMs = limitMs, expiresAtMs = expiresAt,
+    )
+
+    @Test
+    fun partnerSummary_composesLikeTheOwnersOwnRow() {
+        assertEquals(res.getString(R.string.schedule_always_on), partnerSchedule(alwaysOn = true).summaryText(res))
+        assertEquals(
+            "${formatTime(5 * 60L)}–${formatTime(12 * 60L)} · 2h daily limit · weekends",
+            partnerSchedule(window = 5 * 60L to 12 * 60L, limitMs = 2 * HOUR, days = "0000011").summaryText(res),
+        )
+        assertEquals(
+            "a limit beside always-on is inert and never claimed",
+            res.getString(R.string.schedule_always_on),
+            partnerSchedule(alwaysOn = true, limitMs = 2 * HOUR).summaryText(res),
+        )
+        assertEquals(
+            res.getString(R.string.schedule_none),
+            partnerSchedule().summaryText(res),
+        )
+    }
+
+    @Test
+    fun partnerSummary_statesTheEndOnlyWhenItCanLift() {
+        val noon = LocalDate.of(2026, 10, 1).atTime(12, 0)
+            .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        assertTrue(partnerSchedule(alwaysOn = true, expiresAt = noon).summaryText(res).contains("until"))
+        assertEquals(
+            "the harness's far-future sentinel reads as never",
+            res.getString(R.string.schedule_always_on),
+            partnerSchedule(alwaysOn = true, expiresAt = 253_402_300_799_999L).summaryText(res),
+        )
+    }
+
+    @Test
+    fun changedAxes_renderOnlyTheFieldsThatChanged_withBeforeThenAfter() {
+        val before = partnerSchedule(window = 9 * 60L to 17 * 60L, days = "1111100", limitMs = 2 * HOUR)
+        val after = before.copy(days = "0000011", dailyLimitMs = 3 * HOUR)
+
+        assertEquals(
+            listOf(
+                RuleScheduleChange(res.getString(R.string.partner_rule_axis_days), "weekdays", "weekends"),
+                RuleScheduleChange(res.getString(R.string.partner_rule_axis_limit), "2h", "3h"),
+            ),
+            after.changesFrom(before, res),
+        )
+        assertTrue("an untouched schedule yields no diff lines", after.changesFrom(after, res).isEmpty())
+    }
+
+    @Test
+    fun changedAxes_nameTheBlockingMechanism_andItsEnding() {
+        val before = partnerSchedule(alwaysOn = true)
+        val noon = LocalDate.of(2026, 10, 1).atTime(12, 0)
+            .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val after = partnerSchedule(window = 22 * 60L to 7 * 60L, expiresAt = noon)
+        val window = "${formatTime(22 * 60L)}–${formatTime(7 * 60L)}"
+
+        assertEquals(
+            listOf(
+                RuleScheduleChange(
+                    res.getString(R.string.partner_rule_axis_block),
+                    res.getString(R.string.schedule_always_on),
+                    res.getString(R.string.schedule_overnight_window, window),
+                ),
+                RuleScheduleChange(
+                    res.getString(R.string.partner_rule_axis_ends),
+                    res.getString(R.string.schedule_never),
+                    formatExpiry(noon),
+                ),
+            ),
+            after.changesFrom(before, res),
         )
     }
 

@@ -12,6 +12,7 @@ import com.example.myexodus.accountability.serialization.MonitoringState
 import com.example.myexodus.accountability.serialization.OutboxAgeBucket
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleIdentity
+import com.example.myexodus.accountability.serialization.RuleSchedule
 import com.example.myexodus.accountability.serialization.RuleTargetType
 import java.util.UUID
 
@@ -60,6 +61,12 @@ data class PartnerEventJournal(
     @ColumnInfo(name = "rule_target_type") val ruleTargetType: String? = null,
     @ColumnInfo(name = "rule_item_count") val ruleItemCount: Long? = null,
     @ColumnInfo(name = "rule_batch_label") val ruleBatchLabel: String? = null,
+    /** OPD #48: the rule's schedule captured in the write transaction ([RuleSchedule.encode]),
+     *  so the partner hears how the rule blocks, not only that it changed. Null on rows queued
+     *  before the upgrade and on verbs that carry no schedule. */
+    @ColumnInfo(name = "rule_schedule") val ruleSchedule: String? = null,
+    /** UPDATED rows: the schedule before the edit, captured beside the after-snapshot. */
+    @ColumnInfo(name = "rule_previous_schedule") val rulePreviousSchedule: String? = null,
     /** RULE_CONTROL rows only: the assigned pair the envelope is routed to. */
     @ColumnInfo(name = "route_pair_id") val routePairId: String? = null,
     /** v3 MONITORING_STATUS rows only: grants held when the snapshot was taken. */
@@ -111,6 +118,16 @@ data class PartnerEventJournal(
             require(monitoringState == null && outboxAgeBucket == null) {
                 "rule journal rows carry no monitoring fields"
             }
+            ruleSchedule?.let {
+                require(RuleSchedule.decodeOrNull(it) != null) {
+                    "rule journal schedule is outside the contract"
+                }
+            }
+            rulePreviousSchedule?.let {
+                require(RuleSchedule.decodeOrNull(it) != null) {
+                    "rule journal previous schedule is outside the contract"
+                }
+            }
             if (schemaVersion >= 2) {
                 requireNotNull(ruleTargetType?.let(RuleTargetType::fromWire)) {
                     "v2 rule journal rows need a target type"
@@ -134,6 +151,9 @@ data class PartnerEventJournal(
             require(ruleId == null && ruleChange == null && routePairId == null) {
                 "block events carry no rule fields"
             }
+            require(ruleSchedule == null && rulePreviousSchedule == null) {
+                "only rule journal rows carry schedules"
+            }
         }
         if (parsed.kind != AccountabilityEventKind.MONITORING_STATUS) {
             require(capabilities == null) { "only monitoring rows carry capabilities" }
@@ -155,6 +175,13 @@ data class PartnerEventJournal(
             batchLabel = ruleBatchLabel,
         )
     }
+
+    /** The captured after-schedule; null on rows queued before OPD #48 and verbs without one. */
+    fun ruleScheduleOrNull(): RuleSchedule? = ruleSchedule?.let(RuleSchedule::decodeOrNull)
+
+    /** The captured before-schedule on UPDATED rows. */
+    fun rulePreviousScheduleOrNull(): RuleSchedule? =
+        rulePreviousSchedule?.let(RuleSchedule::decodeOrNull)
 
     companion object {
         const val RETENTION_MILLIS = 30L * 24 * 60 * 60 * 1000
@@ -197,6 +224,8 @@ data class PartnerEventJournal(
             occurredAtMinute: Long,
             createdAtMs: Long,
             identity: RuleIdentity,
+            schedule: RuleSchedule? = null,
+            previousSchedule: RuleSchedule? = null,
         ): PartnerEventJournal = PartnerEventJournal(
             eventId = eventId,
             category = AccountabilityEventCategory.RULE_CHANGED.wire,
@@ -207,6 +236,8 @@ data class PartnerEventJournal(
             ruleTargetType = identity.targetType.wire,
             ruleItemCount = identity.itemCount,
             ruleBatchLabel = identity.batchLabel,
+            ruleSchedule = schedule?.encode(),
+            rulePreviousSchedule = previousSchedule?.encode(),
             routePairId = routePairId,
             schemaVersion = AccountabilityEventWire.SCHEMA_VERSION,
             createdAtMs = createdAtMs,

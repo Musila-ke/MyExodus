@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.accountability.serialization.AccountabilityEventWire
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleIdentity
+import com.example.myexodus.accountability.serialization.RuleSchedule
 import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.data.db.ActivityLogKeyManager
 import com.example.myexodus.data.db.AppRulesStore
@@ -24,6 +25,7 @@ import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -277,6 +279,131 @@ class RuleLifecycleStressTest {
         assertEquals(RuleChange.UPDATED.wire, resumed.single().ruleChange)
     }
 
+    /**
+     * OPD #48 scenario matrix (owner bar 2026-11-26): every verb captures exactly the schedule
+     * snapshots its wire verb declares — CREATED/ASSIGNED the after-snapshot, UPDATED
+     * before→after, every unchanged verb neither — across every mechanism shape the editor
+     * stores (always-on, daytime window, overnight, limit-only, window+limit+ends, none).
+     */
+    @Test
+    fun scheduleSnapshots_followEveryVerb_forEveryMechanism() = runBlocking {
+        seedProfile()
+        var clock = BASE_MS
+        val repository = RulesRepository(factory, RulesSnapshotPublisher(context, factory), now = { clock })
+        val journalDao = factory.open()!!.partnerEventJournalDao()
+
+        // Each pair changes a distinct axis, so every UPDATED row has a real diff.
+        val shapes = listOf(
+            scheduled(true, null, null, 0, 0) to
+                scheduled(false, 22 * 60L, 7 * 60L, 0, 0, days = "0000011"),
+            scheduled(false, 9 * 60L, 17 * 60L, 0, 0, days = "1111100") to
+                scheduled(false, 9 * 60L, 17 * 60L, 0, 0, days = "0000011"),
+            scheduled(false, 22 * 60L, 7 * 60L, 0, 0) to
+                scheduled(false, 22 * 60L, 7 * 60L, HOUR, 0),
+            scheduled(false, null, null, HOUR, 0) to
+                scheduled(false, null, null, 3 * HOUR, 0),
+            scheduled(false, 9 * 60L, 17 * 60L, 2 * HOUR, EXPIRY_MS, days = "0000011") to
+                scheduled(false, 9 * 60L, 17 * 60L, 2 * HOUR, 0, days = "0000011"),
+            scheduled(false, null, null, 0, 0) to
+                scheduled(false, null, null, HOUR, 0),
+        )
+
+        shapes.forEachIndexed { index, (before, after) ->
+            val ruleId = UUID.randomUUID().toString()
+            val afterRule = scheduledRule(after, ruleId)
+
+            repository.insertRule(scheduledRule(before, ruleId).copy(assignedPairId = PAIR_A))
+            clock += STEP_MS
+            repository.updateRule(afterRule.copy(assignedPairId = PAIR_A))
+            clock += STEP_MS
+            repository.updateRule(afterRule.copy(assignedPairId = PAIR_A, isEnabled = false))
+            clock += STEP_MS
+            repository.updateRule(afterRule.copy(assignedPairId = PAIR_A))
+            clock += STEP_MS
+            repository.updateRule(afterRule)
+            clock += STEP_MS
+            repository.updateRule(afterRule.copy(assignedPairId = PAIR_A))
+            clock += STEP_MS
+            repository.deleteRule(afterRule.copy(assignedPairId = PAIR_A))
+            clock += STEP_MS
+
+            val rows = journalDao.dueRuleChangesForPair(PAIR_A, 0L, clock, LIMIT)
+                .filter { it.ruleId == ruleId }
+            assertEquals(
+                "shape $index: one row per verb, in order",
+                listOf("CREATED", "UPDATED", "DISABLED", "ENABLED", "UNASSIGNED", "ASSIGNED", "DELETED"),
+                rows.map { it.ruleChange },
+            )
+            assertEquals("shape $index CREATED states the after-schedule", before, rows[0].ruleScheduleOrNull())
+            assertNull("shape $index CREATED has no before", rows[0].rulePreviousScheduleOrNull())
+            assertEquals("shape $index UPDATED states the after-schedule", after, rows[1].ruleScheduleOrNull())
+            assertEquals("shape $index UPDATED states the before-schedule", before, rows[1].rulePreviousScheduleOrNull())
+            (2..4).forEach {
+                assertNull("shape $index ${rows[it].ruleChange} carries no schedule", rows[it].ruleScheduleOrNull())
+                assertNull("shape $index ${rows[it].ruleChange} carries no before", rows[it].rulePreviousScheduleOrNull())
+            }
+            assertEquals("shape $index ASSIGNED states the after-schedule", after, rows[5].ruleScheduleOrNull())
+            assertNull("shape $index ASSIGNED has no before", rows[5].rulePreviousScheduleOrNull())
+            assertNull("shape $index DELETED carries no schedule", rows[6].ruleScheduleOrNull())
+            assertNull("shape $index DELETED carries no before", rows[6].rulePreviousScheduleOrNull())
+        }
+    }
+
+    /**
+     * Degradation contract: a rule the schedule codec cannot represent honestly (here a
+     * malformed day mask) still journals its verb, but with no schedule — never a wrong one.
+     * A valid snapshot on either side of the edit still rides.
+     */
+    @Test
+    fun corruptScheduleFields_journalThinVerbs_andStillCarryTheValidSide() = runBlocking {
+        seedProfile()
+        var clock = BASE_MS
+        val repository = RulesRepository(factory, RulesSnapshotPublisher(context, factory), now = { clock })
+        val journalDao = factory.open()!!.partnerEventJournalDao()
+        val ruleId = UUID.randomUUID().toString()
+        val valid = scheduled(false, null, null, HOUR, 0)
+        val corrupt = scheduledRule(valid, ruleId).copy(activeDaysOfWeek = "11", assignedPairId = PAIR_A)
+
+        repository.insertRule(corrupt)
+        clock += STEP_MS
+        repository.updateRule(corrupt.copy(activeDaysOfWeek = "1111111"))
+        clock += STEP_MS
+        repository.updateRule(corrupt)
+
+        val rows = journalDao.dueRuleChangesForPair(PAIR_A, 0L, clock, LIMIT)
+            .filter { it.ruleId == ruleId }
+        assertEquals(listOf("CREATED", "UPDATED", "UPDATED"), rows.map { it.ruleChange })
+        assertNull("a corrupt rule still journals, but claims no schedule", rows[0].ruleScheduleOrNull())
+        assertNull(rows[0].rulePreviousScheduleOrNull())
+        assertEquals(valid, rows[1].ruleScheduleOrNull())
+        assertNull("the before side was corrupt", rows[1].rulePreviousScheduleOrNull())
+        assertNull("the after side was corrupt", rows[2].ruleScheduleOrNull())
+        assertEquals(valid, rows[2].rulePreviousScheduleOrNull())
+    }
+
+    private fun scheduled(
+        alwaysOn: Boolean,
+        startMinute: Long?,
+        endMinute: Long?,
+        limitMs: Long,
+        expiresAtMs: Long,
+        days: String = "1111111",
+    ) = RuleSchedule(alwaysOn, days, startMinute, endMinute, limitMs, expiresAtMs)
+
+    private fun scheduledRule(schedule: RuleSchedule, ruleId: String) = RestrictionRule(
+        ruleId = ruleId,
+        profileId = PROFILE_ID,
+        blockedPackage = "com.example.scheduled",
+        targetType = "APP",
+        isAlwaysOn = schedule.alwaysOn,
+        dailyLimitMs = schedule.dailyLimitMs,
+        timeRangeStart = schedule.windowStartMinute,
+        timeRangeEnd = schedule.windowEndMinute,
+        activeDaysOfWeek = schedule.days,
+        blockExpiresAt = schedule.expiresAtMs,
+        severityLevel = "HIGH",
+    )
+
     private fun journalRow(
         ruleId: UUID,
         pairId: String,
@@ -342,6 +469,8 @@ class RuleLifecycleStressTest {
         const val JOURNAL_ROWS = 2_000
         const val LIMIT = 100_000
         const val STEP_MS = 1_000L
+        const val HOUR = 60 * 60_000L
+        const val EXPIRY_MS = 1_800_000_000_000L
         const val DAY_MS = 24L * 60 * 60 * 1000
         const val BASE_MS = 1_760_000_000_000L
         const val NOW_MS = BASE_MS + 1_000_000L

@@ -3,6 +3,7 @@ package com.example.myexodus.ui.partner
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleIdentity
+import com.example.myexodus.accountability.serialization.RuleSchedule
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.accountability.serialization.MonitoringCapability
@@ -120,6 +121,10 @@ sealed interface PartnerAlert {
         val change: RuleChange,
         override val atEpochMillis: Long,
         val identity: RuleIdentity? = null,
+        /** OPD #48: the rule's schedule at occurrence time; null on thin/legacy rows. */
+        val schedule: RuleSchedule? = null,
+        /** UPDATED rows: the schedule before the edit, when the sender captured it. */
+        val previousSchedule: RuleSchedule? = null,
     ) : PartnerAlert
 
     /** Owner ask 2026-11-10: a grant the partner's phone lost while a rule they assigned this
@@ -182,7 +187,13 @@ fun protectionGapAlert(row: PartnerProtectionGap): PartnerAlert? =
  *  rather than rendered as a wrong one. */
 fun ruleChangeAlert(row: PartnerRuleChange): PartnerAlert? =
     RuleChange.fromWire(row.ruleChange)?.let {
-        PartnerAlert.RuleChanged(it, row.occurredAtMinute * 60_000L, row.ruleIdentityOrNull())
+        PartnerAlert.RuleChanged(
+            it,
+            row.occurredAtMinute * 60_000L,
+            row.ruleIdentityOrNull(),
+            row.ruleScheduleOrNull(),
+            row.rulePreviousScheduleOrNull(),
+        )
     }
 
 /** A stored staged attempt row as a feed entry — the same parse the legacy chain rows go

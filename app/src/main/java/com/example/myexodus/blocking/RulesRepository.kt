@@ -4,6 +4,7 @@ import android.util.Log
 import com.example.myexodus.accountability.serialization.AccountabilityEventWire
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleIdentity
+import com.example.myexodus.accountability.serialization.RuleSchedule
 import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.data.db.AppRulesStoreFactory
 import com.example.myexodus.data.db.ProtectedPackageException
@@ -13,6 +14,7 @@ import com.example.myexodus.data.db.entity.PartnerEventJournal
 import com.example.myexodus.data.db.entity.RestrictionRule
 import com.example.myexodus.data.db.entity.UserProfile
 import com.example.myexodus.data.db.entity.isExpiredAt
+import com.example.myexodus.data.db.entity.toSchedule
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
@@ -281,7 +283,11 @@ class RulesRepository(
         val journal = batchJournalRows(existing.filter { it.assignedPairId != newPair }, RuleChange.UNASSIGNED) +
             when {
                 newPair == null -> emptyList()
-                existing.all { it.assignedPairId == newPair } -> batchJournalRows(rules, RuleChange.UPDATED)
+                existing.all { it.assignedPairId == newPair } ->
+                    batchJournalRows(
+                        rules, RuleChange.UPDATED,
+                        previous = kept.mapNotNull { existingById[it.ruleId] },
+                    )
                 else -> batchJournalRows(rules, RuleChange.ASSIGNED)
             }
         dao.editBatchAndBump(removed, kept, added, db.policyVersionDao(), db.partnerEventJournalDao(), journal)
@@ -321,7 +327,14 @@ class RulesRepository(
         val minute = AccountabilityEventWire.minuteOf(atMs)
         val rows = mutableListOf<PartnerEventJournal>()
 
-        fun record(pairId: String, ruleId: String, change: RuleChange, rule: RestrictionRule) {
+        fun record(
+            pairId: String,
+            ruleId: String,
+            change: RuleChange,
+            rule: RestrictionRule,
+            schedule: RuleSchedule? = null,
+            previousSchedule: RuleSchedule? = null,
+        ) {
             // No wire identity (legacy id, pre-1970 clock) means nothing to journal — the
             // contract row would be rejected, and a broken clock must never block the write.
             if (minute < 1) return
@@ -334,26 +347,40 @@ class RulesRepository(
                 occurredAtMinute = minute,
                 createdAtMs = atMs,
                 identity = identityOf(rule),
+                schedule = schedule,
+                previousSchedule = previousSchedule,
             )
         }
 
         when {
             new == null -> if (old != null && from != null) record(from, old.ruleId, RuleChange.DELETED, old)
-            old == null -> if (to != null) record(to, new.ruleId, RuleChange.CREATED, new)
+            old == null -> if (to != null) {
+                record(to, new.ruleId, RuleChange.CREATED, new, schedule = new.toSchedule())
+            }
             from != to -> {
                 if (from != null) record(from, old.ruleId, RuleChange.UNASSIGNED, old)
-                if (to != null) record(to, new.ruleId, RuleChange.ASSIGNED, new)
+                if (to != null) {
+                    record(to, new.ruleId, RuleChange.ASSIGNED, new, schedule = new.toSchedule())
+                }
             }
-            to != null && old != new -> record(
-                to,
-                new.ruleId,
-                forcedChange ?: when {
+            to != null && old != new -> {
+                // OPD #48: only an UPDATED row describes the before→after; a pause/resume or a
+                // lapsed duration keeps the plain verb.
+                val change = forcedChange ?: when {
                     old.isEnabled && !new.isEnabled -> RuleChange.DISABLED
                     !old.isEnabled && new.isEnabled -> RuleChange.ENABLED
                     else -> RuleChange.UPDATED
-                },
-                new,
-            )
+                }
+                val describes = change == RuleChange.UPDATED
+                record(
+                    to,
+                    new.ruleId,
+                    change,
+                    new,
+                    schedule = if (describes) new.toSchedule() else null,
+                    previousSchedule = if (describes) old.toSchedule() else null,
+                )
+            }
         }
         return rows
     }
@@ -368,8 +395,12 @@ class RulesRepository(
     )
 
     /** One batch-level journal row per assigned pair — the partner sees "Social media
-     *  (12 items)", not twelve rows. */
-    private fun batchJournalRows(rules: List<RestrictionRule>, change: RuleChange): List<PartnerEventJournal> {
+     *  (12 items)", not twelve rows. [previous] is the members' before-state for an UPDATED. */
+    private fun batchJournalRows(
+        rules: List<RestrictionRule>,
+        change: RuleChange,
+        previous: List<RestrictionRule> = emptyList(),
+    ): List<PartnerEventJournal> {
         val name = rules.firstNotNullOfOrNull { it.batchName?.takeIf(String::isNotBlank) } ?: return emptyList()
         val batchId = rules.firstNotNullOfOrNull { it.batchId } ?: return emptyList()
         val atMs = now()
@@ -381,6 +412,7 @@ class RulesRepository(
             targetType = RuleTargetType.BATCH,
             itemCount = rules.size.toLong(),
         )
+        val describes = change in setOf(RuleChange.CREATED, RuleChange.ASSIGNED, RuleChange.UPDATED)
         return rules.groupBy { it.assignedPairId }.mapNotNull { (pairId, members) ->
             if (pairId == null) return@mapNotNull null
             PartnerEventJournal.forRuleChange(
@@ -391,9 +423,17 @@ class RulesRepository(
                 occurredAtMinute = minute,
                 createdAtMs = atMs,
                 identity = identity.copy(itemCount = members.size.toLong()),
+                schedule = if (describes) uniformSchedule(members) else null,
+                previousSchedule = if (change == RuleChange.UPDATED) uniformSchedule(previous) else null,
             )
         }
     }
+
+    /** shortcut: a batch row carries a schedule only when every member shares one — a mixed
+     *  batch keeps the plain verb; per-member diffs need per-member after/before pairs,
+     *  upgrade if the batch editor ever allows mixed block settings. */
+    private fun uniformSchedule(rules: List<RestrictionRule>): RuleSchedule? =
+        rules.map { it.toSchedule() }.toSet().singleOrNull()
 
     /**
      * Every rule FK-references a profile (`profile_id` is NOT NULL), but V1 ships no

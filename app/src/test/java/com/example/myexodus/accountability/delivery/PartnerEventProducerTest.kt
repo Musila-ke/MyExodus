@@ -9,6 +9,7 @@ import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.AccountabilityEventCategory
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleIdentity
+import com.example.myexodus.accountability.serialization.RuleSchedule
 import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.accountability.state.AccountabilityDatabase
 import com.example.myexodus.data.db.ActivityLogKeyManager
@@ -102,18 +103,6 @@ class PartnerEventProducerTest {
             listOf(ExistingE2eeRecipientEncryptor.recipientKeyIdOf(pairOne.partnerAgreementPubKey)),
             envelopes.map { it.recipientEncryptionKeyId },
         )
-        val envelope = envelopes.single()
-        val plaintext = EventCipher().decryptWithAad(
-            cek,
-            PartnerEventEnvelopeAad.of(
-                stored.eventId,
-                stored.installationId,
-                stored.ownerUid,
-                PartnerEventKind.RULE_CHANGE_ATTEMPT,
-                envelope.recipientEncryptionKeyId,
-            ),
-            Base64.getUrlDecoder().decode(envelope.payload),
-        )
         assertEquals(
             PartnerRuleChangePayload.Decoded(
                 ruleId = ruleId,
@@ -121,8 +110,27 @@ class PartnerEventProducerTest {
                 identity = RuleIdentity("Instagram", RuleTargetType.APP),
                 occurredAtMinute = MINUTE,
             ),
-            PartnerRuleChangePayload.decodeOrNull(plaintext),
+            decodedPayload(stored),
         )
+    }
+
+    /** OPD #48: the journal's captured schedules ride into the sealed payload, so the
+     *  partner can describe how the rule blocks and what its edit changed. */
+    @Test
+    fun ruleRowWithSchedules_carriesThemIntoTheSealedPayload() = runBlocking {
+        val after = RuleSchedule(
+            alwaysOn = false, days = "1111100", windowStartMinute = 540, windowEndMinute = 1020,
+            dailyLimitMs = 2 * 60 * 60_000L, expiresAtMs = 0,
+        )
+        val before = after.copy(alwaysOn = true, days = "0000011", windowStartMinute = null,
+            windowEndMinute = null, dailyLimitMs = 0)
+        val row = ruleRow(change = RuleChange.UPDATED, schedule = after, previousSchedule = before)
+
+        assertEquals(PartnerEventTransport.SIGNED, producer(listOf(pairOne)).transport(row))
+
+        val decoded = checkNotNull(decodedPayload(checkNotNull(outbox.event(row.eventId))))
+        assertEquals(after, decoded.schedule)
+        assertEquals(before, decoded.previousSchedule)
     }
 
     @Test
@@ -176,22 +184,7 @@ class PartnerEventProducerTest {
 
         assertEquals(PartnerEventTransport.SIGNED, transport)
         val stored = checkNotNull(outbox.event(row.eventId))
-        val envelope = ExistingE2eeRecipientEncryptor.decode(
-            checkNotNull(stored.recipientEnvelopesBlob),
-        ).single()
-        val decoded = PartnerRuleChangePayload.decodeOrNull(
-            EventCipher().decryptWithAad(
-                cek,
-                PartnerEventEnvelopeAad.of(
-                    stored.eventId,
-                    stored.installationId,
-                    stored.ownerUid,
-                    PartnerEventKind.RULE_CHANGE_ATTEMPT,
-                    envelope.recipientEncryptionKeyId,
-                ),
-                Base64.getUrlDecoder().decode(envelope.payload),
-            ),
-        )!!
+        val decoded = checkNotNull(decodedPayload(stored))
         assertEquals(ruleId, decoded.ruleId)
         assertEquals(
             "the rule row is unreadable here, so the neutral name is used — never a guess",
@@ -270,6 +263,8 @@ class PartnerEventProducerTest {
     private fun ruleRow(
         ruleId: UUID = UUID.randomUUID(),
         change: RuleChange = RuleChange.ASSIGNED,
+        schedule: RuleSchedule? = null,
+        previousSchedule: RuleSchedule? = null,
     ) = PartnerEventJournal.forRuleChange(
         eventId = UUID.randomUUID().toString(),
         ruleId = ruleId,
@@ -278,7 +273,29 @@ class PartnerEventProducerTest {
         occurredAtMinute = MINUTE,
         createdAtMs = 1_000,
         identity = RuleIdentity("Instagram", RuleTargetType.APP),
+        schedule = schedule,
+        previousSchedule = previousSchedule,
     )
+
+    /** Opens the one sealed copy under its envelope AAD — what the recipient will decode. */
+    private fun decodedPayload(stored: PendingPartnerEvent): PartnerRuleChangePayload.Decoded? {
+        val envelope = ExistingE2eeRecipientEncryptor.decode(
+            checkNotNull(stored.recipientEnvelopesBlob),
+        ).single()
+        return PartnerRuleChangePayload.decodeOrNull(
+            EventCipher().decryptWithAad(
+                cek,
+                PartnerEventEnvelopeAad.of(
+                    stored.eventId,
+                    stored.installationId,
+                    stored.ownerUid,
+                    PartnerEventKind.RULE_CHANGE_ATTEMPT,
+                    envelope.recipientEncryptionKeyId,
+                ),
+                Base64.getUrlDecoder().decode(envelope.payload),
+            ),
+        )
+    }
 
     private suspend fun insertOutboxRow(
         eventId: String,

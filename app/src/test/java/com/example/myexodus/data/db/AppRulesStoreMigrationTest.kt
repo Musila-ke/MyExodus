@@ -1275,6 +1275,93 @@ class AppRulesStoreMigrationTest {
         context.deleteDatabase("partner-activity-alert-test.db")
     }
 
+    /** v33 adds the schedule snapshots OPD #48's partner rule cards render (owner ruling
+     *  2026-11-26). Additive in both directions: a v32 database keeps every journal and feed
+     *  row, and the rollback drops only the two nullable columns on each table. */
+    @Test
+    fun migration32to33AndBack_addsScheduleColumns_andKeepsEveryRow() {
+        val scratchPath = context.getDatabasePath("partner-rule-schedule-test.db").absolutePath
+        AndroidSQLiteDriver().open(scratchPath).use { conn ->
+            conn.prepare("CREATE TABLE sentinel_table (id INTEGER NOT NULL, PRIMARY KEY(id))").use { it.step() }
+            conn.prepare("INSERT INTO sentinel_table (id) VALUES (1)").use { it.step() }
+            // The v32 shapes, hand-built exactly as MIGRATION_33_32 restores them.
+            conn.prepare(
+                "CREATE TABLE partner_event_journal (event_id TEXT NOT NULL, " +
+                    "category TEXT NOT NULL, occurred_at_minute INTEGER NOT NULL, " +
+                    "monitoring_state TEXT, outbox_age_bucket TEXT, rule_id TEXT, " +
+                    "rule_change TEXT, rule_label TEXT, rule_target_type TEXT, " +
+                    "rule_item_count INTEGER, rule_batch_label TEXT, route_pair_id TEXT, " +
+                    "capabilities TEXT, schema_version INTEGER NOT NULL, " +
+                    "created_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL, " +
+                    "PRIMARY KEY(event_id))",
+            ).use { it.step() }
+            conn.prepare(
+                "CREATE TABLE partner_rule_change (pair_id TEXT NOT NULL, " +
+                    "event_id TEXT NOT NULL, rule_id TEXT NOT NULL, " +
+                    "rule_change TEXT NOT NULL, rule_label TEXT, rule_target_type TEXT, " +
+                    "rule_item_count INTEGER, rule_batch_label TEXT, " +
+                    "occurred_at_minute INTEGER NOT NULL, received_at_ms INTEGER NOT NULL, " +
+                    "expires_at_ms INTEGER NOT NULL, PRIMARY KEY(pair_id, event_id))",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO partner_event_journal (event_id, category, occurred_at_minute, " +
+                    "rule_id, rule_change, rule_label, rule_target_type, route_pair_id, " +
+                    "schema_version, created_at_ms, expires_at_ms) " +
+                    "VALUES ('e-1', 'rule_changed', 42, 'r-1', 'CREATED', 'Instagram', 'APP', " +
+                    "'pair-1', 3, 10, 99)",
+            ).use { it.step() }
+            conn.prepare(
+                "INSERT INTO partner_rule_change (pair_id, event_id, rule_id, rule_change, " +
+                    "occurred_at_minute, received_at_ms, expires_at_ms) " +
+                    "VALUES ('pair-1', 'e-1', 'r-1', 'CREATED', 42, 10, 99)",
+            ).use { it.step() }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_32_33.migrate(conn) }
+
+            listOf("partner_event_journal", "partner_rule_change").forEach { table ->
+                assertTrue("$table gains the after-schedule", "rule_schedule" in columnNames(conn, table))
+                assertTrue(
+                    "$table gains the before-schedule",
+                    "rule_previous_schedule" in columnNames(conn, table),
+                )
+            }
+            listOf("partner_event_journal", "partner_rule_change").forEach { table ->
+                conn.prepare(
+                    "UPDATE $table SET rule_schedule = '1|1|1111111|||0|0', " +
+                        "rule_previous_schedule = '1|0|1111100|540|1020|7200000|0'",
+                ).use { it.step() }
+            }
+
+            runBlocking { AppRulesStoreFactory.MIGRATION_33_32.migrate(conn) }
+
+            listOf("partner_event_journal", "partner_rule_change").forEach { table ->
+                assertFalse("$table loses the after-schedule", "rule_schedule" in columnNames(conn, table))
+                assertFalse(
+                    "$table loses the before-schedule",
+                    "rule_previous_schedule" in columnNames(conn, table),
+                )
+            }
+            conn.prepare("SELECT event_id, rule_change FROM partner_event_journal").use { stmt ->
+                assertTrue("rollback keeps the journal row", stmt.step())
+                assertEquals("e-1", stmt.getText(0))
+                assertEquals("CREATED", stmt.getText(1))
+                assertFalse(stmt.step())
+            }
+            conn.prepare("SELECT pair_id, rule_change FROM partner_rule_change").use { stmt ->
+                assertTrue("rollback keeps the feed row", stmt.step())
+                assertEquals("pair-1", stmt.getText(0))
+                assertEquals("CREATED", stmt.getText(1))
+                assertFalse(stmt.step())
+            }
+            conn.prepare("SELECT id FROM sentinel_table").use { stmt ->
+                assertTrue("nothing else is touched on either direction", stmt.step())
+                assertEquals(1L, stmt.getLong(0))
+                assertFalse(stmt.step())
+            }
+        }
+        context.deleteDatabase("partner-rule-schedule-test.db")
+    }
+
     private fun columnNames(conn: androidx.sqlite.SQLiteConnection, table: String): List<String> {
         val names = mutableListOf<String>()
         conn.prepare("PRAGMA table_info($table)").use { stmt ->

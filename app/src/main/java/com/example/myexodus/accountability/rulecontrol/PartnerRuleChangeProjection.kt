@@ -77,6 +77,8 @@ class PartnerRuleChangeProjection(
                 ruleTargetType = decoded.identity.targetType.wire,
                 ruleItemCount = decoded.identity.itemCount,
                 ruleBatchLabel = decoded.identity.batchLabel,
+                ruleSchedule = decoded.schedule?.encode(),
+                rulePreviousSchedule = decoded.previousSchedule?.encode(),
                 occurredAtMinute = decoded.occurredAtMinute,
                 receivedAtMs = nowMs,
                 expiresAtMs = nowMs + PartnerEventJournal.RETENTION_MILLIS,

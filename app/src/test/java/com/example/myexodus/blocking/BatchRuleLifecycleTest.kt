@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.myexodus.accountability.serialization.RuleChange
+import com.example.myexodus.accountability.serialization.RuleSchedule
 import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.data.db.ActivityLogKeyManager
 import com.example.myexodus.data.db.AppRulesStoreFactory
@@ -481,6 +482,83 @@ class BatchRuleLifecycleTest {
         )
     }
 
+    /**
+     * OPD #48 scenario matrix: a batch row states the members' shared schedule — the
+     * after-snapshot on CREATED, before→after on UPDATED — and claims nothing once the
+     * members disagree or the verb carries no schedule.
+     */
+    @Test
+    fun batchScheduleSnapshots_rideCreatedAndUpdated_dropWhenMixedOrThin() = runBlocking {
+        seedProfile()
+        var clock = BASE_MS
+        val repository = RulesRepository(factory, RulesSnapshotPublisher(context, factory), now = { clock })
+        val store = factory.open()!!
+        val batchId = UUID.randomUUID().toString()
+        val journalDao = store.partnerEventJournalDao()
+
+        val a = RuleSchedule(false, "1111100", 9 * 60L, 17 * 60L, 0, 0)
+        val b = RuleSchedule(false, "0000011", 9 * 60L, 17 * 60L, 0, 0)
+        val c = RuleSchedule(false, "0000011", 9 * 60L, 17 * 60L, 2 * HOUR, 0)
+        fun withSchedule(rule: RestrictionRule, schedule: RuleSchedule) = rule.copy(
+            isAlwaysOn = schedule.alwaysOn,
+            activeDaysOfWeek = schedule.days,
+            timeRangeStart = schedule.windowStartMinute,
+            timeRangeEnd = schedule.windowEndMinute,
+            dailyLimitMs = schedule.dailyLimitMs,
+            blockExpiresAt = schedule.expiresAtMs,
+        )
+        suspend fun journalRows() = journalDao.dueRuleChangesForPair(PAIR_A, 0L, clock, LIMIT)
+
+        repository.insertBatch(
+            listOf(
+                withSchedule(appRule("com.example.one", batchId, "Social media", PAIR_A), a),
+                withSchedule(appRule("com.example.two", batchId, "Social media", PAIR_A), a),
+            ),
+        )
+        clock += STEP_MS
+        val created = journalRows().single()
+        assertEquals("the members' shared schedule rides the CREATED row", a, created.ruleScheduleOrNull())
+        assertNull(created.rulePreviousScheduleOrNull())
+
+        repository.updateBatch(batchId, store.restrictionRuleDao().getByBatch(batchId).map { withSchedule(it, b) })
+        clock += STEP_MS
+        val updated = journalRows().single { it.ruleChange == RuleChange.UPDATED.wire }
+        assertEquals(b, updated.ruleScheduleOrNull())
+        assertEquals(a, updated.rulePreviousScheduleOrNull())
+
+        // Mixed after-state: no uniform claim, but the uniform before-snapshot still rides.
+        val mixed = store.restrictionRuleDao().getByBatch(batchId)
+        repository.updateBatch(
+            batchId,
+            listOf(withSchedule(mixed[0], b), withSchedule(mixed[1], c)),
+        )
+        clock += STEP_MS
+        val mixedRow = journalRows().filter { it.ruleChange == RuleChange.UPDATED.wire }
+            .maxByOrNull { it.createdAtMs }!!
+        assertNull("a mixed batch claims no after-schedule", mixedRow.ruleScheduleOrNull())
+        assertEquals("the uniform before-snapshot still rides", b, mixedRow.rulePreviousScheduleOrNull())
+
+        // Uniform again, mixed before: an after-snapshot without a diff.
+        repository.updateBatch(batchId, store.restrictionRuleDao().getByBatch(batchId).map { withSchedule(it, a) })
+        clock += STEP_MS
+        val uniformAgain = journalRows().filter { it.ruleChange == RuleChange.UPDATED.wire }
+            .maxByOrNull { it.createdAtMs }!!
+        assertEquals(a, uniformAgain.ruleScheduleOrNull())
+        assertNull("a mixed before yields no diff", uniformAgain.rulePreviousScheduleOrNull())
+
+        repository.setBatchEnabled(batchId, false)
+        clock += STEP_MS
+        val disabled = journalRows().single { it.ruleChange == RuleChange.DISABLED.wire }
+        assertNull(disabled.ruleScheduleOrNull())
+        assertNull(disabled.rulePreviousScheduleOrNull())
+
+        repository.deleteBatch(batchId)
+        clock += STEP_MS
+        val deleted = journalRows().single { it.ruleChange == RuleChange.DELETED.wire }
+        assertNull(deleted.ruleScheduleOrNull())
+        assertNull(deleted.rulePreviousScheduleOrNull())
+    }
+
     private suspend fun seedProfile() {
         factory.open()!!.userProfileDao().insert(
             UserProfile(
@@ -542,6 +620,7 @@ class BatchRuleLifecycleTest {
         const val PAIR_B = "pair-B"
         const val LIMIT = 100_000
         const val STEP_MS = 1_000L
+        const val HOUR = 60 * 60_000L
         const val BASE_MS = 1_760_000_000_000L
     }
 }

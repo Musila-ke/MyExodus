@@ -90,8 +90,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -117,6 +121,8 @@ import com.example.myexodus.ui.AppMark
 import com.example.myexodus.ui.BackRow
 import com.example.myexodus.ui.PillTone
 import com.example.myexodus.ui.StatusPill
+import com.example.myexodus.ui.changesFrom
+import com.example.myexodus.ui.summaryText
 import com.example.myexodus.ui.settings.IndexRow
 import com.example.myexodus.ui.settings.RowDivider
 import com.example.myexodus.ui.settings.StatusTone
@@ -2860,7 +2866,40 @@ private fun AlertRow(alert: PartnerAlert) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (alert is PartnerAlert.RuleChanged) RuleChangeDetail(alert)
         }
+    }
+}
+
+/**
+ * OPD #48 (owner ruling 2026-11-26): an enriched rule row tells the partner how the rule
+ * works — the full schedule on created/assigned — and on an edit the before → after of each
+ * schedule field that changed, so the change is unmistakable without flooding the row.
+ * Legacy thin rows and the verbs the owner left unchanged carry no schedule and render
+ * exactly as before.
+ */
+@Composable
+private fun RuleChangeDetail(alert: PartnerAlert.RuleChanged) {
+    val after = alert.schedule ?: return
+    val res = LocalContext.current.resources
+    val changes = alert.previousSchedule?.let { after.changesFrom(it, res) }.orEmpty()
+    if (changes.isEmpty()) {
+        Text(after.summaryText(res), style = MaterialTheme.typography.bodySmall)
+        return
+    }
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    changes.forEach { change ->
+        Text(
+            buildAnnotatedString {
+                withStyle(SpanStyle(color = muted)) { append("${change.label}: ") }
+                withStyle(SpanStyle(color = muted, textDecoration = TextDecoration.LineThrough)) {
+                    append(change.before)
+                }
+                withStyle(SpanStyle(color = muted)) { append(" → ") }
+                withStyle(SpanStyle(fontWeight = FontWeight.Medium)) { append(change.after) }
+            },
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }
 

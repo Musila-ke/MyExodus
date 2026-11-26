@@ -4,6 +4,7 @@ import com.example.myexodus.accountability.serialization.ActivityStateAfter
 import com.example.myexodus.accountability.serialization.EventPayload
 import com.example.myexodus.accountability.serialization.MonitoringCapability
 import com.example.myexodus.accountability.serialization.RuleChange
+import com.example.myexodus.accountability.serialization.RuleSchedule
 import com.example.myexodus.accountability.state.ApprovalRequest
 import com.example.myexodus.accountability.state.ChainHead
 import com.example.myexodus.data.db.entity.PartnerActivityAlert
@@ -246,6 +247,28 @@ class PartnerPresentationTest {
         )
         assertEquals(
             PartnerAlert.RuleChanged(RuleChange.DISABLED, 28_333_333 * 60_000L),
+            ruleChangeAlert(row),
+        )
+    }
+
+    /** OPD #48: a receiver row's stored schedules reach the feed mapping unchanged, so the
+     *  Rules & Blocks card and the activity feed can render them. */
+    @Test
+    fun ruleChange_rowsCarryTheirStoredSchedules() {
+        val after = RuleSchedule(
+            alwaysOn = false, days = "1111100", windowStartMinute = 540, windowEndMinute = 1020,
+            dailyLimitMs = 0, expiresAtMs = 0,
+        )
+        val before = after.copy(alwaysOn = true, days = "1111111", windowStartMinute = null, windowEndMinute = null)
+        val row = PartnerRuleChange(
+            pairId = "pair", eventId = "evt", ruleId = "uuid", ruleChange = "UPDATED",
+            ruleSchedule = after.encode(), rulePreviousSchedule = before.encode(),
+            occurredAtMinute = 28_333_333, receivedAtMs = now, expiresAtMs = now,
+        )
+        assertEquals(
+            PartnerAlert.RuleChanged(
+                RuleChange.UPDATED, 28_333_333 * 60_000L, null, after, before,
+            ),
             ruleChangeAlert(row),
         )
     }

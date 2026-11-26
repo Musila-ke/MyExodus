@@ -1035,6 +1035,41 @@ v31, live channel, 2026-11-13):**
   exercised. The X6532C was unreachable (BLOCKED).
 - `UpdatePolicyTest` was re-run against the shipping tree: passed.
 
+**PASSED (publication of v48, 2026-11-26):**
+
+- `:app:assembleRelease` built `versionCode=48`, `versionName=1.1.46`, `minSdk 26`,
+  `targetSdk 36`, 39,821,638 bytes, SHA-256
+  `d3aded879ec34a47057f5d9cc94c442776cc607f1c5ebd4a213fefecb2761df5`, signed by the release
+  identity (`apksigner verify --print-certs`, certificate SHA-256 `8f881880…854b`).
+- `artifact-v48` was published as an immutable prerelease with `app-release.apk` uploaded
+  directly from `app/build/outputs/apk/release/app-release.apk`; the GitHub asset digest
+  equals the local SHA-256.
+- **Pitfall — artifact-v47 is permanently burned.** v47 (1.1.45, 39,805,250 bytes, SHA-256
+  `f301af8e…b55`) was built and installed for smoke testing, but its APK asset was uploaded
+  to `artifact-v47` under a renamed copy (`v47-app-release.apk`) while the policy pins
+  `app-release.apk`. Immutable releases refuse asset replacement or deletion, and deleting
+  the release does not free the tag — recreating it fails with "tag_name was used by an
+  immutable release" even after deleting the tag ref. versionCode 47 was never offered by
+  any policy (publisher state stayed at 21/46) and is skipped; the feature shipped as
+  v48/1.1.46. **Rule: upload the APK from its original build path, never a renamed copy.**
+- `policy-000022` (sequence 22, versionCode 48, rollout 100, cohort salt
+  `5b40dafb4c941876a67faf4f6f3baf56`) was signed with the production key and published as
+  the latest non-prerelease. Publisher state after publication:
+  `{"highestPolicySequence": 22, "highestVersionCode": 48}`.
+- The live `/releases/latest/download/update-manifest.json` decoded anonymously to
+  `policySequence 22`, `OFFER`, versionCode 48 (`1.1.46`), rollout 100, the pinned `apkUrl`,
+  and the exact size and SHA-256 above; the envelope's signature verified against the
+  publisher public key; the downloaded envelope is byte-identical to the locally signed one
+  (SHA-256 `68f9b4ec00fa12b40e95b402713fb7348008241ca845bfcfa17ad789fa6b33c6`). CDN lag:
+  the latest link served the new mapping within one 15-second retry.
+- The version-pinned APK URL downloaded anonymously byte-identical to the local build.
+- On the X6532, v48 was installed with `adb install -r` at 16:22:05 EAT (`firstInstallTime`
+  2026-11-15 17:13:06 preserved); the post-upgrade dialog showed "MyExodus is now on
+  version 1.1.46", Settings → About showed Version 1.1.46, and Settings → Updates →
+  Check again ran a live check against this policy: "You're on version 1.1.46, the latest
+  version", "Last verified update check: 0 minutes ago".
+- `UpdatePolicyTest` was re-run against the shipping tree: 27/27 passed.
+
 **BLOCKED (owner-gated or hardware):**
 
 - Installer-session `fsync` with a real `openWrite` stream, duplicate and stale status intents,

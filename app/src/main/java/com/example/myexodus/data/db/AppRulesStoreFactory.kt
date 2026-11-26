@@ -1940,6 +1940,91 @@ class AppRulesStoreFactory(
             }
         }
 
+        /**
+         * v32 → v33 (OPD #48, owner ruling 2026-11-26): the partner's rule cards describe how
+         * a rule blocks. The sender journals the rule's schedule beside the identity, and the
+         * receiver stores what the payload carried, so both halves need the same pair of
+         * nullable columns. Nullable — pre-upgrade rows stay valid and render thin.
+         */
+        val MIGRATION_32_33 = object : Migration(32, 33) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                listOf("partner_event_journal", "partner_rule_change").forEach { table ->
+                    connection.prepare(
+                        "ALTER TABLE $table ADD COLUMN rule_schedule TEXT",
+                    ).use { it.step() }
+                    connection.prepare(
+                        "ALTER TABLE $table ADD COLUMN rule_previous_schedule TEXT",
+                    ).use { it.step() }
+                }
+            }
+        }
+
+        /** v33 rollback (older build reinstalled): table rebuilds drop the schedule columns
+         *  while every journal and feed row survives. Rebuilds, not DROP COLUMN — the latter is
+         *  unsafe on the system SQLite versions this app supports. */
+        val MIGRATION_33_32 = object : Migration(33, 32) {
+            override suspend fun migrate(connection: SQLiteConnection) {
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_event_journal_old (" +
+                        "event_id TEXT NOT NULL, category TEXT NOT NULL, " +
+                        "occurred_at_minute INTEGER NOT NULL, monitoring_state TEXT, " +
+                        "outbox_age_bucket TEXT, rule_id TEXT, rule_change TEXT, " +
+                        "rule_label TEXT, rule_target_type TEXT, rule_item_count INTEGER, " +
+                        "rule_batch_label TEXT, route_pair_id TEXT, capabilities TEXT, " +
+                        "schema_version INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, " +
+                        "expires_at_ms INTEGER NOT NULL, PRIMARY KEY(event_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO partner_event_journal_old (event_id, category, " +
+                        "occurred_at_minute, monitoring_state, outbox_age_bucket, rule_id, " +
+                        "rule_change, rule_label, rule_target_type, rule_item_count, " +
+                        "rule_batch_label, route_pair_id, capabilities, schema_version, " +
+                        "created_at_ms, expires_at_ms) SELECT event_id, category, " +
+                        "occurred_at_minute, monitoring_state, outbox_age_bucket, rule_id, " +
+                        "rule_change, rule_label, rule_target_type, rule_item_count, " +
+                        "rule_batch_label, route_pair_id, capabilities, schema_version, " +
+                        "created_at_ms, expires_at_ms FROM partner_event_journal",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE partner_event_journal").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE partner_event_journal_old RENAME TO partner_event_journal",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_event_journal_created_at_ms " +
+                        "ON partner_event_journal (created_at_ms)",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_event_journal_expires_at_ms " +
+                        "ON partner_event_journal (expires_at_ms)",
+                ).use { it.step() }
+
+                connection.prepare(
+                    "CREATE TABLE IF NOT EXISTS partner_rule_change_old (" +
+                        "pair_id TEXT NOT NULL, event_id TEXT NOT NULL, rule_id TEXT NOT NULL, " +
+                        "rule_change TEXT NOT NULL, rule_label TEXT, rule_target_type TEXT, " +
+                        "rule_item_count INTEGER, rule_batch_label TEXT, " +
+                        "occurred_at_minute INTEGER NOT NULL, received_at_ms INTEGER NOT NULL, " +
+                        "expires_at_ms INTEGER NOT NULL, PRIMARY KEY(pair_id, event_id))",
+                ).use { it.step() }
+                connection.prepare(
+                    "INSERT INTO partner_rule_change_old (pair_id, event_id, rule_id, " +
+                        "rule_change, rule_label, rule_target_type, rule_item_count, " +
+                        "rule_batch_label, occurred_at_minute, received_at_ms, expires_at_ms) " +
+                        "SELECT pair_id, event_id, rule_id, rule_change, rule_label, " +
+                        "rule_target_type, rule_item_count, rule_batch_label, " +
+                        "occurred_at_minute, received_at_ms, expires_at_ms FROM partner_rule_change",
+                ).use { it.step() }
+                connection.prepare("DROP TABLE partner_rule_change").use { it.step() }
+                connection.prepare(
+                    "ALTER TABLE partner_rule_change_old RENAME TO partner_rule_change",
+                ).use { it.step() }
+                connection.prepare(
+                    "CREATE INDEX IF NOT EXISTS index_partner_rule_change_occurred_at_minute " +
+                        "ON partner_rule_change (occurred_at_minute)",
+                ).use { it.step() }
+            }
+        }
+
         /** v23 rollback (older build reinstalled): table rebuilds remove the identity and
          *  batch columns while every rule and journal row survives. */
         val MIGRATION_23_22 = object : Migration(23, 22) {
@@ -2260,6 +2345,7 @@ class AppRulesStoreFactory(
             MIGRATION_29_30, MIGRATION_30_29,
             MIGRATION_30_31, MIGRATION_31_30,
             MIGRATION_31_32, MIGRATION_32_31,
+            MIGRATION_32_33, MIGRATION_33_32,
         )
     }
 }

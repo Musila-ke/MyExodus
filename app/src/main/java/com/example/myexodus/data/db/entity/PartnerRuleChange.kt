@@ -4,6 +4,7 @@ import androidx.room3.ColumnInfo
 import androidx.room3.Entity
 import androidx.room3.Index
 import com.example.myexodus.accountability.serialization.RuleIdentity
+import com.example.myexodus.accountability.serialization.RuleSchedule
 import com.example.myexodus.accountability.serialization.RuleTargetType
 
 /**
@@ -26,10 +27,19 @@ data class PartnerRuleChange(
     @ColumnInfo(name = "rule_target_type") val ruleTargetType: String? = null,
     @ColumnInfo(name = "rule_item_count") val ruleItemCount: Long? = null,
     @ColumnInfo(name = "rule_batch_label") val ruleBatchLabel: String? = null,
+    /** OPD #48: the sender's schedule at occurrence time; null on thin/legacy rows. */
+    @ColumnInfo(name = "rule_schedule") val ruleSchedule: String? = null,
+    /** UPDATED rows: the schedule before the edit, so the feed can show before→after. */
+    @ColumnInfo(name = "rule_previous_schedule") val rulePreviousSchedule: String? = null,
     @ColumnInfo(name = "occurred_at_minute") val occurredAtMinute: Long,
     @ColumnInfo(name = "received_at_ms") val receivedAtMs: Long,
     @ColumnInfo(name = "expires_at_ms") val expiresAtMs: Long,
 ) {
+    fun ruleScheduleOrNull(): RuleSchedule? = ruleSchedule?.let(RuleSchedule::decodeOrNull)
+
+    fun rulePreviousScheduleOrNull(): RuleSchedule? =
+        rulePreviousSchedule?.let(RuleSchedule::decodeOrNull)
+
     /** The v2 identity as the wire delivered it; null on rows from a pre-v2 sender. */
     fun ruleIdentityOrNull(): RuleIdentity? {
         val type = ruleTargetType?.let(RuleTargetType::fromWire) ?: return null

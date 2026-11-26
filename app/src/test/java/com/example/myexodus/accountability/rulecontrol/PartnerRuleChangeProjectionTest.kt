@@ -10,6 +10,7 @@ import com.example.myexodus.accountability.delivery.PartnerRuleChangePayload
 import com.example.myexodus.accountability.enrollment.EnrollmentRecord
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleIdentity
+import com.example.myexodus.accountability.serialization.RuleSchedule
 import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.example.myexodus.accountability.state.AccountabilityDatabase
 import com.example.myexodus.data.db.ActivityLogKeyManager
@@ -25,6 +26,7 @@ import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -85,6 +87,8 @@ class PartnerRuleChangeProjectionTest {
         assertEquals(RuleChange.ASSIGNED.wire, row.ruleChange)
         assertEquals("Instagram", row.ruleLabel)
         assertEquals(RuleTargetType.APP.wire, row.ruleTargetType)
+        assertNull("a thin body stores no schedule", row.ruleScheduleOrNull())
+        assertNull(row.rulePreviousScheduleOrNull())
         assertEquals(MINUTE, row.occurredAtMinute)
         assertEquals(nowMs, row.receivedAtMs)
         assertEquals(nowMs + PartnerEventJournal.RETENTION_MILLIS, row.expiresAtMs)
@@ -99,6 +103,28 @@ class PartnerRuleChangeProjectionTest {
             ),
             notifications,
         )
+    }
+
+    /** OPD #48: an enriched body keeps its schedule snapshots on the feed row, so the
+     *  partner surfaces can describe the rule and its before→after. */
+    @Test
+    fun deliveredSchedules_areStoredOnTheFeedRow() = runBlocking {
+        db.enrollmentDao().upsert(enrollment())
+        val after = RuleSchedule(
+            alwaysOn = false, days = "1111100", windowStartMinute = 540, windowEndMinute = 1020,
+            dailyLimitMs = 2 * 60 * 60_000L, expiresAtMs = 0,
+        )
+        val before = after.copy(alwaysOn = true, days = "0000011", windowStartMinute = null,
+            windowEndMinute = null, dailyLimitMs = 0)
+
+        projection().onDelivered(
+            document(eventId = UUID.randomUUID().toString()),
+            PartnerRuleChangePayload.encode(ruleId, RuleChange.UPDATED, IDENTITY, MINUTE, after, before),
+        )
+
+        val row = rows("pair-1").single()
+        assertEquals(after, row.ruleScheduleOrNull())
+        assertEquals(before, row.rulePreviousScheduleOrNull())
     }
 
     @Test

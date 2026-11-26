@@ -2,6 +2,7 @@ package com.example.myexodus.ui
 
 import android.content.res.Resources
 import com.example.myexodus.R
+import com.example.myexodus.accountability.serialization.RuleSchedule
 import com.example.myexodus.blocking.BlockDecisionEngine
 import com.example.myexodus.blocking.EVERY_DAY
 import com.example.myexodus.data.db.entity.RestrictionRule
@@ -66,8 +67,7 @@ fun scheduleSummary(rule: RestrictionRule, res: Resources): String {
         parts += res.getString(R.string.schedule_always_on)
     }
     if (rule.timeRangeStart != null && rule.timeRangeEnd != null) {
-        val window = "${formatTime(rule.timeRangeStart)}–${formatTime(rule.timeRangeEnd)}"
-        parts += if (rule.isOvernight) res.getString(R.string.schedule_overnight_window, window) else window
+        parts += windowLabel(rule.timeRangeStart, rule.timeRangeEnd, res)
     }
     // A limit beside "always on" is inert — the rule already covers every hour — so the row
     // never claims it. The editor zeroes it on save; this is for rules saved before that.
@@ -84,9 +84,78 @@ fun scheduleSummary(rule: RestrictionRule, res: Resources): String {
     return if (parts.isEmpty()) res.getString(R.string.schedule_none) else parts.joinToString(" · ")
 }
 
-/** end < start crosses midnight: the window ends on a later day than it starts. */
-val RestrictionRule.isOvernight: Boolean
-    get() = timeRangeStart != null && timeRangeEnd != null && timeRangeEnd <= timeRangeStart
+/** end <= start crosses midnight: the window ends on a later day than it starts. */
+private fun windowLabel(startMinute: Long, endMinute: Long, res: Resources): String {
+    val window = "${formatTime(startMinute)}–${formatTime(endMinute)}"
+    return if (endMinute <= startMinute) res.getString(R.string.schedule_overnight_window, window) else window
+}
+
+/** OPD #48: one changed schedule field as the partner's rule card shows it — the axis and its
+ *  value before and after the edit. */
+data class RuleScheduleChange(val label: String, val before: String, val after: String)
+
+private fun RuleSchedule.blockingText(res: Resources): String {
+    val start = windowStartMinute
+    val end = windowEndMinute
+    if (!alwaysOn && start != null && end != null) return windowLabel(start, end, res)
+    return res.getString(if (alwaysOn) R.string.schedule_always_on else R.string.partner_rule_no_hours)
+}
+
+private fun RuleSchedule.limitText(res: Resources): String =
+    if (dailyLimitMs > 0) formatDuration(dailyLimitMs) else res.getString(R.string.schedule_off)
+
+private fun RuleSchedule.endsText(res: Resources): String =
+    if (expiresAtMs > 0 && expiresAtMs < FAR_FUTURE_EPOCH_MILLIS) {
+        formatExpiry(expiresAtMs)
+    } else {
+        res.getString(R.string.schedule_never)
+    }
+
+/** The partner's after-snapshot of a rule (OPD #48): how it blocks, day scope, daily cap and
+ *  end — the composition the owner's own rule rows use, without the partner field. */
+fun RuleSchedule.summaryText(res: Resources): String {
+    val parts = mutableListOf<String>()
+    if (alwaysOn) parts += res.getString(R.string.schedule_always_on)
+    val start = windowStartMinute
+    val end = windowEndMinute
+    if (start != null && end != null) parts += windowLabel(start, end, res)
+    if (dailyLimitMs > 0 && !alwaysOn) {
+        parts += res.getString(R.string.schedule_daily_limit, formatDuration(dailyLimitMs))
+    }
+    if (days != EVERY_DAY) daysLabel(days, res)?.takeIf(String::isNotEmpty)?.let { parts += it }
+    if (expiresAtMs > 0 && expiresAtMs < FAR_FUTURE_EPOCH_MILLIS) {
+        parts += res.getString(R.string.schedule_until, formatExpiry(expiresAtMs))
+    }
+    return if (parts.isEmpty()) res.getString(R.string.schedule_none) else parts.joinToString(" · ")
+}
+
+/** Per-axis before→after of an edited rule, in reading order; empty when no schedule field
+ *  changed (the caller then shows the after-snapshot instead). */
+fun RuleSchedule.changesFrom(before: RuleSchedule, res: Resources): List<RuleScheduleChange> =
+    changedAxesFrom(before).map { axis ->
+        when (axis) {
+            RuleSchedule.Axis.BLOCKING -> RuleScheduleChange(
+                res.getString(R.string.partner_rule_axis_block),
+                before.blockingText(res),
+                blockingText(res),
+            )
+            RuleSchedule.Axis.DAYS -> RuleScheduleChange(
+                res.getString(R.string.partner_rule_axis_days),
+                daysLabel(before.days, res)?.takeIf(String::isNotEmpty) ?: before.days,
+                daysLabel(days, res)?.takeIf(String::isNotEmpty) ?: days,
+            )
+            RuleSchedule.Axis.LIMIT -> RuleScheduleChange(
+                res.getString(R.string.partner_rule_axis_limit),
+                before.limitText(res),
+                limitText(res),
+            )
+            RuleSchedule.Axis.ENDS -> RuleScheduleChange(
+                res.getString(R.string.partner_rule_axis_ends),
+                before.endsText(res),
+                endsText(res),
+            )
+        }
+    }
 
 fun formatTime(minutesOfDay: Long): String =
     DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)

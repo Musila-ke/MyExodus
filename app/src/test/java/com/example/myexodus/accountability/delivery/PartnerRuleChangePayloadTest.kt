@@ -3,6 +3,7 @@ package com.example.myexodus.accountability.delivery
 import com.example.myexodus.accountability.serialization.CanonicalCbor
 import com.example.myexodus.accountability.serialization.RuleChange
 import com.example.myexodus.accountability.serialization.RuleIdentity
+import com.example.myexodus.accountability.serialization.RuleSchedule
 import com.example.myexodus.accountability.serialization.RuleTargetType
 import com.upokecenter.cbor.CBORObject
 import java.util.UUID
@@ -71,8 +72,10 @@ class PartnerRuleChangePayloadTest {
         assertTrue(bytes.size <= PartnerRuleChangePayload.MAX_BYTES / 2)
     }
 
+    /** OPD #48 (owner ruling 2026-11-26): unknown keys are tolerated so an additive field
+     *  from a newer sender never makes this receiver lose the row; known keys stay strict. */
     @Test
-    fun unknownKey_isRejected() {
+    fun unknownKey_isIgnored() {
         val bytes = CanonicalCbor.encodeMap(
             listOf(
                 "v" to CanonicalCbor.int(1),
@@ -84,7 +87,78 @@ class PartnerRuleChangePayloadTest {
                 "pkg" to CanonicalCbor.text("com.example.blocked"),
             ),
         )
-        assertNull(PartnerRuleChangePayload.decodeOrNull(bytes))
+        assertEquals(
+            PartnerRuleChangePayload.Decoded(ruleId, RuleChange.CREATED, appIdentity, 42),
+            PartnerRuleChangePayload.decodeOrNull(bytes),
+        )
+    }
+
+    @Test
+    fun schedule_roundTrips_onCreatedAndUpdatedBodies() {
+        val after = RuleSchedule(
+            alwaysOn = false, days = "1111100", windowStartMinute = 540, windowEndMinute = 1020,
+            dailyLimitMs = 2 * 60 * 60_000L, expiresAtMs = 1_800_000_000_000L,
+        )
+        val before = after.copy(alwaysOn = true, days = "0000011", windowStartMinute = null,
+            windowEndMinute = null, dailyLimitMs = 0, expiresAtMs = 0)
+
+        assertEquals(
+            PartnerRuleChangePayload.Decoded(ruleId, RuleChange.CREATED, appIdentity, 42, after, null),
+            PartnerRuleChangePayload.decodeOrNull(
+                PartnerRuleChangePayload.encode(ruleId, RuleChange.CREATED, appIdentity, 42, after),
+            ),
+        )
+        assertEquals(
+            PartnerRuleChangePayload.Decoded(ruleId, RuleChange.UPDATED, appIdentity, 43, after, before),
+            PartnerRuleChangePayload.decodeOrNull(
+                PartnerRuleChangePayload.encode(
+                    ruleId, RuleChange.UPDATED, appIdentity, 43, after, before,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun undecodableSchedule_rejectsTheWholeBody_knownKeysStayStrict() {
+        fun payload(schedule: CBORObject) = CanonicalCbor.encodeMap(
+            listOf(
+                "v" to CanonicalCbor.int(1),
+                "rid" to CanonicalCbor.text(ruleId.toString()),
+                "chg" to CanonicalCbor.text("CREATED"),
+                "lbl" to CanonicalCbor.text("Instagram"),
+                "tgt" to CanonicalCbor.text("APP"),
+                "t" to CanonicalCbor.int(42),
+                "sch" to schedule,
+            ),
+        )
+        assertNull(PartnerRuleChangePayload.decodeOrNull(payload(CanonicalCbor.text("not-a-schedule"))))
+        assertNull(
+            "a present-but-malformed schedule is strict, never silently omitted",
+            PartnerRuleChangePayload.decodeOrNull(payload(CanonicalCbor.text("1|0|11111|540|1020|0|0"))),
+        )
+        assertNull(PartnerRuleChangePayload.decodeOrNull(payload(CanonicalCbor.int(1))))
+    }
+
+    @Test
+    fun enrichedEncoding_staysWithinTheDeclaredBound() {
+        val schedule = RuleSchedule(
+            alwaysOn = false, days = "1111100", windowStartMinute = 0, windowEndMinute = 1439,
+            dailyLimitMs = Long.MAX_VALUE, expiresAtMs = 253_402_300_799_999L,
+        )
+        val identity = RuleIdentity(
+            label = "L".repeat(64),
+            targetType = RuleTargetType.WEBSITE,
+            batchLabel = "B".repeat(64),
+        )
+
+        val bytes = PartnerRuleChangePayload.encode(
+            ruleId, RuleChange.UPDATED, identity, 29_000_001, schedule, schedule,
+        )
+
+        assertTrue(
+            "the worst realistic enriched body still fits the declared bound: ${bytes.size} bytes",
+            bytes.size <= PartnerRuleChangePayload.MAX_BYTES,
+        )
     }
 
     @Test

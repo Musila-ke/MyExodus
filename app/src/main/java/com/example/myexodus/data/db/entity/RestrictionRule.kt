@@ -5,6 +5,7 @@ import androidx.room3.Entity
 import androidx.room3.ForeignKey
 import androidx.room3.Index
 import androidx.room3.PrimaryKey
+import com.example.myexodus.accountability.serialization.RuleSchedule
 
 /**
  * CHECK constraints (Rule 4 self-block, severity values) are added by SchemaConstraints,
@@ -56,6 +57,20 @@ data class RestrictionRule(
  */
 fun RestrictionRule.isExpiredAt(nowEpochMillis: Long): Boolean =
     blockExpiresAt > 0 && nowEpochMillis > blockExpiresAt
+
+/** The wire/storage schedule form (OPD #48). Null when this row cannot be represented
+ *  honestly (a corrupt days mask or out-of-range window) — the partner then hears the plain
+ *  verb, never a wrong schedule, and a corrupt legacy row still saves. */
+fun RestrictionRule.toSchedule(): RuleSchedule? = runCatching {
+    RuleSchedule(
+        alwaysOn = isAlwaysOn,
+        days = activeDaysOfWeek,
+        windowStartMinute = timeRangeStart,
+        windowEndMinute = timeRangeEnd,
+        dailyLimitMs = dailyLimitMs,
+        expiresAtMs = blockExpiresAt,
+    )
+}.getOrNull()
 
 /** "The tunnel has something to do" — any website rule the publisher would publish (enabled,
  *  unexpired), limit or block-only. Shared by the Home/Rules readiness surfaces and the

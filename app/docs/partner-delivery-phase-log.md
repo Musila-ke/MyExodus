@@ -2040,3 +2040,62 @@ Verification:
 - Honest limits: live E2E of a delivered event on v45 needs the partner awake (partner
   delivery legs ride the next awake window); Crashlytics has no read API and was not
   consultable from here — the server rails (Cloud Logging) were checked instead.
+
+## 2026-11-26 — v48/1.1.46 published: partner rule cards carry the rule's schedule, updates show before → after (OPD #48, ADR #320)
+
+Owner ruled OPD #48 BUILD on 2026-11-26: the partner's Rules & blocks and Recent activity
+entries for a created/updated rule must say how the rule actually works — days, mechanism
+(always-on / time window / daily limit), when it ends — and an edit must show what changed
+as before → after, without a partner-accountability field.
+
+- **Wire.** `RuleSchedule` (new, `accountability/serialization/RuleSchedule.kt`) is a
+  single-line versioned codec (`v|alwaysOn|days|startMinute|endMinute|limitMs|expiresAtMs`,
+  Monday-first 7-char mask, overnight windows allowed, `decodeOrNull` never throws). The
+  E2EE `PartnerRuleChangePayload` gains optional `sch`/`prv` keys. The decoder is strict on
+  known keys and tolerant of unknown ones; tolerance plus enriched emission ship in the
+  SAME release by owner decision (deviation from the two-phase rollout in the plan): a
+  pre-tolerance receiver drops enriched rows silently until it updates, which is accepted.
+- **Capture at write time.** `RulesRepository`/`PartnerEventProducer` journal the schedule
+  the rule had when the verb occurred: CREATED/ASSIGNED carry the after-schedule, UPDATED
+  carries after + previous, DISABLED/ENABLED/UNASSIGNED/DELETED carry none, EXPIRED is
+  forced thin. Batch rows describe CREATED/ASSIGNED/UPDATED only when every member shares
+  one schedule (`uniformSchedule`); a mixed batch journals thin (the batch editor cannot
+  currently produce mixed block settings). A rule whose stored days are corrupt
+  (`toSchedule()` null) journals thin rather than a wrong schedule.
+- **Storage.** Room 32→33 adds nullable `rule_schedule`/`rule_previous_schedule` TEXT to
+  `partner_event_journal` and `partner_rule_change`; migration exported
+  (`app/schemas/com.example.myexodus.data.db.AppRulesStore/33.json`). Rows stay thin on
+  legacy data by design.
+- **Presentation.** `RuleSchedule.summaryText` renders mechanism, window (shared
+  `windowLabel` keeps overnight semantics identical to the owner's own rule card), days
+  only when narrowed, limit only when it applies, expiry with its instant.
+  `changesFrom`/`RuleChangeDetail` render struck-through before → after, one line per
+  changed axis; unchanged edits fall back to the plain summary. Notifications are
+  unchanged.
+
+Verification:
+
+- Full JVM `:app:testDebugUnitTest` on the exact shipping tree: 299 classes / **2,910
+  tests / 0 failures / 0 errors / 0 skipped**. `:app:lintDebug` alone earlier the same day
+  on the same code (the only later change is the versionCode/versionName bump): BUILD
+  SUCCESSFUL, 41m19s, no errors.
+- Scenario-matrix coverage for the capture: `RuleLifecycleStressTest` exercises 6
+  mechanism shapes × 7 verbs and the corrupt-days degradation; `BatchRuleLifecycleTest`
+  covers uniform after, before + after, mixed-after, mixed-before, and thin verbs;
+  `RuleScheduleTest` (8 tests) covers round-trip, malformed shapes, full option matrix and
+  prefix decoding; payload/projection/presentation/migration tests updated.
+- Device: v47 (intermediate build, never published) and v48 both installed `install -r`
+  on the X6532 with `firstInstallTime` preserved; v48 launched clean (no FATAL), the
+  post-upgrade dialog read "MyExodus is now on version 1.1.46", Settings → About showed
+  1.1.46, and Settings → Updates → Check again ran a live check against the published
+  policy ("0 minutes ago", "the latest version"). Rotation guard verified
+  `accelerometer_rotation=0` after the leg. Evidence:
+  `/tmp/opd48-evidence/X6532-v48-*.png`.
+- Publication: `artifact-v48` (immutable prerelease, `app-release.apk`, 39,821,638 bytes,
+  SHA-256 `d3aded87…1df5`) and `policy-000022` (sequence 22, rollout 100) — full record in
+  `app/docs/app-update-channel.md`. versionCode 47 was burned at the channel (renamed APK
+  asset in an immutable release) and never offered.
+- Honest limits: the enriched card has not been seen rendered against a real remote
+  partner yet — it needs the subject on v48+ to create or update a rule (owner field test
+  planned with Arsene); pre-tolerance receivers silently drop enriched rows until updated;
+  legacy journal rows stay thin by design; mixed-schedule batches journal thin.

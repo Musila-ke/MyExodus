@@ -368,6 +368,8 @@
     <string name="schedule_daily_limit">%1$s daily limit</string>
     <string name="schedule_until">until %1$s</string>
     <string name="schedule_none">No schedule set</string>
+    <string name="schedule_off">Off</string>
+    <string name="schedule_never">Never</string>
     <string name="days_every_day">every day</string>
     <string name="days_weekdays">weekdays</string>
     <string name="days_weekends">weekends</string>
@@ -1238,6 +1240,13 @@
     <string name="partner_rule_deleted">Rule deleted</string>
     <string name="partner_rule_expired">Rule ended</string>
     <string name="partner_rule_in_batch">%1$s batch</string>
+    <!-- OPD #48: the partner's rule card describes how a rule blocks and, on an edit, the
+         before → after of each changed field. -->
+    <string name="partner_rule_no_hours">No set hours</string>
+    <string name="partner_rule_axis_block">Block</string>
+    <string name="partner_rule_axis_days">Days</string>
+    <string name="partner_rule_axis_limit">Daily limit</string>
+    <string name="partner_rule_axis_ends">Ends</string>
     <plurals name="partner_rule_item_count">
         <item quantity="one">%1$d item</item>
         <item quantity="other">%1$d items</item>
