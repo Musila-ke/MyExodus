@@ -638,6 +638,7 @@
     <string name="settings_update_subtitle_up_to_date_short">Up to date</string>
     <string name="settings_update_subtitle_failed">Update needs attention</string>
     <string name="settings_update_subtitle_downloading">Downloading: %1$d%%</string>
+    <string name="settings_update_subtitle_downloading_starting">Downloading update</string>
     <string name="settings_update_subtitle_paused">Download paused</string>
     <string name="settings_update_subtitle_verifying">Verifying the download</string>
     <string name="settings_update_subtitle_ready">Ready to install</string>
@@ -661,6 +662,8 @@
     <string name="settings_update_metered">You’re on a metered connection. The download uses %1$s of data.</string>
     <string name="settings_update_whats_new">What’s new</string>
     <string name="settings_update_downloading">Downloading the update: %1$d%%</string>
+    <string name="settings_update_downloading_starting">Starting the download…</string>
+    <string name="settings_update_download_stalled">No progress for several minutes. Check your internet connection, or cancel and retry.</string>
     <string name="settings_update_paused">The download is paused. It resumes when the connection is back.</string>
     <string name="settings_update_verifying">Verifying the downloaded file…</string>
     <string name="settings_update_ready">The download is verified. Android will show its install screen.</string>
@@ -721,6 +724,9 @@
          standing opt-in, downloads it automatically over unmetered Wi-Fi. Installing still
          asks you. All copy stays neutral: no activity, partner, or account context. -->
     <string name="update_notification_channel">Update availability</string>
+    <string name="update_notification_transfer_channel">Update download</string>
+    <string name="update_notification_transfer_title">MyExodus update</string>
+    <string name="update_notification_transfer_body">Downloading version %1$s</string>
     <string name="update_notification_available_title">Update available</string>
     <string name="update_notification_available_body">Version %1$s is available. Open MyExodus to review it.</string>
     <string name="update_notification_ready_title">Update ready to install</string>

@@ -20,7 +20,6 @@ internal class UpdateDiagnostics(context: Context) {
         versionCode: Long? = null,
         bytes: Long? = null,
         durationMs: Long? = null,
-        downloadManagerStatus: String? = null,
         installerStatus: String? = null,
         nowMs: Long = System.currentTimeMillis(),
     ) {
@@ -35,7 +34,6 @@ internal class UpdateDiagnostics(context: Context) {
                 versionCode?.let { put("version", it) }
                 bytes?.let { put("bytes", it) }
                 durationMs?.let { put("ms", it) }
-                downloadManagerStatus?.let { put("dm", it) }
                 installerStatus?.let { put("inst", it) }
             },
         )

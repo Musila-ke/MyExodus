@@ -254,9 +254,9 @@ update-manifest.json (max 32 KiB)
        HALT:  no release, rolloutPercent must be 0
        |
        v  monotonic policy and version floors, URL validation, cohort eligibility
-  DownloadManager -> app-specific external files
+  in-app resumable HTTPS transfer -> app-specific external files
        |
-       v  exact byte count + SHA-256 over the platform stream
+       v  exact byte count + SHA-256 over the stored file
           archive package / versionCode / minSdk / targetSdk
        |
        v  fresh signed policy immediately before the first commit
@@ -309,7 +309,8 @@ claiming the app is current.
 | `update/UpdateChecker.kt` | bounded HTTPS fetch and `PolicyFetch` result |
 | `update/UpdateStateStore.kt` | independent check and attempt records, floors, cohort ID, launch marker |
 | `update/UpdateCoordinator.kt` | single main-process owner: check, download start, verify, install, cancel, reconciliation |
-| `update/UpdateDownloadController.kt` | DownloadManager enqueue/query/open/cancel, owned-file sweep |
+| `update/UpdateDownloadController.kt` | transfer worker start/cancel, file progress/completeness, owned-file sweep |
+| `update/UpdateTransferWorker.kt` | resumable HTTPS transfer, foreground notification, completion/failure hand-off |
 | `update/ApkVerifier.kt` | exact stream hash and archive identity checks |
 | `update/UpdateInstaller.kt` | pre-commit gate, PackageInstaller session, dual hash, fsync, commit |
 | `update/UpdateInstallReceiver.kt` | installer status mapping into the owned attempt |
@@ -399,7 +400,7 @@ Any active state -> CANCELLED | FAILED
 INSTALLING / AWAITING_USER_CONFIRMATION -> UPDATE_STATUS_UNKNOWN when platform evidence is lost
 ```
 
-Only one attempt is active. The attempt is persisted before `DownloadManager.enqueue`, so a
+Only one attempt is active. The attempt is persisted before the transfer work is enqueued, so a
 process death cannot leave an untracked transfer. A process-local `Mutex` serializes commands;
 durable attempt and session IDs establish ownership across process death and duplicate
 callbacks.
@@ -416,9 +417,9 @@ metered transfer. The opt-in is a preference in `update_state` (`KEY_AUTO_DOWNLO
 false). Turning it off affects future automatic starts only; it does not cancel an in-flight
 attempt.
 
-Cancellation removes only the owned DownloadManager entry, abandons only an uncommitted owned
-session, deletes only that attempt's directory, and stores `CANCELLED`. Terminal leftovers from
-other attempts are swept on the next main-process start.
+Cancellation removes only the owned transfer work, abandons only an uncommitted owned session,
+deletes only that attempt's directory, and stores `CANCELLED`. Terminal leftovers from other
+attempts are swept on the next main-process start.
 
 Reconciliation sources:
 
@@ -428,33 +429,45 @@ Reconciliation sources:
 - `reconcileAfterReplace` and the startup path: if the installed version is at or above the
   attempt target, the attempt becomes `SUCCEEDED` and its files are deleted; a committed
   session that no longer exists becomes `UPDATE_STATUS_UNKNOWN`
-- `DOWNLOAD_STARTING` with no download ID becomes `DOWNLOAD_FAILED`
+- `DOWNLOAD_STARTING` at process start becomes `DOWNLOAD_FAILED` (death between the durable
+  attempt write and a durable worker enqueue); WorkManager itself recovers a worker whose
+  process died, and the transfer resumes from the bytes on disk
 
 ## 6. Download
 
-`UpdateDownloadController` uses DownloadManager with:
+ADR #321 replaced Android's DownloadManager with an in-app transfer. DownloadManager binds its
+JobScheduler connectivity check to the requesting app's uid, and the protection VPN excludes
+the app itself from its TUN (INV-9) with the owner uid stripped from the capabilities handed to
+JobScheduler; the check can therefore never be satisfied while protection is on, whatever the
+network's meteredness. The in-app transfer is the app's own HTTP traffic, which INV-9 already
+keeps outside the TUN.
 
-- MIME `application/vnd.android.package-archive`
-- `setDestinationInExternalFilesDir(..., "updates/<attemptId>/release.apk")`
-- neutral `VISIBILITY_VISIBLE` notification ("MyExodus update" / "Downloading an app update")
-- roaming always forbidden; metered allowed only with this attempt's consent
-- `UpdateDownloadReceiver` (exported, `DOWNLOAD_COMPLETE`, guarded by
-  `android.permission.SEND_DOWNLOAD_COMPLETED_INTENTS`) correlates the broadcast to the owned
-  attempt's `downloadId`, then enqueues the expedited `update_verify` work. It must be exported:
-  the completion broadcast is sent by `com.android.providers.downloads`, a different UID, so a
-  non-exported receiver is silently skipped with "Permission Denial" (AVD 2026-11-14: the
-  legacy export setting came from an earlier design, the transfer completed, and the attempt
-  stayed `DOWNLOADING` forever, blocking every later attempt because only one attempt may be
-  active). The declared permission is the downloads provider's own signature permission, so no
-  other app can target the receiver. The verify worker re-reads the transfer, retries while
-  still downloading, and posts the neutral "Update ready to install" notification only once
-  `READY_TO_INSTALL` is reached. Neither notification can start an install.
-- no public Downloads fallback, no FileProvider fallback, no WorkManager or foreground-service
-  transfer fallback
+`UpdateDownloadController.start` enqueues unique one-time work
+`update_transfer_<attemptId>` (`KEEP`) with no network constraint. Constraints are deliberately
+absent: WorkManager schedules through JobScheduler, so a required network would go through the
+same uid-bound path. The worker:
 
-Success is never inferred from DownloadManager's displayed byte count. The completed file is
-opened with `openDownloadedFile` and streamed through `ApkVerifier.verifyBytes`, then archive
-checks run against the app-specific path:
+- runs as a long-running foreground worker (`dataSync` type) where the OS allows it, with the
+  neutral "MyExodus update" / "Downloading version X" notification and a progress bar; API 31+
+  refuses a foreground service started from the background, so a background auto-download
+  falls back to an ordinary job
+- writes `updates/<attemptId>/release.apk` in app-specific external files and resumes with an
+  HTTP `Range` request from the bytes already on disk; a server that ignores the range restarts
+  the file
+- follows up to 10 HTTPS redirects manually (never non-HTTPS), 10 s connect / 30 s read
+  timeouts, 64 KiB copy chunks
+- stops at the signed `apkSizeBytes`; the signer's byte count is authoritative
+- checks the network before starting and retries with WorkManager backoff when it is offline,
+  roaming, or metered without this attempt's consent; a metered or offline attempt projects as
+  paused, and a visible Settings screen requests a fresh resumable run (throttled) rather than
+  waiting on backoff
+- on completion calls `UpdateCoordinator.refreshDownload()`, which verifies the file and only
+  then posts the neutral "Update ready to install" notification; on a terminal failure it
+  records the attempt error; transient failures retry and resume
+- no public Downloads fallback, no FileProvider fallback
+
+Success is never inferred from the worker's own count. The stored file is streamed through
+`ApkVerifier.verifyBytes`, then archive checks run against the app-specific path:
 
 - exact signed byte count and SHA-256
 - installed version and trusted floor still below the target
@@ -979,7 +992,10 @@ v31, live channel, 2026-11-13):**
   consents automatically, and the attempt had already entered `DOWNLOADING`, so the gate
   was not the blocker). Root cause not established; the channel-verified artifact was
   installed with `adb install -r` instead and read back `versionCode=42`. Recorded as
-  observed, not explained.
+  observed, not explained. (Revision 2026-11-27: the v49/v51 incident below proved a
+  different unsatisfiable-job class — a METERED VPN network versus a job requiring
+  NOT_METERED. That leg's job was enqueued with metered consent on cellular, so the
+  mechanism does not translate; this cause remains unestablished.)
 - `accelerometer_rotation=0` verified on both serials after the injected input
   (`scripts/rotation-guard.sh`).
 
@@ -1070,6 +1086,135 @@ v31, live channel, 2026-11-13):**
   version", "Last verified update check: 0 minutes ago".
 - `UpdatePolicyTest` was re-run against the shipping tree: 27/27 passed.
 
+**INCIDENT — in-app download frozen at 0% while the protection VPN is on (owner report
+2026-11-26; root cause proven 2026-11-27; fixed in v52/1.1.50):**
+
+- **Symptom.** A user on Wi-Fi, auto-download ON, pressed Check; the app offered 1.1.47
+  (v49) and the transfer then sat at "Downloading the update: 0%" indefinitely, with no
+  error and no diagnostics action. Reproduced on the X6532 and later on v51.
+- **Defect 1 — the UI lie, fixed in v49/1.1.47.** Pre-v49, the progress renderer drew a
+  null percent (DownloadManager reports total `-1` while PENDING) as a determinate 0%. v49
+  renders an indeterminate "Starting the download…" until a real total arrives, shows a
+  stall hint with the diagnostics action after 3 minutes without byte movement, and keeps
+  Copy diagnostics visible whenever the attempt has an error or check failure.
+- **Defect 2 — the protection VPN advertised itself as METERED, fixed in v51/1.1.49.**
+  Android's `VpnService.Builder` documents that VPN apps targeting Q+ are considered
+  metered by default; `DnsSinkholeVpnService` never overrode it, so on Wi-Fi the VPN
+  network lacked `NOT_METERED`. `setMetered(false)` (API 29+; pre-Q has no VPN meteredness)
+  makes the VPN network unmetered. This was a real defect (every allowed app's background
+  traffic was charged as metered over Wi-Fi) but, as proven below, **not the cause of the
+  update stall**; the v51 release notes' claim that downloads now start reliably is wrong.
+- **The actual stall — the app excludes itself from its own VPN (INV-9), and
+  DownloadManager's job connectivity is bound to the app's uid, proven 2026-11-27 on the
+  X6532 with AOSP source and live dumps.**
+  1. DownloadManager enqueues its transfer as a JobScheduler job under the requesting app's
+     uid (dumpsys: `Job #1878: u0a423 pkg=com.example.myexodus`,
+     `DownloadManager:com.android.providers.downloads`). JobScheduler's
+     `ConnectivityController` evaluates the job's CONNECTIVITY constraint against the
+     default network for that uid.
+  2. `DnsSinkholeVpnService` calls `addDisallowedApplication(BuildConfig.APPLICATION_ID)`
+     (INV-9: the app's own traffic never enters the TUN), so VPN network 160's `Uids` set
+     excludes uid 10423 while its `AdminUids` includes it.
+  3. ConnectivityService nonetheless makes the VPN owner's network the default network for
+     uid 10423 (`Current default network callbacks: UID: 10423; Network: 160`), and it
+     strips `OwnerUid` from the capabilities parcelled to non-owner callers — JobScheduler
+     is uid 1000 — so `NetworkCapabilities.satisfiedByUids` can never satisfy a request
+     that names uid 10423: the required uid range neither contains the (stripped) owner uid
+     nor falls inside the VPN's allowed `Uids`. The result is a permanently unsatisfied
+     CONNECTIVITY constraint, independent of meteredness.
+  4. Job #1878 was enqueued about 20 minutes **after** the NOT_METERED VPN (network 160)
+     was established, yet stayed `Unsatisfied constraints: CONNECTIVITY` on network 160.
+     The on-device diagnostics summary (Settings → Updates → Copy diagnostic summary, 25
+     entries) ends `2026-11-26T23:05:07.278Z download_enqueued policy=25 version=51 api=34
+     bytes=39823010` then `…23:05:07.332Z download_status … dm=1` — DownloadManager status
+     1 is STATUS_PENDING, and it never advanced. The transfer could not start on v51.
+- **Fix — ADR #321, shipped in v52/1.1.50.** The updater no longer uses DownloadManager:
+  a unique WorkManager long-running worker performs the transfer as the app's own HTTPS
+  traffic (which INV-9 already keeps outside the TUN), writes to the same app-specific
+  path, resumes with HTTP Range from the bytes on disk, verifies the signed size/hash, and
+  only then posts "ready to install". No WorkManager network constraint is used, because
+  WorkManager schedules through JobScheduler and would re-enter the same uid-bound check;
+  the worker evaluates the network itself. See §6.
+- **versionCode 50 is never offered.** v50/1.1.48 (the meteredness fix) was built and
+  installed with `install -r` on the X6532 only as a proof vehicle; the published artifact
+  of that fix is v51/1.1.49.
+- **Burned policy `policy-000023`.** The v49 envelope was first uploaded under
+  `update-manifest-000023.json` (the `OUT` basename pitfall recorded in §11 — third
+  occurrence after `policy-000020`), so the `latest` mapping 404ed until `policy-000024`
+  was signed (sequence 24) with the asset named exactly `update-manifest.json`.
+  Immutable releases keep `policy-000023` permanently burned.
+- **Impact on users on v51 and below.** Their installed transfer path still uses
+  DownloadManager, so an in-app download with the protection VPN on stalls at 0%. From v52
+  the condition cannot recur for the app's own downloads: they no longer pass through a job
+  connectivity check at all.
+- **The recovery, proven on the X6532 (v50→v52, 2026-11-27), and the order that does NOT
+  work.** Tap Download once so the attempt is enqueued — a stalled 0% transfer already
+  counts, the DownloadManager job exists. Then turn protection off from system VPN settings
+  **without returning to MyExodus** and wait: the queued job's CONNECTIVITY constraint
+  satisfies immediately and the transfer completes in the background (38 MB in under a
+  minute on Wi-Fi, observed within the first 10 s poll). Re-open the app — protection
+  re-establishes automatically on foreground — and Install. Turning protection off *before*
+  starting the download does not work: opening MyExodus re-arms the tunnel within about a
+  second (`VpnLifecycle.ensure` on resume, `VpnLifecycle.kt:90-108`), and a fresh
+  DownloadManager job strands again. The published v52 release note covers the primary
+  scenario (a download that already failed to start); its "turn protection off, download
+  from Settings" phrasing presumes the stuck attempt exists.
+- **v49 publication record (2026-11-26).** `:app:assembleRelease` built versionCode 49 /
+  1.1.47, 39,823,014 bytes, SHA-256
+  `dd5149d918f95cb4279c718e7ae8aeb2a97d976e373949b1d59752b9d32e811e`; `artifact-v49`
+  published as an immutable prerelease with `MyExodus-1.1.47-v49.apk`; `policy-000024`
+  (sequence 24, OFFER 49/1.1.47, rollout 100, cohort salt
+  `71eb3643ab08a1bb6120d41ce3748f7b`) published as the latest non-prerelease and
+  verified: live envelope byte-identical to the signed one (SHA-256
+  `5b10fa168b3a40f1d5914776aaec4b4e815c8d168d07bfd509326ee0bbd7e135`), version-pinned
+  APK downloaded anonymously byte-exact. Publisher state after publication:
+  `{"highestPolicySequence": 24, "highestVersionCode": 49}`.
+- **v51 publication record (2026-11-26).** `artifact-v51` is an immutable prerelease whose
+  asset is `app-release.apk` (uploaded from the original build path); the APK is versionCode
+  51 / 1.1.49, 39,823,010 bytes, SHA-256
+  `a8df78130ff7459440dbbd69801539425742af39cc74031acb251f98cecc243e`. `policy-000025`
+  (sequence 25, OFFER 51/1.1.49, rollout 100, cohort salt
+  `731b427d58b0a637c0509359c076ac81`) is the latest non-prerelease; the live envelope
+  SHA-256 is `6e4d9745098f3cfc2ad2d92c2b1d922cb2ca27285eab0eaee7b9c327cca9cba7`.
+  Publisher state after publication:
+  `{"highestPolicySequence": 25, "highestVersionCode": 51}`. Its release notes overstate
+  the fix; v52's notes correct the record and carry the workaround for v47–v49 installs.
+- **v52 publication record (2026-11-27).** `artifact-v52` is an immutable prerelease whose
+  asset is `app-release.apk` (uploaded from the original build path); the APK is versionCode
+  52 / 1.1.50, 39,824,254 bytes, SHA-256
+  `eaaa0b6439381efd0c6ee4533007f5f91502f1b792af8ae0e2b1466fbe1515a6`, signed by the release
+  identity (certificate SHA-256 `8f881880…854b`). `policy-000026` (sequence 26, OFFER
+  52/1.1.50, rollout 100, cohort salt `73d0df7abf2bff0fcc4e00341b93f4da`) is the latest
+  non-prerelease; the live envelope SHA-256 is
+  `ceea2e74be840ff467db176ab872031ed4626814f55704aa8fe736874234a03a`. Publisher state after
+  publication: `{"highestPolicySequence": 26, "highestVersionCode": 52}`.
+- **v52 device leg (physical X6532, 2026-11-27, release builds only, `install -r` semantics
+  never exercised — the replacement rode the in-app updater).** The stall was reproduced on
+  the v52 offer under the installed v50 transfer path: DownloadManager jobs #1877/#1880 from
+  uid 10423 sat `Unsatisfied constraints: CONNECTIVITY [0x10000000]` with `UID: 10423;
+  Network: 162` (the protection VPN as the uid default; the VPN's Uids set excludes 10423).
+  The recovery above then completed the exact v52 file (39,824,254 bytes) while the app
+  stayed backgrounded. The Install tap ran the fresh pre-commit policy fetch successfully
+  against policy 26; the system installer showed Play Protect's scan dialog ("This app looks
+  safe" after Scan app) and completed: versionCode 52 / versionName 1.1.50 at 03:11:19 EAT,
+  `firstInstallTime` 2026-11-15 17:13:06 preserved. Post-install: upgrade notice "MyExodus is
+  now on version 1.1.50"; Settings → About "Version 1.1.50"; Updates dialog "You're on
+  version 1.1.50, the latest version" + "Last installation succeeded."; the attempts
+  directory was emptied (no stale APK). With the tunnel up again, "Check again" ran a fresh
+  HTTPS check to the live channel ("Last verified update check: 0 minutes ago") — the app's
+  own network path works under protection on v52. Screenshots: `/tmp/dev-2*.png` …
+  `/tmp/dev-49-recheck.png`.
+- **Restricted settings after a self-update (the 2026-11-18 block, resolved on the X6532
+  2026-11-27).** After the in-app replacement the accessibility service was off
+  (`enabled_accessibility_services` null, `accessibility_enabled` 0) and switching it on hit
+  "Restricted setting — For your security, this setting is currently unavailable";
+  `appops get … ACCESS_RESTRICTED_SETTINGS` read `ignore` (my rejected tap 18 s prior).
+  Writing the settings value from adb is silently reverted on XOS; `appops set … allow`
+  then the in-app "Re-enable" → system Accessibility → toggle → Allow restored it:
+  `Enabled services: {com.example.myexodus/…BlockerAccessibilityService}`, Home chip
+  "Protecting". The ⋮ "Allow restricted settings" item in App Info is the owner-facing
+  equivalent of the appop write.
+
 **BLOCKED (owner-gated or hardware):**
 
 - Installer-session `fsync` with a real `openWrite` stream, duplicate and stale status intents,
@@ -1081,9 +1226,10 @@ v31, live channel, 2026-11-13):**
   update". The 2026-11-18 in-app replacement left `ACCESS_RESTRICTED_SETTINGS` at `ignore`
   on the X6532C (`installerPackageName=com.example.myexodus`) — the one state in which App
   Info shows the ⋮ "Allow restricted settings" item — and the owner confirms the ⋮ is now
-  visible on both phones. The re-grant itself (⋮ → allow → re-enable the service) was not
-  yet completed on either phone at wrap time, so no accessibility-on evidence follows from
-  this leg.
+  visible on both phones. The X6532 side is resolved (2026-11-27): after the v52 in-app
+  replacement the same `ignore` state blocked the toggle; `appops set` to `allow`, then the
+  in-app Re-enable path, bound the service (see the v52 device leg above). The X6532C has
+  not repeated the re-grant since; no accessibility-on evidence follows for that phone.
 - 5 to 25 to 100 percent cohort progression has not been rehearsed on the live repository.
   Policy 9 goes straight to 100 percent for the two-tester base; GitHub immutable-release
   settings and the public `latest` mapping are configured and verified.

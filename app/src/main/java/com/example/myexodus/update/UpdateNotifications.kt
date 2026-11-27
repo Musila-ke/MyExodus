@@ -1,6 +1,7 @@
 package com.example.myexodus.update
 
 import android.annotation.SuppressLint
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -18,8 +19,10 @@ import com.example.myexodus.notifications.NotificationAccess
  */
 internal object UpdateNotifications {
     private const val CHANNEL_ID = "update_availability"
+    private const val CHANNEL_TRANSFER = "update_transfer"
     private const val ID_AVAILABLE = 4100
     private const val ID_READY = 4101
+    const val TRANSFER_ID = 4102
 
     fun notifyAvailable(context: Context, versionName: String) {
         post(
@@ -39,21 +42,42 @@ internal object UpdateNotifications {
         )
     }
 
+    /**
+     * Foreground-service notification for an in-app transfer (ADR #321). Not gated on
+     * [NotificationAccess]: a foreground service must always supply one.
+     */
+    fun transfer(context: Context, versionName: String, percent: Int?): Notification {
+        ensureChannel(
+            context,
+            CHANNEL_TRANSFER,
+            R.string.update_notification_transfer_channel,
+            NotificationManager.IMPORTANCE_LOW,
+        )
+        return NotificationCompat.Builder(context, CHANNEL_TRANSFER)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(context.getString(R.string.update_notification_transfer_title))
+            .setContentText(
+                context.getString(R.string.update_notification_transfer_body, versionName),
+            )
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setProgress(100, percent ?: 0, percent == null)
+            .build()
+    }
+
     // Suppressed: the gate is NotificationAccess.canPost (the only way in), which lint can't
     // trace through a helper.
     @SuppressLint("MissingPermission")
     private fun post(context: Context, id: Int, title: String, text: String) {
         if (!NotificationAccess.canPost(context)) return
-        val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        if (manager.getNotificationChannel(CHANNEL_ID) == null) {
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    context.getString(R.string.update_notification_channel),
-                    NotificationManager.IMPORTANCE_DEFAULT,
-                ),
-            )
-        }
+        ensureChannel(
+            context,
+            CHANNEL_ID,
+            R.string.update_notification_channel,
+            NotificationManager.IMPORTANCE_DEFAULT,
+        )
         val openApp = PendingIntent.getActivity(
             context,
             id,
@@ -83,5 +107,14 @@ internal object UpdateNotifications {
             )
             .build()
         NotificationManagerCompat.from(context).notify(id, notification)
+    }
+
+    private fun ensureChannel(context: Context, id: String, nameRes: Int, importance: Int) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        if (manager.getNotificationChannel(id) == null) {
+            manager.createNotificationChannel(
+                NotificationChannel(id, context.getString(nameRes), importance),
+            )
+        }
     }
 }

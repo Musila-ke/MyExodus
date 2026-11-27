@@ -37,6 +37,19 @@ import kotlinx.coroutines.withContext
 
 enum class LastOutcome { NONE, SUCCEEDED, FAILED, UNKNOWN }
 
+/** §9: an authority rejection needs a fresh check, never an automatic re-download. */
+internal val AUTHORITY_ERRORS = setOf(
+    AttemptError.NO_STABLE_POLICY,
+    AttemptError.POLICY_INVALID,
+    AttemptError.POLICY_ROLLBACK,
+    AttemptError.POLICY_CONFLICT,
+    AttemptError.HALTED,
+    AttemptError.NOT_IN_ROLLOUT,
+    AttemptError.RELEASE_INCOMPATIBLE,
+)
+
+internal fun AttemptError.requiresFreshCheck(): Boolean = this in AUTHORITY_ERRORS
+
 enum class UpdatePhase {
     IDLE,
     NOT_CONFIGURED,
@@ -74,6 +87,8 @@ data class UpdateUiState(
     val metered: Boolean = false,
     val roaming: Boolean = false,
     val busy: Boolean = false,
+    /** Downloading with no byte progress for several minutes; surfaces diagnostics, never fails. */
+    val stalled: Boolean = false,
     val protectionResumeRequired: Boolean = false,
     val notice: UpgradeNotice? = null,
     val autoDownload: Boolean = false,
@@ -92,6 +107,7 @@ class UpdateViewModel @Inject constructor(
 
     private var pollJob: Job? = null
     private var busy = false
+    private val stallTracker = DownloadStallTracker(STALL_MS)
 
     init {
         viewModelScope.launch {
@@ -224,11 +240,29 @@ class UpdateViewModel @Inject constructor(
         val (snapshot, notice) = withContext(Dispatchers.IO) {
             coordinator.snapshot() to coordinator.pendingUpgradeNotice()
         }
-        _state.update { snapshot.toUi(it).let { ui -> ui.copy(notice = ui.notice ?: notice) } }
+        val stalled = stalledNow(snapshot)
+        if (snapshot.progress is DownloadSnapshot.Paused || stalled) {
+            // A paused network or a worker the system stopped must not wait on WorkManager's
+            // backoff; a visible screen asks for a fresh resumable run.
+            withContext(Dispatchers.IO) { coordinator.ensureTransferRunning() }
+        }
+        _state.update {
+            snapshot.toUi(it).let { ui -> ui.copy(notice = ui.notice ?: notice, stalled = stalled) }
+        }
         val state = snapshot.attempt?.state
         if (state == AttemptState.DOWNLOADING || state == AttemptState.DOWNLOAD_STARTING) {
             startPolling()
         }
+    }
+
+    private fun stalledNow(snapshot: UpdateSnapshot): Boolean {
+        val attempt = snapshot.attempt
+        if (attempt?.state != AttemptState.DOWNLOADING) {
+            stallTracker.reset()
+            return false
+        }
+        val bytes = (snapshot.progress as? DownloadSnapshot.Running)?.downloadedBytes
+        return stallTracker.observe(attempt.attemptId, bytes, System.currentTimeMillis())
     }
 
     private fun startPolling() {
@@ -258,7 +292,7 @@ class UpdateViewModel @Inject constructor(
             availableVersionName = shownVersion,
             notes = release?.releaseNotes?.takeIf { phase == UpdatePhase.AVAILABLE && it.isNotBlank() },
             sizeBytes = release?.apkSizeBytes ?: attempt?.apkSizeBytes,
-            progressPercent = percent(progress),
+            progressPercent = downloadPercent(progress),
             error = attempt?.error?.takeIf {
                 phase == UpdatePhase.FAILED ||
                     phase == UpdatePhase.NEEDS_PERMISSION ||
@@ -328,24 +362,10 @@ class UpdateViewModel @Inject constructor(
         }
     }
 
-    private fun percent(progress: DownloadSnapshot?): Int? {
-        val running = progress as? DownloadSnapshot.Running ?: return null
-        if (running.totalBytes <= 0) return null
-        return ((running.downloadedBytes * 100) / running.totalBytes).toInt().coerceIn(0, 100)
-    }
-
     private companion object {
         const val POLL_INTERVAL_MS = 1000L
+        const val STALL_MS = 3L * 60 * 1000
         const val CHECKING_TIMEOUT_MS = 2L * 60 * 1000
-        val AUTHORITY_ERRORS = setOf(
-            AttemptError.NO_STABLE_POLICY,
-            AttemptError.POLICY_INVALID,
-            AttemptError.POLICY_ROLLBACK,
-            AttemptError.POLICY_CONFLICT,
-            AttemptError.HALTED,
-            AttemptError.NOT_IN_ROLLOUT,
-            AttemptError.RELEASE_INCOMPATIBLE,
-        )
         val ACTIVE_PHASES = setOf(
             UpdatePhase.CHECKING,
             UpdatePhase.DOWNLOADING,

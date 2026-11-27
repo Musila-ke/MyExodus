@@ -1,13 +1,14 @@
 package com.example.myexodus.update
 
-import android.app.DownloadManager
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import androidx.core.net.toUri
 import android.os.Build
-import android.os.ParcelFileDescriptor
 import android.telephony.TelephonyManager
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import java.io.File
 import java.io.InputStream
 
@@ -18,25 +19,40 @@ internal data class NetworkState(
 )
 
 internal sealed interface DownloadEnqueue {
-    data class Enqueued(val downloadId: Long) : DownloadEnqueue
+    data object Enqueued : DownloadEnqueue
     data class Failed(val failure: AttemptError) : DownloadEnqueue
 }
 
 internal sealed interface DownloadSnapshot {
     data class Running(val downloadedBytes: Long, val totalBytes: Long) : DownloadSnapshot
-    data object Paused : DownloadSnapshot
-    data class Failed(val failure: AttemptError) : DownloadSnapshot
-    data object Successful : DownloadSnapshot
-    data object Missing : DownloadSnapshot
+    data class Paused(val downloadedBytes: Long) : DownloadSnapshot
 }
 
 /**
- * Plan §8.4: DownloadManager into app-specific external storage, neutral notification,
- * no public Downloads or FileProvider fallback, owned-entry cancellation only.
+ * File-based progress for the in-app transfer. A metered, roaming or offline network reports
+ * Paused because [UpdateTransferWorker] stops instead of transferring.
+ */
+internal fun transferSnapshot(
+    network: NetworkState,
+    meteredConsent: Boolean,
+    downloadedBytes: Long,
+    expectedBytes: Long,
+): DownloadSnapshot {
+    val bytes = downloadedBytes.coerceIn(0L, maxOf(expectedBytes, 0L))
+    return if (!network.connected || network.roaming || (network.metered && !meteredConsent)) {
+        DownloadSnapshot.Paused(bytes)
+    } else {
+        DownloadSnapshot.Running(bytes, expectedBytes)
+    }
+}
+
+/**
+ * Plan §8.4 replacement (ADR #321): DownloadManager binds its connectivity check to the
+ * requesting app's uid, and the self-excluded protection VPN can never satisfy that check
+ * (INV-9), so transfers run in-app and resume from the byte count already on disk.
  */
 internal class UpdateDownloadController(context: Context) {
     private val appContext = context.applicationContext
-    private val manager = appContext.getSystemService(DownloadManager::class.java)
 
     fun networkState(): NetworkState {
         val connectivity = appContext.getSystemService(ConnectivityManager::class.java)
@@ -61,102 +77,88 @@ internal class UpdateDownloadController(context: Context) {
     fun relativePath(attemptId: String): String = "updates/$attemptId/release.apk"
 
     fun destinationPath(attemptId: String): String? {
-        val externalFiles = externalFilesDir() ?: return null
+        val externalFiles = appContext.getExternalFilesDir(null) ?: return null
         return File(externalFiles, relativePath(attemptId)).absolutePath
     }
 
-    fun enqueue(
-        attemptId: String,
-        apkUrl: String,
-        meteredConsent: Boolean,
-    ): DownloadEnqueue {
-        val externalFiles = externalFilesDir()
+    /**
+     * No WorkManager network constraint: WorkManager schedules through JobScheduler, and a
+     * job's network requirement is bound to the requesting uid, which the self-excluded VPN
+     * cannot satisfy (ADR #321). The worker checks the network itself and retries.
+     */
+    fun start(attemptId: String, replace: Boolean = false): DownloadEnqueue {
+        val destination = destinationPath(attemptId)
             ?: return DownloadEnqueue.Failed(AttemptError.DOWNLOAD_DESTINATION_UNAVAILABLE)
-        val service = manager
-            ?: return DownloadEnqueue.Failed(AttemptError.DOWNLOAD_SERVICE_UNAVAILABLE)
-        val directory = File(externalFiles, "updates/$attemptId")
-        if (!directory.isDirectory && !directory.mkdirs()) {
+        val directory = File(destination).parentFile
+        if (directory == null ||
+            (!directory.isDirectory && !directory.mkdirs())
+        ) {
             return DownloadEnqueue.Failed(AttemptError.DOWNLOAD_DESTINATION_UNAVAILABLE)
         }
+        val request = OneTimeWorkRequestBuilder<UpdateTransferWorker>()
+            .setInputData(workDataOf(UpdateTransferWorker.EXTRA_ATTEMPT_ID to attemptId))
+            .addTag(TAG)
+            .build()
         return try {
-            val request = DownloadManager.Request(apkUrl.toUri())
-                .setTitle("MyExodus update")
-                .setDescription("Downloading an app update")
-                .setMimeType("application/vnd.android.package-archive")
-                .setDestinationInExternalFilesDir(appContext, null, relativePath(attemptId))
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
-                .setAllowedOverRoaming(false)
-                .setAllowedOverMetered(meteredConsent)
-            DownloadEnqueue.Enqueued(service.enqueue(request))
-        } catch (e: IllegalStateException) {
-            DownloadEnqueue.Failed(AttemptError.DOWNLOAD_SERVICE_UNAVAILABLE)
-        } catch (e: Exception) {
-            DownloadEnqueue.Failed(AttemptError.DOWNLOAD_DESTINATION_UNAVAILABLE)
-        }
-    }
-
-    fun snapshot(downloadId: Long): DownloadSnapshot {
-        val service = manager ?: return DownloadSnapshot.Missing
-        val cursor = runCatching {
-            service.query(DownloadManager.Query().setFilterById(downloadId))
-        }.getOrNull() ?: return DownloadSnapshot.Missing
-        cursor.use {
-            if (!it.moveToFirst()) return DownloadSnapshot.Missing
-            val status = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-            val downloaded = it.getLong(
-                it.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR),
+            WorkManager.getInstance(appContext).enqueueUniqueWork(
+                workName(attemptId),
+                if (replace) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
+                request,
             )
-            val total = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
-            return when (status) {
-                DownloadManager.STATUS_SUCCESSFUL -> DownloadSnapshot.Successful
-                DownloadManager.STATUS_RUNNING, DownloadManager.STATUS_PENDING ->
-                    DownloadSnapshot.Running(downloaded, total)
-                DownloadManager.STATUS_PAUSED -> DownloadSnapshot.Paused
-                DownloadManager.STATUS_FAILED -> {
-                    val reason = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
-                    DownloadSnapshot.Failed(failureForReason(reason))
-                }
-                else -> DownloadSnapshot.Missing
-            }
+            DownloadEnqueue.Enqueued
+        } catch (e: Exception) {
+            DownloadEnqueue.Failed(AttemptError.DOWNLOAD_SERVICE_UNAVAILABLE)
         }
     }
 
-    fun openStream(downloadId: Long): InputStream? {
-        val service = manager ?: return null
-        val descriptor: ParcelFileDescriptor = service.openDownloadedFile(downloadId) ?: return null
-        return ParcelFileDescriptor.AutoCloseInputStream(descriptor)
+    fun cancel(attemptId: String) {
+        runCatching { WorkManager.getInstance(appContext).cancelUniqueWork(workName(attemptId)) }
     }
 
-    fun cancel(downloadId: Long) {
-        runCatching { manager?.remove(downloadId) }
+    fun progress(attempt: UpdateAttempt, network: NetworkState): DownloadSnapshot? {
+        if (attempt.state != AttemptState.DOWNLOADING &&
+            attempt.state != AttemptState.DOWNLOAD_STARTING
+        ) {
+            return null
+        }
+        val destination = attempt.destination ?: return null
+        val downloaded = runCatching { File(destination).length() }.getOrDefault(0L)
+        return transferSnapshot(
+            network = network,
+            meteredConsent = attempt.meteredConsent,
+            downloadedBytes = downloaded,
+            expectedBytes = attempt.apkSizeBytes,
+        )
     }
+
+    fun isComplete(attempt: UpdateAttempt): Boolean {
+        if (attempt.apkSizeBytes <= 0) return false
+        val destination = attempt.destination ?: return false
+        return runCatching { File(destination).length() == attempt.apkSizeBytes }
+            .getOrDefault(false)
+    }
+
+    fun openFile(path: String): InputStream? =
+        runCatching { File(path).inputStream() }.getOrNull()
 
     fun deleteAttemptFiles(attemptId: String) {
-        val externalFiles = externalFilesDir() ?: return
+        val externalFiles = appContext.getExternalFilesDir(null) ?: return
         runCatching { File(externalFiles, "updates/$attemptId").deleteRecursively() }
     }
 
     /** Remove terminal leftovers; only the active attempt's directory survives. */
     fun sweepOtherAttempts(activeAttemptId: String?) {
-        val externalFiles = externalFilesDir() ?: return
+        val externalFiles = appContext.getExternalFilesDir(null) ?: return
         val updates = File(externalFiles, "updates")
         updates.listFiles()?.forEach { dir ->
             if (dir.name != activeAttemptId) runCatching { dir.deleteRecursively() }
         }
     }
 
-    private fun externalFilesDir(): File? = appContext.getExternalFilesDir(null)
+    private companion object {
+        const val TAG = "update_transfer"
+        const val WORK_PREFIX = "update_transfer_"
 
-    private fun failureForReason(reason: Int): AttemptError = when (reason) {
-        DownloadManager.ERROR_INSUFFICIENT_SPACE -> AttemptError.INSUFFICIENT_STORAGE
-        DownloadManager.ERROR_CANNOT_RESUME -> AttemptError.NETWORK_UNAVAILABLE
-        DownloadManager.ERROR_TOO_MANY_REDIRECTS,
-        DownloadManager.ERROR_UNHANDLED_HTTP_CODE,
-        DownloadManager.ERROR_HTTP_DATA_ERROR,
-        DownloadManager.ERROR_UNKNOWN,
-        DownloadManager.ERROR_FILE_ERROR,
-        DownloadManager.ERROR_FILE_ALREADY_EXISTS,
-        -> AttemptError.DOWNLOAD_FAILED
-        else -> AttemptError.DOWNLOAD_FAILED
+        fun workName(attemptId: String): String = WORK_PREFIX + attemptId
     }
 }

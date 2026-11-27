@@ -81,7 +81,6 @@ internal data class UpdateAttempt(
     val targetSdk: Int,
     val createdAtMs: Long,
     val updatedAtMs: Long,
-    val downloadId: Long? = null,
     val destination: String? = null,
     val sessionId: Int? = null,
     val meteredConsent: Boolean = false,
@@ -104,7 +103,6 @@ internal data class UpdateAttempt(
         put("updatedAtMs", updatedAtMs)
         put("meteredConsent", meteredConsent)
         put("committed", committed)
-        downloadId?.let { put("downloadId", it) }
         destination?.let { put("destination", it) }
         sessionId?.let { put("sessionId", it) }
         error?.let { put("error", it.name) }
@@ -127,7 +125,6 @@ internal data class UpdateAttempt(
                 targetSdk = obj.optInt("targetSdk", 0),
                 createdAtMs = obj.getLong("createdAtMs"),
                 updatedAtMs = obj.getLong("updatedAtMs"),
-                downloadId = obj.optLong("downloadId", -1).takeIf { it >= 0 },
                 destination = obj.optString("destination").takeIf { it.isNotBlank() },
                 sessionId = obj.optInt("sessionId", -1).takeIf { it >= 0 },
                 meteredConsent = obj.optBoolean("meteredConsent", false),

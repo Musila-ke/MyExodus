@@ -76,7 +76,6 @@ class UpdateStateStoreTest {
     @Test
     fun attemptRoundTripKeepsSdkValuesAndNullableFields() {
         val full = attempt().copy(
-            downloadId = 42L,
             destination = "/tmp/release.apk",
             sessionId = 9,
             meteredConsent = true,
@@ -88,7 +87,6 @@ class UpdateStateStoreTest {
 
         val bare = attempt()
         val restored = UpdateAttempt.fromJson(bare.toJson())!!
-        assertNull(restored.downloadId)
         assertNull(restored.destination)
         assertNull(restored.sessionId)
         assertNull(restored.error)

@@ -108,6 +108,7 @@ class UpdateCoordinator @Inject constructor(
 
     private var cachedEnvelope: String? = null
     private var cachedPolicy: UpdatePolicy? = null
+    private var lastKickAtMs = 0L
 
     val configured: Boolean get() = UpdateConfig.configured
 
@@ -281,9 +282,8 @@ class UpdateCoordinator @Inject constructor(
             return StartResult.Failed(AttemptError.NETWORK_UNAVAILABLE)
         }
         val attemptId = UUID.randomUUID().toString()
-        if (downloads.destinationPath(attemptId) == null) {
-            return StartResult.Failed(AttemptError.DOWNLOAD_DESTINATION_UNAVAILABLE)
-        }
+        val destination = downloads.destinationPath(attemptId)
+            ?: return StartResult.Failed(AttemptError.DOWNLOAD_DESTINATION_UNAVAILABLE)
         if (!storageAdequate(release.apkSizeBytes)) {
             return StartResult.Failed(AttemptError.INSUFFICIENT_STORAGE)
         }
@@ -307,16 +307,13 @@ class UpdateCoordinator @Inject constructor(
         store.saveAttempt(attempt)
         downloads.sweepOtherAttempts(attemptId)
         return when (
-            val enqueued = withContext(Dispatchers.IO) {
-                downloads.enqueue(attemptId, release.apkUrl, meteredConsent)
-            }
+            val enqueued = withContext(Dispatchers.IO) { downloads.start(attemptId) }
         ) {
-            is DownloadEnqueue.Enqueued -> {
+            DownloadEnqueue.Enqueued -> {
                 store.saveAttempt(
                     attempt.copy(
                         state = AttemptState.DOWNLOADING,
-                        downloadId = enqueued.downloadId,
-                        destination = downloads.destinationPath(attemptId),
+                        destination = destination,
                         updatedAtMs = System.currentTimeMillis(),
                     ),
                 )
@@ -342,7 +339,7 @@ class UpdateCoordinator @Inject constructor(
         }
     }
 
-    /** Polls the owned DownloadManager entry and verifies a completed transfer (plan §8.4). */
+    /** Verifies a transfer once the worker has written the signed byte count (plan §8.4). */
     internal suspend fun refreshDownload(): UpdateAttempt? = bus.withLock {
         val attempt = store.activeAttempt() ?: return null
         if (attempt.state != AttemptState.DOWNLOADING &&
@@ -350,32 +347,47 @@ class UpdateCoordinator @Inject constructor(
         ) {
             return attempt
         }
-        val downloadId = attempt.downloadId
-        if (downloadId == null) {
-            if (attempt.state == AttemptState.DOWNLOAD_STARTING) {
-                return failAttempt(attempt, AttemptError.DOWNLOAD_FAILED)
+        val complete = withContext(Dispatchers.IO) { downloads.isComplete(attempt) }
+        if (complete) verifyDownload(attempt) else attempt
+    }
+
+    /** The transfer worker reports a terminal failure it cannot retry (ADR #321). */
+    internal suspend fun markTransferFailed(attemptId: String, failure: AttemptError) =
+        bus.withLock {
+            val attempt = store.activeAttempt()
+            if (attempt != null &&
+                attempt.attemptId == attemptId &&
+                (attempt.state == AttemptState.DOWNLOADING ||
+                    attempt.state == AttemptState.DOWNLOAD_STARTING)
+            ) {
+                failAttempt(attempt, failure)
             }
-            return attempt
         }
-        return when (
-            val snapshot = withContext(Dispatchers.IO) { downloads.snapshot(downloadId) }
+
+    /**
+     * (Re)runs an active transfer when nothing is moving: a paused network allowed it again,
+     * or the system stopped the worker. WorkManager's backoff can defer the next run for
+     * hours and a background job is stopped after its limit, so a visible screen requests a
+     * resume (throttled); the transfer resumes from the bytes already on disk.
+     */
+    fun ensureTransferRunning() {
+        val attempt = store.activeAttempt() ?: return
+        if (attempt.state != AttemptState.DOWNLOADING &&
+            attempt.state != AttemptState.DOWNLOAD_STARTING
         ) {
-            is DownloadSnapshot.Running -> {
-                if (attempt.state != AttemptState.DOWNLOADING) {
-                    store.saveAttempt(
-                        attempt.copy(
-                            state = AttemptState.DOWNLOADING,
-                            updatedAtMs = System.currentTimeMillis(),
-                        ),
-                    )
-                }
-                store.activeAttempt()
-            }
-            DownloadSnapshot.Paused -> attempt
-            DownloadSnapshot.Missing -> failAttempt(attempt, AttemptError.DOWNLOAD_FAILED)
-            is DownloadSnapshot.Failed -> failAttempt(attempt, snapshot.failure)
-            DownloadSnapshot.Successful -> verifyDownload(attempt)
+            return
         }
+        val network = downloads.networkState()
+        if (!network.connected ||
+            network.roaming ||
+            (network.metered && !attempt.meteredConsent)
+        ) {
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (now - lastKickAtMs < KICK_INTERVAL_MS) return
+        lastKickAtMs = now
+        downloads.start(attempt.attemptId, replace = true)
     }
 
     internal suspend fun install(): InstallResult = bus.withLock {
@@ -450,7 +462,7 @@ class UpdateCoordinator @Inject constructor(
         val outcome = withContext(Dispatchers.IO) {
             installer.stageAndCommit(
                 attempt = staging,
-                open = { staging.downloadId?.let(downloads::openStream) },
+                open = { staging.destination?.let(downloads::openFile) },
                 onSessionCreated = { sessionId ->
                     val current = store.activeAttempt()
                     if (current != null && current.attemptId == staging.attemptId) {
@@ -506,7 +518,7 @@ class UpdateCoordinator @Inject constructor(
                         ),
                     )
                     if (outcome.failure == AttemptError.APK_INTEGRITY_FAILURE) {
-                        current.downloadId?.let(downloads::cancel)
+                        downloads.cancel(current.attemptId)
                         downloads.deleteAttemptFiles(current.attemptId)
                     }
                 }
@@ -551,7 +563,7 @@ class UpdateCoordinator @Inject constructor(
     fun cancelAttempt() {
         val attempt = store.activeAttempt() ?: return
         if (!attempt.state.active) return
-        attempt.downloadId?.let(downloads::cancel)
+        downloads.cancel(attempt.attemptId)
         if (!attempt.committed) attempt.sessionId?.let(installer::abandonSession)
         downloads.deleteAttemptFiles(attempt.attemptId)
         store.saveAttempt(
@@ -608,7 +620,9 @@ class UpdateCoordinator @Inject constructor(
             markInstalled(attempt)
             return
         }
-        if (attempt.state == AttemptState.DOWNLOAD_STARTING && attempt.downloadId == null) {
+        if (attempt.state == AttemptState.DOWNLOAD_STARTING) {
+            // Death between the durable attempt write and a durable worker enqueue.
+            downloads.cancel(attempt.attemptId)
             store.saveAttempt(
                 attempt.copy(
                     state = AttemptState.FAILED,
@@ -652,19 +666,20 @@ class UpdateCoordinator @Inject constructor(
     }
 
     private suspend fun verifyDownload(attempt: UpdateAttempt): UpdateAttempt? {
-        val downloadId = attempt.downloadId ?: return failAttempt(attempt, AttemptError.APK_INTEGRITY_FAILURE)
+        val path = attempt.destination ?: downloads.destinationPath(attempt.attemptId)
+            ?: return failAttempt(attempt, AttemptError.DOWNLOAD_FAILED)
         store.saveAttempt(
             attempt.copy(state = AttemptState.VERIFYING, updatedAtMs = System.currentTimeMillis()),
         )
         val bytesOk = withContext(Dispatchers.IO) {
-            verifier.verifyBytes({ downloads.openStream(downloadId) }, attempt.asRelease())
+            verifier.verifyBytes({ downloads.openFile(path) }, attempt.asRelease())
         }
         val archiveFailure = if (!bytesOk) {
             AttemptError.APK_INTEGRITY_FAILURE
         } else {
             withContext(Dispatchers.IO) {
                 verifier.verifyArchive(
-                    path = attempt.destination ?: downloads.destinationPath(attempt.attemptId),
+                    path = path,
                     release = attempt.asRelease(),
                     installedVersionCode = installedVersionCode(appContext),
                     highestTrustedVersionCode = store.highestVersionCode(),
@@ -698,7 +713,7 @@ class UpdateCoordinator @Inject constructor(
         ) {
             return current
         }
-        current.downloadId?.let(downloads::cancel)
+        downloads.cancel(current.attemptId)
         downloads.deleteAttemptFiles(current.attemptId)
         val failed = current.copy(
             state = AttemptState.FAILED,
@@ -727,12 +742,7 @@ class UpdateCoordinator @Inject constructor(
 
     private fun progress(): DownloadSnapshot? {
         val attempt = store.activeAttempt() ?: return null
-        if (attempt.state != AttemptState.DOWNLOADING &&
-            attempt.state != AttemptState.DOWNLOAD_STARTING
-        ) {
-            return null
-        }
-        return attempt.downloadId?.let(downloads::snapshot)
+        return downloads.progress(attempt, downloads.networkState())
     }
 
     private fun effectiveDisplay(now: Long): DisplayStatus? {
@@ -800,5 +810,6 @@ class UpdateCoordinator @Inject constructor(
 
     private companion object {
         const val STORAGE_MARGIN_BYTES = 64L * 1024 * 1024
+        const val KICK_INTERVAL_MS = 15_000L
     }
 }

@@ -57,10 +57,9 @@ internal fun UpdateSettingsSection(update: UpdateViewModel, onOpenProtection: ()
             R.string.settings_update_subtitle_available,
             state.availableVersionName.orEmpty(),
         )
-        UpdatePhase.DOWNLOADING -> stringResource(
-            R.string.settings_update_subtitle_downloading,
-            state.progressPercent ?: 0,
-        )
+        UpdatePhase.DOWNLOADING -> state.progressPercent?.let { percent ->
+            stringResource(R.string.settings_update_subtitle_downloading, percent)
+        } ?: stringResource(R.string.settings_update_subtitle_downloading_starting)
         UpdatePhase.PAUSED -> stringResource(R.string.settings_update_subtitle_paused)
         UpdatePhase.VERIFYING -> stringResource(R.string.settings_update_subtitle_verifying)
         UpdatePhase.READY_TO_INSTALL -> stringResource(R.string.settings_update_subtitle_ready)
@@ -179,16 +178,22 @@ private fun UpdateDialog(
                         }
                     }
                     UpdatePhase.DOWNLOADING -> {
-                        Text(
-                            stringResource(
-                                R.string.settings_update_downloading,
-                                state.progressPercent ?: 0,
-                            ),
-                        )
-                        LinearProgressIndicator(
-                            progress = { (state.progressPercent ?: 0) / 100f },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        // The transfer reports no total until its first run writes bytes;
+                        // that unknown state must not render as a determinate 0% (2026-11-26).
+                        val percent = state.progressPercent
+                        if (percent != null) {
+                            Text(stringResource(R.string.settings_update_downloading, percent))
+                            LinearProgressIndicator(
+                                progress = { percent / 100f },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            Text(stringResource(R.string.settings_update_downloading_starting))
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                        if (state.stalled) {
+                            Text(stringResource(R.string.settings_update_download_stalled))
+                        }
                     }
                     UpdatePhase.PAUSED -> Text(stringResource(R.string.settings_update_paused))
                     UpdatePhase.VERIFYING -> BusyLine(stringResource(R.string.settings_update_verifying))
@@ -247,8 +252,9 @@ private fun UpdateDialog(
                     }
                 }
                 // Owner ruling 2026-11-12: the diagnostics copy is a failure-report affordance,
-                // not something a healthy update flow shows every user.
-                if (state.error != null || state.checkError != null) {
+                // not something a healthy update flow shows every user. A stalled download is
+                // exactly such a report even though no error is set (2026-11-26).
+                if (state.error != null || state.checkError != null || state.stalled) {
                     TextButton(onClick = { update.copyDiagnostics(context) }) {
                         Text(stringResource(R.string.settings_update_copy_diagnostics))
                     }
@@ -303,7 +309,15 @@ private fun UpdateDialog(
                     onClick = { update.retry() },
                 )
                 UpdatePhase.FAILED -> PrimaryAction(
-                    label = stringResource(R.string.settings_update_retry),
+                    // R06: a retry that re-downloads must carry the metered-data wording,
+                    // never start a metered transfer behind a plain "Retry" label.
+                    label = stringResource(
+                        if (state.metered && state.error?.requiresFreshCheck() == false) {
+                            R.string.settings_update_download_metered
+                        } else {
+                            R.string.settings_update_retry
+                        },
+                    ),
                     enabled = !state.busy && !state.roaming,
                     onClick = { update.retry() },
                 )

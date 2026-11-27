@@ -245,6 +245,11 @@ class DnsSinkholeVpnService : VpnService() {
                 } catch (_: PackageManager.NameNotFoundException) {
                     // GMS-less device: nothing to exclude from the TUN.
                 }
+                // Q+ apps default to a METERED VPN network (official Builder docs), so every
+                // allowed app's traffic looked metered even over Wi-Fi. Declare the tunnel
+                // unmetered. This did not fix the 2026-11-27 update stall: that job was
+                // stranded by its uid-bound connectivity check (ADR #321).
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false)
                 addAddress(TUN_V4, 32)
                 addAddress(TUN_V6, 128)
                 addRoute("0.0.0.0", 0)
